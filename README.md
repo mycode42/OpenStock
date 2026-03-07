@@ -1,158 +1,162 @@
-# AI Hedge Fund
+# AI Hedge Fund — Agent Trading Playbook
 
-This is a proof of concept for an AI-powered hedge fund.  The goal of this project is to explore the use of AI to make trading decisions.  This project is for **educational** purposes only and is not intended for real trading or investment.
+A multi-agent AI hedge fund system that uses LLM-powered analyst agents to make trading decisions, with Alpaca paper trading integration for execution.
 
-This system employs several agents working together:
+Built on top of [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), extended with:
+- **Alpaca paper trading integration** — live order execution with safety rails
+- **Custom analyst agents** — create agents with your own investment philosophy
+- **Automated portfolio management** — cron-based daily analysis and rebalancing
+- **Telegram reporting** — formatted output for chat-based monitoring
 
-1. Aswath Damodaran Agent - The Dean of Valuation, focuses on story, numbers, and disciplined valuation
-2. Ben Graham Agent - The godfather of value investing, only buys hidden gems with a margin of safety
-3. Bill Ackman Agent - An activist investor, takes bold positions and pushes for change
-4. Cathie Wood Agent - The queen of growth investing, believes in the power of innovation and disruption
-5. Charlie Munger Agent - Warren Buffett's partner, only buys wonderful businesses at fair prices
-6. Michael Burry Agent - The Big Short contrarian who hunts for deep value
-7. Mohnish Pabrai Agent - The Dhandho investor, who looks for doubles at low risk
-8. Peter Lynch Agent - Practical investor who seeks "ten-baggers" in everyday businesses
-9. Phil Fisher Agent - Meticulous growth investor who uses deep "scuttlebutt" research 
-10. Rakesh Jhunjhunwala Agent - The Big Bull of India
-11. Stanley Druckenmiller Agent - Macro legend who hunts for asymmetric opportunities with growth potential
-12. Warren Buffett Agent - The oracle of Omaha, seeks wonderful companies at a fair price
-13. Valuation Agent - Calculates the intrinsic value of a stock and generates trading signals
-14. Sentiment Agent - Analyzes market sentiment and generates trading signals
-15. Fundamentals Agent - Analyzes fundamental data and generates trading signals
-16. Technicals Agent - Analyzes technical indicators and generates trading signals
-17. Risk Manager - Calculates risk metrics and sets position limits
-18. Portfolio Manager - Makes final trading decisions and generates orders
+## How It Works
 
-<img width="1042" alt="Screenshot 2025-03-22 at 6 19 07 PM" src="https://github.com/user-attachments/assets/cbae3dcf-b571-490d-b0ad-3f0f035ac0d4" />
+```
+Alpaca positions → AI agents analyze → Portfolio Manager decides → Safety rails validate → Alpaca executes
+```
 
-Note: the system does not actually make any trades.
+Each analyst agent embodies a different investment philosophy (Buffett, Burry, Cathie Wood, etc.). They independently analyze stocks, then a Portfolio Manager agent weighs all signals and makes trading decisions. Those decisions pass through safety rails before executing via Alpaca.
 
-[![Twitter Follow](https://img.shields.io/twitter/follow/virattt?style=social)](https://twitter.com/virattt)
+### Built-in Agents
 
-## Disclaimer
+| Agent | Style |
+|---|---|
+| Warren Buffett | Value investing, moats, margin of safety |
+| Michael Burry | Contrarian deep value, FCF analysis |
+| Cathie Wood | Disruptive innovation, exponential growth |
+| Charlie Munger | Quality at fair prices |
+| Peter Lynch | Growth at a reasonable price (GARP) |
+| Bill Ackman | Activist, concentrated positions |
+| Stanley Druckenmiller | Macro-driven, asymmetric bets |
+| Ben Graham | Deep value, net-net analysis |
+| Phil Fisher | Scuttlebutt, qualitative growth |
+| Aswath Damodaran | Rigorous DCF valuation |
+| + 3 data agents | Fundamentals, technicals, sentiment |
 
-This project is for **educational and research purposes only**.
+Plus a template for creating your own custom agents (see [PLAYBOOK.md](./PLAYBOOK.md)).
 
-- Not intended for real trading or investment
-- No investment advice or guarantees provided
-- Creator assumes no liability for financial losses
-- Consult a financial advisor for investment decisions
-- Past performance does not indicate future results
+## Quick Start
 
-By using this software, you agree to use it solely for learning purposes.
+### Prerequisites
 
-## Table of Contents
-- [How to Install](#how-to-install)
-- [How to Run](#how-to-run)
-  - [⌨️ Command Line Interface](#️-command-line-interface)
-  - [🖥️ Web Application](#️-web-application)
-- [How to Contribute](#how-to-contribute)
-- [Feature Requests](#feature-requests)
-- [License](#license)
+- Python 3.11+
+- [Poetry](https://python-poetry.org/) (`curl -sSL https://install.python-poetry.org | python3 -`)
+- [Ollama](https://ollama.ai/) with at least one model (`ollama pull llama3:8b`)
+- [Alpaca](https://app.alpaca.markets) paper trading account (free)
 
-## How to Install
-
-Before you can run the AI Hedge Fund, you'll need to install it and set up your API keys. These steps are common to both the full-stack web application and command line interface.
-
-### 1. Clone the Repository
+### Setup
 
 ```bash
-git clone https://github.com/virattt/ai-hedge-fund.git
+git clone https://github.com/zhound/ai-hedge-fund.git
 cd ai-hedge-fund
-```
-
-### 2. Set up API keys
-
-Create a `.env` file for your API keys:
-```bash
-# Create .env file for your API keys (in the root directory)
-cp .env.example .env
-```
-
-Open and edit the `.env` file to add your API keys:
-```bash
-# For running LLMs hosted by openai (gpt-4o, gpt-4o-mini, etc.)
-OPENAI_API_KEY=your-openai-api-key
-
-# For getting financial data to power the hedge fund
-FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
-```
-
-**Important**: You must set at least one LLM API key (e.g. `OPENAI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, or `DEEPSEEK_API_KEY`) for the hedge fund to work. 
-
-**Financial Data**: Data for AAPL, GOOGL, MSFT, NVDA, and TSLA is free and does not require an API key. For any other ticker, you will need to set the `FINANCIAL_DATASETS_API_KEY` in the .env file.
-
-## How to Run
-
-### ⌨️ Command Line Interface
-
-You can run the AI Hedge Fund directly via terminal. This approach offers more granular control and is useful for automation, scripting, and integration purposes.
-
-<img width="992" alt="Screenshot 2025-01-06 at 5 50 17 PM" src="https://github.com/user-attachments/assets/e8ca04bf-9989-4a7d-a8b4-34e04666663b" />
-
-#### Quick Start
-
-1. Install Poetry (if not already installed):
-```bash
-curl -sSL https://install.python-poetry.org | python3 -
-```
-
-2. Install dependencies:
-```bash
 poetry install
 ```
 
-#### Run the AI Hedge Fund
-```bash
-poetry run python src/main.py --ticker AAPL,MSFT,NVDA
-```
-
-You can also specify a `--ollama` flag to run the AI hedge fund using local LLMs.
+Create `.env` in the project root:
 
 ```bash
-poetry run python src/main.py --ticker AAPL,MSFT,NVDA --ollama
+# Alpaca Paper Trading (required for trade execution)
+ALPACA_API_KEY=your-key-here
+ALPACA_API_SECRET=your-secret-here
+
+# Financial data — free for AAPL, GOOGL, MSFT, NVDA, TSLA
+# For other tickers: https://financialdatasets.ai/
+FINANCIAL_DATASETS_API_KEY=
+
+# LLM providers (only needed if NOT using Ollama)
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+GROQ_API_KEY=
+DEEPSEEK_API_KEY=
+GOOGLE_API_KEY=
 ```
 
-You can optionally specify the start and end dates to make decisions over a specific time period.
+### Run
 
 ```bash
-poetry run python src/main.py --ticker AAPL,MSFT,NVDA --start-date 2024-01-01 --end-date 2024-03-01
+# Dry run — analyze holdings, show what trades WOULD happen
+poetry run python run_hedge_fund.py
+
+# Analyze specific tickers
+poetry run python run_hedge_fund.py --tickers NVDA,AVGO,TSM
+
+# Show detailed agent reasoning
+poetry run python run_hedge_fund.py --show-reasoning
+
+# Use a different model
+poetry run python run_hedge_fund.py --model qwen3.5:cloud
+
+# Pick specific analysts
+poetry run python run_hedge_fund.py --analysts warren_buffett,michael_burry,technical_analyst
+
+# Telegram-friendly output (no tables)
+poetry run python run_hedge_fund.py --telegram
+
+# Actually execute trades (⚠️ places real orders on Alpaca paper)
+poetry run python run_hedge_fund.py --execute
 ```
 
-#### Run the Backtester
-```bash
-poetry run python src/backtester.py --ticker AAPL,MSFT,NVDA
+## Safety Rails
+
+Built into `src/alpaca_integration.py`:
+
+| Rail | Default | Purpose |
+|---|---|---|
+| Max trade size | 5% of portfolio | No single trade exceeds 5% of total value |
+| Max daily trades | 5 per session | Prevents runaway trading loops |
+| Min confidence | 70% | Portfolio Manager must be ≥70% confident |
+| Min keep | 10% | Never sells entire position |
+| Paper only | Enforced | Hardcoded to paper-api endpoint |
+| Dry run default | On | Must pass `--execute` to place orders |
+
+## Creating Custom Agents
+
+See [PLAYBOOK.md](./PLAYBOOK.md) for the full guide, including:
+
+- Step-by-step custom agent creation
+- Alpaca API reference
+- Rebalancing scripts
+- Cron automation setup
+- Troubleshooting
+
+## File Reference
+
+```
+ai-hedge-fund/
+├── .env                          # API keys (gitignored)
+├── run_hedge_fund.py             # Main runner — analysis + execution
+├── rebalance.py                  # Manual rebalance script
+├── PLAYBOOK.md                   # Complete setup & operations guide
+├── src/
+│   ├── main.py                   # Core hedge fund engine
+│   ├── alpaca_integration.py     # Alpaca API + safety rails
+│   ├── agents/                   # All analyst agents
+│   ├── graph/                    # Agent state management
+│   ├── llm/                      # Model configuration
+│   ├── tools/                    # Financial data API client
+│   └── utils/                    # Agent registry, helpers
+└── app/                          # Web UI (optional)
 ```
 
-**Example Output:**
-<img width="941" alt="Screenshot 2025-01-06 at 5 47 52 PM" src="https://github.com/user-attachments/assets/00e794ea-8628-44e6-9a84-8f8a31ad3b47" />
+## For AI Agents
 
+This repo is designed to be consumed by autonomous AI agents (e.g., [OpenClaw](https://openclaw.ai)). The [PLAYBOOK.md](./PLAYBOOK.md) contains everything an agent needs to:
 
-Note: The `--ollama`, `--start-date`, and `--end-date` flags work for the backtester, as well!
+1. Set up the system from scratch
+2. Create custom analyst agents with unique investment philosophies
+3. Run analysis and execute trades
+4. Automate via cron or heartbeat
+5. Pipe results to Telegram or other channels
 
-### 🖥️ Web Application
+Point your agent at the playbook and let it rip.
 
-The new way to run the AI Hedge Fund is through our web application that provides a user-friendly interface. This is recommended for users who prefer visual interfaces over command line tools.
+## Disclaimer
 
-Please see detailed instructions on how to install and run the web application [here](https://github.com/virattt/ai-hedge-fund/tree/main/app).
+This project is for **educational and research purposes only**. Not intended for real trading. No investment advice or guarantees. Past performance ≠ future results. Consult a financial advisor for real investment decisions.
 
-<img width="1721" alt="Screenshot 2025-06-28 at 6 41 03 PM" src="https://github.com/user-attachments/assets/b95ab696-c9f4-416c-9ad1-51feb1f5374b" />
+## Credits
 
-
-## How to Contribute
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-**Important**: Please keep your pull requests small and focused.  This will make it easier to review and merge.
-
-## Feature Requests
-
-If you have a feature request, please open an [issue](https://github.com/virattt/ai-hedge-fund/issues) and make sure it is tagged with `enhancement`.
+Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) — the original multi-agent hedge fund framework.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT License — see [LICENSE](./LICENSE) for details.

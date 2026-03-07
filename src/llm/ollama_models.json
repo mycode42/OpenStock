@@ -1,57 +1,32 @@
 [
   {
-    "display_name": "gpt-oss (20B)",
-    "model_name": "gpt-oss:20b",
-    "provider": "OpenAI"
+    "display_name": "Qwen 3.5 (Cloud)",
+    "model_name": "qwen3.5:cloud",
+    "provider": "Ollama"
   },
   {
-    "display_name": "gpt-oss (120B)",
-    "model_name": "gpt-oss:120b",
-    "provider": "OpenAI"
+    "display_name": "GLM 4.7 (Cloud)",
+    "model_name": "glm-4.7:cloud",
+    "provider": "Ollama"
   },
   {
-    "display_name": "Gemma 3 (4B)",
-    "model_name": "gemma3:4b",
-    "provider": "Google"
+    "display_name": "Kimi K2.5 (Cloud)",
+    "model_name": "kimi-k2.5:cloud",
+    "provider": "Ollama"
   },
   {
-    "display_name": "Qwen 3 (4B)",
-    "model_name": "qwen3:4b",
-    "provider": "Alibaba"
+    "display_name": "GLM 4.7 Flash Q8 (31B Local)",
+    "model_name": "glm-4.7-flash:q8_0",
+    "provider": "Ollama"
   },
   {
-    "display_name": "Qwen 3 (8B)",
-    "model_name": "qwen3:8b",
-    "provider": "Alibaba"
+    "display_name": "Llama 3 (8B Local)",
+    "model_name": "llama3:8b",
+    "provider": "Ollama"
   },
   {
-    "display_name": "Llama 3.1 (8B)",
-    "model_name": "llama3.1:latest",
-    "provider": "Meta"
-  },
-  {
-    "display_name": "Gemma 3 (12B)",
-    "model_name": "gemma3:12b",
-    "provider": "Google"
-  },
-  {
-    "display_name": "Mistral Small 3.1 (24B)",
-    "model_name": "mistral-small3.1",
-    "provider": "Mistral"
-  },
-  {
-    "display_name": "Gemma 3 (27B)",
-    "model_name": "gemma3:27b",
-    "provider": "Google"
-  },
-  {
-    "display_name": "Qwen 3 (30B-a3B)",
-    "model_name": "qwen3:30b-a3b",
-    "provider": "Alibaba"
-  },
-  {
-    "display_name": "Llama 3.3 (70B)",
-    "model_name": "llama3.3:70b-instruct-q4_0",
-    "provider": "Meta"
+    "display_name": "Phi 3 Mini (Local)",
+    "model_name": "phi3:mini",
+    "provider": "Ollama"
   }
-] 
+]

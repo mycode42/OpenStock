@@ -19,6 +19,7 @@ from src.agents.rakesh_jhunjhunwala import rakesh_jhunjhunwala_agent
 from src.agents.mohnish_pabrai import mohnish_pabrai_agent
 from src.agents.news_sentiment import news_sentiment_agent
 from src.agents.growth_agent import growth_analyst_agent
+from src.agents.mordecai import mordecai_agent
 
 # Define analyst configuration - single source of truth
 ANALYST_CONFIG = {
@@ -165,6 +166,14 @@ ANALYST_CONFIG = {
         "agent_func": valuation_analyst_agent,
         "type": "analyst",
         "order": 16,
+    },
+    "mordecai": {
+        "display_name": "Mordecai",
+        "description": "Aggressive Growth & AI Infrastructure Specialist",
+        "investing_style": "Aggressive growth investor targeting AI infrastructure, leveraged ETFs, momentum plays, and moonshots. Contrarian on consensus, conviction-based sizing, cuts losers fast and lets winners run.",
+        "agent_func": mordecai_agent,
+        "type": "analyst",
+        "order": 17,
     },
 }
 
