@@ -574,41 +574,128 @@ For a planned rebalance, you may want to temporarily increase `MAX_TRADE_PCT` or
 
 ## Automation (Cron)
 
-### OpenClaw Cron (recommended)
+### OpenClaw Cron Setup
 
-Add a daily morning analysis cron:
+The system is designed to run on autopilot with OpenClaw cron jobs. Here's a production-tested setup:
+
+#### 1. Daily Portfolio Check (every day, 9 AM)
+
+Lightweight check — just reads positions from Alpaca and reports P/L. No analysis, no trades.
+
+```bash
+openclaw cron add alpaca-portfolio \
+  --cron "0 9 * * *" \
+  --tz "America/Los_Angeles" \
+  --exact \
+  --model google/gemini-2.5-flash \
+  --session isolated \
+  --message "Check Alpaca paper trading portfolio. API endpoint: https://paper-api.alpaca.markets/v2. Use API Key from env var ALPACA_API_KEY and Secret from ALPACA_API_SECRET. If env vars aren't set, read them from the .env file at ~/projects/ai-hedge-fund/.env. Report: total portfolio value, top 5 positions by value, biggest movers (>5% swing), and daily P/L. Keep it concise — bullet format, no tables." \
+  --announce \
+  --channel telegram \
+  --to YOUR_CHAT_ID
+```
+
+#### 2. Morning Analysis Scan (weekdays, 6:30 AM — pre-market)
+
+Runs multi-agent analysis on all holdings. No execution — dry run only.
 
 ```bash
 openclaw cron add morning-analysis \
-  --schedule "0 6 * * 1-5" \
-  --command "cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram" \
-  --model google/gemini-2.5-flash
+  --cron "30 6 * * 1-5" \
+  --tz "America/Los_Angeles" \
+  --exact \
+  --model google/gemini-2.5-flash \
+  --session isolated \
+  --message "Run the AI hedge fund analysis. cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram. Send the output summary." \
+  --announce \
+  --channel telegram \
+  --to YOUR_CHAT_ID
 ```
 
-This runs at 6:00 AM Mon-Fri (before market open at 6:30 AM PST).
+#### 3. Midday & Afternoon Scans (weekdays)
+
+Additional analysis windows for intraday monitoring:
+
+```bash
+# Midday (12 PM)
+openclaw cron add midday-scan \
+  --cron "0 12 * * 1-5" \
+  --tz "America/Los_Angeles" \
+  --exact \
+  --model google/gemini-2.5-flash \
+  --session isolated \
+  --message "Run midday portfolio analysis: cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram --analysts technical_analyst,mordecai"
+
+# Afternoon (2 PM)
+openclaw cron add afternoon-scan \
+  --cron "0 14 * * 1-5" \
+  --tz "America/Los_Angeles" \
+  --exact \
+  --model google/gemini-2.5-flash \
+  --session isolated \
+  --message "Run afternoon portfolio analysis with full agent panel: cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram"
+```
+
+#### 4. Evening Research (weekdays, 4:30 PM — post-close)
+
+Deeper analysis after market close, when all daily data is final:
+
+```bash
+openclaw cron add evening-research \
+  --cron "30 16 * * 1-5" \
+  --tz "America/Los_Angeles" \
+  --exact \
+  --model google/gemini-2.5-flash \
+  --session isolated \
+  --message "Run end-of-day portfolio review: cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram --show-reasoning. Summarize the day's signals and any overnight action items." \
+  --announce \
+  --channel telegram \
+  --to YOUR_CHAT_ID
+```
+
+### Recommended Cron Schedule (Summary)
+
+| Job | Schedule | Purpose |
+|---|---|---|
+| `alpaca-portfolio` | Daily 9:00 AM | Quick P/L check (all days, including weekends for visibility) |
+| `morning-analysis` | Mon-Fri 6:30 AM | Pre-market multi-agent analysis |
+| `midday-scan` | Mon-Fri 12:00 PM | Midday pulse check (lighter agent set) |
+| `afternoon-scan` | Mon-Fri 2:00 PM | Afternoon analysis |
+| `evening-research` | Mon-Fri 4:30 PM | Post-close deep analysis with reasoning |
+
+### Key Design Decisions
+
+- **Use `google/gemini-2.5-flash`** for cron jobs to save primary model tokens. Flash is fast and cheap — fine for portfolio reads and running the analysis scripts.
+- **Use `--session isolated`** so cron runs don't pollute your main session history.
+- **Use `--exact`** to disable cron staggering — you want market-timed jobs to run at the specified time.
+- **Never put API keys in the cron `--message`**. Reference env vars or `.env` files instead.
+- **Use `--announce`** to deliver results to Telegram/Discord/etc. without routing through the main session.
 
 ### Heartbeat Integration
 
-Add to your `HEARTBEAT.md`:
+For agents using OpenClaw heartbeats (periodic wake-ups), add to your `HEARTBEAT.md`:
 
 ```markdown
 ### Alpaca Portfolio Check (daily, morning)
 - API: `https://paper-api.alpaca.markets/v2`
-- Key: `YOUR_KEY`
-- Secret: `YOUR_SECRET`
+- Credentials: Read from `projects/ai-hedge-fund/.env` (ALPACA_API_KEY, ALPACA_API_SECRET)
 - Check positions, daily P/L, total portfolio value
 - Alert on big movers (>5% single position swing)
 - Post summary to Telegram
 - Track in `memory/heartbeat-state.json` under `alpacaPortfolio`
+- Consider rebalancing if any position drifts >50% from target allocation
 ```
 
-### Manual Check Script
+The heartbeat approach is lighter than a cron — the agent checks on its regular 30-minute wake cycle and only reports if something interesting happened. Use this for monitoring; use cron for scheduled analysis.
+
+### Manual Quick Check
 
 ```bash
-# Quick portfolio check (no analysis, just positions)
+# One-liner portfolio check (no analysis, just positions)
+source ~/projects/ai-hedge-fund/.env
 curl -s "https://paper-api.alpaca.markets/v2/positions" \
-  -H "APCA-API-KEY-ID: YOUR_KEY" \
-  -H "APCA-API-SECRET-KEY: YOUR_SECRET" | \
+  -H "APCA-API-KEY-ID: $ALPACA_API_KEY" \
+  -H "APCA-API-SECRET-KEY: $ALPACA_API_SECRET" | \
   python3 -c "
 import sys,json
 positions = json.load(sys.stdin)
@@ -624,25 +711,13 @@ for p in sorted(positions, key=lambda x: abs(float(x['market_value'])), reverse=
 
 ## Telegram Integration
 
-The `--telegram` flag on `run_hedge_fund.py` outputs a clean format suitable for Telegram. To pipe it to your bot:
+The `--telegram` flag on `run_hedge_fund.py` outputs a clean format suitable for Telegram (bullet lists, no markdown tables).
 
-### From a cron/heartbeat
+### Via OpenClaw Cron (recommended)
 
-```python
-import subprocess
+Set up a cron job with `--announce --channel telegram --to YOUR_CHAT_ID` (see Automation section above). The cron runner handles delivery automatically.
 
-# Run analysis
-result = subprocess.run(
-    ["poetry", "run", "python", "run_hedge_fund.py", "--telegram"],
-    capture_output=True, text=True,
-    cwd="/path/to/ai-hedge-fund"
-)
-
-# Send to Telegram via OpenClaw message tool
-# (from within an agent session)
-```
-
-### From an OpenClaw agent
+### From an OpenClaw Agent Session
 
 ```python
 # Use the message tool directly
@@ -652,6 +727,19 @@ message(
     target="YOUR_CHAT_ID",
     message=analysis_output
 )
+```
+
+### From a Script
+
+```python
+import subprocess
+
+result = subprocess.run(
+    ["poetry", "run", "python", "run_hedge_fund.py", "--telegram"],
+    capture_output=True, text=True,
+    cwd="/path/to/ai-hedge-fund"
+)
+# result.stdout contains the Telegram-formatted summary
 ```
 
 ---
