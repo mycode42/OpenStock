@@ -4,17 +4,6 @@ import pandas as pd
 import requests
 import time
 
-# Re-export free API functions so existing imports keep working
-from src.tools.api_free import (  # noqa: F401
-    get_prices,
-    get_financial_metrics,
-    search_line_items,
-    get_insider_trades,
-    get_company_news,
-    get_company_facts,
-    prices_to_df,
-    get_price_data,
-)
 
 from src.data.cache import get_cache
 from src.data.models import (
@@ -93,7 +82,8 @@ def get_prices(ticker: str, start_date: str, end_date: str, api_key: str = None)
     try:
         price_response = PriceResponse(**response.json())
         prices = price_response.prices
-    except:
+    except Exception as e:
+        print(f"Error parsing price response for {ticker}: {e}")
         return []
 
     if not prices:
@@ -134,7 +124,8 @@ def get_financial_metrics(
     try:
         metrics_response = FinancialMetricsResponse(**response.json())
         financial_metrics = metrics_response.financial_metrics
-    except:
+    except Exception as e:
+        print(f"Error parsing financial metrics for {ticker}: {e}")
         return []
 
     if not financial_metrics:
@@ -177,7 +168,8 @@ def search_line_items(
         data = response.json()
         response_model = LineItemResponse(**data)
         search_results = response_model.search_results
-    except:
+    except Exception as e:
+        print(f"Error parsing line items for {ticker}: {e}")
         return []
     if not search_results:
         return []
@@ -224,8 +216,9 @@ def get_insider_trades(
             data = response.json()
             response_model = InsiderTradeResponse(**data)
             insider_trades = response_model.insider_trades
-        except:
-            break  # Parsing error, exit loop
+        except Exception as e:
+            print(f"Error parsing insider trades for {ticker}: {e}")
+            break
 
         if not insider_trades:
             break
@@ -289,8 +282,9 @@ def get_company_news(
             data = response.json()
             response_model = CompanyNewsResponse(**data)
             company_news = response_model.news
-        except:
-            break  # Parsing error, exit loop
+        except Exception as e:
+            print(f"Error parsing company news for {ticker}: {e}")
+            break
 
         if not company_news:
             break
@@ -350,6 +344,22 @@ def get_market_cap(
         return None
 
     return market_cap
+
+
+def get_company_facts(ticker: str, api_key: str = None) -> CompanyFactsResponse:
+    """Fetch company facts from the financialdatasets.ai API."""
+    headers = {}
+    financial_api_key = api_key or os.environ.get("FINANCIAL_DATASETS_API_KEY")
+    if financial_api_key:
+        headers["X-API-KEY"] = financial_api_key
+
+    url = f"https://api.financialdatasets.ai/company/facts/?ticker={ticker}"
+    response = _make_api_request(url, headers)
+    if response.status_code != 200:
+        raise Exception(f"Error fetching company facts: {ticker} - {response.status_code}")
+
+    data = response.json()
+    return CompanyFactsResponse(**data)
 
 
 def prices_to_df(prices: list[Price]) -> pd.DataFrame:

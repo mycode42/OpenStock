@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Mordecai AI Hedge Fund Runner
+Swarm Trader AI Hedge Fund Runner
 
 Fetches live Alpaca positions, runs multi-agent analysis, and executes trades with safety rails.
 
@@ -31,7 +31,7 @@ from src.main import run_hedge_fund
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run Mordecai AI Hedge Fund analysis and trading",
+        description="Run Swarm Trader AI Hedge Fund analysis and trading",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -76,8 +76,8 @@ Examples:
     parser.add_argument(
         "--analysts", 
         type=str,
-        default="mordecai,fundamentals_analyst,technical_analyst",
-        help="Comma-separated list of analysts to use (default: mordecai + fundamentals + technical)"
+        default="apex,fundamentals_analyst,technical_analyst",
+        help="Comma-separated list of analysts to use (default: apex + fundamentals + technical)"
     )
     parser.add_argument(
         "--top",
@@ -128,7 +128,7 @@ Examples:
             
         print(f"🔍 Analyzing {len(tickers_to_analyze)} ticker(s): {', '.join(tickers_to_analyze)}")
         print(f"🤖 Using analysts: {', '.join(selected_analysts)}")
-        print(f"🧠 Model: {args.model} (Ollama)")
+        print(f"🧠 Model: {args.model} ({args.provider})")
         print(f"💼 Mode: {'LIVE TRADING' if args.execute else 'DRY RUN'}")
         print()
         
@@ -222,7 +222,7 @@ def output_detailed_summary(decisions, analyst_signals, trade_results, executed)
 
 def output_telegram_summary(decisions, trade_results, executed):
     """Output Telegram-friendly summary (no markdown tables)."""
-    print("🤖 Mordecai AI Hedge Fund Analysis")
+    print("🤖 Swarm Trader AI Hedge Fund Analysis")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
     print()
     

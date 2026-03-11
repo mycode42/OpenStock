@@ -1,10 +1,12 @@
 # Swarm Trader
 
-Multi-agent AI trading system. LLM-powered analyst agents (Buffett, Munger, Burry, Cathie Wood, and more) independently analyze stocks, then a Portfolio Manager aggregates their signals to make trading decisions. Executes on Alpaca paper trading.
+Multi-agent AI trading system. 19 analyst agents — 13 LLM-powered personalities (Buffett, Munger, Burry, and more) plus 6 data/quant specialists — independently analyze stocks. A Portfolio Manager aggregates their signals to make trading decisions. Executes on Alpaca paper trading.
 
-**Zero paid data APIs required.** All financial data sourced from SEC EDGAR + yfinance.
+**Multi-provider LLM support** — 13 providers: OpenAI, Anthropic, Google, DeepSeek, Groq, Ollama, xAI, OpenRouter, Azure OpenAI, GigaChat, Alibaba, Meta, Mistral.
 
-> Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), extended with free data sources, Alpaca execution, custom agents, and automation.
+**Zero paid data APIs required.** Hybrid data layer tries financialdatasets.ai first, falls back to SEC EDGAR + yfinance. Works fully free out of the box.
+
+> Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), extended with free data sources, multi-provider LLM support, Alpaca execution, custom agents, and automation.
 
 ---
 
@@ -12,8 +14,10 @@ Multi-agent AI trading system. LLM-powered analyst agents (Buffett, Munger, Burr
 
 | Feature | Upstream (ai-hedge-fund) | Swarm Trader |
 |---|---|---|
-| Financial data | financialdatasets.ai ($200/mo) | **SEC EDGAR + yfinance (free)** |
+| LLM providers | Single provider | **13 providers (Ollama, OpenAI, Anthropic, Google, etc.)** |
+| Financial data | financialdatasets.ai ($200/mo) | **Hybrid: financialdatasets.ai → SEC EDGAR + yfinance (free)** |
 | Trade execution | Simulated only | **Alpaca paper trading** |
+| Analyst agents | 12 built-in | **19 agents (12 + apex + 6 data/quant)** |
 | Custom agents | Not supported | **Create your own analyst agents** |
 | Automation | Manual runs | **Cron-based daily pipeline** |
 | Agent-native | Interactive CLI | **Fully headless, `.env` config, structured JSON output** |
@@ -36,8 +40,9 @@ Multi-agent AI trading system. LLM-powered analyst agents (Buffett, Munger, Burr
 │ Fundamentals │ │ Buffett   │ │ Position   │
 │ Technical    │ │ Burry     │ │ Sizing     │
 │ Sentiment    │ │ Wood      │ │ Volatility │
-│ Growth       │ │ + 9 more  │ │            │
-│ News         │ │ + custom  │ │            │
+│ Growth       │ │ + 10 more │ │            │
+│ Valuation    │ │ + custom  │ │            │
+│ News         │ │           │ │            │
 └──────┬───────┘ └─────┬─────┘ └─────┬──────┘
        │               │             │
        └───────────────┼─────────────┘
@@ -59,7 +64,7 @@ Multi-agent AI trading system. LLM-powered analyst agents (Buffett, Munger, Burr
 
 ## Data Sources
 
-All financial data comes from free, public APIs. No accounts or API keys needed for data.
+Hybrid data layer: tries financialdatasets.ai first (if API key is set), falls back to SEC EDGAR + yfinance on failure or empty results. No paid API keys required for data — works fully free out of the box.
 
 | Data Type | Source | Cache TTL |
 |---|---|---|
@@ -71,9 +76,7 @@ All financial data comes from free, public APIs. No accounts or API keys needed 
 | Market cap / company info | yfinance + SEC EDGAR | 24 hrs |
 | CIK resolution | SEC EDGAR company_tickers.json | 30 days |
 
-The data layer (`src/tools/api_free.py`) is a drop-in replacement for the upstream's `financialdatasets.ai` client. Same function signatures, same return types — agents don't know the difference.
-
-> **Note:** The original `financialdatasets.ai` implementation is preserved as `src/tools/api_original.py` if you ever want to revert.
+The data layer (`src/tools/api.py`) dispatches to `api_original.py` (paid) first, then `api_free.py` (free). Same function signatures, same return types — agents don't know the difference.
 
 ---
 
@@ -83,8 +86,13 @@ The data layer (`src/tools/api_free.py`) is a drop-in replacement for the upstre
 
 - Python 3.11+
 - [Poetry](https://python-poetry.org/)
-- [Ollama](https://ollama.ai/) with at least one model pulled (`ollama pull llama3:8b`)
 - [Alpaca](https://app.alpaca.markets) paper trading account (free)
+- At least one LLM provider configured. Popular options:
+  - [Ollama](https://ollama.ai/) (local, free) — `ollama pull llama3:8b`
+  - [OpenAI](https://platform.openai.com/) — set `OPENAI_API_KEY` in `.env`
+  - [Anthropic](https://console.anthropic.com/) — set `ANTHROPIC_API_KEY` in `.env`
+  - [Google](https://aistudio.google.com/) — set `GOOGLE_API_KEY` in `.env`
+  - Any of the other 13 supported providers (see `src/llm/models.py`)
 
 ### Setup
 
@@ -92,10 +100,9 @@ The data layer (`src/tools/api_free.py`) is a drop-in replacement for the upstre
 git clone https://github.com/zhound420/swarm-trader.git
 cd swarm-trader
 poetry install
-pip install yfinance  # Required for free data layer
 
 cp .env.example .env
-# Add your Alpaca keys to .env
+# Add your Alpaca keys and LLM provider keys to .env
 ```
 
 ### Verify Data Layer
@@ -146,8 +153,8 @@ poetry run python run_hedge_fund.py --telegram
 |---|---|---|
 | `--execute` | off (dry run) | Place real orders on Alpaca paper |
 | `--tickers X,Y,Z` | all holdings | Analyze specific tickers |
-| `--model NAME` | `llama3:8b` | Ollama model to use |
-| `--analysts a,b,c` | buffett, burry, wood, + more | Comma-separated analyst list |
+| `--model NAME` | inherited from `openclaw.json` (fallback: `qwen3.5:397b-cloud`) | LLM model to use |
+| `--analysts a,b,c` | `warren_buffett,michael_burry,cathie_wood,apex,fundamentals_analyst,technical_analyst` | Comma-separated analyst list |
 | `--show-reasoning` | off | Print detailed reasoning from each agent |
 | `--telegram` | off | Bullet-list output for chat |
 
@@ -155,7 +162,9 @@ poetry run python run_hedge_fund.py --telegram
 
 ## Analyst Agents
 
-### LLM Agents (12 built-in)
+### LLM Agents (13)
+
+12 legendary investor personalities + 1 custom:
 
 | Agent | Philosophy |
 |---|---|
@@ -171,8 +180,9 @@ poetry run python run_hedge_fund.py --telegram
 | `aswath_damodaran` | DCF valuation |
 | `rakesh_jhunjhunwala` | Emerging market growth |
 | `mohnish_pabrai` | Dhandho framework |
+| `apex` | Aggressive growth, AI infrastructure, momentum plays |
 
-### Data Agents (no LLM)
+### Data/Quant Agents (6)
 
 | Agent | What it does |
 |---|---|
@@ -180,10 +190,12 @@ poetry run python run_hedge_fund.py --telegram
 | `technical_analyst` | Trend, momentum, volatility |
 | `sentiment_analyst` | Market sentiment |
 | `growth_analyst` | Revenue acceleration, R&D |
+| `valuation_analyst` | Fair value models |
+| `news_sentiment_analyst` | News-driven sentiment signals |
 
 ### Custom Agents
 
-Create your own — see `src/agents/mordecai.py` as a template. Register in `src/utils/analysts.py`. Full guide in [PLAYBOOK.md](./PLAYBOOK.md).
+Create your own — see `src/agents/apex.py` as a template. Register in `src/utils/analysts.py`. Full guide in [PLAYBOOK.md](./PLAYBOOK.md).
 
 ---
 
@@ -191,14 +203,14 @@ Create your own — see `src/agents/mordecai.py` as a template. Register in `src
 
 Every trade passes through all rails before execution:
 
-| Rail | Default | Purpose |
+| Rail | Value | Purpose |
 |---|---|---|
-| Max trade size | 5% of portfolio | No single trade too large |
-| Max daily trades | 5 per session | Prevents runaway loops |
-| Min confidence | 70% | Must be confident to act |
-| Min keep | 10% | Never sells entire position |
+| Max trade size | 10% of portfolio | No single trade too large |
+| Max daily trades | 8 per session | Prevents runaway loops |
+| Min confidence | 60% | Must be confident to act |
+| Min keep | 5% | Never sells entire position |
 | Paper only | Enforced | Hardcoded to paper endpoint |
-| Dry run default | On | Must pass `--execute` |
+| Dry run default | On | Must pass `--execute` to trade |
 
 ---
 
@@ -230,13 +242,15 @@ swarm-trader/
 ├── .env.example               # Secret template
 ├── src/
 │   ├── tools/
-│   │   ├── api.py             # Import router (points to api_free)
-│   │   ├── api_free.py        # ⭐ Free data layer (SEC EDGAR + yfinance)
+│   │   ├── api.py             # Hybrid dispatcher (paid → free fallback)
+│   │   ├── api_free.py        # Free data layer (SEC EDGAR + yfinance)
 │   │   └── api_original.py    # Original financialdatasets.ai client
-│   ├── agents/                # 12 LLM + 4 data agents + custom
+│   ├── agents/                # 13 LLM + 6 data/quant agents + custom
 │   ├── alpaca_integration.py  # Alpaca API + safety rails
 │   └── llm/
-│       └── ollama_models.json # Available models (edit this)
+│       ├── models.py          # 13 LLM provider definitions
+│       ├── api_models.json    # API provider model catalog
+│       └── ollama_models.json # Local Ollama model catalog
 └── .cache/                    # Disk cache (gitignored)
 ```
 

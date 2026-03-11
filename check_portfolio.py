@@ -19,19 +19,13 @@ load_dotenv()
 
 import requests
 
+from src.config import UNIVERSE_SIMPLE as UNIVERSE, ALL_UNIVERSE_TICKERS as ALL_UNIVERSE
+
 API_BASE = "https://paper-api.alpaca.markets/v2"
 HEADERS = {
     "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
     "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
 }
-
-UNIVERSE = {
-    "ai_infra": ["NVDA", "AVGO", "SMCI", "TSM"],
-    "leveraged": ["TQQQ", "SOXL", "UPRO"],
-    "momentum": ["PLTR", "MSTR", "COIN", "RKLB"],
-    "moonshots": ["IONQ", "RGTI", "SOUN", "LUNR"],
-}
-ALL_UNIVERSE = [t for group in UNIVERSE.values() for t in group]
 
 
 def api(endpoint):
@@ -110,7 +104,7 @@ def main():
 
 def output_telegram(equity, cash, daily_pl, daily_pl_pct, positions, big_movers, out_of_universe):
     pl_emoji = "📈" if daily_pl >= 0 else "📉"
-    print(f"💰 Mordecai Fund — Portfolio Check")
+    print(f"💰 Apex Fund — Portfolio Check")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
     print()
     print(f"Portfolio: ${equity:,.2f}")
@@ -153,7 +147,7 @@ def output_telegram(equity, cash, daily_pl, daily_pl_pct, positions, big_movers,
 
 def output_terminal(equity, cash, daily_pl, daily_pl_pct, positions, big_movers, out_of_universe):
     print(f"{'='*60}")
-    print(f"  MORDECAI FUND — PORTFOLIO CHECK")
+    print(f"  APEX FUND — PORTFOLIO CHECK")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
     print(f"{'='*60}")
     print(f"  Equity:   ${equity:>12,.2f}")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Mordecai AI Hedge Fund Runner
+Swarm Trader AI Hedge Fund Runner
 
 Fetches live Alpaca positions, runs multi-agent analysis, and executes trades with safety rails.
 
@@ -13,8 +13,10 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before any imports that need credentials
@@ -29,9 +31,30 @@ from src.alpaca_integration import (
 from src.main import run_hedge_fund
 
 
+def _resolve_openclaw_model(fallback="qwen3.5:397b-cloud"):
+    """Read the primary model from ~/.openclaw/openclaw.json (drox agent or defaults)."""
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    try:
+        config = json.loads(config_path.read_text())
+        agents = config.get("agents", {})
+        # Look for drox agent first, then fall back to defaults
+        for agent in agents.get("list", []):
+            if agent.get("id") == "drox":
+                model = agent["model"]["primary"]
+                # Strip provider prefix (e.g. "ollama/qwen3.5:397b-cloud" -> "qwen3.5:397b-cloud")
+                return model.split("/", 1)[-1] if "/" in model else model
+        # Fall back to agent defaults
+        model = agents.get("defaults", {}).get("model", {}).get("primary", "")
+        if model:
+            return model.split("/", 1)[-1] if "/" in model else model
+    except Exception:
+        pass
+    return fallback
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Run Mordecai AI Hedge Fund analysis and trading",
+        description="Run Swarm Trader AI Hedge Fund analysis and trading",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -62,15 +85,15 @@ Examples:
     
     # Model configuration
     parser.add_argument(
-        "--model", 
-        type=str, 
-        default="llama3:8b",
-        help="Ollama model to use (default: llama3:8b)"
+        "--model",
+        type=str,
+        default=None,
+        help="Ollama model to use (default: inherited from openclaw.json)"
     )
     parser.add_argument(
         "--analysts", 
         type=str,
-        default="warren_buffett,michael_burry,cathie_wood,mordecai,fundamentals_analyst,technical_analyst",
+        default="warren_buffett,michael_burry,cathie_wood,apex,fundamentals_analyst,technical_analyst",
         help="Comma-separated list of analysts to use"
     )
     parser.add_argument(
@@ -80,7 +103,11 @@ Examples:
     )
     
     args = parser.parse_args()
-    
+
+    # Resolve model from openclaw.json if not explicitly provided
+    if args.model is None:
+        args.model = _resolve_openclaw_model()
+
     # Parse inputs
     selected_analysts = [a.strip() for a in args.analysts.split(",") if a.strip()]
     specific_tickers = [t.strip() for t in args.tickers.split(",")] if args.tickers else None
@@ -112,7 +139,7 @@ Examples:
             
         print(f"🔍 Analyzing {len(tickers_to_analyze)} ticker(s): {', '.join(tickers_to_analyze)}")
         print(f"🤖 Using analysts: {', '.join(selected_analysts)}")
-        print(f"🧠 Model: {args.model} (Ollama)")
+        print(f"🧠 Model: {args.model} (Ollama via OpenClaw)")
         print(f"💼 Mode: {'LIVE TRADING' if args.execute else 'DRY RUN'}")
         print()
         
@@ -206,7 +233,7 @@ def output_detailed_summary(decisions, analyst_signals, trade_results, executed)
 
 def output_telegram_summary(decisions, trade_results, executed):
     """Output Telegram-friendly summary (no markdown tables)."""
-    print("🤖 Mordecai AI Hedge Fund Analysis")
+    print("🤖 Swarm Trader AI Hedge Fund Analysis")
     print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
     print()
     

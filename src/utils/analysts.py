@@ -19,7 +19,7 @@ from src.agents.rakesh_jhunjhunwala import rakesh_jhunjhunwala_agent
 from src.agents.mohnish_pabrai import mohnish_pabrai_agent
 from src.agents.news_sentiment import news_sentiment_agent
 from src.agents.growth_agent import growth_analyst_agent
-from src.agents.mordecai import mordecai_agent
+from src.agents.apex import apex_agent
 
 # Define analyst configuration - single source of truth
 ANALYST_CONFIG = {
@@ -85,7 +85,7 @@ ANALYST_CONFIG = {
         "investing_style": "Invests in companies with understandable business models and strong growth potential using the 'buy what you know' strategy.",
         "agent_func": peter_lynch_agent,
         "type": "analyst",
-        "order": 6,
+        "order": 7,
     },
     "phil_fisher": {
         "display_name": "Phil Fisher",
@@ -93,7 +93,7 @@ ANALYST_CONFIG = {
         "investing_style": "Emphasizes investing in companies with strong management and innovative products, focusing on long-term growth through scuttlebutt research.",
         "agent_func": phil_fisher_agent,
         "type": "analyst",
-        "order": 7,
+        "order": 8,
     },
     "rakesh_jhunjhunwala": {
         "display_name": "Rakesh Jhunjhunwala",
@@ -101,7 +101,7 @@ ANALYST_CONFIG = {
         "investing_style": "Leverages macroeconomic insights to invest in high-growth sectors, particularly within emerging markets and domestic opportunities.",
         "agent_func": rakesh_jhunjhunwala_agent,
         "type": "analyst",
-        "order": 8,
+        "order": 9,
     },
     "stanley_druckenmiller": {
         "display_name": "Stanley Druckenmiller",
@@ -109,7 +109,7 @@ ANALYST_CONFIG = {
         "investing_style": "Focuses on macroeconomic trends, making large bets on currencies, commodities, and interest rates through top-down analysis.",
         "agent_func": stanley_druckenmiller_agent,
         "type": "analyst",
-        "order": 9,
+        "order": 10,
     },
     "warren_buffett": {
         "display_name": "Warren Buffett",
@@ -117,7 +117,7 @@ ANALYST_CONFIG = {
         "investing_style": "Seeks companies with strong fundamentals and competitive advantages through value investing and long-term ownership.",
         "agent_func": warren_buffett_agent,
         "type": "analyst",
-        "order": 10,
+        "order": 11,
     },
     "technical_analyst": {
         "display_name": "Technical Analyst",
@@ -125,7 +125,7 @@ ANALYST_CONFIG = {
         "investing_style": "Focuses on chart patterns and market trends to make investment decisions, often using technical indicators and price action analysis.",
         "agent_func": technical_analyst_agent,
         "type": "analyst",
-        "order": 11,
+        "order": 12,
     },
     "fundamentals_analyst": {
         "display_name": "Fundamentals Analyst",
@@ -133,7 +133,7 @@ ANALYST_CONFIG = {
         "investing_style": "Delves into financial statements and economic indicators to assess the intrinsic value of companies through fundamental analysis.",
         "agent_func": fundamentals_analyst_agent,
         "type": "analyst",
-        "order": 12,
+        "order": 13,
     },
     "growth_analyst": {
         "display_name": "Growth Analyst",
@@ -141,7 +141,7 @@ ANALYST_CONFIG = {
         "investing_style": "Analyzes growth trends and valuation to identify growth opportunities through growth analysis.",
         "agent_func": growth_analyst_agent,
         "type": "analyst",
-        "order": 13,
+        "order": 14,
     },
     "news_sentiment_analyst": {
         "display_name": "News Sentiment Analyst",
@@ -149,7 +149,7 @@ ANALYST_CONFIG = {
         "investing_style": "Analyzes news sentiment to predict market movements and identify opportunities through news analysis.",
         "agent_func": news_sentiment_agent,
         "type": "analyst",
-        "order": 14,
+        "order": 15,
     },
     "sentiment_analyst": {
         "display_name": "Sentiment Analyst",
@@ -157,7 +157,7 @@ ANALYST_CONFIG = {
         "investing_style": "Gauges market sentiment and investor behavior to predict market movements and identify opportunities through behavioral analysis.",
         "agent_func": sentiment_analyst_agent,
         "type": "analyst",
-        "order": 15,
+        "order": 16,
     },
     "valuation_analyst": {
         "display_name": "Valuation Analyst",
@@ -165,15 +165,15 @@ ANALYST_CONFIG = {
         "investing_style": "Specializes in determining the fair value of companies, using various valuation models and financial metrics for investment decisions.",
         "agent_func": valuation_analyst_agent,
         "type": "analyst",
-        "order": 16,
+        "order": 17,
     },
-    "mordecai": {
-        "display_name": "Mordecai",
+    "apex": {
+        "display_name": "Apex",
         "description": "Aggressive Growth & AI Infrastructure Specialist",
         "investing_style": "Aggressive growth investor targeting AI infrastructure, leveraged ETFs, momentum plays, and moonshots. Contrarian on consensus, conviction-based sizing, cuts losers fast and lets winners run.",
-        "agent_func": mordecai_agent,
+        "agent_func": apex_agent,
         "type": "analyst",
-        "order": 17,
+        "order": 18,
     },
 }
 

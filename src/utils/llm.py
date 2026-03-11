@@ -48,8 +48,8 @@ def call_llm(
     model_info = get_model_info(model_name, model_provider)
     llm = get_model(model_name, model_provider, api_keys)
 
-    # For non-JSON support models, we can use structured output
-    if not (model_info and not model_info.has_json_mode()):
+    # Use structured output for models that support JSON mode (or when model info is unavailable)
+    if model_info is None or model_info.has_json_mode():
         llm = llm.with_structured_output(
             pydantic_model,
             method="json_mode",
@@ -107,17 +107,46 @@ def create_default_response(model_class: type[BaseModel]) -> BaseModel:
 
 
 def extract_json_from_response(content: str) -> dict | None:
-    """Extracts JSON from markdown-formatted response."""
+    """Extracts JSON from a response, trying multiple formats."""
+    # 1. Try parsing the entire content as raw JSON
+    try:
+        return json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 2. Try extracting from ```json ... ``` markdown blocks
     try:
         json_start = content.find("```json")
         if json_start != -1:
-            json_text = content[json_start + 7 :]  # Skip past ```json
+            json_text = content[json_start + 7:]
             json_end = json_text.find("```")
             if json_end != -1:
                 json_text = json_text[:json_end].strip()
                 return json.loads(json_text)
-    except Exception as e:
-        print(f"Error extracting JSON from response: {e}")
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 3. Try extracting from ``` ... ``` blocks (no language tag)
+    try:
+        json_start = content.find("```")
+        if json_start != -1:
+            json_text = content[json_start + 3:]
+            json_end = json_text.find("```")
+            if json_end != -1:
+                json_text = json_text[:json_end].strip()
+                return json.loads(json_text)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 4. Try finding the first { ... } or [ ... ] block via greedy match
+    import re
+    try:
+        match = re.search(r'(\{[\s\S]*\})', content)
+        if match:
+            return json.loads(match.group(1))
+    except (json.JSONDecodeError, TypeError):
+        pass
+
     return None
 
 

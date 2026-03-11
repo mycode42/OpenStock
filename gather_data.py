@@ -23,20 +23,14 @@ load_dotenv()
 
 import requests
 
+from src.config import UNIVERSE_SIMPLE as UNIVERSE, ALL_UNIVERSE_TICKERS as ALL_UNIVERSE
+
 # Alpaca config
 API_BASE = "https://paper-api.alpaca.markets/v2"
 HEADERS = {
     "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
     "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
 }
-
-UNIVERSE = {
-    "ai_infra": ["NVDA", "AVGO", "SMCI", "TSM"],
-    "leveraged": ["TQQQ", "SOXL", "UPRO"],
-    "momentum": ["PLTR", "MSTR", "COIN", "RKLB"],
-    "moonshots": ["IONQ", "RGTI", "SOUN", "LUNR"],
-}
-ALL_UNIVERSE = [t for group in UNIVERSE.values() for t in group]
 
 
 def alpaca_get(endpoint):
