@@ -201,6 +201,58 @@ def _place_alpaca_order(ticker: str, action: str, qty: int) -> dict:
     }
 
 
+def _place_bracket_order(
+    ticker: str,
+    action: str,
+    qty: int,
+    stop_price: float,
+    take_profit_price: float,
+) -> dict:
+    """Place a bracket order via Alpaca API (entry + stop-loss + take-profit as one atomic order).
+
+    Args:
+        ticker: Stock symbol
+        action: "buy" or "sell"
+        qty: Number of shares
+        stop_price: Stop-loss trigger price
+        take_profit_price: Take-profit limit price
+
+    Returns:
+        Dict with success, order_id, status, or reason on failure
+    """
+    side = "buy" if action in ("buy", "cover") else "sell"
+    order_data = {
+        "symbol": ticker,
+        "qty": str(qty),
+        "side": side,
+        "type": "market",
+        "time_in_force": "gtc",
+        "order_class": "bracket",
+        "stop_loss": {"stop_price": str(round(stop_price, 2))},
+        "take_profit": {"limit_price": str(round(take_profit_price, 2))},
+    }
+    resp = requests.post(
+        f"{ALPACA_BASE_URL}/orders",
+        headers=_HEADERS,
+        json=order_data,
+        timeout=10,
+    )
+    if resp.status_code in (200, 201):
+        order = resp.json()
+        return {
+            "success": True,
+            "order_id": order.get("id"),
+            "status": order.get("status"),
+            "order_class": "bracket",
+            "stop_price": stop_price,
+            "take_profit_price": take_profit_price,
+        }
+    return {
+        "success": False,
+        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
+    }
+
+
 def execute_decisions(
     decisions: dict,
     positions_raw: list[dict],
@@ -210,7 +262,9 @@ def execute_decisions(
     """Execute all trading decisions against safety rails.
 
     Args:
-        decisions: Dict of {ticker: {action, quantity, confidence, reasoning}}
+        decisions: Dict of {ticker: {action, quantity, confidence, reasoning,
+                   stop_price (optional), take_profit (optional)}}
+                   If stop_price and take_profit are both provided, a bracket order is placed.
         positions_raw: Raw Alpaca positions list
         account: Raw Alpaca account dict
         dry_run: If True, validate but don't actually place orders
@@ -231,6 +285,12 @@ def execute_decisions(
         qty = int(decision.get("quantity", 0))
         confidence = float(decision.get("confidence", 0))
         reasoning = decision.get("reasoning", "")
+        stop_price = decision.get("stop_price")
+        take_profit = decision.get("take_profit")
+        order_type = decision.get("order_type", "market")
+        limit_price = decision.get("limit_price")
+        trail_percent = decision.get("trail_percent")
+        use_bracket = stop_price is not None and take_profit is not None and order_type != "oco"
 
         if action == "hold" or qty <= 0:
             results.append({
@@ -269,7 +329,7 @@ def execute_decisions(
             continue
 
         if dry_run:
-            results.append({
+            dry_result: dict = {
                 "ticker": ticker,
                 "action": action,
                 "qty": qty,
@@ -277,9 +337,36 @@ def execute_decisions(
                 "success": True,
                 "dry_run": True,
                 "reasoning": reasoning,
-            })
+                "order_type": order_type,
+            }
+            if use_bracket:
+                dry_result["order_class"] = "bracket"
+                dry_result["stop_price"] = stop_price
+                dry_result["take_profit_price"] = take_profit
+            elif order_type == "oco" and stop_price is not None and take_profit is not None:
+                dry_result["order_class"] = "oco"
+                dry_result["stop_price"] = stop_price
+                dry_result["take_profit_price"] = take_profit
+            elif order_type == "limit" and limit_price is not None:
+                dry_result["limit_price"] = limit_price
+            elif order_type == "stop" and stop_price is not None:
+                dry_result["stop_price"] = stop_price
+            elif order_type == "trailing_stop" and trail_percent is not None:
+                dry_result["trail_percent"] = trail_percent
+            results.append(dry_result)
         else:
-            order_result = _place_alpaca_order(ticker, action, qty)
+            if use_bracket:
+                order_result = _place_bracket_order(ticker, action, qty, float(stop_price), float(take_profit))
+            elif order_type == "oco" and stop_price is not None and take_profit is not None:
+                order_result = _place_oco_order(ticker, action, qty, float(stop_price), float(take_profit))
+            elif order_type == "limit" and limit_price is not None:
+                order_result = _place_limit_order(ticker, action, qty, float(limit_price))
+            elif order_type == "stop" and stop_price is not None:
+                order_result = _place_stop_order(ticker, action, qty, float(stop_price))
+            elif order_type == "trailing_stop" and trail_percent is not None:
+                order_result = _place_trailing_stop(ticker, action, qty, float(trail_percent))
+            else:
+                order_result = _place_alpaca_order(ticker, action, qty)
             if order_result["success"]:
                 _session_trade_count += 1
             results.append({
@@ -291,6 +378,204 @@ def execute_decisions(
             })
 
     return results
+
+
+def get_open_orders(status: str = "open") -> list[dict]:
+    """Fetch all open orders from Alpaca.
+
+    Args:
+        status: Order status filter — "open", "closed", or "all"
+
+    Returns:
+        List of order dicts from Alpaca
+    """
+    resp = requests.get(
+        f"{ALPACA_BASE_URL}/orders",
+        headers=_HEADERS,
+        params={"status": status, "limit": 100},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_order(order_id: str) -> dict:
+    """Fetch a single order by ID.
+
+    Returns:
+        Full order dict (status, filled_qty, etc.) or error dict
+    """
+    resp = requests.get(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=_HEADERS, timeout=10)
+    if resp.status_code == 200:
+        return resp.json()
+    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+
+
+def cancel_order(order_id: str) -> dict:
+    """Cancel a single open order by ID.
+
+    Returns:
+        {"success": True/False, "order_id": ..., "reason": ...}
+    """
+    resp = requests.delete(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=_HEADERS, timeout=10)
+    if resp.status_code in (200, 204):
+        return {"success": True, "order_id": order_id}
+    return {
+        "success": False,
+        "order_id": order_id,
+        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
+    }
+
+
+def cancel_all_orders() -> dict:
+    """Cancel all open orders.
+
+    Returns:
+        {"success": True/False, "cancelled_count": int}
+    """
+    resp = requests.delete(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, timeout=10)
+    if resp.status_code in (200, 207):
+        cancelled = resp.json() if resp.text else []
+        return {"success": True, "cancelled_count": len(cancelled) if isinstance(cancelled, list) else 0}
+    return {
+        "success": False,
+        "cancelled_count": 0,
+        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
+    }
+
+
+def _place_limit_order(
+    ticker: str,
+    action: str,
+    qty: int,
+    limit_price: float,
+    time_in_force: str = "day",
+) -> dict:
+    """Place a limit order via Alpaca API."""
+    side = "buy" if action in ("buy", "cover") else "sell"
+    order_data = {
+        "symbol": ticker,
+        "qty": str(qty),
+        "side": side,
+        "type": "limit",
+        "time_in_force": time_in_force,
+        "limit_price": str(round(limit_price, 2)),
+    }
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    if resp.status_code in (200, 201):
+        order = resp.json()
+        return {
+            "success": True,
+            "order_id": order.get("id"),
+            "status": order.get("status"),
+            "order_type": "limit",
+            "limit_price": limit_price,
+        }
+    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+
+
+def _place_stop_order(
+    ticker: str,
+    action: str,
+    qty: int,
+    stop_price: float,
+    time_in_force: str = "gtc",
+) -> dict:
+    """Place a standalone stop order via Alpaca API.
+
+    Use this for stop-losses on EXISTING positions (not as part of a bracket entry).
+    """
+    side = "buy" if action in ("buy", "cover") else "sell"
+    order_data = {
+        "symbol": ticker,
+        "qty": str(qty),
+        "side": side,
+        "type": "stop",
+        "time_in_force": time_in_force,
+        "stop_price": str(round(stop_price, 2)),
+    }
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    if resp.status_code in (200, 201):
+        order = resp.json()
+        return {
+            "success": True,
+            "order_id": order.get("id"),
+            "status": order.get("status"),
+            "order_type": "stop",
+            "stop_price": stop_price,
+        }
+    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+
+
+def _place_trailing_stop(
+    ticker: str,
+    action: str,
+    qty: int,
+    trail_percent: float,
+    time_in_force: str = "gtc",
+) -> dict:
+    """Place a trailing stop order via Alpaca API.
+
+    Args:
+        trail_percent: Percentage trail (e.g. 2.0 = 2% trailing stop)
+    """
+    side = "buy" if action in ("buy", "cover") else "sell"
+    order_data = {
+        "symbol": ticker,
+        "qty": str(qty),
+        "side": side,
+        "type": "trailing_stop",
+        "time_in_force": time_in_force,
+        "trail_percent": str(round(trail_percent, 2)),
+    }
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    if resp.status_code in (200, 201):
+        order = resp.json()
+        return {
+            "success": True,
+            "order_id": order.get("id"),
+            "status": order.get("status"),
+            "order_type": "trailing_stop",
+            "trail_percent": trail_percent,
+        }
+    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+
+
+def _place_oco_order(
+    ticker: str,
+    action: str,
+    qty: int,
+    stop_price: float,
+    take_profit_price: float,
+) -> dict:
+    """Place an OCO (One-Cancels-Other) order via Alpaca API.
+
+    Use for managing exits on ALREADY HELD positions — no new entry leg.
+    Different from bracket: bracket = entry + exits; OCO = just exits.
+    """
+    side = "buy" if action in ("buy", "cover") else "sell"
+    order_data = {
+        "symbol": ticker,
+        "qty": str(qty),
+        "side": side,
+        "type": "limit",
+        "time_in_force": "gtc",
+        "order_class": "oco",
+        "stop_loss": {"stop_price": str(round(stop_price, 2))},
+        "take_profit": {"limit_price": str(round(take_profit_price, 2))},
+    }
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    if resp.status_code in (200, 201):
+        order = resp.json()
+        return {
+            "success": True,
+            "order_id": order.get("id"),
+            "status": order.get("status"),
+            "order_class": "oco",
+            "stop_price": stop_price,
+            "take_profit_price": take_profit_price,
+        }
+    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
 
 
 def format_positions_summary(positions_raw: list[dict], account: dict) -> str:

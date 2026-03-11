@@ -52,20 +52,48 @@ def get_positions():
     return {p["symbol"]: p for p in r.json()}
 
 
-def place_order(ticker, action, qty):
-    """Place a market order."""
+def place_order(ticker, action, qty, order_type="market", stop_price=None, take_profit=None, limit_price=None):
+    """Place an order. Supports market, bracket, and limit order types."""
     side = "buy" if action in ("buy", "cover") else "sell"
-    order = {
-        "symbol": ticker,
-        "qty": str(int(qty)),
-        "side": side,
-        "type": "market",
-        "time_in_force": "day",
-    }
+
+    use_bracket = order_type == "bracket" or (stop_price is not None and take_profit is not None)
+
+    if use_bracket:
+        order = {
+            "symbol": ticker,
+            "qty": str(int(qty)),
+            "side": side,
+            "type": "market",
+            "time_in_force": "gtc",
+            "order_class": "bracket",
+            "stop_loss": {"stop_price": str(round(float(stop_price), 2))},
+            "take_profit": {"limit_price": str(round(float(take_profit), 2))},
+        }
+    elif order_type == "limit" and limit_price is not None:
+        order = {
+            "symbol": ticker,
+            "qty": str(int(qty)),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "day",
+            "limit_price": str(round(float(limit_price), 2)),
+        }
+    else:
+        order = {
+            "symbol": ticker,
+            "qty": str(int(qty)),
+            "side": side,
+            "type": "market",
+            "time_in_force": "day",
+        }
+
     r = requests.post(f"{API_BASE}/orders", headers=HEADERS, json=order, timeout=10)
     if r.status_code in (200, 201):
         data = r.json()
-        return {"success": True, "order_id": data.get("id"), "status": data.get("status")}
+        result = {"success": True, "order_id": data.get("id"), "status": data.get("status")}
+        if use_bracket:
+            result["order_class"] = "bracket"
+        return result
     return {"success": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
 
 
@@ -124,6 +152,10 @@ def main():
         action = trade["action"].lower()
         qty = int(trade.get("qty", 0))
         reasoning = trade.get("reasoning", "")
+        order_type = trade.get("order_type", "market")
+        stop_price = trade.get("stop_price")
+        take_profit = trade.get("take_profit")
+        limit_price = trade.get("limit_price")
 
         if action == "hold" or qty <= 0:
             results.append({"ticker": ticker, "action": action, "status": "skipped", "reason": "Hold or zero qty"})
@@ -136,10 +168,17 @@ def main():
             continue
 
         if args.dry_run:
-            results.append({"ticker": ticker, "action": action, "qty": qty, "status": "would_execute", "reasoning": reasoning})
+            dry_entry = {"ticker": ticker, "action": action, "qty": qty, "status": "would_execute", "reasoning": reasoning, "order_type": order_type}
+            if stop_price is not None:
+                dry_entry["stop_price"] = stop_price
+            if take_profit is not None:
+                dry_entry["take_profit"] = take_profit
+            if limit_price is not None:
+                dry_entry["limit_price"] = limit_price
+            results.append(dry_entry)
             executed += 1
         else:
-            result = place_order(ticker, action, qty)
+            result = place_order(ticker, action, qty, order_type=order_type, stop_price=stop_price, take_profit=take_profit, limit_price=limit_price)
             status = "executed" if result["success"] else "failed"
             results.append({
                 "ticker": ticker,
