@@ -16,7 +16,7 @@ Multi-agent AI trading system. 19 analyst agents — 13 LLM-powered personalitie
 |---|---|---|
 | LLM providers | Single provider | **13 providers (Ollama, OpenAI, Anthropic, Google, etc.)** |
 | Financial data | financialdatasets.ai ($200/mo) | **Hybrid: financialdatasets.ai → SEC EDGAR + yfinance (free)** |
-| Trade execution | Simulated only | **Alpaca paper trading** |
+| Trade execution | Simulated only | **Alpaca paper trading — market, limit, bracket, OCO, trailing stop** |
 | Analyst agents | 12 built-in | **19 agents (12 + apex + 6 data/quant)** |
 | Custom agents | Not supported | **Create your own analyst agents** |
 | Automation | Manual runs | **Cron-based daily pipeline** |
@@ -145,6 +145,29 @@ poetry run python run_hedge_fund.py --execute
 poetry run python run_hedge_fund.py --telegram
 ```
 
+### Execute from saved JSON (`execute_trades.py`)
+
+For external orchestration (e.g. passing decisions from another agent):
+
+```bash
+# From stdin
+echo '{"trades":[{"ticker":"NVDA","action":"buy","qty":1,"reasoning":"..."}]}' | \
+  poetry run python execute_trades.py
+
+# From file
+poetry run python execute_trades.py --file decisions.json --dry-run
+
+# With bracket order
+cat > decisions.json <<'EOF'
+{"trades":[
+  {"ticker":"NVDA","action":"buy","qty":1,"reasoning":"...","stop_price":900,"take_profit":1050}
+]}
+EOF
+poetry run python execute_trades.py --file decisions.json
+```
+
+Supported fields per trade: `ticker`, `action`, `qty`, `reasoning`, `order_type` (`market`/`bracket`/`limit`), `stop_price`, `take_profit`, `limit_price`.
+
 ---
 
 ## CLI Flags
@@ -196,6 +219,36 @@ poetry run python run_hedge_fund.py --telegram
 ### Custom Agents
 
 Create your own — see `src/agents/apex.py` as a template. Register in `src/utils/analysts.py`. Full guide in [PLAYBOOK.md](./PLAYBOOK.md).
+
+---
+
+## Order Types
+
+The portfolio manager can emit any of the following order types. Set `order_type` in the decision dict (or let the PM choose based on its thesis):
+
+| Type | When to use | Key fields |
+|---|---|---|
+| `market` | Default — fill immediately at market price | — |
+| `limit` | Enter/exit at a specific price | `limit_price` |
+| `bracket` | New entry with automatic stop-loss + take-profit (atomic) | `stop_price`, `take_profit` |
+| `stop` | Standalone stop-loss on an existing position (no entry) | `stop_price` |
+| `oco` | Exit-only: stop + take-profit on existing position (no entry) | `stop_price`, `take_profit` |
+| `trailing_stop` | Stop that rises with price to lock in gains | `trail_percent` |
+
+The PM automatically emits `stop_price` + `take_profit` for high-conviction entries with defined risk levels, triggering bracket orders without manual intervention.
+
+### Order Management
+
+`src/alpaca_integration.py` also exposes order management functions for checking and cancelling orders before placing new ones (avoids "position locked" / duplicate order errors):
+
+```python
+from src.alpaca_integration import get_open_orders, get_order, cancel_order, cancel_all_orders
+
+get_open_orders()          # list all open orders
+get_order(order_id)        # full order detail: status, filled_qty, etc.
+cancel_order(order_id)     # cancel one order
+cancel_all_orders()        # cancel all open orders
+```
 
 ---
 
