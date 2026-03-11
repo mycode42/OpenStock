@@ -162,7 +162,7 @@ fi
 
 # Build the Docker image if 'build' command is provided
 if [ "$COMMAND" = "build" ]; then
-  docker build -t ai-hedge-fund -f Dockerfile ..
+  docker build -t swarm-trader -f Dockerfile ..
   exit 0
 fi
 
@@ -341,9 +341,9 @@ if [ -n "$USE_OLLAMA" ]; then
     fi
   fi
 
-  if [[ "$(docker images -q ai-hedge-fund 2> /dev/null)" == "" ]]; then
+  if [[ "$(docker images -q swarm-trader 2> /dev/null)" == "" ]]; then
     echo "Building AI Hedge Fund image..."
-    docker build -t ai-hedge-fund -f Dockerfile ..
+    docker build -t swarm-trader -f Dockerfile ..
   fi
 
   echo "Running AI Hedge Fund with Ollama using Docker Compose..."
@@ -365,7 +365,7 @@ fi
 CMD="docker run -it --rm -v $(pwd)/.env:/app/.env"
 
 # Add the command
-CMD="$CMD ai-hedge-fund python $SCRIPT_PATH --ticker $TICKER $START_DATE $END_DATE $INITIAL_PARAM --margin-requirement $MARGIN_REQUIREMENT $SHOW_REASONING"
+CMD="$CMD swarm-trader python $SCRIPT_PATH --ticker $TICKER $START_DATE $END_DATE $INITIAL_PARAM --margin-requirement $MARGIN_REQUIREMENT $SHOW_REASONING"
 
 # Run the command
 echo "Running: $CMD"

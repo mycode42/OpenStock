@@ -53,8 +53,8 @@ interface TabsProviderProps {
 }
 
 // localStorage keys
-const TABS_STORAGE_KEY = 'ai-hedge-fund-tabs';
-const ACTIVE_TAB_STORAGE_KEY = 'ai-hedge-fund-active-tab';
+const TABS_STORAGE_KEY = 'swarm-trader-tabs';
+const ACTIVE_TAB_STORAGE_KEY = 'swarm-trader-active-tab';
 
 export function TabsProvider({ children }: TabsProviderProps) {
   const [tabs, setTabs] = useState<Tab[]>([]);

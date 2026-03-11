@@ -12,7 +12,7 @@ Multi-agent AI trading system. 19 analyst agents — 13 LLM-powered personalitie
 
 ## What's Different
 
-| Feature | Upstream (ai-hedge-fund) | Swarm Trader |
+| Feature | Upstream | Swarm Trader |
 |---|---|---|
 | LLM providers | Single provider | **13 providers (Ollama, OpenAI, Anthropic, Google, etc.)** |
 | Financial data | financialdatasets.ai ($200/mo) | **Hybrid: financialdatasets.ai → SEC EDGAR + yfinance (free)** |

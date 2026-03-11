@@ -5,9 +5,9 @@ export interface SidebarStates {
 }
 
 export class SidebarStorageService {
-  private static readonly LEFT_SIDEBAR_KEY = 'ai-hedge-fund-left-sidebar-collapsed';
-  private static readonly RIGHT_SIDEBAR_KEY = 'ai-hedge-fund-right-sidebar-collapsed';
-  private static readonly BOTTOM_PANEL_KEY = 'ai-hedge-fund-bottom-panel-collapsed';
+  private static readonly LEFT_SIDEBAR_KEY = 'swarm-trader-left-sidebar-collapsed';
+  private static readonly RIGHT_SIDEBAR_KEY = 'swarm-trader-right-sidebar-collapsed';
+  private static readonly BOTTOM_PANEL_KEY = 'swarm-trader-bottom-panel-collapsed';
 
   /**
    * Save left sidebar collapsed state to localStorage

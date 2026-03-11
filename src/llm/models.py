@@ -186,7 +186,7 @@ def get_model(model_name: str, model_provider: ModelProvider, api_keys: dict = N
             raise ValueError("OpenRouter API key not found. Please make sure OPENROUTER_API_KEY is set in your .env file or provided via API keys.")
         
         # Get optional site URL and name for headers
-        site_url = os.getenv("YOUR_SITE_URL", "https://github.com/virattt/ai-hedge-fund")
+        site_url = os.getenv("YOUR_SITE_URL", "https://github.com/zhound420/swarm-trader")
         site_name = os.getenv("YOUR_SITE_NAME", "AI Hedge Fund")
         
         return ChatOpenAI(

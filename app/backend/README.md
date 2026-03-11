@@ -15,8 +15,8 @@ This backend is designed to work with a future frontend application that will al
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/virattt/ai-hedge-fund.git
-cd ai-hedge-fund
+git clone https://github.com/zhound420/swarm-trader.git
+cd swarm-trader
 ```
 
 2. Install Poetry (if not already installed):

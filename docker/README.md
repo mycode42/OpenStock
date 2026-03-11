@@ -57,8 +57,8 @@ Before you can run the AI Hedge Fund, you'll need to install it and set up your 
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/virattt/ai-hedge-fund.git
-cd ai-hedge-fund
+git clone https://github.com/zhound420/swarm-trader.git
+cd swarm-trader
 ```
 
 ### 2. Set Up Your API Keys
@@ -203,7 +203,7 @@ run.bat --ticker AAPL,MSFT,NVDA --ollama backtest
 
 ## Feature Requests
 
-If you have a feature request, please open an [issue](https://github.com/virattt/ai-hedge-fund/issues) and make sure it is tagged with `enhancement`.
+If you have a feature request, please open an [issue](https://github.com/zhound420/swarm-trader/issues) and make sure it is tagged with `enhancement`.
 
 ## License
 

@@ -86,8 +86,8 @@ If you prefer to set up each component manually or need more control:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/virattt/ai-hedge-fund.git
-cd ai-hedge-fund
+git clone https://github.com/zhound420/swarm-trader.git
+cd swarm-trader
 ```
 
 2. Set up your environment variables:
@@ -227,5 +227,5 @@ If ports 8000 or 5173 are in use:
 - **Or use different ports** by modifying the scripts
 
 ### Getting Help
-- Check the [GitHub Issues](https://github.com/virattt/ai-hedge-fund/issues)
+- Check the [GitHub Issues](https://github.com/zhound420/swarm-trader/issues)
 - Follow updates on [Twitter](https://x.com/virattt) 

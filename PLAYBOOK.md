@@ -27,7 +27,7 @@
 ## Overview
 
 This system combines:
-- **virattt/ai-hedge-fund** — Open-source multi-agent hedge fund framework
+- **zhound420/swarm-trader** — Open-source multi-agent hedge fund framework
 - **Alpaca Markets** — Paper trading API for order execution
 - **Ollama** — Local LLM inference (zero API cost)
 - **Custom agents** — Your own investment philosophy as an analyst agent
@@ -53,11 +53,11 @@ Alpaca positions → AI agents analyze → Portfolio Manager decides → Safety 
 
 ### Ollama Models
 
-The system uses Ollama for LLM inference. You need at least one model available:
+The system uses Ollama for LLM inference. The default model is inherited from `openclaw.json` when `--model` is not specified. You need at least one model available:
 
 ```bash
 # Local models (run on your hardware)
-ollama pull llama3:8b          # Fast, decent quality (recommended default)
+ollama pull llama3:8b          # Fast, decent quality
 ollama pull phi3:mini           # Lightweight
 
 # Cloud models via Ollama (routed through Ollama's cloud, free tier available)
@@ -73,8 +73,8 @@ ollama pull phi3:mini           # Lightweight
 
 ```bash
 cd ~/your-workspace/projects
-git clone https://github.com/virattt/ai-hedge-fund.git
-cd ai-hedge-fund
+git clone https://github.com/zhound420/swarm-trader.git
+cd swarm-trader
 ```
 
 ### Step 2: Install dependencies
@@ -239,7 +239,7 @@ This supports `env`, `file`, and `exec` providers for secret resolution.
 │ Fundamentals │ │ Buffett   │ │ Volatility │
 │ Technical    │ │ Burry     │ │ Correlation│
 │ Growth       │ │ Cathie    │ │ Position   │
-│ Sentiment    │ │ Mordecai  │ │ Sizing     │
+│ Sentiment    │ │ Apex  │ │ Sizing     │
 │ News         │ │ + 9 more  │ │            │
 └──────┬───────┘ └─────┬─────┘ └─────┬──────┘
        │               │             │
@@ -283,7 +283,7 @@ This supports `env`, `file`, and `exec` providers for secret resolution.
 - `mohnish_pabrai` — Dhandho framework, low risk/high uncertainty
 
 **Custom agents** (your own philosophy):
-- `mordecai` — Aggressive growth, AI infrastructure heavy, contrarian (see below)
+- `apex` — Aggressive growth, AI infrastructure heavy, contrarian (see below)
 
 ### Signal Format
 
@@ -312,7 +312,7 @@ The Portfolio Manager aggregates all signals and decides:
 
 ## Custom Agent Creation
 
-To create your own analyst agent (like we did with Mordecai):
+To create your own analyst agent (like we did with Apex):
 
 ### Step 1: Create the agent file
 
@@ -459,7 +459,7 @@ poetry run python run_hedge_fund.py --show-reasoning
 poetry run python run_hedge_fund.py --model qwen3.5:cloud
 
 # Use specific analysts
-poetry run python run_hedge_fund.py --analysts warren_buffett,mordecai,technical_analyst
+poetry run python run_hedge_fund.py --analysts warren_buffett,apex,technical_analyst
 
 # Telegram-friendly output (no tables, bullet lists)
 poetry run python run_hedge_fund.py --telegram
@@ -589,7 +589,7 @@ openclaw cron add alpaca-portfolio \
   --exact \
   --model google/gemini-2.5-flash \
   --session isolated \
-  --message "Check Alpaca paper trading portfolio. API endpoint: https://paper-api.alpaca.markets/v2. Use API Key from env var ALPACA_API_KEY and Secret from ALPACA_API_SECRET. If env vars aren't set, read them from the .env file at ~/projects/ai-hedge-fund/.env. Report: total portfolio value, top 5 positions by value, biggest movers (>5% swing), and daily P/L. Keep it concise — bullet format, no tables." \
+  --message "Check Alpaca paper trading portfolio. API endpoint: https://paper-api.alpaca.markets/v2. Use API Key from env var ALPACA_API_KEY and Secret from ALPACA_API_SECRET. If env vars aren't set, read them from the .env file at ~/projects/swarm-trader/.env. Report: total portfolio value, top 5 positions by value, biggest movers (>5% swing), and daily P/L. Keep it concise — bullet format, no tables." \
   --announce \
   --channel telegram \
   --to YOUR_CHAT_ID
@@ -606,7 +606,7 @@ openclaw cron add morning-analysis \
   --exact \
   --model google/gemini-2.5-flash \
   --session isolated \
-  --message "Run the AI hedge fund analysis. cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram. Send the output summary." \
+  --message "Run the AI hedge fund analysis. cd ~/projects/swarm-trader && poetry run python run_hedge_fund.py --telegram. Send the output summary." \
   --announce \
   --channel telegram \
   --to YOUR_CHAT_ID
@@ -624,7 +624,7 @@ openclaw cron add midday-scan \
   --exact \
   --model google/gemini-2.5-flash \
   --session isolated \
-  --message "Run midday portfolio analysis: cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram --analysts technical_analyst,mordecai"
+  --message "Run midday portfolio analysis: cd ~/projects/swarm-trader && poetry run python run_hedge_fund.py --telegram --analysts technical_analyst,apex"
 
 # Afternoon (2 PM)
 openclaw cron add afternoon-scan \
@@ -633,7 +633,7 @@ openclaw cron add afternoon-scan \
   --exact \
   --model google/gemini-2.5-flash \
   --session isolated \
-  --message "Run afternoon portfolio analysis with full agent panel: cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram"
+  --message "Run afternoon portfolio analysis with full agent panel: cd ~/projects/swarm-trader && poetry run python run_hedge_fund.py --telegram"
 ```
 
 #### 4. Evening Research (weekdays, 4:30 PM — post-close)
@@ -647,7 +647,7 @@ openclaw cron add evening-research \
   --exact \
   --model google/gemini-2.5-flash \
   --session isolated \
-  --message "Run end-of-day portfolio review: cd ~/projects/ai-hedge-fund && poetry run python run_hedge_fund.py --telegram --show-reasoning. Summarize the day's signals and any overnight action items." \
+  --message "Run end-of-day portfolio review: cd ~/projects/swarm-trader && poetry run python run_hedge_fund.py --telegram --show-reasoning. Summarize the day's signals and any overnight action items." \
   --announce \
   --channel telegram \
   --to YOUR_CHAT_ID
@@ -678,7 +678,7 @@ For agents using OpenClaw heartbeats (periodic wake-ups), add to your `HEARTBEAT
 ```markdown
 ### Alpaca Portfolio Check (daily, morning)
 - API: `https://paper-api.alpaca.markets/v2`
-- Credentials: Read from `projects/ai-hedge-fund/.env` (ALPACA_API_KEY, ALPACA_API_SECRET)
+- Credentials: Read from `projects/swarm-trader/.env` (ALPACA_API_KEY, ALPACA_API_SECRET)
 - Check positions, daily P/L, total portfolio value
 - Alert on big movers (>5% single position swing)
 - Post summary to Telegram
@@ -692,7 +692,7 @@ The heartbeat approach is lighter than a cron — the agent checks on its regula
 
 ```bash
 # One-liner portfolio check (no analysis, just positions)
-source ~/projects/ai-hedge-fund/.env
+source ~/projects/swarm-trader/.env
 curl -s "https://paper-api.alpaca.markets/v2/positions" \
   -H "APCA-API-KEY-ID: $ALPACA_API_KEY" \
   -H "APCA-API-SECRET-KEY: $ALPACA_API_SECRET" | \
@@ -737,7 +737,7 @@ import subprocess
 result = subprocess.run(
     ["poetry", "run", "python", "run_hedge_fund.py", "--telegram"],
     capture_output=True, text=True,
-    cwd="/path/to/ai-hedge-fund"
+    cwd="/path/to/swarm-trader"
 )
 # result.stdout contains the Telegram-formatted summary
 ```
@@ -746,9 +746,9 @@ result = subprocess.run(
 
 ## Known Limitations
 
-1. **Financial data coverage**: Free tier of financialdatasets.ai only covers AAPL, GOOGL, MSFT, NVDA, TSLA. All other tickers get "insufficient data" from fundamentals-dependent agents (Buffett, Burry, Cathie Wood). Fix: Get a paid API key from https://financialdatasets.ai/
+1. **Financial data coverage**: `api.py` is a hybrid dispatcher — it tries financialdatasets.ai first (free tier covers AAPL, GOOGL, MSFT, NVDA, TSLA), then automatically falls back to yfinance + SEC EDGAR for other tickers or API failures. Check `[api]` log lines to see which source was used. For tickers where both sources lack data, use `technical_analyst` + `apex` (no API dependency). A paid financialdatasets.ai key expands primary coverage beyond the 5 free tickers.
 
-2. **ETFs and leveraged products**: TQQQ, SOXL, UPRO, XLE don't have company fundamentals. Agents that rely on company data will return bearish-by-default or neutral. The technical analyst and custom agents (like Mordecai) work fine on ETFs.
+2. **ETFs and leveraged products**: TQQQ, SOXL, UPRO, XLE don't have company fundamentals. Agents that rely on company data will return bearish-by-default or neutral. The technical analyst and custom agents (like Apex) work fine on ETFs.
 
 3. **Weekend/after-hours**: Market orders placed when market is closed get `status: accepted` and execute at next market open. This is fine for paper trading but be aware of gap risk.
 
@@ -786,7 +786,7 @@ result = subprocess.run(
 ## File Reference
 
 ```
-ai-hedge-fund/
+swarm-trader/
 ├── .env                          # API keys (don't commit!)
 ├── pyproject.toml                # Python dependencies (Poetry)
 ├── run_hedge_fund.py               # ⭐ Main runner — analysis + Alpaca execution
@@ -796,7 +796,7 @@ ai-hedge-fund/
 │   ├── main.py                   # Core hedge fund engine
 │   ├── alpaca_integration.py     # ⭐ Alpaca API + safety rails
 │   ├── agents/
-│   │   ├── mordecai.py           # ⭐ Custom agent (our investment philosophy)
+│   │   ├── apex.py           # ⭐ Custom agent (our investment philosophy)
 │   │   ├── warren_buffett.py     # Buffett agent
 │   │   ├── michael_burry.py      # Burry agent
 │   │   ├── cathie_wood.py        # Cathie Wood agent
@@ -809,7 +809,9 @@ ai-hedge-fund/
 │   │   ├── models.py             # Model configuration
 │   │   └── ollama_models.json    # ⭐ Available Ollama models
 │   ├── tools/
-│   │   └── api.py                # Financial data API client
+│   │   ├── api.py                # ⭐ Hybrid data dispatcher (financialdatasets.ai → yfinance/SEC fallback)
+│   │   ├── api_original.py       # Original financialdatasets.ai-only client
+│   │   └── api_free.py           # yfinance/SEC EDGAR-only client
 │   └── utils/
 │       ├── analysts.py           # ⭐ Agent registry (add new agents here)
 │       ├── llm.py                # LLM call helper with retries
@@ -825,7 +827,7 @@ ai-hedge-fund/
 
 For a new OpenClaw agent to get trading:
 
-- [ ] Clone repo: `git clone https://github.com/virattt/ai-hedge-fund.git`
+- [ ] Clone repo: `git clone https://github.com/zhound420/swarm-trader.git`
 - [ ] Install: `poetry install`
 - [ ] Create `.env` with API keys
 - [ ] Update `ollama_models.json` with available models

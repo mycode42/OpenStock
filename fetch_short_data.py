@@ -9,8 +9,8 @@ import sys
 import json
 from datetime import datetime, timedelta
 
-# Add the ai-hedge-fund src to path
-sys.path.insert(0, '/home/zohair/.openclaw/workspace/ai-hedge-fund/src')
+# Add the swarm-trader src to path
+sys.path.insert(0, '/home/zohair/.openclaw/workspace/swarm-trader/src')
 
 from tools.api_original import (
     get_prices,
@@ -183,7 +183,7 @@ def main():
         all_data[ticker] = data
     
     # Save to file
-    output_file = "/home/zohair/.openclaw/workspace/ai-hedge-fund/short_analysis_data.json"
+    output_file = "/home/zohair/.openclaw/workspace/swarm-trader/short_analysis_data.json"
     with open(output_file, 'w') as f:
         json.dump(all_data, f, indent=2, default=str)
     

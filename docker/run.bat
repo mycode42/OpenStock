@@ -192,7 +192,7 @@ if !ERRORLEVEL! EQU 0 (
 
 :: Build the Docker image if 'build' command is provided
 if "!COMMAND!"=="build" (
-    docker build -t ai-hedge-fund -f Dockerfile ..
+    docker build -t swarm-trader -f Dockerfile ..
     exit /b 0
 )
 
@@ -373,10 +373,10 @@ if not "!USE_OLLAMA!"=="" (
 :continue_ollama
     )
 
-    docker images -q ai-hedge-fund 2>nul | findstr /r /c:"^..*$" >nul
+    docker images -q swarm-trader 2>nul | findstr /r /c:"^..*$" >nul
     if !ERRORLEVEL! NEQ 0 (
         echo Building AI Hedge Fund image...
-        docker build -t ai-hedge-fund -f Dockerfile ..
+        docker build -t swarm-trader -f Dockerfile ..
     )
 
     echo Running AI Hedge Fund with Ollama using Docker Compose...
@@ -399,7 +399,7 @@ if not "!USE_OLLAMA!"=="" (
 set CMD=docker run -it --rm -v %cd%\.env:/app/.env
 
 :: Add the command
-set CMD=!CMD! ai-hedge-fund python !SCRIPT_PATH! --ticker !TICKER! !START_DATE! !END_DATE! !INITIAL_PARAM! --margin-requirement !MARGIN_REQUIREMENT! !SHOW_REASONING!
+set CMD=!CMD! swarm-trader python !SCRIPT_PATH! --ticker !TICKER! !START_DATE! !END_DATE! !INITIAL_PARAM! --margin-requirement !MARGIN_REQUIREMENT! !SHOW_REASONING!
 
 :: Run the command
 echo Running: !CMD!
