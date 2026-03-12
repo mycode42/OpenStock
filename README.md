@@ -71,43 +71,7 @@ The scanner typically surfaces 15-25 tickers per session — a mix of names you 
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│              Alpaca Portfolio State                   │
-│         (positions, cash, market values)              │
-└──────────────────────┬──────────────────────────────┘
-                       │
-        ┌──────────────┼──────────────────┐
-        ▼              ▼                  ▼
-┌──────────────┐ ┌────────────┐  ┌────────────────┐
-│ Data Agents  │ │ LLM Agents │  │ Market Regime  │
-│              │ │            │  │                │
-│ Fundamentals │ │ Buffett    │  │ SPY intraday   │
-│ Technical    │ │ Burry      │  │ trend/range/   │
-│ Sentiment    │ │ Wood       │  │ volatile       │
-│ Growth       │ │ + 10 more  │  │ classification │
-│ Valuation    │ │ + Apex     │  │                │
-│ News         │ │ (day trade)│  │                │
-└──────┬───────┘ └─────┬──────┘  └───────┬────────┘
-       │               │                 │
-       └───────────────┼─────────────────┘
-                       ▼
-              ┌─────────────────┐
-              │ Portfolio Manager│
-              │ Aggregates all  │
-              │ signals, decides│
-              │ buy/sell/hold   │
-              └────────┬────────┘
-                       ▼
-              ┌─────────────────┐
-              │  Safety Rails   │
-              │ • Bracket orders│
-              │ • Circuit break │
-              │ • Daily loss cap│
-              │ • Position limit│
-              │  + Alpaca Exec  │
-              └─────────────────┘
-```
+![Swarm Trader Architecture](docs/architecture.png)
 
 ---
 
