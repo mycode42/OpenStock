@@ -248,6 +248,12 @@ Create your own — see `src/agents/apex.py` as a template. Register in `src/uti
 
 ## Order Types
 
+### Execution Methods & Safety Rails
+
+![Execution Methods & Safety Rails](docs/execution-methods.png)
+
+The Portfolio Manager decides on trade actions (buy, sell, short, cover) and emits order types to Alpaca. These are automatically routed through a series of **safety rails** to prevent unintended risks.
+
 | Type | When to use | Key fields |
 |---|---|---|
 | `market` | Default — fill immediately | — |
