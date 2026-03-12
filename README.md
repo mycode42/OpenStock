@@ -313,9 +313,22 @@ If you don't have a trading agent yet:
 
 ```bash
 openclaw agents add cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --workspace ~/path/to/swarm-trader
 ```
+
+**Model choice:** Any model that can follow multi-step instructions and output structured JSON works. The data gathering and execution are deterministic Python scripts — the LLM only handles analysis and trade decisions.
+
+| Model | Notes |
+|---|---|
+| `anthropic/claude-opus-4-6` | Strong reasoning, good for complex analysis |
+| `anthropic/claude-sonnet-4-6` | Faster, cheaper, still solid |
+| `openai/gpt-4o` | Good alternative |
+| `google/gemini-2.5-pro` | Strong and cost-effective |
+| `ollama/llama3:70b` | Fully local, no API cost (needs beefy hardware) |
+| `ollama/qwen3.5:cloud` | Cloud-routed via Ollama, free tier available |
+
+Stronger models produce better trade analysis, but mid-tier models handle the pipeline fine for most use cases.
 
 ### Pipeline Flow
 
@@ -355,7 +368,7 @@ openclaw cron add --name swarm-portfolio-check \
   --exact \
   --session isolated \
   --agent cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
@@ -375,7 +388,7 @@ openclaw cron add --name swarm-open \
   --exact \
   --session isolated \
   --agent cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
@@ -408,7 +421,7 @@ openclaw cron add --name swarm-midmorning \
   --exact \
   --session isolated \
   --agent cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
@@ -436,7 +449,7 @@ openclaw cron add --name swarm-lunch \
   --exact \
   --session isolated \
   --agent cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
@@ -460,7 +473,7 @@ openclaw cron add --name swarm-late \
   --exact \
   --session isolated \
   --agent cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
@@ -484,7 +497,7 @@ openclaw cron add --name swarm-flatten \
   --exact \
   --session isolated \
   --agent cassius \
-  --model "anthropic/claude-opus-4-6" \
+  --model "your-preferred-model" \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
