@@ -317,18 +317,43 @@ openclaw agents add cassius \
   --workspace ~/path/to/swarm-trader
 ```
 
-**Model choice:** Any model that can follow multi-step instructions and output structured JSON works. The data gathering and execution are deterministic Python scripts — the LLM only handles analysis and trade decisions.
+**Model choice:** Any model that can follow multi-step instructions and output structured JSON works. The data gathering and execution are deterministic Python scripts — the LLM only handles analysis and trade decisions. Stronger models produce better trade analysis, but mid-tier models handle the pipeline fine for most use cases.
 
-| Model | Notes |
-|---|---|
-| `anthropic/claude-opus-4-6` | Strong reasoning, good for complex analysis |
-| `anthropic/claude-sonnet-4-6` | Faster, cheaper, still solid |
-| `openai/gpt-4o` | Good alternative |
-| `google/gemini-2.5-pro` | Strong and cost-effective |
-| `ollama/llama3:70b` | Fully local, no API cost (needs beefy hardware) |
-| `ollama/qwen3.5:cloud` | Cloud-routed via Ollama, free tier available |
+**Frontier models** (best analysis, higher cost):
 
-Stronger models produce better trade analysis, but mid-tier models handle the pipeline fine for most use cases.
+| Model | Provider | Input/Output per 1M tokens | Context | Notes |
+|---|---|---|---|---|
+| GPT-5.4 | OpenAI | $2.50 / $15.00 | 1M | Tied #1 on Intelligence Index (57). Latest and greatest |
+| Gemini 3.1 Pro | Google | ~$1.25 / $10.00 | 1M | Tied #1. Excellent multimodal + long context |
+| Gemini 3 Pro | Google | $1.25 / $10.00 | 1M | Near-frontier, great value for the price |
+| Claude Opus 4.6 | Anthropic | $15.00 / $75.00 | 200K | Best instruction-following, adaptive reasoning |
+| GPT-5.2 | OpenAI | $2.00 / $8.00 | 128K | Strong all-rounder, cheaper than 5.4 |
+| Grok 3 | xAI | $3.00 / $15.00 | 131K | Solid reasoning and coding |
+
+**Cost-effective** (strong performance, lower cost):
+
+| Model | Provider | Input/Output per 1M tokens | Context | Notes |
+|---|---|---|---|---|
+| Claude Sonnet 4.6 | Anthropic | $3.00 / $15.00 | 200K | 95% of Opus quality at 1/5 the price |
+| DeepSeek V3.2 | DeepSeek | $0.28 / $0.42 | 130K | Absurdly cheap, very strong (685B params) |
+| Kimi K2.5 | Moonshot | Free tier available | 262K | 1T params, competitive with frontier |
+| Qwen 3.5 | Alibaba | Varies by host | 262K | 397B MoE, excellent reasoning |
+| MiniMax M2.5 | MiniMax | $0.30 / $1.20 | 205K | Good SWE-bench scores, cheap |
+| Step-3.5-Flash | Stepfun | $0.10 / $0.30 | 256K | Ultra-cheap, decent quality |
+
+**Open-weights / self-hosted** (no API cost, runs on your hardware):
+
+| Model | Params | Notes |
+|---|---|---|
+| GLM-5 | 744B | Top open-weights model (Intelligence Index 50) |
+| Kimi K2.5 | 1T | Near-frontier, open weights |
+| DeepSeek V3.2 | 685B | Also available as API (see above) |
+| Qwen 3.5 | 397B (17B active) | MoE = big-model quality, smaller inference cost |
+| Llama 4 Maverick | 400B | Meta's latest, 1M context window |
+| QwQ-32B | 32B | Compact reasoning beast — runs on consumer hardware |
+| Nemotron Ultra | 253B | Nvidia's open model, strong benchmarks |
+
+**Our recommendation:** For day trading, use the best model you can afford — trade decisions are where model quality matters most. DeepSeek V3.2 at $0.28/M input is an incredible value pick. GPT-5.4 or Gemini 3.1 Pro if you want the absolute best. Claude Sonnet 4.6 is a great middle ground.
 
 ### Pipeline Flow
 
