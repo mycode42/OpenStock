@@ -248,18 +248,25 @@ class Trade:
 # Simulation helpers
 # ---------------------------------------------------------------------------
 
-def _bar_time_str(bar: dict) -> str:
-    """Extract HH:MM from bar timestamp."""
+def _bar_time_et(bar: dict) -> tuple[int, int] | None:
+    """Extract HH:MM from bar timestamp and convert UTC → ET (assumes EDT, UTC-4)."""
     t = bar.get("t", "")
-    return t[11:16] if len(t) >= 16 else ""
+    if len(t) < 16:
+        return None
+    try:
+        h_utc, m = int(t[11:13]), int(t[14:16])
+        h_et = (h_utc - 4) % 24
+        return h_et, m
+    except (ValueError, IndexError):
+        return None
 
 
 def _should_flatten(bar: dict) -> bool:
-    """Return True if this bar is at or after FLATTEN_TIME."""
-    t = _bar_time_str(bar)
-    if not t:
+    """Return True if this bar is at or after FLATTEN_TIME (ET)."""
+    hm = _bar_time_et(bar)
+    if hm is None:
         return False
-    h, m = int(t[:2]), int(t[3:])
+    h, m = hm
     flatten_h, flatten_m = int(FLATTEN_TIME.split(":")[0]), int(FLATTEN_TIME.split(":")[1])
     return h * 60 + m >= flatten_h * 60 + flatten_m
 
@@ -693,6 +700,7 @@ def load_strategy(strategy_path: Path | None = None):
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot load strategy from {strategy_path}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules["strategy"] = module  # Required for Python 3.14 dataclass resolution
     spec.loader.exec_module(module)  # type: ignore[union-attr]
     return module
 
