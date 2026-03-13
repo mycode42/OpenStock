@@ -1,6 +1,6 @@
-# EXPERIMENT: target_multiplier_2.2
-# HYPOTHESIS: With CONF_WEIGHT_RSI=0.35 driving RSI 30/70 extreme setups, these high-conviction reversals often carry momentum beyond 2x the stop. Raising TARGET_MULTIPLIER from 2.0 to 2.2 captures 10% more gain per winner without changing signal generation or trade count. Profit_factor, total_return, and Sharpe/Sortino should improve from larger upside captures on the same quality signals.
-# CHANGE: TARGET_MULTIPLIER raised from 2.0 to 2.2
+# EXPERIMENT: range_bound_multiplier_1.0
+# HYPOTHESIS: Range-bound markets are ideal for RSI mean-reversion. The current range_bound multiplier (0.85) combined with the RSI-extreme bonus (1.15x) nets ~0.98x — nearly neutral, suppressing quality setups. Raising range_bound to 1.00 lets RSI-extreme reversals score at full strength in range-bound regimes, adding 1-2 higher-quality trades and improving win rate and Sharpe without increasing noise.
+# CHANGE: REGIME_MULTIPLIER["range_bound"] raised from 0.85 to 1.00
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "target_multiplier_2.2"
-EXPERIMENT_HYPOTHESIS = "With CONF_WEIGHT_RSI=0.35 driving RSI 30/70 extreme setups, these high-conviction reversals often carry momentum beyond 2x the stop. Raising TARGET_MULTIPLIER to 2.2 captures 10% more gain per winner without changing signal generation or trade count, improving profit_factor and Sharpe/Sortino."
-EXPERIMENT_CHANGE = "TARGET_MULTIPLIER raised from 2.0 to 2.2"
+EXPERIMENT_NAME = "range_bound_multiplier_1.0"
+EXPERIMENT_HYPOTHESIS = "Range-bound markets are ideal for RSI mean-reversion. The current range_bound multiplier (0.85) combined with the RSI-extreme bonus (1.15x) nets ~0.98x — nearly neutral, suppressing quality setups. Raising range_bound to 1.00 lets RSI-extreme reversals score at full strength in range-bound regimes, adding 1-2 higher-quality trades and improving win rate and Sharpe."
+EXPERIMENT_CHANGE = "REGIME_MULTIPLIER['range_bound'] raised from 0.85 to 1.00"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -65,7 +65,7 @@ MACD_SIGNAL_PERIOD = 9
 REGIME_MULTIPLIER: dict[str, float] = {
     "trending_up": 1.00,
     "trending_down": 1.00,
-    "range_bound": 0.85,
+    "range_bound": 1.00,
     "volatile": 0.55,
     "unknown": 0.70,
 }
