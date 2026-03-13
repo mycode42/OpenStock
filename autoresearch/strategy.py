@@ -1,6 +1,6 @@
-# EXPERIMENT: responsive_rsi_overbought
-# HYPOTHESIS: Current RSI_OVERBOUGHT = 70 is designed for daily charts and is too high for 5-minute intraday bars, causing the strategy to miss valid bearish signals since intraday RSI rarely reaches 70. RSI has 35% weight in confidence calculations (highest of any component), so more responsive thresholds should improve signal generation and timing. Reducing RSI_OVERBOUGHT to 65 makes it more appropriate for 5-minute bars, enabling more timely short entries and improving Sharpe ratio.
-# CHANGE: RSI_OVERBOUGHT from 70 to 65
+# EXPERIMENT: vwap_noise_reduction
+# HYPOTHESIS: Current VWAP_NEAR_BAND_PCT = 0.50% is too tight for 5-minute intraday bars, generating noise from small price fluctuations around VWAP that create low-quality signals. VWAP has 30% weight in confidence calculations, so improving its signal selectivity should boost performance. Widening the neutral zone to 0.75% will filter out minor VWAP deviations, making VWAP signals more meaningful when they do trigger, which should improve Sharpe ratio.
+# CHANGE: VWAP_NEAR_BAND_PCT from 0.50 to 0.75
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "responsive_rsi_overbought"
-EXPERIMENT_HYPOTHESIS = "Current RSI_OVERBOUGHT = 70 is designed for daily charts and is too high for 5-minute intraday bars, causing the strategy to miss valid bearish signals since intraday RSI rarely reaches 70. RSI has 35% weight in confidence calculations (highest of any component), so more responsive thresholds should improve signal generation and timing. Reducing RSI_OVERBOUGHT to 65 makes it more appropriate for 5-minute bars, enabling more timely short entries and improving Sharpe ratio."
-EXPERIMENT_CHANGE = "RSI_OVERBOUGHT from 70 to 65"
+EXPERIMENT_NAME = "vwap_noise_reduction"
+EXPERIMENT_HYPOTHESIS = "Current VWAP_NEAR_BAND_PCT = 0.50% is too tight for 5-minute intraday bars, generating noise from small price fluctuations around VWAP that create low-quality signals. VWAP has 30% weight in confidence calculations, so improving its signal selectivity should boost performance. Widening the neutral zone to 0.75% will filter out minor VWAP deviations, making VWAP signals more meaningful when they do trigger, which should improve Sharpe ratio."
+EXPERIMENT_CHANGE = "VWAP_NEAR_BAND_PCT from 0.50 to 0.75"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -35,7 +35,7 @@ RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
 
 # VWAP deviation bands (%)
-VWAP_NEAR_BAND_PCT = 0.50       # Within 0.50% = "at VWAP", no strong signal
+VWAP_NEAR_BAND_PCT = 0.75       # Within 0.75% = "at VWAP", no strong signal
 VWAP_EXTENDED_PCT = 1.50        # > 1.5% from VWAP = extended, caution
 
 # Volume ratio thresholds (today cumulative / 20d avg daily)
