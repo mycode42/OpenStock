@@ -396,6 +396,20 @@ def execute_decisions(
                     stop_dist = entry_price - float(stop_price)
                     take_profit = round(entry_price + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
 
+        # Auto-enforce bracket on short orders: stop ABOVE entry, target BELOW entry
+        elif action == "short" and order_type not in ("limit", "stop", "trailing_stop", "oco"):
+            pos = positions_by_symbol.get(ticker, {})
+            entry_price = float(pos.get("current_price", 0))
+            if entry_price <= 0:
+                entry_price = float(decision.get("limit_price") or decision.get("entry_price") or 0)
+            if entry_price > 0:
+                from src.config import DEFAULT_STOP_PCT, DEFAULT_TARGET_MULTIPLIER
+                if stop_price is None:
+                    stop_price = round(entry_price * (1 + DEFAULT_STOP_PCT), 2)
+                if take_profit is None and stop_price is not None:
+                    stop_dist = float(stop_price) - entry_price
+                    take_profit = round(entry_price - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
+
         use_bracket = stop_price is not None and take_profit is not None and order_type != "oco"
 
         if action == "hold" or qty <= 0:

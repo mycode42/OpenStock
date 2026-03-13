@@ -24,6 +24,7 @@ Multi-agent AI trading system with **two modes**: swing trading and intraday day
 | Custom agents | Not supported | **Create your own analyst agents** |
 | Automation | Manual runs | **Cron-based intraday pipeline (5 runs/day)** |
 | Agent-native | Interactive CLI | **Fully headless, `.env` config, structured JSON output** |
+| Strategy evolution | None | **AutoResearch loop — AI agent evolves strategy.py overnight, backtests every mutation** |
 
 ---
 
@@ -72,6 +73,105 @@ The scanner typically surfaces 15-25 tickers per session — a mix of names you 
 ## Architecture
 
 ![Swarm Trader Architecture](docs/architecture.png)
+
+---
+
+## AutoResearch — Strategy Evolution Lab
+
+> Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — Andrej Karpathy's autonomous AI research framework that went viral in March 2026 (~30k GitHub stars in one week). We took the same loop and applied it to trading strategy evolution instead of ML model training.
+
+**The original:** An AI agent modifies `train.py`, runs a 5-minute GPU training run, measures `val_bpb` (validation loss), keeps the change if it improves, reverts if it doesn't. Repeat 100 times overnight. Karpathy's system found an 11% efficiency improvement in GPT-2 training across ~700 autonomous experiments.
+
+**Our adaptation:** The agent modifies `strategy.py` (pure-Python — indicators, thresholds, signal logic), runs a fast backtest against cached Alpaca 5-min bars, measures a composite fitness score, keeps or reverts. Same idea, different domain.
+
+| | Karpathy's autoresearch | Swarm Trader AutoResearch |
+|---|---|---|
+| What evolves | `train.py` (PyTorch LLM training) | `strategy.py` (intraday trading rules) |
+| Evaluation metric | `val_bpb` (validation loss) | Fitness = Sharpe×0.35 + Sortino×0.25 + Return%×0.20 + WinRate×0.10 + ProfitFactor×0.10 |
+| Evaluation budget | 5-min GPU training run | Fast backtest on cached 5-min bars (~30s) |
+| Research instructions | `program.md` | `program.md` |
+| Experiment log | JSONL with diffs and metrics | `experiments/log.jsonl` (same format) |
+| Agent | Claude Code (claude CLI) | Claude Code (claude CLI) or Anthropic SDK |
+| Overnight yield | ~100 experiments | ~25–50 iterations (configurable) |
+
+### How It Works
+
+```
+program.md  (research instructions — human writes this)
+    ↓
+evolve.py   (orchestrator — spawns agent, runs backtest, keeps/reverts)
+    ↓
+strategy.py (pure-Python strategy — the file being evolved, NO LLM calls)
+    ↓
+backtest_fast.py (fitness function — cached 5-min bars, deterministic, fast)
+    ↓
+experiments/log.jsonl (full experiment history with diffs and metrics)
+```
+
+The agent reads `program.md` + recent experiment history + the current `strategy.py`, forms a hypothesis, edits the file, and hands control back to `evolve.py`. The backtester runs it. If fitness improves, the change is committed. If not, it's reverted and the failure is logged. One iteration takes ~1–2 minutes. Run 25 overnight, wake up to a better strategy.
+
+### Fitness Score
+
+```
+fitness = (sharpe × 0.35) + (sortino × 0.25) + (return% × 0.20) + (win_rate × 0.10) + (profit_factor × 0.10)
+```
+
+Penalties for: drawdown > 15%, win rate < 30%, too few trades (< 10), overtrading (> 200).
+
+### Quick Start
+
+```bash
+# 1. Cache historical data (one-time, ~2 min)
+poetry run python autoresearch/backtest_fast.py --days 10
+
+# 2. Run the baseline backtest
+poetry run python autoresearch/backtest_fast.py
+
+# 3. Kick off autonomous evolution (25 iterations)
+poetry run python autoresearch/evolve.py --iterations 25
+
+# 4. Review experiment log
+cat autoresearch/experiments/log.jsonl | python3 -m json.tool
+
+# 5. Or let it run automatically via cron (see Automation section)
+# autoresearch-evolve cron runs at 5:00 PM PT Mon-Fri after market close
+```
+
+### Files
+
+| File | Role | Modified by |
+|------|------|-------------|
+| `autoresearch/strategy.py` | Pure-Python strategy (indicators, params, signal rules) | Agent |
+| `autoresearch/backtest_fast.py` | Deterministic backtester, fitness scorer | Nobody |
+| `autoresearch/evolve.py` | Evolution loop orchestrator | Nobody |
+| `autoresearch/program.md` | Agent instructions | Human |
+| `autoresearch/experiments/log.jsonl` | Full experiment history | System |
+
+### From Research to Production
+
+AutoResearch and the live trading system are **intentionally decoupled**. There is no automatic bridge — this is a safety feature.
+
+```
+AutoResearch (offline)          Live Trading (your agent)
+─────────────────────          ─────────────────────────
+autoresearch/strategy.py        src/agents/apex.py
+Pure Python, no LLM             LLM-based (Opus)
+Backtests cached data           Trades real money (paper)
+Mutations every iteration       Stable config
+         │                              ▲
+         │    Human review gate         │
+         └──────────────────────────────┘
+```
+
+**How findings flow to production:**
+
+1. Review `experiments/log.jsonl` — see what was tried, what improved fitness
+2. Identify the winning changes (lower RSI threshold? new indicator? tighter stops?)
+3. Decide if the finding is real alpha or overfitting to the backtest window
+4. Manually update `src/config.py` (parameters) or `src/agents/apex.py` (prompt/logic)
+5. Monitor your agent's live performance after the change
+
+**Why no auto-bridge?** Backtesting ≠ live trading. Slippage, liquidity, regime changes, and overfitting mean a strategy that backtests well can still lose money live. The human gate ensures someone with judgment reviews before changes hit production.
 
 ---
 
@@ -744,96 +844,11 @@ swarm-trader/
 
 ---
 
-## AutoResearch — Strategy Evolution Lab
-
-Autonomous strategy evolution inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch). An AI agent iteratively modifies the trading strategy, backtests it against historical data, and keeps improvements — all without human intervention.
-
-### How It Works
-
-```
-program.md (research instructions — human writes this)
-    ↓
-evolve.py (orchestrator — spawns agent, runs backtest, keeps/reverts)
-    ↓
-strategy.py (pure-Python strategy — the file being evolved, NO LLM calls)
-    ↓
-backtest_fast.py (fitness function — cached 5-min bars, deterministic, fast)
-    ↓
-experiments/log.jsonl (full experiment history with diffs and metrics)
-```
-
-The agent modifies `strategy.py` (indicators, parameters, signal rules), the backtester runs it against cached Alpaca 5-min bars, and if the composite fitness score improves, the change is kept. One iteration takes ~1-2 minutes. Run 50 overnight, wake up to a better strategy.
-
-### Fitness Score
-
-```
-fitness = (sharpe * 0.35) + (sortino * 0.25) + (return% * 0.20) + (win_rate * 0.10) + (profit_factor * 0.10)
-```
-
-Penalties for: drawdown > 15%, win rate < 30%, too few trades (< 10), overtrading (> 200).
-
-### Quick Start
-
-```bash
-# 1. Cache historical data (one-time, ~2 min)
-poetry run python autoresearch/backtest_fast.py --days 10
-
-# 2. Run the baseline backtest
-poetry run python autoresearch/backtest_fast.py
-
-# 3. Kick off autonomous evolution (50 iterations)
-poetry run python autoresearch/evolve.py --iterations 50
-
-# 4. Review experiment log
-cat autoresearch/experiments/log.jsonl | python3 -m json.tool
-
-# 5. Or let it run automatically (see Cron Setup Commands)
-# autoresearch-evolve cron runs at 5:00 PM PT Mon-Fri after market close
-```
-
-### Files
-
-| File | Role | Modified by |
-|------|------|-------------|
-| `autoresearch/strategy.py` | Pure-Python strategy (indicators, params, signal rules) | Agent |
-| `autoresearch/backtest_fast.py` | Deterministic backtester, fitness scorer | Nobody |
-| `autoresearch/evolve.py` | Evolution loop orchestrator | Nobody |
-| `autoresearch/program.md` | Agent instructions | Human |
-| `autoresearch/experiments/log.jsonl` | Full experiment history | System |
-
-### From Research to Production
-
-AutoResearch and the live trading system are **intentionally decoupled**. There is no automatic bridge — this is a safety feature.
-
-```
-AutoResearch (offline)          Live Trading (your agent)
-─────────────────────          ──────────────────────
-autoresearch/strategy.py        src/agents/apex.py
-Pure Python, no LLM             LLM-based (Opus)
-Backtests cached data           Trades real money (paper)
-Mutations every iteration       Stable config
-         │                              ▲
-         │    Human review gate         │
-         └──────────────────────────────┘
-```
-
-**How findings flow to production:**
-
-1. Review `experiments/log.jsonl` — see what was tried, what improved fitness
-2. Identify the winning changes (lower RSI threshold? new indicator? tighter stops?)
-3. Decide if the finding is real alpha or overfitting to the backtest window
-4. Manually update `src/config.py` (parameters) or `src/agents/apex.py` (prompt/logic)
-5. Monitor your agent's live performance after the change
-
-**Why no auto-bridge?** Backtesting ≠ live trading. Slippage, liquidity, regime changes, and overfitting mean a strategy that backtests well can still lose money live. The human gate ensures someone with judgment reviews before changes hit production.
-
----
-
 ## Credits
 
 Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund). Extended with free data sources, day trading mode, intraday technicals, enforced risk management, short selling, and multi-provider LLM support.
 
-AutoResearch system inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — the pattern of autonomous AI agents iterating on code with a fixed evaluation budget.
+AutoResearch loop adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) by Andrej Karpathy. The original framework autonomously evolves ML training code using a fixed compute budget; we adapted the same pattern to evolve trading strategies using a fixed backtest budget. Core idea, architecture, and `program.md` convention are his — we ported it to the trading domain.
 
 ## Disclaimer
 

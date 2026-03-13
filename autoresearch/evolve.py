@@ -61,7 +61,7 @@ EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_CONSECUTIVE_FAILURES = 5
 MAX_CONSECUTIVE_SYNTAX_ERRORS = 3
 BACKTEST_TIMEOUT_SEC = 300       # 5 min per backtest run
-AGENT_TIMEOUT_SEC = 180          # 3 min for agent to modify strategy
+AGENT_TIMEOUT_SEC = 300          # 5 min for agent to modify strategy
 
 
 # ---------------------------------------------------------------------------
@@ -211,10 +211,14 @@ def _run_agent_claude(prompt: str, quiet: bool = False) -> tuple[bool, str]:
         "-p", prompt,
     ]
 
+    # Strip CLAUDECODE so the child claude process doesn't see a nested session
+    child_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
     try:
         result = subprocess.run(
             cmd,
             cwd=str(REPO_ROOT),
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=AGENT_TIMEOUT_SEC,
@@ -226,9 +230,70 @@ def _run_agent_claude(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         return False, f"Agent timed out after {AGENT_TIMEOUT_SEC}s"
     except FileNotFoundError:
-        return False, "claude CLI not found in PATH. Install it or use --agent codex."
+        return False, "claude CLI not found in PATH. Install it or use --agent api or --agent dry-run."
     except Exception as e:
         return False, f"Agent error: {e}"
+
+
+def _run_agent_api(prompt: str, quiet: bool = False) -> tuple[bool, str]:
+    """
+    Invoke Claude via Anthropic Python SDK to modify strategy.py.
+    Avoids nested Claude session errors (no subprocess call to claude CLI).
+    Returns (success, output_or_error).
+    """
+    try:
+        import anthropic
+    except ImportError:
+        return False, "anthropic package not installed. Run: pip install anthropic"
+
+    if not quiet:
+        print("  [agent] Invoking Claude API (no nested session)...", file=sys.stderr)
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return False, "ANTHROPIC_API_KEY not set in environment"
+
+    try:
+        strategy_content = STRATEGY_PATH.read_text()
+        program_md_content = PROGRAM_MD_PATH.read_text() if PROGRAM_MD_PATH.exists() else ""
+    except Exception as e:
+        return False, f"Failed to read input files: {e}"
+
+    full_prompt = (
+        prompt
+        + f"\n\n## program.md (your full instructions)\n{program_md_content}"
+        + f"\n\n## Current autoresearch/strategy.py\n```python\n{strategy_content}\n```"
+        + "\n\n## Response format"
+        + "\nOutput ONLY the complete modified strategy.py. No explanation, no markdown fences — raw Python only."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            messages=[{"role": "user", "content": full_prompt}],
+        )
+    except Exception as e:
+        return False, f"Anthropic API error: {e}"
+
+    new_content = message.content[0].text.strip()
+
+    # Strip markdown code fences if the model added them
+    if new_content.startswith("```python"):
+        new_content = new_content[len("```python"):].lstrip("\n")
+    elif new_content.startswith("```"):
+        new_content = new_content[3:].lstrip("\n")
+    if new_content.endswith("```"):
+        new_content = new_content[:-3].rstrip()
+
+    try:
+        STRATEGY_PATH.write_text(new_content)
+    except Exception as e:
+        return False, f"Failed to write strategy.py: {e}"
+
+    tokens_used = getattr(message.usage, "input_tokens", "?"), getattr(message.usage, "output_tokens", "?")
+    return True, f"API agent ok (tokens: {tokens_used[0]}in + {tokens_used[1]}out)"
 
 
 def _run_agent_dry_run(prompt: str, quiet: bool = False) -> tuple[bool, str]:
@@ -270,6 +335,7 @@ def _run_agent_dry_run(prompt: str, quiet: bool = False) -> tuple[bool, str]:
 
 AGENTS: dict[str, Any] = {
     "claude": _run_agent_claude,
+    "api": _run_agent_api,
     "dry-run": _run_agent_dry_run,
 }
 
@@ -425,8 +491,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--agent", type=str, default="claude",
-        choices=["claude", "dry-run"],
-        help="Coding agent to use (default: claude)",
+        choices=["claude", "api", "dry-run"],
+        help="Coding agent to use: 'claude' (CLI), 'api' (Anthropic SDK, no nested session), 'dry-run'",
     )
     parser.add_argument(
         "--backtest-days", type=int, default=None,
