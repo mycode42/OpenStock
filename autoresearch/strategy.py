@@ -1,6 +1,6 @@
-# EXPERIMENT: tighten_rsi_oversold_for_quality
-# HYPOTHESIS: MIN_CONFIDENCE=62 has failed multiple times in recent experiments. Different approach: RSI_OVERSOLD=30 → 25 requires deeper panic/capitulation before buy signals, filtering for higher-quality mean-reversion setups. RSI<25 represents true oversold extremes where bounces are more reliable, reducing weak signals while keeping genuine opportunities. This improves win rate and risk-adjusted returns without the issues that MIN_CONFIDENCE=62 seems to cause.
-# CHANGE: RSI_OVERSOLD from 30 to 25
+# EXPERIMENT: moderate_confidence_increase
+# HYPOTHESIS: Current negative fitness (-0.6359) with 51 trades at 43% WR suggests too many weak signals pass through. Historical successes used MIN_CONFIDENCE=62 with 13-14 trades and 57-84% WR, but recent attempts failed due to volatile regime math constraints (62/0.65=95.38 > 95.0 cap). MIN_CONFIDENCE 50→55 provides middle ground: filters weak signals better than 50, achievable in volatile regime (55/0.65=84.6 < 95), should reduce trade count and improve win rate/Sharpe.
+# CHANGE: MIN_CONFIDENCE from 50.0 to 55.0
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "tighten_rsi_oversold_for_quality"
-EXPERIMENT_HYPOTHESIS = "MIN_CONFIDENCE=62 has failed multiple times in recent experiments. Different approach: RSI_OVERSOLD=30 → 25 requires deeper panic/capitulation before buy signals, filtering for higher-quality mean-reversion setups. RSI<25 represents true oversold extremes where bounces are more reliable, reducing weak signals while keeping genuine opportunities. This improves win rate and risk-adjusted returns without the issues that MIN_CONFIDENCE=62 seems to cause."
-EXPERIMENT_CHANGE = "RSI_OVERSOLD from 30 to 25"
+EXPERIMENT_NAME = "moderate_confidence_increase"
+EXPERIMENT_HYPOTHESIS = "Current negative fitness (-0.6359) with 51 trades at 43% WR suggests too many weak signals pass through. Historical successes used MIN_CONFIDENCE=62 with 13-14 trades and 57-84% WR, but recent attempts failed due to volatile regime math constraints (62/0.65=95.38 > 95.0 cap). MIN_CONFIDENCE 50→55 provides middle ground: filters weak signals better than 50, achievable in volatile regime (55/0.65=84.6 < 95), should reduce trade count and improve win rate/Sharpe."
+EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 50.0 to 55.0"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -48,7 +48,7 @@ TARGET_MULTIPLIER = 3.0         # R:R ratio (target = entry ± stop_dist * 3.0)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
-MIN_CONFIDENCE = 50.0
+MIN_CONFIDENCE = 55.0
 
 # Confidence component weights (must sum to 1.0)
 CONF_WEIGHT_RSI = 0.35
