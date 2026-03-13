@@ -61,7 +61,7 @@ EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_CONSECUTIVE_FAILURES = 5
 MAX_CONSECUTIVE_SYNTAX_ERRORS = 3
 BACKTEST_TIMEOUT_SEC = 300       # 5 min per backtest run
-AGENT_TIMEOUT_SEC = 300          # 5 min for agent to modify strategy
+AGENT_TIMEOUT_SEC = 420          # 7 min per iteration (5 min was too tight, ~40% failure rate)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +207,7 @@ def _run_agent_claude(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     cmd = [
         "claude",
         "--print",
+        "--model", "claude-sonnet-4-20250514",  # Pin Sonnet — prevents accidental Opus billing
         "--allowedTools", "Read,Edit,Bash",
         "-p", prompt,
     ]

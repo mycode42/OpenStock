@@ -449,7 +449,8 @@ execute_trades.py       →  Places bracket orders on Alpaca with safety rails
 | 1:00 PM | `swarm-lunch` | Light session, range plays |
 | 3:00 PM | `swarm-late` | Final hour push, last major moves |
 | 3:45 PM | `swarm-flatten` | **CRITICAL**: Close risky/short positions before close |
-| 5:00 PM | `autoresearch-evolve` | Overnight strategy evolution (50 iterations) |
+| 5:00 PM | `autoresearch-run` | Overnight strategy evolution (50 iterations) |
+| 8:00 PM | `autoresearch-report` | Post evolution results to Telegram |
 
 ### Cron Setup Commands
 
@@ -615,27 +616,54 @@ openclaw cron add --name swarm-flatten \
 NO EXCEPTIONS. Risk management > profit.'
 ```
 
-**AutoResearch Evolution (5:00 PM, Mon-Fri):**
+**AutoResearch — Why two crons?**
+
+The evolution loop has two distinct jobs that warrant different models:
+
+| Layer | Job | Model | Why |
+|---|---|---|---|
+| Orchestrator | Launch `evolve.py`, wait 3 hours | `google/gemini-2.5-flash` | Just runs a shell command — no reasoning needed, use cheapest model |
+| Inner loop | Strategy mutation (per iteration) | `claude-sonnet-4-20250514` (pinned in `evolve.py`) | Needs real reasoning to read experiments, form hypothesis, edit code |
+| Reporter | Read log, format Telegram summary | `google/gemini-2.5-flash` | Read-and-summarize, no reasoning needed |
+
+Using a powerful model as the outer orchestrator is pure waste — it just calls `subprocess.run()` and waits. Flash handles that fine at ~10x lower cost. Sonnet is reserved for the inner strategy mutation loop where reasoning actually matters (and is pinned via `--model` in `evolve.py` to prevent accidental Opus usage).
+
+**AutoResearch Run (5:00 PM, Mon-Fri — worker):**
 
 ```bash
-openclaw cron add --name autoresearch-evolve \
+openclaw cron add --name autoresearch-run \
   --cron "0 17 * * 1-5" \
   --tz "America/New_York" \
   --exact \
   --session isolated \
   --agent my-agent \
-  --model "anthropic/claude-sonnet-4-6" \
+  --model "google/gemini-2.5-flash" \
+  --timeout 10800 \
+  --message "Run the autoresearch evolution loop (no announcement — report job handles that).
+
+cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --iterations 50 --backtest-days 10 --agent claude 2>&1 | tee /tmp/autoresearch-latest.log"
+```
+
+**AutoResearch Report (8:00 PM, Mon-Fri — reporter):**
+
+```bash
+openclaw cron add --name autoresearch-report \
+  --cron "0 20 * * 1-5" \
+  --tz "America/New_York" \
+  --exact \
+  --session isolated \
+  --agent my-agent \
+  --model "google/gemini-2.5-flash" \
+  --timeout 120 \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
-  --message "Run autoresearch evolution loop.
+  --message "Read /tmp/autoresearch-latest.log and post the autoresearch results.
 
-cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --iterations 50 --backtest-days 10 --agent claude
-
-When done, summarize: how many experiments ran, best fitness achieved, what changes were kept, and the top 3 findings."
+Summarize: how many experiments ran, best fitness achieved, what changes were kept, and the top 3 findings."
 ```
 
-Runs after market close. The agent evolves `strategy.py` through 50 iterations against the last 10 trading days of cached data. Uses Sonnet as the outer orchestrator (Claude Code inside `evolve.py` handles strategy mutations). Results posted to Telegram.
+The 3-hour timeout on the run job covers 50 iterations at ~1-2 min each (with slack). The report job fires at 8 PM after evolution is done.
 
 ### Swing Trading Schedule (alternative)
 
@@ -646,28 +674,40 @@ For longer-term position trading instead of intraday:
 | 6:30 AM | Morning analysis | Pre-market multi-agent analysis |
 | 9:00 AM | Portfolio check | Quick P/L report |
 | 4:30 PM | Evening research | Post-close deep analysis |
-| 5:00 PM | `autoresearch-evolve` | Swing strategy evolution (50 iterations, `--mode swing`) |
+| 5:00 PM | `autoresearch-run-swing` | Swing strategy evolution (50 iterations, `--mode swing`) |
+| 8:00 PM | `autoresearch-report-swing` | Post swing evolution results to Telegram |
 
 Swing mode uses `gather_data.py --mode swing` (fundamentals, news, insider trades) instead of intraday technicals. See [PLAYBOOK.md](./PLAYBOOK.md) for swing cron setup.
 
-**AutoResearch swing evolution cron:**
+**AutoResearch swing evolution crons (same two-cron pattern):**
 
 ```bash
-openclaw cron add --name autoresearch-evolve-swing \
+openclaw cron add --name autoresearch-run-swing \
   --cron "0 17 * * 1-5" \
   --tz "America/New_York" \
   --exact \
   --session isolated \
   --agent my-agent \
-  --model "anthropic/claude-sonnet-4-6" \
+  --model "google/gemini-2.5-flash" \
+  --timeout 10800 \
+  --message "Run the autoresearch swing evolution loop (no announcement — report job handles that).
+
+cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --mode swing --iterations 50 --backtest-days 30 --agent claude 2>&1 | tee /tmp/autoresearch-swing-latest.log"
+
+openclaw cron add --name autoresearch-report-swing \
+  --cron "0 20 * * 1-5" \
+  --tz "America/New_York" \
+  --exact \
+  --session isolated \
+  --agent my-agent \
+  --model "google/gemini-2.5-flash" \
+  --timeout 120 \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
-  --message "Run autoresearch swing evolution loop.
+  --message "Read /tmp/autoresearch-swing-latest.log and post the swing autoresearch results.
 
-cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --mode swing --iterations 50 --backtest-days 30 --agent claude
-
-When done, summarize: how many experiments ran, best fitness achieved, what swing strategy changes were kept (MA periods, stop %, trend thresholds), and the top 3 findings."
+Summarize: how many experiments ran, best fitness achieved, what swing strategy changes were kept (MA periods, stop %, trend thresholds), and the top 3 findings."
 ```
 
 ### Managing Crons
