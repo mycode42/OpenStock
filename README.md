@@ -782,7 +782,29 @@ cat autoresearch/experiments/log.jsonl | python3 -m json.tool
 
 ### From Research to Production
 
-AutoResearch discovers what works offline. Winning findings (parameter changes, new indicator combinations, rule improvements) get manually reviewed and folded into the live Apex agent's prompt and config. The research lab doesn't touch live money.
+AutoResearch and the live trading system are **intentionally decoupled**. There is no automatic bridge — this is a safety feature.
+
+```
+AutoResearch (offline)          Live Trading (Cassius)
+─────────────────────          ──────────────────────
+autoresearch/strategy.py        src/agents/apex.py
+Pure Python, no LLM             LLM-based (Opus)
+Backtests cached data           Trades real money (paper)
+Mutations every iteration       Stable config
+         │                              ▲
+         │    Human review gate         │
+         └──────────────────────────────┘
+```
+
+**How findings flow to production:**
+
+1. Review `experiments/log.jsonl` — see what was tried, what improved fitness
+2. Identify the winning changes (lower RSI threshold? new indicator? tighter stops?)
+3. Decide if the finding is real alpha or overfitting to the backtest window
+4. Manually update `src/config.py` (parameters) or `src/agents/apex.py` (prompt/logic)
+5. Monitor Cassius's live performance after the change
+
+**Why no auto-bridge?** Backtesting ≠ live trading. Slippage, liquidity, regime changes, and overfitting mean a strategy that backtests well can still lose money live. The human gate ensures someone with judgment reviews before changes hit production.
 
 ---
 
