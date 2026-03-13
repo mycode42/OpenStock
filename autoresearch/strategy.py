@@ -1,6 +1,6 @@
-# EXPERIMENT: qqq_alignment_bonus
-# HYPOTHESIS: qqq_change_pct is available in market_context but unused. When QQQ aligns with trade direction (tech market confirmation), signal quality is higher. Adding a 1.05x QQQ alignment bonus (mirroring SPY) means trades where both SPY and QQQ confirm get a combined ~1.10x boost, improving win rate and Sharpe by filtering out signals that trade against broad market momentum.
-# CHANGE: Added QQQ alignment bonus (1.05x) after SPY alignment, using qqq_change_pct from market_context
+# EXPERIMENT: tighter_stop_pct
+# HYPOTHESIS: With STOP_PCT=1.0% and TARGET_MULTIPLIER=2.2, the target is 2.2% away — harder to hit. Tightening stop to 0.8% reduces the target distance to 1.76% (same R:R), making targets easier to reach. Win rate should improve from ~55% toward ~60%, reducing P&L variance per trade and improving Sharpe/Sortino — the two largest fitness components (60% combined weight).
+# CHANGE: Reduced STOP_PCT from 0.010 to 0.008
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "qqq_alignment_bonus"
-EXPERIMENT_HYPOTHESIS = "qqq_change_pct is available in market_context but unused. When QQQ aligns with trade direction (tech market confirmation), signal quality is higher. Adding a 1.05x QQQ alignment bonus (mirroring SPY) means trades where both SPY and QQQ confirm get a combined ~1.10x boost, improving win rate and Sharpe by filtering out signals that trade against broad market momentum."
-EXPERIMENT_CHANGE = "Added QQQ alignment bonus (1.05x) after SPY alignment, using qqq_change_pct from market_context"
+EXPERIMENT_NAME = "tighter_stop_pct"
+EXPERIMENT_HYPOTHESIS = "With STOP_PCT=1.0% and TARGET_MULTIPLIER=2.2, the target is 2.2% away — harder to hit. Tightening stop to 0.8% reduces the target distance to 1.76% (same R:R), making targets easier to reach. Win rate should improve from ~55% toward ~60%, reducing P&L variance per trade and improving Sharpe/Sortino — the two largest fitness components (60% combined weight)."
+EXPERIMENT_CHANGE = "Reduced STOP_PCT from 0.010 to 0.008"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -43,7 +43,7 @@ VOLUME_CONFIRM_RATIO = 1.50     # >= 1.5x to confirm signal
 VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
-STOP_PCT = 0.010                # Default stop = 1.0% from entry
+STOP_PCT = 0.008                # Default stop = 0.8% from entry
 TARGET_MULTIPLIER = 2.2         # R:R ratio (target = entry ± stop_dist * 2.2)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
