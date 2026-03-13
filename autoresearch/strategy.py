@@ -1,6 +1,6 @@
-# EXPERIMENT: vwap_noise_reduction
-# HYPOTHESIS: Current VWAP_NEAR_BAND_PCT = 0.50% is too tight for 5-minute intraday bars, generating noise from small price fluctuations around VWAP that create low-quality signals. VWAP has 30% weight in confidence calculations, so improving its signal selectivity should boost performance. Widening the neutral zone to 0.75% will filter out minor VWAP deviations, making VWAP signals more meaningful when they do trigger, which should improve Sharpe ratio.
-# CHANGE: VWAP_NEAR_BAND_PCT from 0.50 to 0.75
+# EXPERIMENT: aggressive_targets
+# HYPOTHESIS: Current strategy achieves exceptional signal quality (Sharpe 4.82, win rate 46.67%) with TARGET_MULTIPLIER = 2.2. Such high-quality signals suggest we can be more aggressive on profit targets while maintaining the same stop discipline. Increasing target multiplier to 2.5 should boost total return (20% fitness weight) by capturing more profit from the already-proven high-quality signals, while the excellent Sharpe ratio provides cushion for any minor win rate reduction.
+# CHANGE: TARGET_MULTIPLIER from 2.2 to 2.5
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "vwap_noise_reduction"
-EXPERIMENT_HYPOTHESIS = "Current VWAP_NEAR_BAND_PCT = 0.50% is too tight for 5-minute intraday bars, generating noise from small price fluctuations around VWAP that create low-quality signals. VWAP has 30% weight in confidence calculations, so improving its signal selectivity should boost performance. Widening the neutral zone to 0.75% will filter out minor VWAP deviations, making VWAP signals more meaningful when they do trigger, which should improve Sharpe ratio."
-EXPERIMENT_CHANGE = "VWAP_NEAR_BAND_PCT from 0.50 to 0.75"
+EXPERIMENT_NAME = "aggressive_targets"
+EXPERIMENT_HYPOTHESIS = "Current strategy achieves exceptional signal quality (Sharpe 4.82, win rate 46.67%) with TARGET_MULTIPLIER = 2.2. Such high-quality signals suggest we can be more aggressive on profit targets while maintaining the same stop discipline. Increasing target multiplier to 2.5 should boost total return (20% fitness weight) by capturing more profit from the already-proven high-quality signals, while the excellent Sharpe ratio provides cushion for any minor win rate reduction."
+EXPERIMENT_CHANGE = "TARGET_MULTIPLIER from 2.2 to 2.5"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -44,7 +44,7 @@ VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
 STOP_PCT = 0.008                # Default stop = 0.8% from entry
-TARGET_MULTIPLIER = 2.2         # R:R ratio (target = entry ± stop_dist * 2.2)
+TARGET_MULTIPLIER = 2.5         # R:R ratio (target = entry ± stop_dist * 2.5)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
