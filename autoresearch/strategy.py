@@ -1,6 +1,6 @@
-# EXPERIMENT: rsi_weight_boost
-# HYPOTHESIS: MACD is a trend-following indicator that often contradicts RSI extremes — when RSI is oversold (<30), MACD is typically still bearish, adding 12 points to bear_score and partially cancelling the RSI bull signal. Since our strategy is RSI mean-reversion, the RSI component should dominate. Shifting 5% weight from MACD to RSI makes extremes score higher, boosting confidence on quality signals and improving win rate / Sharpe.
-# CHANGE: CONF_WEIGHT_RSI from 0.35 to 0.40, CONF_WEIGHT_MACD from 0.15 to 0.10 (sum unchanged at 1.0)
+# EXPERIMENT: lower_confidence_threshold
+# HYPOTHESIS: Current MIN_CONFIDENCE = 58.0 creates a mathematical impossibility in volatile markets. With volatile regime multiplier 0.55, signals need raw confidence ≥ 105.45 to pass, but confidence is capped at 95.0. This explains why experiments consistently get exactly 5 trades and hit the <10 trades penalty (-15 fitness). Quality signals scoring 70-85 raw confidence are rejected after applying 0.55x multiplier. Lowering MIN_CONFIDENCE to 50.0 allows these signals to pass (requiring only 90.9 raw confidence) while maintaining selectivity.
+# CHANGE: MIN_CONFIDENCE from 58.0 to 50.0
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "rsi_weight_boost"
-EXPERIMENT_HYPOTHESIS = "MACD is a trend-following indicator that often contradicts RSI extremes — when RSI is oversold (<30), MACD is typically still bearish, adding 12 points to bear_score and partially cancelling the RSI bull signal. Since our strategy is RSI mean-reversion, the RSI component should dominate. Shifting 5% weight from MACD to RSI makes extremes score higher, boosting confidence on quality signals and improving win rate / Sharpe."
-EXPERIMENT_CHANGE = "CONF_WEIGHT_RSI from 0.35 to 0.40, CONF_WEIGHT_MACD from 0.15 to 0.10 (sum unchanged at 1.0)"
+EXPERIMENT_NAME = "lower_confidence_threshold"
+EXPERIMENT_HYPOTHESIS = "Current MIN_CONFIDENCE = 58.0 creates a mathematical impossibility in volatile markets. With volatile regime multiplier 0.55, signals need raw confidence ≥ 105.45 to pass, but confidence is capped at 95.0. This explains why experiments consistently get exactly 5 trades and hit the <10 trades penalty (-15 fitness). Quality signals scoring 70-85 raw confidence are rejected after applying 0.55x multiplier. Lowering MIN_CONFIDENCE to 50.0 allows these signals to pass (requiring only 90.9 raw confidence) while maintaining selectivity."
+EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 58.0 to 50.0"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -48,13 +48,13 @@ TARGET_MULTIPLIER = 2.2         # R:R ratio (target = entry ± stop_dist * 2.2)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
-MIN_CONFIDENCE = 58.0
+MIN_CONFIDENCE = 50.0
 
 # Confidence component weights (must sum to 1.0)
-CONF_WEIGHT_RSI = 0.40
+CONF_WEIGHT_RSI = 0.35
 CONF_WEIGHT_VWAP = 0.30
 CONF_WEIGHT_VOLUME = 0.20
-CONF_WEIGHT_MACD = 0.10
+CONF_WEIGHT_MACD = 0.15
 
 # MACD parameters
 MACD_FAST = 12
