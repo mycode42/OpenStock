@@ -14,7 +14,7 @@ Orchestrates the autoresearch loop:
 Usage:
     poetry run python autoresearch/evolve.py
     poetry run python autoresearch/evolve.py --iterations 50 --backtest-days 10
-    poetry run python autoresearch/evolve.py --iterations 20 --agent claude --quiet
+    poetry run python autoresearch/evolve.py --iterations 25 --agent claude --quiet
     poetry run python autoresearch/evolve.py --dry-run   # No agent calls, test harness only
 
 Abort conditions:
@@ -50,6 +50,7 @@ STRATEGY_PATH = AUTORESEARCH_DIR / "strategy.py"
 STRATEGY_BACKUP_PATH = AUTORESEARCH_DIR / "strategy_backup.py"
 EXPERIMENTS_DIR = AUTORESEARCH_DIR / "experiments"
 LOG_PATH = EXPERIMENTS_DIR / "log.jsonl"
+RUNS_LOG_PATH = EXPERIMENTS_DIR / "runs.jsonl"
 PROGRAM_MD_PATH = AUTORESEARCH_DIR / "program.md"
 BACKTEST_SCRIPT = AUTORESEARCH_DIR / "backtest_fast.py"
 
@@ -58,10 +59,14 @@ EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Abort thresholds
 # ---------------------------------------------------------------------------
-MAX_CONSECUTIVE_FAILURES = 5
+MAX_CONSECUTIVE_FAILURES = 5     # backtest errors / non-timeout agent errors
+MAX_CONSECUTIVE_TIMEOUTS = 4     # agent timeouts specifically
 MAX_CONSECUTIVE_SYNTAX_ERRORS = 3
 BACKTEST_TIMEOUT_SEC = 300       # 5 min per backtest run
-AGENT_TIMEOUT_SEC = 180          # 3 min for agent to modify strategy
+AGENT_TIMEOUT_SEC = 420          # 7 min per iteration (5 min was too tight, ~40% failure rate)
+PLATEAU_ITERATIONS = 15          # stop early if no improvement in this many consecutive iterations
+OOS_FITNESS_FLOOR = -5.0         # reject keeper if OOS fitness drops below this
+OOS_BACKTEST_DAYS = 20           # wider window for out-of-sample check
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +92,12 @@ def _load_recent_experiments(n: int = 10) -> list[dict]:
 def _append_experiment(record: dict) -> None:
     """Append an experiment record to log.jsonl."""
     with open(LOG_PATH, "a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
+
+
+def _write_run_summary(record: dict) -> None:
+    """Append a run summary record to runs.jsonl."""
+    with open(RUNS_LOG_PATH, "a") as f:
         f.write(json.dumps(record, default=str) + "\n")
 
 
@@ -207,14 +218,19 @@ def _run_agent_claude(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     cmd = [
         "claude",
         "--print",
+        "--model", "claude-sonnet-4-20250514",  # Pin Sonnet — prevents accidental Opus billing
         "--allowedTools", "Read,Edit,Bash",
         "-p", prompt,
     ]
+
+    # Strip CLAUDECODE so the child claude process doesn't see a nested session
+    child_env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
     try:
         result = subprocess.run(
             cmd,
             cwd=str(REPO_ROOT),
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=AGENT_TIMEOUT_SEC,
@@ -226,9 +242,70 @@ def _run_agent_claude(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         return False, f"Agent timed out after {AGENT_TIMEOUT_SEC}s"
     except FileNotFoundError:
-        return False, "claude CLI not found in PATH. Install it or use --agent codex."
+        return False, "claude CLI not found in PATH. Install it or use --agent api or --agent dry-run."
     except Exception as e:
         return False, f"Agent error: {e}"
+
+
+def _run_agent_api(prompt: str, quiet: bool = False) -> tuple[bool, str]:
+    """
+    Invoke Claude via Anthropic Python SDK to modify strategy.py.
+    Avoids nested Claude session errors (no subprocess call to claude CLI).
+    Returns (success, output_or_error).
+    """
+    try:
+        import anthropic
+    except ImportError:
+        return False, "anthropic package not installed. Run: pip install anthropic"
+
+    if not quiet:
+        print("  [agent] Invoking Claude API (no nested session)...", file=sys.stderr)
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return False, "ANTHROPIC_API_KEY not set in environment"
+
+    try:
+        strategy_content = STRATEGY_PATH.read_text()
+        program_md_content = PROGRAM_MD_PATH.read_text() if PROGRAM_MD_PATH.exists() else ""
+    except Exception as e:
+        return False, f"Failed to read input files: {e}"
+
+    full_prompt = (
+        prompt
+        + f"\n\n## program.md (your full instructions)\n{program_md_content}"
+        + f"\n\n## Current autoresearch/strategy.py\n```python\n{strategy_content}\n```"
+        + "\n\n## Response format"
+        + "\nOutput ONLY the complete modified strategy.py. No explanation, no markdown fences — raw Python only."
+    )
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=8192,
+            messages=[{"role": "user", "content": full_prompt}],
+        )
+    except Exception as e:
+        return False, f"Anthropic API error: {e}"
+
+    new_content = message.content[0].text.strip()
+
+    # Strip markdown code fences if the model added them
+    if new_content.startswith("```python"):
+        new_content = new_content[len("```python"):].lstrip("\n")
+    elif new_content.startswith("```"):
+        new_content = new_content[3:].lstrip("\n")
+    if new_content.endswith("```"):
+        new_content = new_content[:-3].rstrip()
+
+    try:
+        STRATEGY_PATH.write_text(new_content)
+    except Exception as e:
+        return False, f"Failed to write strategy.py: {e}"
+
+    tokens_used = getattr(message.usage, "input_tokens", "?"), getattr(message.usage, "output_tokens", "?")
+    return True, f"API agent ok (tokens: {tokens_used[0]}in + {tokens_used[1]}out)"
 
 
 def _run_agent_dry_run(prompt: str, quiet: bool = False) -> tuple[bool, str]:
@@ -270,6 +347,7 @@ def _run_agent_dry_run(prompt: str, quiet: bool = False) -> tuple[bool, str]:
 
 AGENTS: dict[str, Any] = {
     "claude": _run_agent_claude,
+    "api": _run_agent_api,
     "dry-run": _run_agent_dry_run,
 }
 
@@ -425,8 +503,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--agent", type=str, default="claude",
-        choices=["claude", "dry-run"],
-        help="Coding agent to use (default: claude)",
+        choices=["claude", "api", "dry-run"],
+        help="Coding agent to use: 'claude' (CLI), 'api' (Anthropic SDK, no nested session), 'dry-run'",
     )
     parser.add_argument(
         "--backtest-days", type=int, default=None,
@@ -481,9 +559,14 @@ def main() -> int:
     )
 
     # --- Evolution state ---
+    run_id = str(uuid.uuid4())
+    timestamp_start = datetime.utcnow().isoformat() + "Z"
+    stop_reason = "completed"
     session_experiments: list[dict] = []
     consecutive_failures = 0
+    consecutive_timeouts = 0
     consecutive_syntax_errors = 0
+    iterations_since_improvement = 0
 
     for iteration in range(1, args.iterations + 1):
         print(f"\n[{iteration}/{args.iterations}] Starting experiment...", file=sys.stderr)
@@ -495,7 +578,7 @@ def main() -> int:
         shutil.copy2(STRATEGY_PATH, STRATEGY_BACKUP_PATH)
 
         # 2. Load recent experiment history
-        recent_experiments = _load_recent_experiments(n=10)
+        recent_experiments = _load_recent_experiments(n=20)
 
         # 3. Build agent prompt
         prompt = _build_agent_prompt(
@@ -525,10 +608,18 @@ def main() -> int:
                 "error": f"agent_error: {agent_output[:200]}",
             })
             session_experiments.append({"experiment_id": experiment_id, "kept": False, "fitness_score": None, "hypothesis": "agent_error", "metrics": {}, "error": agent_output[:100]})
-            consecutive_failures += 1
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                print(f"\n[ABORT] {MAX_CONSECUTIVE_FAILURES} consecutive failures. Stopping.", file=sys.stderr)
-                break
+            if "timed out" in agent_output.lower() or "TimeoutExpired" in agent_output:
+                consecutive_timeouts += 1
+                if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                    print(f"\n[ABORT] {MAX_CONSECUTIVE_TIMEOUTS} consecutive agent timeouts.", file=sys.stderr)
+                    stop_reason = "abort"
+                    break
+            else:
+                consecutive_failures += 1
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    print(f"\n[ABORT] {MAX_CONSECUTIVE_FAILURES} consecutive failures. Stopping.", file=sys.stderr)
+                    stop_reason = "abort"
+                    break
             continue
 
         # 5. Syntax check
@@ -551,6 +642,7 @@ def main() -> int:
             session_experiments.append({"experiment_id": experiment_id, "kept": False, "fitness_score": None, "hypothesis": "syntax_error", "metrics": {}, "error": syntax_err[:100]})
             if consecutive_syntax_errors >= MAX_CONSECUTIVE_SYNTAX_ERRORS:
                 print(f"\n[ABORT] {MAX_CONSECUTIVE_SYNTAX_ERRORS} consecutive syntax errors. Stopping.", file=sys.stderr)
+                stop_reason = "abort"
                 break
             continue
 
@@ -586,30 +678,45 @@ def main() -> int:
             consecutive_failures += 1
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                 print(f"\n[ABORT] {MAX_CONSECUTIVE_FAILURES} consecutive failures. Stopping.", file=sys.stderr)
+                stop_reason = "abort"
                 break
             continue
 
-        consecutive_failures = 0  # reset on backtest success
+        consecutive_failures = 0   # reset on backtest success
+        consecutive_timeouts = 0   # reset on any successful agent call + backtest
 
         new_fitness = metrics.get("fitness", -999.0)
         fitness_delta = new_fitness - best_fitness
 
-        # 9. Keep or revert
-        kept = new_fitness > best_fitness
+        # 9. Keep or revert (with OOS validation)
+        kept = False
+        oos_rejection_msg = None
 
-        if kept:
-            best_fitness = new_fitness
-            print(
-                f"  [KEPT] fitness={new_fitness:.4f} (Δ{fitness_delta:+.4f})  "
-                f"return={metrics.get('total_return_pct',0):+.2f}%  "
-                f"sharpe={metrics.get('sharpe_ratio',0):.2f}  "
-                f"trades={metrics.get('num_trades',0)}",
-                file=sys.stderr,
-            )
-            # Git commit
-            committed = _git_commit(hypothesis, experiment_id, new_fitness)
-            if not args.quiet and committed:
-                print(f"  [git] Committed.", file=sys.stderr)
+        if new_fitness > best_fitness:
+            # OOS validation — test on wider window before committing
+            oos_ok, oos_metrics = _run_backtest(OOS_BACKTEST_DAYS, args.capital, quiet=True, mode=args.mode)
+            oos_fitness = oos_metrics.get("fitness", -999.0) if oos_ok else -999.0
+            if oos_fitness < OOS_FITNESS_FLOOR:
+                shutil.copy2(STRATEGY_BACKUP_PATH, STRATEGY_PATH)
+                oos_rejection_msg = f"oos_rejected: oos_fitness={oos_fitness:.4f}"
+                print(
+                    f"  [OOS REJECTED] IS fitness={new_fitness:.4f} but OOS fitness={oos_fitness:.4f} < floor {OOS_FITNESS_FLOOR}",
+                    file=sys.stderr,
+                )
+            else:
+                kept = True
+                best_fitness = new_fitness
+                print(
+                    f"  [KEPT] IS={new_fitness:.4f} OOS={oos_fitness:.4f} (Δ{fitness_delta:+.4f})  "
+                    f"return={metrics.get('total_return_pct',0):+.2f}%  "
+                    f"sharpe={metrics.get('sharpe_ratio',0):.2f}  "
+                    f"trades={metrics.get('num_trades',0)}",
+                    file=sys.stderr,
+                )
+                # Git commit
+                committed = _git_commit(hypothesis, experiment_id, new_fitness)
+                if not args.quiet and committed:
+                    print(f"  [git] Committed.", file=sys.stderr)
         else:
             # Revert to backup
             shutil.copy2(STRATEGY_BACKUP_PATH, STRATEGY_PATH)
@@ -630,7 +737,7 @@ def main() -> int:
             "fitness_score": new_fitness,
             "metrics": metrics,
             "kept": kept,
-            "error": None,
+            "error": oos_rejection_msg,
         }
         _append_experiment(record)
         session_experiments.append({
@@ -640,6 +747,19 @@ def main() -> int:
             "hypothesis": hypothesis,
             "metrics": metrics,
         })
+
+        # 11. Plateau detection — stop early if no improvement for N consecutive iterations
+        if kept:
+            iterations_since_improvement = 0
+        else:
+            iterations_since_improvement += 1
+            if iterations_since_improvement >= PLATEAU_ITERATIONS:
+                print(
+                    f"\n[PLATEAU] No improvement in {PLATEAU_ITERATIONS} iterations. Stopping early.",
+                    file=sys.stderr,
+                )
+                stop_reason = "plateau"
+                break
 
     # --- Final summary ---
     all_experiments = _load_recent_experiments(n=1000)
@@ -652,6 +772,39 @@ def main() -> int:
     # Clean up backup
     if STRATEGY_BACKUP_PATH.exists():
         STRATEGY_BACKUP_PATH.unlink()
+
+    # --- Write run summary ---
+    kept_experiments = [e for e in session_experiments if e.get("kept")]
+    top_hypothesis: str | None = None
+    if kept_experiments:
+        best_kept = max(kept_experiments, key=lambda e: e.get("fitness_score") or -999)
+        top_hypothesis = best_kept.get("hypothesis")
+
+    error_count = sum(
+        1 for e in session_experiments if e.get("error")
+    )
+    timeout_count = sum(
+        1 for e in session_experiments
+        if "timed out" in (e.get("error") or "").lower()
+    )
+
+    _write_run_summary({
+        "run_id": run_id,
+        "timestamp_start": timestamp_start,
+        "timestamp_end": datetime.utcnow().isoformat() + "Z",
+        "mode": args.mode,
+        "iterations_requested": args.iterations,
+        "iterations_completed": len(session_experiments),
+        "stop_reason": stop_reason,
+        "baseline_fitness": baseline_fitness,
+        "best_fitness": best_fitness,
+        "improvement": best_fitness - baseline_fitness,
+        "keep_count": len(kept_experiments),
+        "total_experiments": len(session_experiments),
+        "error_count": error_count,
+        "timeout_count": timeout_count,
+        "top_hypothesis": top_hypothesis,
+    })
 
     return 0
 

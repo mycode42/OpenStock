@@ -24,6 +24,7 @@ Multi-agent AI trading system with **two modes**: swing trading and intraday day
 | Custom agents | Not supported | **Create your own analyst agents** |
 | Automation | Manual runs | **Cron-based intraday pipeline (5 runs/day)** |
 | Agent-native | Interactive CLI | **Fully headless, `.env` config, structured JSON output** |
+| Strategy evolution | None | **AutoResearch loop — AI agent evolves strategy.py overnight, backtests every mutation** |
 
 ---
 
@@ -72,6 +73,110 @@ The scanner typically surfaces 15-25 tickers per session — a mix of names you 
 ## Architecture
 
 ![Swarm Trader Architecture](docs/architecture.png)
+
+---
+
+## AutoResearch — Strategy Evolution Lab
+
+> Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — Andrej Karpathy's autonomous AI research framework that went viral in March 2026 (~30k GitHub stars in one week). We took the same loop and applied it to trading strategy evolution instead of ML model training.
+
+**The original:** An AI agent modifies `train.py`, runs a 5-minute GPU training run, measures `val_bpb` (validation loss), keeps the change if it improves, reverts if it doesn't. Repeat 100 times overnight. Karpathy's system found an 11% efficiency improvement in GPT-2 training across ~700 autonomous experiments.
+
+**Our adaptation:** The agent modifies `strategy.py` (pure-Python — indicators, thresholds, signal logic), runs a fast backtest against cached Alpaca 5-min bars, measures a composite fitness score, keeps or reverts. Same idea, different domain.
+
+| | Karpathy's autoresearch | Swarm Trader AutoResearch |
+|---|---|---|
+| What evolves | `train.py` (PyTorch LLM training) | `strategy.py` (intraday trading rules) |
+| Evaluation metric | `val_bpb` (validation loss) | Fitness = Sharpe×0.35 + Sortino×0.25 + Return%×0.20 + WinRate×0.10 + ProfitFactor×0.10 |
+| Evaluation budget | 5-min GPU training run | Fast backtest on cached 5-min bars (~30s) |
+| Research instructions | `program.md` | `program.md` |
+| Experiment log | JSONL with diffs and metrics | `experiments/log.jsonl` (same format) |
+| Agent | Claude Code (claude CLI) | Claude Code (claude CLI, pinned to Sonnet) or Anthropic SDK |
+| Overnight yield | ~100 experiments | ~25–50 iterations (configurable) |
+
+### How It Works
+
+```
+program.md  (research instructions — human writes this)
+    ↓
+evolve.py   (orchestrator — spawns agent, runs backtest, keeps/reverts)
+    ↓
+strategy.py (pure-Python strategy — the file being evolved, NO LLM calls)
+    ↓
+backtest_fast.py (fitness function — cached 5-min bars, deterministic, fast)
+    ↓
+experiments/log.jsonl (full experiment history with diffs and metrics)
+```
+
+The agent reads `program.md` + recent experiment history + the current `strategy.py`, forms a hypothesis, edits the file, and hands control back to `evolve.py`. The backtester runs it. If fitness improves, the change is committed. If not, it's reverted and the failure is logged. One iteration takes ~1–2 minutes. Run 25 overnight, wake up to a better strategy.
+
+### Fitness Score
+
+```
+fitness = (sharpe × 0.35) + (sortino × 0.25) + (return% × 0.20) + (win_rate × 0.10) + (profit_factor × 0.10)
+```
+
+Penalties for: drawdown > 15%, win rate < 30%, too few trades (< 10), overtrading (> 200).
+
+### Quick Start
+
+```bash
+# 1. Cache historical data (one-time, ~2 min)
+poetry run python autoresearch/backtest_fast.py --days 10
+
+# 2. Run the baseline backtest
+poetry run python autoresearch/backtest_fast.py
+
+# 3. Kick off autonomous evolution (25 iterations)
+poetry run python autoresearch/evolve.py --iterations 25
+
+# 4. Review per-run trend (after first run completes)
+poetry run python autoresearch/analyze.py
+
+# 5. Or drill into raw experiment log
+cat autoresearch/experiments/log.jsonl | python3 -m json.tool
+
+# 6. Or let it run automatically via cron (see Automation section)
+# autoresearch-evolve cron runs at 5:00 PM PT Mon-Fri after market close
+```
+
+### Files
+
+| File | Role | Modified by |
+|------|------|-------------|
+| `autoresearch/strategy.py` | Pure-Python strategy (indicators, params, signal rules) | Agent |
+| `autoresearch/backtest_fast.py` | Deterministic backtester, fitness scorer | Nobody |
+| `autoresearch/evolve.py` | Evolution loop orchestrator | Nobody |
+| `autoresearch/analyze.py` | Cross-run analytics — run history, fitness trend, hypothesis frequency | Nobody |
+| `autoresearch/program.md` | Agent instructions | Human |
+| `autoresearch/experiments/log.jsonl` | Full experiment history (one record per experiment) | System |
+| `autoresearch/experiments/runs.jsonl` | Per-session run summaries (one record per evolve.py run) | System |
+
+### From Research to Production
+
+AutoResearch and the live trading system are **intentionally decoupled**. There is no automatic bridge — this is a safety feature.
+
+```
+AutoResearch (offline)          Live Trading (your agent)
+─────────────────────          ─────────────────────────
+autoresearch/strategy.py        src/agents/apex.py
+Pure Python, no LLM             LLM-based (Opus)
+Backtests cached data           Trades real money (paper)
+Mutations every iteration       Stable config
+         │                              ▲
+         │    Human review gate         │
+         └──────────────────────────────┘
+```
+
+**How findings flow to production:**
+
+1. Review `experiments/log.jsonl` — see what was tried, what improved fitness
+2. Identify the winning changes (lower RSI threshold? new indicator? tighter stops?)
+3. Decide if the finding is real alpha or overfitting to the backtest window
+4. Manually update `src/config.py` (parameters) or `src/agents/apex.py` (prompt/logic)
+5. Monitor your agent's live performance after the change
+
+**Why no auto-bridge?** Backtesting ≠ live trading. Slippage, liquidity, regime changes, and overfitting mean a strategy that backtests well can still lose money live. The human gate ensures someone with judgment reviews before changes hit production.
 
 ---
 
@@ -269,12 +374,12 @@ In day trading mode, **bracket orders are mandatory**. If a trade is submitted w
 
 ## Automation with OpenClaw
 
-The system is designed to run fully autonomous via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. An AI agent (we use "Cassius" running Claude Opus) executes the full pipeline on schedule: scan → gather → analyze → trade → report.
+The system is designed to run fully autonomous via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. An AI agent executes the full pipeline on schedule: scan → gather → analyze → trade → report.
 
 ### Prerequisites
 
 1. **OpenClaw installed and running** — `openclaw gateway status` should show healthy
-2. **An agent configured** — e.g., `cassius` with access to the swarm-trader workspace
+2. **An agent configured** — e.g., `my-agent` with access to the swarm-trader workspace
 3. **Telegram group** (optional) — for trade reports. Replace `-5217663499` with your chat ID
 
 ### Agent Setup
@@ -282,7 +387,7 @@ The system is designed to run fully autonomous via [OpenClaw](https://github.com
 If you don't have a trading agent yet:
 
 ```bash
-openclaw agents add cassius \
+openclaw agents add my-agent \
   --model "your-preferred-model" \
   --workspace ~/path/to/swarm-trader
 ```
@@ -341,7 +446,7 @@ execute_trades.py       →  Places bracket orders on Alpaca with safety rails
 
 5 runs during market hours, Mon-Fri:
 
-| Time (PT) | Job | Purpose |
+| Time (ET) | Job | Purpose |
 |---|---|---|
 | 9:00 AM | `swarm-portfolio-check` | Daily P/L report, portfolio health |
 | 9:30 AM | `swarm-open` | Market open — scan + aggressive entries |
@@ -349,7 +454,8 @@ execute_trades.py       →  Places bracket orders on Alpaca with safety rails
 | 1:00 PM | `swarm-lunch` | Light session, range plays |
 | 3:00 PM | `swarm-late` | Final hour push, last major moves |
 | 3:45 PM | `swarm-flatten` | **CRITICAL**: Close risky/short positions before close |
-| 5:00 PM | `autoresearch-evolve` | Overnight strategy evolution (25 iterations) |
+| 5:00 PM | `autoresearch-run` | Overnight strategy evolution (50 iterations) |
+| 8:00 PM | `autoresearch-report` | Post evolution results to Telegram |
 
 ### Cron Setup Commands
 
@@ -360,10 +466,10 @@ Copy-paste these to set up the full day trading schedule. Adjust `--agent`, `--m
 ```bash
 openclaw cron add --name swarm-portfolio-check \
   --cron "0 9 * * *" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -380,10 +486,10 @@ Report: total equity, daily P&L, top positions, any big movers (>5% swing)."
 ```bash
 openclaw cron add --name swarm-open \
   --cron "30 9 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -395,15 +501,15 @@ openclaw cron add --name swarm-open \
    Echo the discovered tickers.
 
 2. Gather intraday data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-intraday.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-intraday.json
 
-3. Read /tmp/cassius-intraday.json — 5-min bars, VWAP, RSI, volume, key levels.
+3. Read /tmp/swarm-intraday.json — 5-min bars, VWAP, RSI, volume, key levels.
 
 4. Analyze each ticker: Price vs VWAP, RSI, volume conviction, key levels, why the scanner flagged it.
 
-5. Write trade decisions to /tmp/cassius-trades.json (bracket orders with stop_price and take_profit required).
+5. Write trade decisions to /tmp/swarm-trades.json (bracket orders with stop_price and take_profit required).
 
-6. Execute: poetry run python execute_trades.py --file /tmp/cassius-trades.json
+6. Execute: poetry run python execute_trades.py --file /tmp/swarm-trades.json
 
 7. Post summary: scanner discoveries, trades executed, market regime, key setups.'
 ```
@@ -413,10 +519,10 @@ openclaw cron add --name swarm-open \
 ```bash
 openclaw cron add --name swarm-midmorning \
   --cron "0 11 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -427,11 +533,11 @@ openclaw cron add --name swarm-midmorning \
    cd ~/path/to/swarm-trader && TICKERS=$(poetry run python scan_market.py --max 25)
 
 2. Gather fresh data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-midmorning.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-midmorning.json
 
 3. Review existing positions — any stops getting hit? Any breakouts?
 
-4. Tactical trades (momentum/mean reversion). Write to /tmp/cassius-midmorning-trades.json and execute.
+4. Tactical trades (momentum/mean reversion). Write to /tmp/swarm-midmorning-trades.json and execute.
 
 5. Brief update: market direction, new scanner finds, position adjustments.'
 ```
@@ -441,10 +547,10 @@ openclaw cron add --name swarm-midmorning \
 ```bash
 openclaw cron add --name swarm-lunch \
   --cron "0 13 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -455,7 +561,7 @@ openclaw cron add --name swarm-lunch \
    cd ~/path/to/swarm-trader && TICKERS=$(poetry run python scan_market.py --max 20)
 
 2. Gather data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-lunch.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-lunch.json
 
 3. Light trading — range plays, quick scalps if setups are clean. Reduce exposure if choppy, add if trending.'
 ```
@@ -465,10 +571,10 @@ openclaw cron add --name swarm-lunch \
 ```bash
 openclaw cron add --name swarm-late \
   --cron "0 15 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -479,7 +585,7 @@ openclaw cron add --name swarm-late \
    cd ~/path/to/swarm-trader && TICKERS=$(poetry run python scan_market.py --max 25)
 
 2. Gather data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-late.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-late.json
 
 3. Last chance for major position changes. Plan what gets flattened at 3:45 PM vs what holds overnight.'
 ```
@@ -489,10 +595,10 @@ openclaw cron add --name swarm-late \
 ```bash
 openclaw cron add --name swarm-flatten \
   --cron "45 15 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -515,59 +621,98 @@ openclaw cron add --name swarm-flatten \
 NO EXCEPTIONS. Risk management > profit.'
 ```
 
-**AutoResearch Evolution (5:00 PM, Mon-Fri):**
+**AutoResearch — Why two crons?**
+
+The evolution loop has two distinct jobs that warrant different models:
+
+| Layer | Job | Model | Why |
+|---|---|---|---|
+| Orchestrator | Launch `evolve.py`, wait 3 hours | `google/gemini-2.5-flash` | Just runs a shell command — no reasoning needed, use cheapest model |
+| Inner loop | Strategy mutation (per iteration) | `claude-sonnet-4-20250514` (pinned in `evolve.py`) | Needs real reasoning to read experiments, form hypothesis, edit code |
+| Reporter | Read log, format Telegram summary | `google/gemini-2.5-flash` | Read-and-summarize, no reasoning needed |
+
+Using a powerful model as the outer orchestrator is pure waste — it just calls `subprocess.run()` and waits. Flash handles that fine at ~10x lower cost. Sonnet is reserved for the inner strategy mutation loop where reasoning actually matters (and is pinned via `--model` in `evolve.py` to prevent accidental Opus usage).
+
+**AutoResearch Run (5:00 PM, Mon-Fri — worker):**
 
 ```bash
-openclaw cron add --name autoresearch-evolve \
+openclaw cron add --name autoresearch-run \
   --cron "0 17 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
-  --model "anthropic/claude-sonnet-4-6" \
+  --agent my-agent \
+  --model "google/gemini-2.5-flash" \
+  --timeout 10800 \
+  --message "Run the autoresearch evolution loop (no announcement — report job handles that).
+
+cd ~/path/to/swarm-trader && poetry run python autoresearch/backtest_fast.py --days 10 && poetry run python autoresearch/evolve.py --iterations 50 --backtest-days 10 --agent claude 2>&1 | tee /tmp/autoresearch-latest.log"
+```
+
+**AutoResearch Report (8:00 PM, Mon-Fri — reporter):**
+
+```bash
+openclaw cron add --name autoresearch-report \
+  --cron "0 20 * * 1-5" \
+  --tz "America/New_York" \
+  --exact \
+  --session isolated \
+  --agent my-agent \
+  --model "google/gemini-2.5-flash" \
+  --timeout 120 \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
-  --message "Run autoresearch evolution loop.
+  --message "Read /tmp/autoresearch-latest.log and post the autoresearch results.
 
-cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --iterations 25 --backtest-days 10 --agent claude
-
-When done, summarize: how many experiments ran, best fitness achieved, what changes were kept, and the top 3 findings."
+Summarize: how many experiments ran, best fitness achieved, what changes were kept, and the top 3 findings."
 ```
 
-Runs after market close. Cassius evolves `strategy.py` through 25 iterations against the last 10 trading days of cached data. Uses Sonnet as the outer orchestrator (Claude Code inside `evolve.py` handles strategy mutations). Results posted to Telegram.
+The 3-hour timeout on the run job covers 50 iterations at ~1-2 min each (with slack). The report job fires at 8 PM after evolution is done.
 
 ### Swing Trading Schedule (alternative)
 
 For longer-term position trading instead of intraday:
 
-| Time (PT) | Job | Purpose |
+| Time (ET) | Job | Purpose |
 |---|---|---|
 | 6:30 AM | Morning analysis | Pre-market multi-agent analysis |
 | 9:00 AM | Portfolio check | Quick P/L report |
 | 4:30 PM | Evening research | Post-close deep analysis |
-| 5:00 PM | `autoresearch-evolve` | Swing strategy evolution (25 iterations, `--mode swing`) |
+| 5:00 PM | `autoresearch-run-swing` | Swing strategy evolution (50 iterations, `--mode swing`) |
+| 8:00 PM | `autoresearch-report-swing` | Post swing evolution results to Telegram |
 
 Swing mode uses `gather_data.py --mode swing` (fundamentals, news, insider trades) instead of intraday technicals. See [PLAYBOOK.md](./PLAYBOOK.md) for swing cron setup.
 
-**AutoResearch swing evolution cron:**
+**AutoResearch swing evolution crons (same two-cron pattern):**
 
 ```bash
-openclaw cron add --name autoresearch-evolve-swing \
+openclaw cron add --name autoresearch-run-swing \
   --cron "0 17 * * 1-5" \
-  --tz "America/Los_Angeles" \
+  --tz "America/New_York" \
   --exact \
   --session isolated \
-  --agent cassius \
-  --model "anthropic/claude-sonnet-4-6" \
+  --agent my-agent \
+  --model "google/gemini-2.5-flash" \
+  --timeout 10800 \
+  --message "Run the autoresearch swing evolution loop (no announcement — report job handles that).
+
+cd ~/path/to/swarm-trader && poetry run python autoresearch/backtest_fast.py --days 30 && poetry run python autoresearch/evolve.py --mode swing --iterations 50 --backtest-days 30 --agent claude 2>&1 | tee /tmp/autoresearch-swing-latest.log"
+
+openclaw cron add --name autoresearch-report-swing \
+  --cron "0 20 * * 1-5" \
+  --tz "America/New_York" \
+  --exact \
+  --session isolated \
+  --agent my-agent \
+  --model "google/gemini-2.5-flash" \
+  --timeout 120 \
   --announce \
   --channel telegram \
   --to "YOUR_CHAT_ID" \
-  --message "Run autoresearch swing evolution loop.
+  --message "Read /tmp/autoresearch-swing-latest.log and post the swing autoresearch results.
 
-cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --mode swing --iterations 25 --backtest-days 30 --agent claude
-
-When done, summarize: how many experiments ran, best fitness achieved, what swing strategy changes were kept (MA periods, stop %, trend thresholds), and the top 3 findings."
+Summarize: how many experiments ran, best fitness achieved, what swing strategy changes were kept (MA periods, stop %, trend thresholds), and the top 3 findings."
 ```
 
 ### Managing Crons
@@ -744,96 +889,11 @@ swarm-trader/
 
 ---
 
-## AutoResearch — Strategy Evolution Lab
-
-Autonomous strategy evolution inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch). An AI agent iteratively modifies the trading strategy, backtests it against historical data, and keeps improvements — all without human intervention.
-
-### How It Works
-
-```
-program.md (research instructions — human writes this)
-    ↓
-evolve.py (orchestrator — spawns agent, runs backtest, keeps/reverts)
-    ↓
-strategy.py (pure-Python strategy — the file being evolved, NO LLM calls)
-    ↓
-backtest_fast.py (fitness function — cached 5-min bars, deterministic, fast)
-    ↓
-experiments/log.jsonl (full experiment history with diffs and metrics)
-```
-
-The agent modifies `strategy.py` (indicators, parameters, signal rules), the backtester runs it against cached Alpaca 5-min bars, and if the composite fitness score improves, the change is kept. One iteration takes ~1-2 minutes. Run 50 overnight, wake up to a better strategy.
-
-### Fitness Score
-
-```
-fitness = (sharpe * 0.35) + (sortino * 0.25) + (return% * 0.20) + (win_rate * 0.10) + (profit_factor * 0.10)
-```
-
-Penalties for: drawdown > 15%, win rate < 30%, too few trades (< 10), overtrading (> 200).
-
-### Quick Start
-
-```bash
-# 1. Cache historical data (one-time, ~2 min)
-poetry run python autoresearch/backtest_fast.py --days 10
-
-# 2. Run the baseline backtest
-poetry run python autoresearch/backtest_fast.py
-
-# 3. Kick off autonomous evolution (25 iterations)
-poetry run python autoresearch/evolve.py --iterations 25
-
-# 4. Review experiment log
-cat autoresearch/experiments/log.jsonl | python3 -m json.tool
-
-# 5. Or let it run automatically (see Cron Setup Commands)
-# autoresearch-evolve cron runs at 5:00 PM PT Mon-Fri after market close
-```
-
-### Files
-
-| File | Role | Modified by |
-|------|------|-------------|
-| `autoresearch/strategy.py` | Pure-Python strategy (indicators, params, signal rules) | Agent |
-| `autoresearch/backtest_fast.py` | Deterministic backtester, fitness scorer | Nobody |
-| `autoresearch/evolve.py` | Evolution loop orchestrator | Nobody |
-| `autoresearch/program.md` | Agent instructions | Human |
-| `autoresearch/experiments/log.jsonl` | Full experiment history | System |
-
-### From Research to Production
-
-AutoResearch and the live trading system are **intentionally decoupled**. There is no automatic bridge — this is a safety feature.
-
-```
-AutoResearch (offline)          Live Trading (Cassius)
-─────────────────────          ──────────────────────
-autoresearch/strategy.py        src/agents/apex.py
-Pure Python, no LLM             LLM-based (Opus)
-Backtests cached data           Trades real money (paper)
-Mutations every iteration       Stable config
-         │                              ▲
-         │    Human review gate         │
-         └──────────────────────────────┘
-```
-
-**How findings flow to production:**
-
-1. Review `experiments/log.jsonl` — see what was tried, what improved fitness
-2. Identify the winning changes (lower RSI threshold? new indicator? tighter stops?)
-3. Decide if the finding is real alpha or overfitting to the backtest window
-4. Manually update `src/config.py` (parameters) or `src/agents/apex.py` (prompt/logic)
-5. Monitor Cassius's live performance after the change
-
-**Why no auto-bridge?** Backtesting ≠ live trading. Slippage, liquidity, regime changes, and overfitting mean a strategy that backtests well can still lose money live. The human gate ensures someone with judgment reviews before changes hit production.
-
----
-
 ## Credits
 
 Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund). Extended with free data sources, day trading mode, intraday technicals, enforced risk management, short selling, and multi-provider LLM support.
 
-AutoResearch system inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — the pattern of autonomous AI agents iterating on code with a fixed evaluation budget.
+AutoResearch loop adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) by Andrej Karpathy. The original framework autonomously evolves ML training code using a fixed compute budget; we adapted the same pattern to evolve trading strategies using a fixed backtest budget. Core idea, architecture, and `program.md` convention are his — we ported it to the trading domain.
 
 ## Disclaimer
 

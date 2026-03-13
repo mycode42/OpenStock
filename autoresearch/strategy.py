@@ -1,6 +1,6 @@
-# EXPERIMENT: increase_target_multiplier
-# HYPOTHESIS: With 14 trades at 57% WR and MIN_CONFIDENCE=62, signal quality is high but profit capture is limited. TARGET_MULTIPLIER 2.5→3.0 increases each winner's profit by 20% (target moves from 2.0% to 2.4% with 0.8% stop) without changing stop risk, signal count, or entry criteria. For mean-reversion RSI<25 bounces, price typically has room to recover 2-3x the stop distance. Larger winners improve total_return (0.20 weight), profit_factor (0.10 weight), and the mean return per trade — boosting Sharpe (0.35) and Sortino (0.25) since the numerator grows while loss distribution stays constant.
-# CHANGE: TARGET_MULTIPLIER from 2.5 to 3.0
+# EXPERIMENT: wider_stops_for_5min_bars
+# HYPOTHESIS: Current STOP_PCT = 0.8% is too tight for 5-minute intraday bars with natural volatility. Following successful MACD optimizations that created highly responsive, quality signals (Sharpe 9.76), the tight 0.8% stops likely cause premature exits on good signals due to 5-minute bar noise. Since signal quality is exceptional, wider stops at 1.2% should let trades breathe, reduce whipsaws, and improve total return while maintaining the strategy's proven signal discipline.
+# CHANGE: STOP_PCT from 0.008 to 0.012
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "increase_target_multiplier"
-EXPERIMENT_HYPOTHESIS = "With 14 trades at 57% WR and MIN_CONFIDENCE=62, signal quality is high but profit capture is limited. TARGET_MULTIPLIER 2.5→3.0 increases each winner's profit by 20% (target moves from 2.0% to 2.4% with 0.8% stop) without changing stop risk, signal count, or entry criteria. For mean-reversion RSI<25 bounces, price typically has room to recover 2-3x the stop distance. Larger winners improve total_return (0.20 weight), profit_factor (0.10 weight), and the mean return per trade — boosting Sharpe (0.35) and Sortino (0.25) since the numerator grows while loss distribution stays constant."
-EXPERIMENT_CHANGE = "TARGET_MULTIPLIER from 2.5 to 3.0"
+EXPERIMENT_NAME = "wider_stops_for_5min_bars"
+EXPERIMENT_HYPOTHESIS = "Current STOP_PCT = 0.8% is too tight for 5-minute intraday bars with natural volatility. Following successful MACD optimizations that created highly responsive, quality signals (Sharpe 9.76), the tight 0.8% stops likely cause premature exits on good signals due to 5-minute bar noise. Since signal quality is exceptional, wider stops at 1.2% should let trades breathe, reduce whipsaws, and improve total return while maintaining the strategy's proven signal discipline."
+EXPERIMENT_CHANGE = "STOP_PCT from 0.008 to 0.012"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -29,13 +29,13 @@ EXPERIMENT_CHANGE = "TARGET_MULTIPLIER from 2.5 to 3.0"
 
 # RSI thresholds
 RSI_PERIOD = 14
-RSI_OVERSOLD = 25           # Buy signal below this
-RSI_OVERBOUGHT = 75         # Sell signal above this
+RSI_OVERSOLD = 30           # Buy signal below this
+RSI_OVERBOUGHT = 65         # Sell signal above this
 RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
 
 # VWAP deviation bands (%)
-VWAP_NEAR_BAND_PCT = 0.50       # Within 0.50% = "at VWAP", no strong signal
+VWAP_NEAR_BAND_PCT = 0.75       # Within 0.75% = "at VWAP", no strong signal
 VWAP_EXTENDED_PCT = 1.50        # > 1.5% from VWAP = extended, caution
 
 # Volume ratio thresholds (today cumulative / 20d avg daily)
@@ -43,31 +43,31 @@ VOLUME_CONFIRM_RATIO = 1.50     # >= 1.5x to confirm signal
 VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
-STOP_PCT = 0.008                # Default stop = 0.8% from entry
-TARGET_MULTIPLIER = 3.0         # R:R ratio (target = entry ± stop_dist * 3.0)
+STOP_PCT = 0.012                # Default stop = 1.2% from entry
+TARGET_MULTIPLIER = 2.5         # R:R ratio (target = entry ± stop_dist * 2.5)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
-MIN_CONFIDENCE = 62.0
+MIN_CONFIDENCE = 50.0
 
 # Confidence component weights (must sum to 1.0)
-CONF_WEIGHT_RSI = 0.40
+CONF_WEIGHT_RSI = 0.35
 CONF_WEIGHT_VWAP = 0.30
 CONF_WEIGHT_VOLUME = 0.20
-CONF_WEIGHT_MACD = 0.10
+CONF_WEIGHT_MACD = 0.15
 
 # MACD parameters
-MACD_FAST = 12
+MACD_FAST = 6
 MACD_SLOW = 26
-MACD_SIGNAL_PERIOD = 9
+MACD_SIGNAL_PERIOD = 7
 
 # Regime multipliers — scale confidence based on market conditions
 REGIME_MULTIPLIER: dict[str, float] = {
-    "trending_up": 1.00,
-    "trending_down": 1.00,
-    "range_bound": 1.00,
-    "volatile": 0.55,
-    "unknown": 0.70,
+    "trending_up":    1.00,
+    "trending_down":  1.00,
+    "range_bound":    1.00,
+    "volatile":       0.65,   # was 0.55 — 0.55 made signals mathematically impossible (58/0.55=105 > max 95)
+    "unknown":        0.70,
 }
 
 # Time-of-day filters (ET)
