@@ -1,6 +1,6 @@
-# EXPERIMENT: rsi_weight_boost
-# HYPOTHESIS: MACD is a trend-following indicator that often contradicts RSI extremes — when RSI is oversold (<30), MACD is typically still bearish, adding 12 points to bear_score and partially cancelling the RSI bull signal. Since our strategy is RSI mean-reversion, the RSI component should dominate. Shifting 5% weight from MACD to RSI makes extremes score higher, boosting confidence on quality signals and improving win rate / Sharpe.
-# CHANGE: CONF_WEIGHT_RSI from 0.35 to 0.40, CONF_WEIGHT_MACD from 0.15 to 0.10 (sum unchanged at 1.0)
+# EXPERIMENT: higher_rr_ratio
+# HYPOTHESIS: RSI extreme mean-reversion signals (<30 oversold, >70 overbought) typically produce multi-percent moves once reversal begins. With STOP_PCT=0.8% and 59% win rate, raising TARGET_MULTIPLIER from 2.2 to 2.5 increases winner gain from 1.76% to 2.0% while keeping the same stop. EV improves from 0.59*2.2-0.41=0.888 to 0.59*2.5-0.41=1.065 per unit risk. Profit_factor and total_return improve directly; Sharpe/Sortino benefit from larger average winner vs stable loser.
+# CHANGE: TARGET_MULTIPLIER from 2.2 to 2.5
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "rsi_weight_boost"
-EXPERIMENT_HYPOTHESIS = "MACD is a trend-following indicator that often contradicts RSI extremes — when RSI is oversold (<30), MACD is typically still bearish, adding 12 points to bear_score and partially cancelling the RSI bull signal. Since our strategy is RSI mean-reversion, the RSI component should dominate. Shifting 5% weight from MACD to RSI makes extremes score higher, boosting confidence on quality signals and improving win rate / Sharpe."
-EXPERIMENT_CHANGE = "CONF_WEIGHT_RSI from 0.35 to 0.40, CONF_WEIGHT_MACD from 0.15 to 0.10 (sum unchanged at 1.0)"
+EXPERIMENT_NAME = "higher_rr_ratio"
+EXPERIMENT_HYPOTHESIS = "RSI extreme mean-reversion signals (<30 oversold, >70 overbought) typically produce multi-percent moves once reversal begins. With STOP_PCT=0.8% and 59% win rate, raising TARGET_MULTIPLIER from 2.2 to 2.5 increases winner gain from 1.76% to 2.0% while keeping the same stop. EV improves from 0.59*2.2-0.41=0.888 to 0.59*2.5-0.41=1.065 per unit risk. Profit_factor and total_return improve directly; Sharpe/Sortino benefit from larger average winner vs stable loser."
+EXPERIMENT_CHANGE = "TARGET_MULTIPLIER from 2.2 to 2.5"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -44,7 +44,7 @@ VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
 STOP_PCT = 0.008                # Default stop = 0.8% from entry
-TARGET_MULTIPLIER = 2.2         # R:R ratio (target = entry ± stop_dist * 2.2)
+TARGET_MULTIPLIER = 2.5         # R:R ratio (target = entry ± stop_dist * 2.5)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
