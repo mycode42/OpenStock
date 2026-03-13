@@ -1,6 +1,6 @@
-# EXPERIMENT: tighten_stop_pct
-# HYPOTHESIS: Reducing STOP_PCT from 1.5% to 1.0% shrinks per-trade losses (left tail), reducing return variance and boosting Sharpe/Sortino without affecting trade count or win rate. Same 2:1 R:R is preserved; we just risk less per trade.
-# CHANGE: STOP_PCT decreased from 0.015 to 0.010
+# EXPERIMENT: rsi_weight_boost
+# HYPOTHESIS: MACD is a trend-following indicator that often contradicts RSI extremes — when RSI is oversold (<30), MACD is typically still bearish, adding 12 points to bear_score and partially cancelling the RSI bull signal. Since our strategy is RSI mean-reversion, the RSI component should dominate. Shifting 5% weight from MACD to RSI makes extremes score higher, boosting confidence on quality signals and improving win rate / Sharpe.
+# CHANGE: CONF_WEIGHT_RSI from 0.35 to 0.40, CONF_WEIGHT_MACD from 0.15 to 0.10 (sum unchanged at 1.0)
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "tighten_stop_pct"
-EXPERIMENT_HYPOTHESIS = "Tighter STOP_PCT=1.0% reduces per-trade loss magnitude, shrinking return variance and improving Sharpe/Sortino; R:R ratio preserved at 2:1"
-EXPERIMENT_CHANGE = "STOP_PCT decreased from 0.015 to 0.010"
+EXPERIMENT_NAME = "rsi_weight_boost"
+EXPERIMENT_HYPOTHESIS = "MACD is a trend-following indicator that often contradicts RSI extremes — when RSI is oversold (<30), MACD is typically still bearish, adding 12 points to bear_score and partially cancelling the RSI bull signal. Since our strategy is RSI mean-reversion, the RSI component should dominate. Shifting 5% weight from MACD to RSI makes extremes score higher, boosting confidence on quality signals and improving win rate / Sharpe."
+EXPERIMENT_CHANGE = "CONF_WEIGHT_RSI from 0.35 to 0.40, CONF_WEIGHT_MACD from 0.15 to 0.10 (sum unchanged at 1.0)"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -29,13 +29,13 @@ EXPERIMENT_CHANGE = "STOP_PCT decreased from 0.015 to 0.010"
 
 # RSI thresholds
 RSI_PERIOD = 14
-RSI_OVERSOLD = 35           # Buy signal below this
-RSI_OVERBOUGHT = 65         # Sell signal above this
+RSI_OVERSOLD = 30           # Buy signal below this
+RSI_OVERBOUGHT = 70         # Sell signal above this
 RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
 
 # VWAP deviation bands (%)
-VWAP_NEAR_BAND_PCT = 0.50       # Within 0.5% = "at VWAP", no strong signal
+VWAP_NEAR_BAND_PCT = 0.50       # Within 0.50% = "at VWAP", no strong signal
 VWAP_EXTENDED_PCT = 1.50        # > 1.5% from VWAP = extended, caution
 
 # Volume ratio thresholds (today cumulative / 20d avg daily)
@@ -43,18 +43,18 @@ VOLUME_CONFIRM_RATIO = 1.50     # >= 1.5x to confirm signal
 VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
-STOP_PCT = 0.010                # Default stop = 1.0% from entry
-TARGET_MULTIPLIER = 2.0         # R:R ratio (target = entry ± stop_dist * 2.0)
+STOP_PCT = 0.008                # Default stop = 0.8% from entry
+TARGET_MULTIPLIER = 2.2         # R:R ratio (target = entry ± stop_dist * 2.2)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
 MIN_CONFIDENCE = 58.0
 
 # Confidence component weights (must sum to 1.0)
-CONF_WEIGHT_RSI = 0.30
+CONF_WEIGHT_RSI = 0.40
 CONF_WEIGHT_VWAP = 0.30
 CONF_WEIGHT_VOLUME = 0.20
-CONF_WEIGHT_MACD = 0.20
+CONF_WEIGHT_MACD = 0.10
 
 # MACD parameters
 MACD_FAST = 12
@@ -65,7 +65,7 @@ MACD_SIGNAL_PERIOD = 9
 REGIME_MULTIPLIER: dict[str, float] = {
     "trending_up": 1.00,
     "trending_down": 1.00,
-    "range_bound": 0.85,
+    "range_bound": 1.00,
     "volatile": 0.55,
     "unknown": 0.70,
 }
@@ -73,6 +73,31 @@ REGIME_MULTIPLIER: dict[str, float] = {
 # Time-of-day filters (ET)
 NO_TRADE_OPEN_MINUTES = 5       # Skip first 5 min (9:30–9:35)
 MARKET_CLOSE_CUTOFF = time(15, 45)  # No new entries after 3:45 PM ET
+
+# ---------------------------------------------------------------------------
+# Mode: "day" or "swing" — controls which signal logic path runs
+# ---------------------------------------------------------------------------
+MODE = "day"
+
+# ---------------------------------------------------------------------------
+# Swing trading parameters (used when MODE = "swing")
+# ---------------------------------------------------------------------------
+SMA_FAST = 20               # Fast simple moving average period
+SMA_SLOW = 50               # Slow simple moving average period
+SWING_RSI_PERIOD = 14
+SWING_RSI_OVERSOLD = 35     # Buy on pullbacks below this
+SWING_RSI_OVERBOUGHT = 70   # Sell/short above this
+SWING_STOP_PCT = 0.03       # 3% stop for swing (wider than day)
+SWING_TARGET_MULTIPLIER = 2.5  # 2.5:1 R:R for swing
+SWING_MIN_CONFIDENCE = 50.0
+SWING_TREND_STRENGTH_MIN = 0.5  # Min SMA spread (%) to confirm trend
+SWING_VOLUME_CONFIRM = 1.2  # Volume ratio to confirm breakout
+
+# Swing confidence weights
+SWING_CONF_WEIGHT_TREND = 0.35    # SMA crossover / alignment
+SWING_CONF_WEIGHT_RSI = 0.25      # RSI mean reversion
+SWING_CONF_WEIGHT_MOMENTUM = 0.25 # Price momentum (rate of change)
+SWING_CONF_WEIGHT_VOLUME = 0.15   # Volume confirmation
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +323,13 @@ def _ticker_signal(
     elif spy_chg < -0.3 and bear_score > bull_score:
         bear_score *= 1.05
 
+    # QQQ alignment — independent tech-market confirmation bonus
+    qqq_chg = float(market_context.get("qqq_change_pct") or 0.0)
+    if qqq_chg > 0.3 and bull_score > bear_score:
+        bull_score *= 1.05
+    elif qqq_chg < -0.3 and bear_score > bull_score:
+        bear_score *= 1.05
+
     # --- Pick direction ---
     if bull_score > bear_score:
         direction: Literal["long", "short"] = "long"
@@ -378,25 +410,196 @@ def _ticker_signal(
 
 
 # ---------------------------------------------------------------------------
+# Swing signal helpers
+# ---------------------------------------------------------------------------
+
+def _calc_sma(closes: list[float], period: int) -> float | None:
+    """Simple moving average of the last `period` closes."""
+    if len(closes) < period:
+        return None
+    return sum(closes[-period:]) / period
+
+
+def _calc_roc(closes: list[float], period: int = 10) -> float | None:
+    """Rate of change (%) over `period` bars."""
+    if len(closes) < period + 1:
+        return None
+    return (closes[-1] - closes[-period - 1]) / closes[-period - 1] * 100.0
+
+
+def _swing_ticker_signal(
+    ticker: str,
+    bars: list[dict],
+    market_context: dict,
+) -> Signal | None:
+    """Generate a swing trading signal for a single ticker using daily bars."""
+    if not bars or len(bars) < SMA_SLOW + 5:
+        return None
+
+    closes = [float(b["c"]) for b in bars]
+    highs = [float(b["h"]) for b in bars]
+    lows = [float(b["l"]) for b in bars]
+    volumes = [float(b.get("v", 0)) for b in bars]
+
+    current_price = closes[-1]
+
+    # --- Indicators ---
+    sma_fast = _calc_sma(closes, SMA_FAST)
+    sma_slow = _calc_sma(closes, SMA_SLOW)
+    rsi = _calc_rsi(closes, SWING_RSI_PERIOD)
+    roc = _calc_roc(closes, 10)
+
+    # Volume ratio: last 5 days avg vs 20-day avg
+    avg_vol_5 = sum(volumes[-5:]) / 5 if len(volumes) >= 5 else None
+    avg_vol_20 = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else None
+    volume_ratio = avg_vol_5 / avg_vol_20 if avg_vol_5 and avg_vol_20 and avg_vol_20 > 0 else None
+
+    if sma_fast is None or sma_slow is None:
+        return None
+
+    # --- Trend scoring ---
+    sma_spread_pct = (sma_fast - sma_slow) / sma_slow * 100.0
+    price_vs_sma_fast_pct = (current_price - sma_fast) / sma_fast * 100.0
+
+    bull_score = 0.0
+    bear_score = 0.0
+
+    # Trend component (SMA alignment)
+    if sma_spread_pct > SWING_TREND_STRENGTH_MIN:
+        # Uptrend: SMA20 > SMA50 by meaningful amount
+        trend_score = min(100.0, 50.0 + abs(sma_spread_pct) * 15.0)
+        bull_score += SWING_CONF_WEIGHT_TREND * trend_score
+    elif sma_spread_pct < -SWING_TREND_STRENGTH_MIN:
+        # Downtrend
+        trend_score = min(100.0, 50.0 + abs(sma_spread_pct) * 15.0)
+        bear_score += SWING_CONF_WEIGHT_TREND * trend_score
+
+    # RSI component — mean reversion within trend
+    if rsi is not None:
+        if rsi < SWING_RSI_OVERSOLD:
+            # Oversold — strong buy signal
+            bull_score += SWING_CONF_WEIGHT_RSI * 90.0
+        elif rsi > SWING_RSI_OVERBOUGHT:
+            # Overbought — strong sell/short signal
+            bear_score += SWING_CONF_WEIGHT_RSI * 90.0
+        elif rsi < 45:
+            bull_score += SWING_CONF_WEIGHT_RSI * 50.0
+        elif rsi > 55:
+            bear_score += SWING_CONF_WEIGHT_RSI * 50.0
+
+    # Momentum component (ROC)
+    if roc is not None:
+        if roc > 2.0:
+            bull_score += SWING_CONF_WEIGHT_MOMENTUM * min(100.0, 40.0 + roc * 8.0)
+        elif roc < -2.0:
+            bear_score += SWING_CONF_WEIGHT_MOMENTUM * min(100.0, 40.0 + abs(roc) * 8.0)
+
+    # Volume component — confirms direction
+    if volume_ratio is not None:
+        if volume_ratio >= SWING_VOLUME_CONFIRM:
+            vol_score = min(100.0, 50.0 + (volume_ratio - 1.0) * 40.0)
+        else:
+            vol_score = 30.0
+        if bull_score >= bear_score:
+            bull_score += SWING_CONF_WEIGHT_VOLUME * vol_score
+        else:
+            bear_score += SWING_CONF_WEIGHT_VOLUME * vol_score
+
+    # Pullback bonus: price near SMA in uptrend = good entry
+    if sma_spread_pct > SWING_TREND_STRENGTH_MIN and -1.5 < price_vs_sma_fast_pct < 0.5:
+        bull_score *= 1.15  # Buying the dip in an uptrend
+    elif sma_spread_pct < -SWING_TREND_STRENGTH_MIN and -0.5 < price_vs_sma_fast_pct < 1.5:
+        bear_score *= 1.15  # Shorting the rip in a downtrend
+
+    # --- Pick direction ---
+    if bull_score > bear_score:
+        direction: Literal["long", "short"] = "long"
+        raw_confidence = bull_score
+    elif bear_score > bull_score:
+        direction = "short"
+        raw_confidence = bear_score
+    else:
+        return None
+
+    confidence = min(raw_confidence, 95.0)
+    if confidence < SWING_MIN_CONFIDENCE:
+        return None
+
+    # --- Stop and target ---
+    recent_low = min(lows[-10:])
+    recent_high = max(highs[-10:])
+
+    if direction == "long":
+        default_stop = round(current_price * (1.0 - SWING_STOP_PCT), 4)
+        natural_stop = round(recent_low * 0.995, 4)
+        stop_price = max(default_stop, natural_stop)
+        stop_dist = current_price - stop_price
+        if stop_dist <= 0:
+            stop_price = default_stop
+            stop_dist = current_price - stop_price
+        target_price = round(current_price + stop_dist * SWING_TARGET_MULTIPLIER, 4)
+    else:
+        default_stop = round(current_price * (1.0 + SWING_STOP_PCT), 4)
+        natural_stop = round(recent_high * 1.005, 4)
+        stop_price = min(default_stop, natural_stop)
+        stop_dist = stop_price - current_price
+        if stop_dist <= 0:
+            stop_price = default_stop
+            stop_dist = stop_price - current_price
+        target_price = round(current_price - stop_dist * SWING_TARGET_MULTIPLIER, 4)
+
+    if direction == "long" and target_price <= current_price:
+        return None
+    if direction == "short" and target_price >= current_price:
+        return None
+
+    # Reasoning
+    sma_s = f"SMA{SMA_FAST}={sma_fast:.2f}/SMA{SMA_SLOW}={sma_slow:.2f}"
+    rsi_s = f"RSI={rsi:.1f}" if rsi is not None else "RSI=n/a"
+    roc_s = f"ROC={roc:+.1f}%" if roc is not None else "ROC=n/a"
+    vol_s = f"vol={volume_ratio:.1f}x" if volume_ratio is not None else "vol=n/a"
+    reasoning = (
+        f"SWING {direction.upper()} | {sma_s} spread={sma_spread_pct:+.1f}% | "
+        f"{rsi_s} {roc_s} {vol_s} | conf={confidence:.0f}"
+    )
+
+    return Signal(
+        ticker=ticker,
+        direction=direction,
+        confidence=confidence,
+        entry_price=current_price,
+        stop_price=stop_price,
+        target_price=target_price,
+        reasoning=reasoning,
+        indicators={
+            "sma_fast": sma_fast,
+            "sma_slow": sma_slow,
+            "sma_spread_pct": sma_spread_pct,
+            "rsi": rsi,
+            "roc_10": roc,
+            "volume_ratio": volume_ratio,
+            "price_vs_sma_fast_pct": price_vs_sma_fast_pct,
+            "recent_high": recent_high,
+            "recent_low": recent_low,
+            "current_price": current_price,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def generate_signals(bars_df: dict[str, list[dict]], market_context: dict) -> list[Signal]:
     """
-    Generate trading signals for all tickers at the current bar.
+    Generate trading signals for all tickers.
+
+    Routes to day trading or swing logic based on MODE constant or
+    market_context["mode"] override.
 
     Args:
-        bars_df:        Dict of {ticker: [bar_dicts]} where each bar_dict has
-                        keys {t, o, h, l, c, v}. Contains bars from market open
-                        up to and including the current bar.
-        market_context: Dict with keys:
-                          regime          — "trending_up" | "trending_down" |
-                                            "range_bound" | "volatile" | "unknown"
-                          current_bar_time — ISO timestamp of current bar
-                          spy_change_pct  — SPY % change from open to now
-                          qqq_change_pct  — QQQ % change from open to now
-                          {ticker}_prev_close      — previous day's close per ticker
-                          {ticker}_avg_volume_20d  — 20-day avg daily volume per ticker
+        bars_df:        Dict of {ticker: [bar_dicts]} with keys {t, o, h, l, c, v}.
+        market_context: Dict with regime info, timestamps, and optional "mode" key.
 
     Returns:
         List of Signal objects. May be empty.
@@ -404,7 +607,29 @@ def generate_signals(bars_df: dict[str, list[dict]], market_context: dict) -> li
     if not isinstance(bars_df, dict):
         return []
 
-    # Time-of-day gate
+    mode = market_context.get("mode", MODE)
+
+    if mode == "swing":
+        return _generate_swing_signals(bars_df, market_context)
+    else:
+        return _generate_day_signals(bars_df, market_context)
+
+
+def _generate_swing_signals(bars_df: dict[str, list[dict]], market_context: dict) -> list[Signal]:
+    """Swing mode: daily bars, trend following, multi-day holds."""
+    signals: list[Signal] = []
+    for ticker, bars in bars_df.items():
+        try:
+            sig = _swing_ticker_signal(ticker, bars, market_context)
+            if sig is not None:
+                signals.append(sig)
+        except Exception:
+            continue
+    return signals
+
+
+def _generate_day_signals(bars_df: dict[str, list[dict]], market_context: dict) -> list[Signal]:
+    """Day mode: 5-min bars, intraday technicals, flatten at close."""
     current_bar_time = market_context.get("current_bar_time", "")
     if current_bar_time and not _is_tradeable_time(current_bar_time):
         return []
@@ -420,5 +645,4 @@ def generate_signals(bars_df: dict[str, list[dict]], market_context: dict) -> li
                 signals.append(sig)
         except Exception:
             continue
-
     return signals
