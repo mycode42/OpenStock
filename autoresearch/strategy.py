@@ -19,8 +19,8 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "baseline_v1"
-EXPERIMENT_HYPOTHESIS = "Deterministic rules extracted from Apex agent logic as starting point"
+EXPERIMENT_NAME = "dry_run_55to53"
+EXPERIMENT_HYPOTHESIS = "Lower MIN_CONFIDENCE from 55.0 to 53.0 to generate more signals"
 EXPERIMENT_CHANGE = "Initial implementation with RSI/VWAP/Volume/MACD indicators"
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ TARGET_MULTIPLIER = 2.0         # R:R ratio (target = entry ± stop_dist * 2.0)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
-MIN_CONFIDENCE = 55.0
+MIN_CONFIDENCE = 53.0
 
 # Confidence component weights (must sum to 1.0)
 CONF_WEIGHT_RSI = 0.30
@@ -154,26 +154,34 @@ def _calc_macd(closes: list[float]) -> tuple[float | None, float | None, float |
     return macd_val, sig_val, macd_val - sig_val
 
 
-def _parse_bar_time(bar_time: str) -> time | None:
-    """Parse 'HH:MM' from an ISO timestamp string."""
+def _parse_bar_time_et(bar_time: str) -> time | None:
+    """Parse ISO timestamp and convert UTC → ET (EST = UTC-5, EDT = UTC-4).
+
+    Alpaca bars use UTC timestamps. We assume EDT (UTC-4) for US market hours
+    during DST (Mar–Nov). Outside DST it's EST (UTC-5), but since we only
+    care about filtering within market hours (9:30–16:00 ET), a 1-hour
+    discrepancy at DST boundaries is acceptable for backtesting.
+    """
     try:
-        t_str = bar_time[11:16]  # 'HH:MM'
+        t_str = bar_time[11:16]  # 'HH:MM' in UTC
         h, m = int(t_str[:2]), int(t_str[3:5])
-        return time(h, m)
+        # Convert UTC → EDT (UTC - 4)
+        h_et = (h - 4) % 24
+        return time(h_et, m)
     except Exception:
         return None
 
 
 def _is_tradeable_time(bar_time: str) -> bool:
-    """Return True if the bar timestamp falls within the tradeable window."""
-    t = _parse_bar_time(bar_time)
+    """Return True if the bar timestamp (UTC) falls within the tradeable ET window."""
+    t = _parse_bar_time_et(bar_time)
     if t is None:
         return True  # can't parse → allow
     # Skip first N minutes after open
     open_cutoff = time(9, 30 + NO_TRADE_OPEN_MINUTES)
     if t < open_cutoff:
         return False
-    # No new entries at or after 15:45
+    # No new entries at or after 3:45 PM ET
     if t >= MARKET_CLOSE_CUTOFF:
         return False
     return True
