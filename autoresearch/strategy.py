@@ -1,6 +1,6 @@
-# EXPERIMENT: moderate_confidence_increase
-# HYPOTHESIS: Current negative fitness (-0.6359) with 51 trades at 43% WR suggests too many weak signals pass through. Historical successes used MIN_CONFIDENCE=62 with 13-14 trades and 57-84% WR, but recent attempts failed due to volatile regime math constraints (62/0.65=95.38 > 95.0 cap). MIN_CONFIDENCE 50→55 provides middle ground: filters weak signals better than 50, achievable in volatile regime (55/0.65=84.6 < 95), should reduce trade count and improve win rate/Sharpe.
-# CHANGE: MIN_CONFIDENCE from 50.0 to 55.0
+# EXPERIMENT: optimal_confidence_threshold
+# HYPOTHESIS: Current fitness=2.7808 with MIN_CONFIDENCE=55 (24 trades, 54% WR) can be improved. Historical experiments achieved fitness=8.5593 with MIN_CONFIDENCE=62, but 62/0.65=95.38 > 95.0 creates volatile regime impossibility. MIN_CONFIDENCE=60 bridges this gap: 60/0.65=92.3 < 95.0 (achievable), filters more weak signals than 55, should reduce trade count to ~15-20 and increase win rate to 60-65%, improving Sharpe ratio and overall fitness.
+# CHANGE: MIN_CONFIDENCE from 55.0 to 60.0
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "moderate_confidence_increase"
-EXPERIMENT_HYPOTHESIS = "Current negative fitness (-0.6359) with 51 trades at 43% WR suggests too many weak signals pass through. Historical successes used MIN_CONFIDENCE=62 with 13-14 trades and 57-84% WR, but recent attempts failed due to volatile regime math constraints (62/0.65=95.38 > 95.0 cap). MIN_CONFIDENCE 50→55 provides middle ground: filters weak signals better than 50, achievable in volatile regime (55/0.65=84.6 < 95), should reduce trade count and improve win rate/Sharpe."
-EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 50.0 to 55.0"
+EXPERIMENT_NAME = "optimal_confidence_threshold"
+EXPERIMENT_HYPOTHESIS = "Current fitness=2.7808 with MIN_CONFIDENCE=55 (24 trades, 54% WR) can be improved. Historical experiments achieved fitness=8.5593 with MIN_CONFIDENCE=62, but 62/0.65=95.38 > 95.0 creates volatile regime impossibility. MIN_CONFIDENCE=60 bridges this gap: 60/0.65=92.3 < 95.0 (achievable), filters more weak signals than 55, should reduce trade count to ~15-20 and increase win rate to 60-65%, improving Sharpe ratio and overall fitness."
+EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 55.0 to 60.0"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -48,7 +48,7 @@ TARGET_MULTIPLIER = 3.0         # R:R ratio (target = entry ± stop_dist * 3.0)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
-MIN_CONFIDENCE = 55.0
+MIN_CONFIDENCE = 60.0
 
 # Confidence component weights (must sum to 1.0)
 CONF_WEIGHT_RSI = 0.35
