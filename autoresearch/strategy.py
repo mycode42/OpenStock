@@ -1,6 +1,6 @@
-# EXPERIMENT: raise_min_confidence
-# HYPOTHESIS: VWAP_NEAR_BAND_PCT=0.50 reduces VWAP score contribution for many tickers, meaning borderline signals now pass on RSI+Volume+MACD alone with weaker scores. Raising MIN_CONFIDENCE from 53→58 filters these marginal signals, cutting trades from ~24 back to ~15-18, improving Sharpe by eliminating low-conviction noise trades.
-# CHANGE: MIN_CONFIDENCE increased from 53.0 to 58.0
+# EXPERIMENT: tighten_stop_pct
+# HYPOTHESIS: Reducing STOP_PCT from 1.5% to 1.0% shrinks per-trade losses (left tail), reducing return variance and boosting Sharpe/Sortino without affecting trade count or win rate. Same 2:1 R:R is preserved; we just risk less per trade.
+# CHANGE: STOP_PCT decreased from 0.015 to 0.010
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "raise_min_confidence"
-EXPERIMENT_HYPOTHESIS = "VWAP=0.50 weakens VWAP contribution; raising MIN_CONFIDENCE 53→58 filters marginal signals and improves Sharpe"
-EXPERIMENT_CHANGE = "MIN_CONFIDENCE increased from 53.0 to 58.0"
+EXPERIMENT_NAME = "tighten_stop_pct"
+EXPERIMENT_HYPOTHESIS = "Tighter STOP_PCT=1.0% reduces per-trade loss magnitude, shrinking return variance and improving Sharpe/Sortino; R:R ratio preserved at 2:1"
+EXPERIMENT_CHANGE = "STOP_PCT decreased from 0.015 to 0.010"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -43,7 +43,7 @@ VOLUME_CONFIRM_RATIO = 1.50     # >= 1.5x to confirm signal
 VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
-STOP_PCT = 0.015                # Default stop = 1.5% from entry
+STOP_PCT = 0.010                # Default stop = 1.0% from entry
 TARGET_MULTIPLIER = 2.0         # R:R ratio (target = entry ± stop_dist * 2.0)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
