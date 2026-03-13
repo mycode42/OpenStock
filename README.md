@@ -269,12 +269,12 @@ In day trading mode, **bracket orders are mandatory**. If a trade is submitted w
 
 ## Automation with OpenClaw
 
-The system is designed to run fully autonomous via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. An AI agent (we use "Cassius" running Claude Opus) executes the full pipeline on schedule: scan → gather → analyze → trade → report.
+The system is designed to run fully autonomous via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. An AI agent executes the full pipeline on schedule: scan → gather → analyze → trade → report.
 
 ### Prerequisites
 
 1. **OpenClaw installed and running** — `openclaw gateway status` should show healthy
-2. **An agent configured** — e.g., `cassius` with access to the swarm-trader workspace
+2. **An agent configured** — e.g., `my-agent` with access to the swarm-trader workspace
 3. **Telegram group** (optional) — for trade reports. Replace `-5217663499` with your chat ID
 
 ### Agent Setup
@@ -282,7 +282,7 @@ The system is designed to run fully autonomous via [OpenClaw](https://github.com
 If you don't have a trading agent yet:
 
 ```bash
-openclaw agents add cassius \
+openclaw agents add my-agent \
   --model "your-preferred-model" \
   --workspace ~/path/to/swarm-trader
 ```
@@ -363,7 +363,7 @@ openclaw cron add --name swarm-portfolio-check \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -383,7 +383,7 @@ openclaw cron add --name swarm-open \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -395,15 +395,15 @@ openclaw cron add --name swarm-open \
    Echo the discovered tickers.
 
 2. Gather intraday data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-intraday.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-intraday.json
 
-3. Read /tmp/cassius-intraday.json — 5-min bars, VWAP, RSI, volume, key levels.
+3. Read /tmp/swarm-intraday.json — 5-min bars, VWAP, RSI, volume, key levels.
 
 4. Analyze each ticker: Price vs VWAP, RSI, volume conviction, key levels, why the scanner flagged it.
 
-5. Write trade decisions to /tmp/cassius-trades.json (bracket orders with stop_price and take_profit required).
+5. Write trade decisions to /tmp/swarm-trades.json (bracket orders with stop_price and take_profit required).
 
-6. Execute: poetry run python execute_trades.py --file /tmp/cassius-trades.json
+6. Execute: poetry run python execute_trades.py --file /tmp/swarm-trades.json
 
 7. Post summary: scanner discoveries, trades executed, market regime, key setups.'
 ```
@@ -416,7 +416,7 @@ openclaw cron add --name swarm-midmorning \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -427,11 +427,11 @@ openclaw cron add --name swarm-midmorning \
    cd ~/path/to/swarm-trader && TICKERS=$(poetry run python scan_market.py --max 25)
 
 2. Gather fresh data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-midmorning.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-midmorning.json
 
 3. Review existing positions — any stops getting hit? Any breakouts?
 
-4. Tactical trades (momentum/mean reversion). Write to /tmp/cassius-midmorning-trades.json and execute.
+4. Tactical trades (momentum/mean reversion). Write to /tmp/swarm-midmorning-trades.json and execute.
 
 5. Brief update: market direction, new scanner finds, position adjustments.'
 ```
@@ -444,7 +444,7 @@ openclaw cron add --name swarm-lunch \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -455,7 +455,7 @@ openclaw cron add --name swarm-lunch \
    cd ~/path/to/swarm-trader && TICKERS=$(poetry run python scan_market.py --max 20)
 
 2. Gather data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-lunch.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-lunch.json
 
 3. Light trading — range plays, quick scalps if setups are clean. Reduce exposure if choppy, add if trending.'
 ```
@@ -468,7 +468,7 @@ openclaw cron add --name swarm-late \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -479,7 +479,7 @@ openclaw cron add --name swarm-late \
    cd ~/path/to/swarm-trader && TICKERS=$(poetry run python scan_market.py --max 25)
 
 2. Gather data:
-   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/cassius-late.json
+   poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/swarm-late.json
 
 3. Last chance for major position changes. Plan what gets flattened at 3:45 PM vs what holds overnight.'
 ```
@@ -492,7 +492,7 @@ openclaw cron add --name swarm-flatten \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "your-preferred-model" \
   --announce \
   --channel telegram \
@@ -523,7 +523,7 @@ openclaw cron add --name autoresearch-evolve \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "anthropic/claude-sonnet-4-6" \
   --announce \
   --channel telegram \
@@ -535,7 +535,7 @@ cd ~/path/to/swarm-trader && poetry run python autoresearch/evolve.py --iteratio
 When done, summarize: how many experiments ran, best fitness achieved, what changes were kept, and the top 3 findings."
 ```
 
-Runs after market close. Cassius evolves `strategy.py` through 25 iterations against the last 10 trading days of cached data. Uses Sonnet as the outer orchestrator (Claude Code inside `evolve.py` handles strategy mutations). Results posted to Telegram.
+Runs after market close. The agent evolves `strategy.py` through 25 iterations against the last 10 trading days of cached data. Uses Sonnet as the outer orchestrator (Claude Code inside `evolve.py` handles strategy mutations). Results posted to Telegram.
 
 ### Swing Trading Schedule (alternative)
 
@@ -558,7 +558,7 @@ openclaw cron add --name autoresearch-evolve-swing \
   --tz "America/Los_Angeles" \
   --exact \
   --session isolated \
-  --agent cassius \
+  --agent my-agent \
   --model "anthropic/claude-sonnet-4-6" \
   --announce \
   --channel telegram \
@@ -806,7 +806,7 @@ cat autoresearch/experiments/log.jsonl | python3 -m json.tool
 AutoResearch and the live trading system are **intentionally decoupled**. There is no automatic bridge — this is a safety feature.
 
 ```
-AutoResearch (offline)          Live Trading (Cassius)
+AutoResearch (offline)          Live Trading (your agent)
 ─────────────────────          ──────────────────────
 autoresearch/strategy.py        src/agents/apex.py
 Pure Python, no LLM             LLM-based (Opus)
@@ -823,7 +823,7 @@ Mutations every iteration       Stable config
 2. Identify the winning changes (lower RSI threshold? new indicator? tighter stops?)
 3. Decide if the finding is real alpha or overfitting to the backtest window
 4. Manually update `src/config.py` (parameters) or `src/agents/apex.py` (prompt/logic)
-5. Monitor Cassius's live performance after the change
+5. Monitor your agent's live performance after the change
 
 **Why no auto-bridge?** Backtesting ≠ live trading. Slippage, liquidity, regime changes, and overfitting mean a strategy that backtests well can still lose money live. The human gate ensures someone with judgment reviews before changes hit production.
 
