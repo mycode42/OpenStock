@@ -1,6 +1,6 @@
-# EXPERIMENT: faster_macd_signal
-# HYPOTHESIS: Current MACD_SIGNAL_PERIOD = 9 is designed for daily charts and is too slow for 5-minute intraday bars. Following the successful MACD_FAST optimization (8→6), the signal line period of 9 means 45 minutes of smoothing, which delays crossover signals and histogram calculations that determine momentum scoring. Since MACD has 15% weight in confidence, reducing MACD_SIGNAL_PERIOD from 9 to 7 (35 minutes) should provide more timely crossover detection while maintaining sufficient smoothing, improving signal timing.
-# CHANGE: MACD_SIGNAL_PERIOD from 9 to 7
+# EXPERIMENT: wider_stops_for_5min_bars
+# HYPOTHESIS: Current STOP_PCT = 0.8% is too tight for 5-minute intraday bars with natural volatility. Following successful MACD optimizations that created highly responsive, quality signals (Sharpe 9.76), the tight 0.8% stops likely cause premature exits on good signals due to 5-minute bar noise. Since signal quality is exceptional, wider stops at 1.2% should let trades breathe, reduce whipsaws, and improve total return while maintaining the strategy's proven signal discipline.
+# CHANGE: STOP_PCT from 0.008 to 0.012
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "faster_macd_signal"
-EXPERIMENT_HYPOTHESIS = "Current MACD_SIGNAL_PERIOD = 9 is designed for daily charts and is too slow for 5-minute intraday bars. Following the successful MACD_FAST optimization (8→6), the signal line period of 9 means 45 minutes of smoothing, which delays crossover signals and histogram calculations that determine momentum scoring. Since MACD has 15% weight in confidence, reducing MACD_SIGNAL_PERIOD from 9 to 7 (35 minutes) should provide more timely crossover detection while maintaining sufficient smoothing, improving signal timing."
-EXPERIMENT_CHANGE = "MACD_SIGNAL_PERIOD from 9 to 7"
+EXPERIMENT_NAME = "wider_stops_for_5min_bars"
+EXPERIMENT_HYPOTHESIS = "Current STOP_PCT = 0.8% is too tight for 5-minute intraday bars with natural volatility. Following successful MACD optimizations that created highly responsive, quality signals (Sharpe 9.76), the tight 0.8% stops likely cause premature exits on good signals due to 5-minute bar noise. Since signal quality is exceptional, wider stops at 1.2% should let trades breathe, reduce whipsaws, and improve total return while maintaining the strategy's proven signal discipline."
+EXPERIMENT_CHANGE = "STOP_PCT from 0.008 to 0.012"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -43,7 +43,7 @@ VOLUME_CONFIRM_RATIO = 1.50     # >= 1.5x to confirm signal
 VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
-STOP_PCT = 0.008                # Default stop = 0.8% from entry
+STOP_PCT = 0.012                # Default stop = 1.2% from entry
 TARGET_MULTIPLIER = 2.5         # R:R ratio (target = entry ± stop_dist * 2.5)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
