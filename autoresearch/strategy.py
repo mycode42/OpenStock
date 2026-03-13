@@ -1,6 +1,6 @@
-# EXPERIMENT: wider_stops_for_5min_bars
-# HYPOTHESIS: Current STOP_PCT = 0.8% is too tight for 5-minute intraday bars with natural volatility. Following successful MACD optimizations that created highly responsive, quality signals (Sharpe 9.76), the tight 0.8% stops likely cause premature exits on good signals due to 5-minute bar noise. Since signal quality is exceptional, wider stops at 1.2% should let trades breathe, reduce whipsaws, and improve total return while maintaining the strategy's proven signal discipline.
-# CHANGE: STOP_PCT from 0.008 to 0.012
+# EXPERIMENT: tighten_rsi_oversold_for_quality
+# HYPOTHESIS: MIN_CONFIDENCE=62 has failed multiple times in recent experiments. Different approach: RSI_OVERSOLD=30 → 25 requires deeper panic/capitulation before buy signals, filtering for higher-quality mean-reversion setups. RSI<25 represents true oversold extremes where bounces are more reliable, reducing weak signals while keeping genuine opportunities. This improves win rate and risk-adjusted returns without the issues that MIN_CONFIDENCE=62 seems to cause.
+# CHANGE: RSI_OVERSOLD from 30 to 25
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "wider_stops_for_5min_bars"
-EXPERIMENT_HYPOTHESIS = "Current STOP_PCT = 0.8% is too tight for 5-minute intraday bars with natural volatility. Following successful MACD optimizations that created highly responsive, quality signals (Sharpe 9.76), the tight 0.8% stops likely cause premature exits on good signals due to 5-minute bar noise. Since signal quality is exceptional, wider stops at 1.2% should let trades breathe, reduce whipsaws, and improve total return while maintaining the strategy's proven signal discipline."
-EXPERIMENT_CHANGE = "STOP_PCT from 0.008 to 0.012"
+EXPERIMENT_NAME = "tighten_rsi_oversold_for_quality"
+EXPERIMENT_HYPOTHESIS = "MIN_CONFIDENCE=62 has failed multiple times in recent experiments. Different approach: RSI_OVERSOLD=30 → 25 requires deeper panic/capitulation before buy signals, filtering for higher-quality mean-reversion setups. RSI<25 represents true oversold extremes where bounces are more reliable, reducing weak signals while keeping genuine opportunities. This improves win rate and risk-adjusted returns without the issues that MIN_CONFIDENCE=62 seems to cause."
+EXPERIMENT_CHANGE = "RSI_OVERSOLD from 30 to 25"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -29,7 +29,7 @@ EXPERIMENT_CHANGE = "STOP_PCT from 0.008 to 0.012"
 
 # RSI thresholds
 RSI_PERIOD = 14
-RSI_OVERSOLD = 30           # Buy signal below this
+RSI_OVERSOLD = 25           # Buy signal below this
 RSI_OVERBOUGHT = 65         # Sell signal above this
 RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
@@ -44,7 +44,7 @@ VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
 STOP_PCT = 0.012                # Default stop = 1.2% from entry
-TARGET_MULTIPLIER = 2.5         # R:R ratio (target = entry ± stop_dist * 2.5)
+TARGET_MULTIPLIER = 3.0         # R:R ratio (target = entry ± stop_dist * 3.0)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
