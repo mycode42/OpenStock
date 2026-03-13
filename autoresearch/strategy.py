@@ -1,6 +1,6 @@
-# EXPERIMENT: aggressive_targets
-# HYPOTHESIS: Current strategy achieves exceptional signal quality (Sharpe 4.82, win rate 46.67%) with TARGET_MULTIPLIER = 2.2. Such high-quality signals suggest we can be more aggressive on profit targets while maintaining the same stop discipline. Increasing target multiplier to 2.5 should boost total return (20% fitness weight) by capturing more profit from the already-proven high-quality signals, while the excellent Sharpe ratio provides cushion for any minor win rate reduction.
-# CHANGE: TARGET_MULTIPLIER from 2.2 to 2.5
+# EXPERIMENT: faster_macd
+# HYPOTHESIS: Current MACD_FAST = 8 is too slow for 5-minute intraday bars, causing delayed momentum signals. Since MACD has 15% weight in confidence calculations and other indicators have been optimized for 5-minute timeframes (RSI_OVERBOUGHT 70→65, VWAP_NEAR_BAND_PCT 0.50%→0.75%), making MACD more responsive should improve signal timing. Reducing MACD_FAST from 8 to 6 periods (30 minutes vs 40 minutes) should provide more timely momentum signals while staying meaningful for intraday trading.
+# CHANGE: MACD_FAST from 8 to 6
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "aggressive_targets"
-EXPERIMENT_HYPOTHESIS = "Current strategy achieves exceptional signal quality (Sharpe 4.82, win rate 46.67%) with TARGET_MULTIPLIER = 2.2. Such high-quality signals suggest we can be more aggressive on profit targets while maintaining the same stop discipline. Increasing target multiplier to 2.5 should boost total return (20% fitness weight) by capturing more profit from the already-proven high-quality signals, while the excellent Sharpe ratio provides cushion for any minor win rate reduction."
-EXPERIMENT_CHANGE = "TARGET_MULTIPLIER from 2.2 to 2.5"
+EXPERIMENT_NAME = "faster_macd"
+EXPERIMENT_HYPOTHESIS = "Current MACD_FAST = 8 is too slow for 5-minute intraday bars, causing delayed momentum signals. Since MACD has 15% weight in confidence calculations and other indicators have been optimized for 5-minute timeframes (RSI_OVERBOUGHT 70→65, VWAP_NEAR_BAND_PCT 0.50%→0.75%), making MACD more responsive should improve signal timing. Reducing MACD_FAST from 8 to 6 periods (30 minutes vs 40 minutes) should provide more timely momentum signals while staying meaningful for intraday trading."
+EXPERIMENT_CHANGE = "MACD_FAST from 8 to 6"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -57,7 +57,7 @@ CONF_WEIGHT_VOLUME = 0.20
 CONF_WEIGHT_MACD = 0.15
 
 # MACD parameters
-MACD_FAST = 8
+MACD_FAST = 6
 MACD_SLOW = 26
 MACD_SIGNAL_PERIOD = 9
 
