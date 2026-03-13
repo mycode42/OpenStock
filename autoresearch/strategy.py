@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_confidence_threshold
-# HYPOTHESIS: Current MIN_CONFIDENCE = 58.0 creates a mathematical impossibility in volatile markets. With volatile regime multiplier 0.55, signals need raw confidence ≥ 105.45 to pass, but confidence is capped at 95.0. This explains why experiments consistently get exactly 5 trades and hit the <10 trades penalty (-15 fitness). Quality signals scoring 70-85 raw confidence are rejected after applying 0.55x multiplier. Lowering MIN_CONFIDENCE to 50.0 allows these signals to pass (requiring only 90.9 raw confidence) while maintaining selectivity.
-# CHANGE: MIN_CONFIDENCE from 58.0 to 50.0
+# EXPERIMENT: responsive_macd
+# HYPOTHESIS: Current MACD_FAST = 12 is designed for daily charts and is too slow for 5-minute intraday bars, causing lagging entry signals that reduce signal quality and timing. This hurts the Sharpe ratio (currently 0.2732, which has 35% weight in fitness). Reducing MACD_FAST to 8 makes MACD more responsive to short-term price movements on 5-minute bars, improving entry timing and signal quality without changing fundamental logic.
+# CHANGE: MACD_FAST from 12 to 8
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "lower_confidence_threshold"
-EXPERIMENT_HYPOTHESIS = "Current MIN_CONFIDENCE = 58.0 creates a mathematical impossibility in volatile markets. With volatile regime multiplier 0.55, signals need raw confidence ≥ 105.45 to pass, but confidence is capped at 95.0. This explains why experiments consistently get exactly 5 trades and hit the <10 trades penalty (-15 fitness). Quality signals scoring 70-85 raw confidence are rejected after applying 0.55x multiplier. Lowering MIN_CONFIDENCE to 50.0 allows these signals to pass (requiring only 90.9 raw confidence) while maintaining selectivity."
-EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 58.0 to 50.0"
+EXPERIMENT_NAME = "responsive_macd"
+EXPERIMENT_HYPOTHESIS = "Current MACD_FAST = 12 is designed for daily charts and is too slow for 5-minute intraday bars, causing lagging entry signals that reduce signal quality and timing. This hurts the Sharpe ratio (currently 0.2732, which has 35% weight in fitness). Reducing MACD_FAST to 8 makes MACD more responsive to short-term price movements on 5-minute bars, improving entry timing and signal quality without changing fundamental logic."
+EXPERIMENT_CHANGE = "MACD_FAST from 12 to 8"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -57,7 +57,7 @@ CONF_WEIGHT_VOLUME = 0.20
 CONF_WEIGHT_MACD = 0.15
 
 # MACD parameters
-MACD_FAST = 12
+MACD_FAST = 8
 MACD_SLOW = 26
 MACD_SIGNAL_PERIOD = 9
 
