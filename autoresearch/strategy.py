@@ -1,6 +1,6 @@
-# EXPERIMENT: baseline_v1
-# HYPOTHESIS: Establish deterministic baseline from Apex agent logic — RSI/VWAP/Volume/MACD rules
-# CHANGE: Initial implementation extracted from apex.py trading philosophy
+# EXPERIMENT: widen_vwap_band
+# HYPOTHESIS: VWAP_NEAR_BAND_PCT=0.30 is too tight — price barely above/below VWAP still scores directional signal, creating noise trades in choppy markets. Widening to 0.50 requires stronger VWAP deviation before scoring, reducing low-quality signals and improving Sharpe/Sortino.
+# CHANGE: VWAP_NEAR_BAND_PCT increased from 0.30 to 0.50
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "dry_run_55to53"
-EXPERIMENT_HYPOTHESIS = "Lower MIN_CONFIDENCE from 55.0 to 53.0 to generate more signals"
-EXPERIMENT_CHANGE = "Initial implementation with RSI/VWAP/Volume/MACD indicators"
+EXPERIMENT_NAME = "widen_vwap_band"
+EXPERIMENT_HYPOTHESIS = "VWAP_NEAR_BAND_PCT=0.30 too tight — widening to 0.50 filters marginal near-VWAP signals"
+EXPERIMENT_CHANGE = "VWAP_NEAR_BAND_PCT increased from 0.30 to 0.50"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -35,7 +35,7 @@ RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
 
 # VWAP deviation bands (%)
-VWAP_NEAR_BAND_PCT = 0.30       # Within 0.3% = "at VWAP", no strong signal
+VWAP_NEAR_BAND_PCT = 0.50       # Within 0.5% = "at VWAP", no strong signal
 VWAP_EXTENDED_PCT = 1.50        # > 1.5% from VWAP = extended, caution
 
 # Volume ratio thresholds (today cumulative / 20d avg daily)
