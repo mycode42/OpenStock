@@ -719,7 +719,11 @@ def main() -> int:
                     print(f"  [git] Committed.", file=sys.stderr)
         else:
             # Revert to backup
-            shutil.copy2(STRATEGY_BACKUP_PATH, STRATEGY_PATH)
+            if STRATEGY_BACKUP_PATH.exists():
+                shutil.copy2(STRATEGY_BACKUP_PATH, STRATEGY_PATH)
+            else:
+                print("  [WARN] No backup file found — using git checkout to revert", file=sys.stderr)
+                subprocess.run(["git", "checkout", str(STRATEGY_PATH)], cwd=str(AUTORESEARCH_DIR.parent), capture_output=True)
             print(
                 f"  [REVERTED] fitness={new_fitness:.4f} (Δ{fitness_delta:+.4f})  "
                 f"best remains {best_fitness:.4f}",
