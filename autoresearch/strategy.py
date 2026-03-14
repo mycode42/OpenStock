@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_min_confidence_threshold
-# HYPOTHESIS: Current RSI_OVERSOLD=25 achieves fitness=7.1953 with 70% WR and 10 trades, while historical RSI_OVERSOLD=23 achieved fitness=8.3331+ with 81.82% WR. Recent RSI=23 attempts only generate 9 trades (penalty). Market microstructure has changed, making RSI<23 rarer. MIN_CONFIDENCE 60.0→58.0 allows slightly more marginal signals through while maintaining proven RSI=25 threshold. Math check: 58.0/0.65=89.2 < 95.0 (achievable in volatile regime). Should increase trade frequency 10→12-13, improving total return (20% weight) and profit factor (10% weight).
-# CHANGE: MIN_CONFIDENCE from 60.0 to 58.0
+# EXPERIMENT: add_rsi_strong_oversold_tier
+# HYPOTHESIS: Current fitness=7.5312 with 66.67% WR suggests RSI scoring gap is limiting signal quality. RSI<25 gets 100% score (35 pts) but RSI 25-44 only gets 60% score (21 pts). In volatile markets (regime_mult=0.65), RSI 25-32 represents quality oversold mean-reversion opportunities but scores too low to pass MIN_CONFIDENCE=58.0. Adding RSI_STRONG_OVERSOLD=32 tier (80% score) bridges the gap, capturing more quality signals in 25-32 range without RSI<23's trade count risk.
+# CHANGE: Add RSI_STRONG_OVERSOLD=32 tier giving 80% score for RSI 25-32 range
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "lower_min_confidence_threshold"
-EXPERIMENT_HYPOTHESIS = "Current RSI_OVERSOLD=25 achieves fitness=7.1953 with 70% WR and 10 trades, while historical RSI_OVERSOLD=23 achieved fitness=8.3331+ with 81.82% WR. Recent RSI=23 attempts only generate 9 trades (penalty). Market microstructure has changed, making RSI<23 rarer. MIN_CONFIDENCE 60.0→58.0 allows slightly more marginal signals through while maintaining proven RSI=25 threshold. Math check: 58.0/0.65=89.2 < 95.0 (achievable in volatile regime). Should increase trade frequency 10→12-13, improving total return (20% weight) and profit factor (10% weight)."
-EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 60.0 to 58.0"
+EXPERIMENT_NAME = "add_rsi_strong_oversold_tier"
+EXPERIMENT_HYPOTHESIS = "Current fitness=7.5312 with 66.67% WR suggests RSI scoring gap is limiting signal quality. RSI<25 gets 100% score (35 pts) but RSI 25-44 only gets 60% score (21 pts). In volatile markets (regime_mult=0.65), RSI 25-32 represents quality oversold mean-reversion opportunities but scores too low to pass MIN_CONFIDENCE=58.0. Adding RSI_STRONG_OVERSOLD=32 tier (80% score) bridges the gap, capturing more quality signals in 25-32 range without RSI<23's trade count risk."
+EXPERIMENT_CHANGE = "Add RSI_STRONG_OVERSOLD=32 tier giving 80% score for RSI 25-32 range"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -30,6 +30,7 @@ EXPERIMENT_CHANGE = "MIN_CONFIDENCE from 60.0 to 58.0"
 # RSI thresholds
 RSI_PERIOD = 14
 RSI_OVERSOLD = 25           # Buy signal below this
+RSI_STRONG_OVERSOLD = 32    # Strong oversold tier (80% score)
 RSI_OVERBOUGHT = 65         # Sell signal above this
 RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
@@ -257,6 +258,8 @@ def _ticker_signal(
     if rsi is not None:
         if rsi < RSI_OVERSOLD:
             bull_score += CONF_WEIGHT_RSI * 100.0
+        elif rsi < RSI_STRONG_OVERSOLD:
+            bull_score += CONF_WEIGHT_RSI * 80.0   # Strong oversold tier
         elif rsi > RSI_OVERBOUGHT:
             bear_score += CONF_WEIGHT_RSI * 100.0
         elif rsi < RSI_NEUTRAL_LOW:
@@ -311,7 +314,7 @@ def _ticker_signal(
         bear_score *= 1.10
     elif regime == "range_bound":
         # Prefer mean-reversion at extremes in range-bound
-        if rsi is not None and rsi < RSI_OVERSOLD:
+        if rsi is not None and rsi < RSI_STRONG_OVERSOLD:
             bull_score *= 1.15
         elif rsi is not None and rsi > RSI_OVERBOUGHT:
             bear_score *= 1.15
