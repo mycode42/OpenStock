@@ -1,6 +1,6 @@
-# EXPERIMENT: add_rsi_strong_oversold_tier
-# HYPOTHESIS: Current fitness=7.5312 with 66.67% WR suggests RSI scoring gap is limiting signal quality. RSI<25 gets 100% score (35 pts) but RSI 25-44 only gets 60% score (21 pts). In volatile markets (regime_mult=0.65), RSI 25-32 represents quality oversold mean-reversion opportunities but scores too low to pass MIN_CONFIDENCE=58.0. Adding RSI_STRONG_OVERSOLD=32 tier (80% score) bridges the gap, capturing more quality signals in 25-32 range without RSI<23's trade count risk.
-# CHANGE: Add RSI_STRONG_OVERSOLD=32 tier giving 80% score for RSI 25-32 range
+# EXPERIMENT: add_rsi_moderate_oversold_bridge
+# HYPOTHESIS: Current fitness=8.1367 shows RSI_STRONG_OVERSOLD=32 success, but RSI scoring still has a gap: RSI 25-32 gets 80% score (28pts) while RSI 32-45 only gets 60% score (21pts). In volatile markets (regime_mult=0.65), RSI 32-38 represents quality moderate oversold signals that score too low to consistently pass MIN_CONFIDENCE=58.0. Adding RSI_MODERATE_OVERSOLD=38 with 70% score bridges this remaining gap, following the successful pattern to capture more quality mean-reversion signals.
+# CHANGE: Add RSI_MODERATE_OVERSOLD=38 tier giving 70% score for RSI 32-38 range
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "add_rsi_strong_oversold_tier"
-EXPERIMENT_HYPOTHESIS = "Current fitness=7.5312 with 66.67% WR suggests RSI scoring gap is limiting signal quality. RSI<25 gets 100% score (35 pts) but RSI 25-44 only gets 60% score (21 pts). In volatile markets (regime_mult=0.65), RSI 25-32 represents quality oversold mean-reversion opportunities but scores too low to pass MIN_CONFIDENCE=58.0. Adding RSI_STRONG_OVERSOLD=32 tier (80% score) bridges the gap, capturing more quality signals in 25-32 range without RSI<23's trade count risk."
-EXPERIMENT_CHANGE = "Add RSI_STRONG_OVERSOLD=32 tier giving 80% score for RSI 25-32 range"
+EXPERIMENT_NAME = "add_rsi_moderate_oversold_bridge"
+EXPERIMENT_HYPOTHESIS = "Current fitness=8.1367 shows RSI_STRONG_OVERSOLD=32 success, but RSI scoring still has a gap: RSI 25-32 gets 80% score (28pts) while RSI 32-45 only gets 60% score (21pts). In volatile markets (regime_mult=0.65), RSI 32-38 represents quality moderate oversold signals that score too low to consistently pass MIN_CONFIDENCE=58.0. Adding RSI_MODERATE_OVERSOLD=38 with 70% score bridges this remaining gap, following the successful pattern to capture more quality mean-reversion signals."
+EXPERIMENT_CHANGE = "Add RSI_MODERATE_OVERSOLD=38 tier giving 70% score for RSI 32-38 range"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -31,6 +31,7 @@ EXPERIMENT_CHANGE = "Add RSI_STRONG_OVERSOLD=32 tier giving 80% score for RSI 25
 RSI_PERIOD = 14
 RSI_OVERSOLD = 25           # Buy signal below this
 RSI_STRONG_OVERSOLD = 32    # Strong oversold tier (80% score)
+RSI_MODERATE_OVERSOLD = 38  # Moderate oversold tier (70% score)
 RSI_OVERBOUGHT = 65         # Sell signal above this
 RSI_NEUTRAL_LOW = 45        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 55       # Weak bear zone upper bound
@@ -260,6 +261,8 @@ def _ticker_signal(
             bull_score += CONF_WEIGHT_RSI * 100.0
         elif rsi < RSI_STRONG_OVERSOLD:
             bull_score += CONF_WEIGHT_RSI * 80.0   # Strong oversold tier
+        elif rsi < RSI_MODERATE_OVERSOLD:
+            bull_score += CONF_WEIGHT_RSI * 70.0   # Moderate oversold tier
         elif rsi > RSI_OVERBOUGHT:
             bear_score += CONF_WEIGHT_RSI * 100.0
         elif rsi < RSI_NEUTRAL_LOW:
