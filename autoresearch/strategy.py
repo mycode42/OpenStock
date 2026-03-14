@@ -1,6 +1,6 @@
-# EXPERIMENT: add_rsi_very_oversold_29
-# HYPOTHESIS: Current fitness=8.1437 has largest remaining gap: RSI<25 (100%) vs RSI 25-32 (80%) = 20% gap over 7 RSI points. Previous RSI_VERY_OVERSOLD=27 (90%) failed, likely too close to RSI=25 threshold. RSI_VERY_OVERSOLD=29 provides better separation and splits the 20% gap into two balanced 10% gaps: RSI 25-29 (90%) and RSI 29-32 (80%). This follows successful bridge tier pattern that improved fitness 8.1367→8.1437.
-# CHANGE: Add RSI_VERY_OVERSOLD=29 tier giving 90% score for RSI 25-29 range
+# EXPERIMENT: extend_range_bound_bonus
+# HYPOTHESIS: Current fitness=8.2291 with successful RSI bridge tiers, but range-bound bonus only applies to RSI<32 (strong+ oversold), missing moderate oversold tier (RSI 32-38). In range-bound markets, mean-reversion strategies should work well even at moderate oversold levels. Extending range-bound bonus from RSI<32 to RSI<38 captures additional quality mean-reversion signals in choppy markets, giving RSI 32-38 tier a 15% boost (70% → 80.5% effective score) when regime=range_bound.
+# CHANGE: Extend range-bound mean-reversion bonus to include RSI < RSI_MODERATE_OVERSOLD (38) instead of RSI < RSI_STRONG_OVERSOLD (32)
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "add_rsi_very_oversold_29"
-EXPERIMENT_HYPOTHESIS = "Current fitness=8.1437 has largest remaining gap: RSI<25 (100%) vs RSI 25-32 (80%) = 20% gap over 7 RSI points. Previous RSI_VERY_OVERSOLD=27 (90%) failed, likely too close to RSI=25 threshold. RSI_VERY_OVERSOLD=29 provides better separation and splits the 20% gap into two balanced 10% gaps: RSI 25-29 (90%) and RSI 29-32 (80%). This follows successful bridge tier pattern that improved fitness 8.1367→8.1437."
-EXPERIMENT_CHANGE = "Add RSI_VERY_OVERSOLD=29 tier giving 90% score for RSI 25-29 range"
+EXPERIMENT_NAME = "extend_range_bound_bonus"
+EXPERIMENT_HYPOTHESIS = "Current fitness=8.2291 with successful RSI bridge tiers, but range-bound bonus only applies to RSI<32 (strong+ oversold), missing moderate oversold tier (RSI 32-38). In range-bound markets, mean-reversion strategies should work well even at moderate oversold levels. Extending range-bound bonus from RSI<32 to RSI<38 captures additional quality mean-reversion signals in choppy markets, giving RSI 32-38 tier a 15% boost (70% → 80.5% effective score) when regime=range_bound."
+EXPERIMENT_CHANGE = "Extend range-bound mean-reversion bonus to include RSI < RSI_MODERATE_OVERSOLD (38) instead of RSI < RSI_STRONG_OVERSOLD (32)"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -320,7 +320,7 @@ def _ticker_signal(
         bear_score *= 1.10
     elif regime == "range_bound":
         # Prefer mean-reversion at extremes in range-bound
-        if rsi is not None and rsi < RSI_STRONG_OVERSOLD:
+        if rsi is not None and rsi < RSI_MODERATE_OVERSOLD:
             bull_score *= 1.15
         elif rsi is not None and rsi > RSI_OVERBOUGHT:
             bear_score *= 1.15
