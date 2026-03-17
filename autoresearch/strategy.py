@@ -1,6 +1,6 @@
-# EXPERIMENT: stop_loss_efficiency
-# HYPOTHESIS: Current fitness=9.6457 with excellent 82.61% win rate shows very high signal quality. With such strong performance, most trades (82.61%) are winners, so tightening stop loss from 1.2% to 1.1% should improve risk-adjusted metrics (Sharpe 35% + Sortino 25% = 60% of fitness weight) by reducing average loss on the 17.39% losing trades while the high win rate provides cushion against negative impact. Follows proven selectivity/efficiency optimization pattern.
-# CHANGE: Reduce STOP_PCT from 1.2% to 1.1%
+# EXPERIMENT: rsi_overbought_selectivity
+# HYPOTHESIS: Current fitness=9.7327 with excellent 83.33% win rate shows very high signal quality from recent selectivity optimizations. Following this proven selectivity pattern, lowering RSI_OVERBOUGHT from 65 to 63 makes short signals more stringent by moving RSI 63-65 from 100% to 60% scoring. This targets the highest-weighted confidence component (RSI 35%) and should improve signal quality for short entries while the excellent current performance provides cushion. Complements the proven bull-side RSI optimizations.
+# CHANGE: Reduce RSI_OVERBOUGHT from 65 to 63
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "stop_loss_efficiency"
-EXPERIMENT_HYPOTHESIS = "Current fitness=9.6457 with excellent 82.61% win rate shows very high signal quality. With such strong performance, most trades (82.61%) are winners, so tightening stop loss from 1.2% to 1.1% should improve risk-adjusted metrics (Sharpe 35% + Sortino 25% = 60% of fitness weight) by reducing average loss on the 17.39% losing trades while the high win rate provides cushion against negative impact. Follows proven selectivity/efficiency optimization pattern."
-EXPERIMENT_CHANGE = "Reduce STOP_PCT from 1.2% to 1.1%"
+EXPERIMENT_NAME = "rsi_overbought_selectivity"
+EXPERIMENT_HYPOTHESIS = "Current fitness=9.7327 with excellent 83.33% win rate shows very high signal quality from recent selectivity optimizations. Following this proven selectivity pattern, lowering RSI_OVERBOUGHT from 65 to 63 makes short signals more stringent by moving RSI 63-65 from 100% to 60% scoring. This targets the highest-weighted confidence component (RSI 35%) and should improve signal quality for short entries while the excellent current performance provides cushion. Complements the proven bull-side RSI optimizations."
+EXPERIMENT_CHANGE = "Reduce RSI_OVERBOUGHT from 65 to 63"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -33,7 +33,7 @@ RSI_OVERSOLD = 25           # Buy signal below this
 RSI_VERY_OVERSOLD = 29      # Very oversold tier (90% score)
 RSI_STRONG_OVERSOLD = 32    # Strong oversold tier (80% score)
 RSI_MODERATE_OVERSOLD = 38  # Moderate oversold tier (70% score)
-RSI_OVERBOUGHT = 65         # Sell signal above this
+RSI_OVERBOUGHT = 63         # Sell signal above this
 RSI_NEUTRAL_LOW = 47        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 53       # Weak bear zone upper bound
 
