@@ -1,6 +1,6 @@
-# EXPERIMENT: rsi_neutral_zone_selectivity
-# HYPOTHESIS: Current fitness=10.0164 with exceptional 87.5% win rate shows outstanding signal quality from recent RSI tier optimizations (oversold/overbought refinements). Following this proven selectivity pattern, raising RSI_NEUTRAL_LOW from 47 to 48 makes the 60% bull scoring tier more selective by moving RSI 47-48 from 60% scoring to neutral (no contribution). This targets the highest-weighted confidence component (RSI 35%) to further improve signal quality while the exceptional current performance provides ample cushion.
-# CHANGE: Increase RSI_NEUTRAL_LOW from 47 to 48
+# EXPERIMENT: tighten_stop_loss
+# HYPOTHESIS: Current fitness=10.0323 with exceptional 88% win rate shows outstanding signal quality, but recent RSI optimizations have reached diminishing returns. Risk-adjusted metrics (Sharpe + Sortino exactly) comprise 60% of fitness weight. With such high win rate (88%), tightening STOP_PCT from 1.1% to 1.0% should improve risk-adjusted ratios by reducing average loss on the 12% losing trades. This targets the highest-weighted fitness components while following the proven efficiency pattern, and the exceptional win rate provides cushion against any increase in stop-outs.
+# CHANGE: Decrease STOP_PCT from 0.011 (1.1%) to 0.010 (1.0%)
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "rsi_neutral_zone_selectivity"
-EXPERIMENT_HYPOTHESIS = "Current fitness=10.0164 with exceptional 87.5% win rate shows outstanding signal quality from recent RSI tier optimizations (oversold/overbought refinements). Following this proven selectivity pattern, raising RSI_NEUTRAL_LOW from 47 to 48 makes the 60% bull scoring tier more selective by moving RSI 47-48 from 60% scoring to neutral (no contribution). This targets the highest-weighted confidence component (RSI 35%) to further improve signal quality while the exceptional current performance provides ample cushion."
-EXPERIMENT_CHANGE = "Increase RSI_NEUTRAL_LOW from 47 to 48"
+EXPERIMENT_NAME = "tighten_stop_loss"
+EXPERIMENT_HYPOTHESIS = "Current fitness=10.0323 with exceptional 88% win rate shows outstanding signal quality, but recent RSI optimizations have reached diminishing returns. Risk-adjusted metrics (Sharpe + Sortino exactly) comprise 60% of fitness weight. With such high win rate (88%), tightening STOP_PCT from 1.1% to 1.0% should improve risk-adjusted ratios by reducing average loss on the 12% losing trades. This targets the highest-weighted fitness components while following the proven efficiency pattern, and the exceptional win rate provides cushion against any increase in stop-outs."
+EXPERIMENT_CHANGE = "Decrease STOP_PCT from 0.011 (1.1%) to 0.010 (1.0%)"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -46,7 +46,7 @@ VOLUME_CONFIRM_RATIO = 1.40     # >= 1.4x to confirm signal
 VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
-STOP_PCT = 0.011                # Default stop = 1.1% from entry
+STOP_PCT = 0.010                # Default stop = 1.0% from entry
 TARGET_MULTIPLIER = 3.0         # R:R ratio (target = entry ± stop_dist * 3.0)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
