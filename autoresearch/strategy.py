@@ -1,6 +1,6 @@
-# EXPERIMENT: tighten_stop_loss
-# HYPOTHESIS: Current fitness=10.0323 with exceptional 88% win rate shows outstanding signal quality, but recent RSI optimizations have reached diminishing returns. Risk-adjusted metrics (Sharpe + Sortino exactly) comprise 60% of fitness weight. With such high win rate (88%), tightening STOP_PCT from 1.1% to 1.0% should improve risk-adjusted ratios by reducing average loss on the 12% losing trades. This targets the highest-weighted fitness components while following the proven efficiency pattern, and the exceptional win rate provides cushion against any increase in stop-outs.
-# CHANGE: Decrease STOP_PCT from 0.011 (1.1%) to 0.010 (1.0%)
+# EXPERIMENT: increase_target_multiplier
+# HYPOTHESIS: Current fitness=10.0340 with exceptional 88% win rate shows outstanding signal quality. Recent RSI optimizations have reached diminishing returns. With such high win rate (88%), the current 3.0x R:R ratio (TARGET_MULTIPLIER) may be overly conservative, limiting profit potential on the 88% winning trades. Increasing from 3.0 to 3.1 should boost total_return_pct (20% of fitness weight) and profit_factor (10% of fitness weight) - combined 30% weight - while the exceptional win rate provides cushion against any increase in volatility.
+# CHANGE: Increase TARGET_MULTIPLIER from 3.0 to 3.1
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "tighten_stop_loss"
-EXPERIMENT_HYPOTHESIS = "Current fitness=10.0323 with exceptional 88% win rate shows outstanding signal quality, but recent RSI optimizations have reached diminishing returns. Risk-adjusted metrics (Sharpe + Sortino exactly) comprise 60% of fitness weight. With such high win rate (88%), tightening STOP_PCT from 1.1% to 1.0% should improve risk-adjusted ratios by reducing average loss on the 12% losing trades. This targets the highest-weighted fitness components while following the proven efficiency pattern, and the exceptional win rate provides cushion against any increase in stop-outs."
-EXPERIMENT_CHANGE = "Decrease STOP_PCT from 0.011 (1.1%) to 0.010 (1.0%)"
+EXPERIMENT_NAME = "increase_target_multiplier"
+EXPERIMENT_HYPOTHESIS = "Current fitness=10.0340 with exceptional 88% win rate shows outstanding signal quality. Recent RSI optimizations have reached diminishing returns. With such high win rate (88%), the current 3.0x R:R ratio (TARGET_MULTIPLIER) may be overly conservative, limiting profit potential on the 88% winning trades. Increasing from 3.0 to 3.1 should boost total_return_pct (20% of fitness weight) and profit_factor (10% of fitness weight) - combined 30% weight - while the exceptional win rate provides cushion against any increase in volatility."
+EXPERIMENT_CHANGE = "Increase TARGET_MULTIPLIER from 3.0 to 3.1"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -47,7 +47,7 @@ VOLUME_STRONG_RATIO = 2.50      # >= 2.5x = strong conviction
 
 # Risk / sizing
 STOP_PCT = 0.010                # Default stop = 1.0% from entry
-TARGET_MULTIPLIER = 3.0         # R:R ratio (target = entry ± stop_dist * 3.0)
+TARGET_MULTIPLIER = 3.1         # R:R ratio (target = entry ± stop_dist * 3.1)
 MAX_POSITION_SIZE_PCT = 0.15    # Max 15% of portfolio per position
 
 # Minimum confidence to emit a signal (0–100)
