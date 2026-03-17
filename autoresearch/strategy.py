@@ -1,6 +1,6 @@
-# EXPERIMENT: rsi_very_oversold_selectivity
-# HYPOTHESIS: Current fitness=9.7389 with exceptional 84% win rate shows very high signal quality from recent selectivity optimizations. Following this proven selectivity pattern, lowering RSI_VERY_OVERSOLD from 29 to 28 makes the 90% scoring tier more selective by moving RSI 28-29 from 90% to 100% scoring. This targets the highest-weighted confidence component (RSI 35%) and should improve signal quality for long entries while complementing the successful bear-side RSI optimization (65→63). The exceptional current performance provides cushion for this bull-side RSI tier refinement.
-# CHANGE: Reduce RSI_VERY_OVERSOLD from 29 to 28
+# EXPERIMENT: rsi_strong_oversold_selectivity
+# HYPOTHESIS: Current fitness=10.0098 with exceptional 87.5% win rate shows outstanding signal quality from recent RSI tier optimizations. Following this proven selectivity pattern, lowering RSI_STRONG_OVERSOLD from 32 to 31 makes the 80% scoring tier more selective by moving RSI 31-32 from 80% to 90% scoring. This continues the successful bull-side tier refinement (very_oversold 29→28, overbought 65→63) and targets the highest-weighted confidence component (RSI 35%) to further improve signal quality while the exceptional current performance provides ample cushion.
+# CHANGE: Reduce RSI_STRONG_OVERSOLD from 32 to 31
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "rsi_very_oversold_selectivity"
-EXPERIMENT_HYPOTHESIS = "Current fitness=9.7389 with exceptional 84% win rate shows very high signal quality from recent selectivity optimizations. Following this proven selectivity pattern, lowering RSI_VERY_OVERSOLD from 29 to 28 makes the 90% scoring tier more selective by moving RSI 28-29 from 90% to 100% scoring. This targets the highest-weighted confidence component (RSI 35%) and should improve signal quality for long entries while complementing the successful bear-side RSI optimization (65→63). The exceptional current performance provides cushion for this bull-side RSI tier refinement."
-EXPERIMENT_CHANGE = "Reduce RSI_VERY_OVERSOLD from 29 to 28"
+EXPERIMENT_NAME = "rsi_strong_oversold_selectivity"
+EXPERIMENT_HYPOTHESIS = "Current fitness=10.0098 with exceptional 87.5% win rate shows outstanding signal quality from recent RSI tier optimizations. Following this proven selectivity pattern, lowering RSI_STRONG_OVERSOLD from 32 to 31 makes the 80% scoring tier more selective by moving RSI 31-32 from 80% to 90% scoring. This continues the successful bull-side tier refinement (very_oversold 29→28, overbought 65→63) and targets the highest-weighted confidence component (RSI 35%) to further improve signal quality while the exceptional current performance provides ample cushion."
+EXPERIMENT_CHANGE = "Reduce RSI_STRONG_OVERSOLD from 32 to 31"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -31,7 +31,7 @@ EXPERIMENT_CHANGE = "Reduce RSI_VERY_OVERSOLD from 29 to 28"
 RSI_PERIOD = 10
 RSI_OVERSOLD = 25           # Buy signal below this
 RSI_VERY_OVERSOLD = 28      # Very oversold tier (90% score)
-RSI_STRONG_OVERSOLD = 32    # Strong oversold tier (80% score)
+RSI_STRONG_OVERSOLD = 31    # Strong oversold tier (80% score)
 RSI_MODERATE_OVERSOLD = 38  # Moderate oversold tier (70% score)
 RSI_OVERBOUGHT = 63         # Sell signal above this
 RSI_NEUTRAL_LOW = 47        # Weak bull zone lower bound
