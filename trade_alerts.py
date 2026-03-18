@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Trade Alerts — Monitors for anomalies in Cassius's trading behavior.
+Trade Alerts — Monitors for anomalies in Agent's trading behavior.
 
 All thresholds pulled from active mode config — no hardcoded values.
 
@@ -245,7 +245,7 @@ def log_alerts(alerts):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cassius Trade Alerts")
+    parser = argparse.ArgumentParser(description="Swarm Trader Alerts")
     parser.add_argument("--check", action="store_true", help="Run all alert checks")
     parser.add_argument("--audit", type=str, help="Audit trade decisions before execution")
     parser.add_argument("--telegram", action="store_true", help="Telegram format")
@@ -276,14 +276,14 @@ def main():
         if args.telegram:
             critical = [a for a in alerts if a.get("level") == "critical"]
             warnings = [a for a in alerts if a.get("level") == "warning"]
-            print(f"🚨 Cassius Alert [{mode.upper()}] — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
+            print(f"🚨 Swarm Alert [{mode.upper()}] — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
             for a in critical:
                 print(f"  {a['message']}")
             for a in warnings:
                 print(f"  {a['message']}")
         else:
             print(f"{'='*50}")
-            print(f"  CASSIUS ALERTS [{mode.upper()}] — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
+            print(f"  SWARM ALERTS [{mode.upper()}] — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
             print(f"{'='*50}")
             for a in alerts:
                 level = "🔴 CRITICAL" if a["level"] == "critical" else "🟡 WARNING"

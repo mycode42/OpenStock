@@ -108,7 +108,7 @@ def resolve_mode(cli_mode: str = None) -> str:
       4. TRADING_MODE env var
       5. Default: "swing"
 
-    When mode is "auto", returns "auto" — caller (Cassius) decides.
+    When mode is "auto", returns "auto" — the agent decides.
     """
     import json
     from datetime import datetime
@@ -162,15 +162,15 @@ def resolve_mode(cli_mode: str = None) -> str:
     return "swing"
 
 
-def set_mode(mode: str, reason: str = None, updated_by: str = "cassius",
+def set_mode(mode: str, reason: str = None, updated_by: str = "agent",
              override: bool = False, override_hours: float = None) -> str:
     """
-    Update trading_mode.json. Used by Cassius autonomously or by human.
+    Update trading_mode.json. Used by the agent autonomously or by human.
 
     Args:
         mode:            "swing", "day", or "auto"
         reason:          Why the change was made
-        updated_by:      "cassius", "human", etc.
+        updated_by:      "agent", "human", etc.
         override:        If True, sets as override (takes priority over auto)
         override_hours:  Override duration in hours (None = permanent)
 

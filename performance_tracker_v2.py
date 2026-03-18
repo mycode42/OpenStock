@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # CANONICAL TRACKER — This is the authoritative performance tracker. performance_tracker.py (V1) has been removed.
 """
-Performance Tracker V2 — Cassius V2 daily performance with benchmark comparison.
+Performance Tracker V2 — Swarm Trader daily performance with benchmark comparison.
 
 Tracks portfolio vs SPY and QQQ, computes rolling 21-day Sharpe ratio,
 win rate, and average win/loss per trade.  Saves daily JSON snapshots to
@@ -372,7 +372,7 @@ def terminal_report(perf: dict, trade_stats: dict) -> None:
         return
 
     print(f"{'='*65}")
-    print(f"  CASSIUS V2 — PERFORMANCE TRACKER")
+    print(f"  SWARM TRADER — PERFORMANCE TRACKER")
     print(f"  {perf['period_start']} → {perf['period_end']}  ({perf['snapshots_count']} snapshots)")
     print(f"{'='*65}")
     print(f"  Starting Equity:    ${perf['starting_equity']:>13,.2f}")
@@ -435,7 +435,7 @@ def terminal_report(perf: dict, trade_stats: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Cassius V2 Performance Tracker")
+    parser = argparse.ArgumentParser(description="Swarm Trader Performance Tracker")
     parser.add_argument("--snapshot", action="store_true", help="Record today's snapshot")
     parser.add_argument("--force", action="store_true", help="Overwrite today's snapshot")
     parser.add_argument("--report", action="store_true", help="Terminal performance report")

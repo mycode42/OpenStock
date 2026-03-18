@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Portfolio Monitor — Cassius V2 stop-loss enforcer and health check.
+Portfolio Monitor — Swarm Trader stop-loss enforcer and health check.
 
 Designed to run on cron (e.g., 9:30 AM and 3:30 PM ET).  Checks every open
 position against its hard stop and trailing stop from the active trading mode.
@@ -321,7 +321,7 @@ def _print_summary(
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     print(f"{'='*65}")
-    print(f"  CASSIUS V2 — PORTFOLIO MONITOR{mode_tag}")
+    print(f"  SWARM TRADER — PORTFOLIO MONITOR{mode_tag}")
     print(f"  Mode: {mode.upper()} — {mode_config['label']}")
     print(f"  Stops: -{stop_loss_pct*100:.1f}% hard  /  -{trailing_stop_pct*100:.1f}% trailing")
     print(f"  {now}")
@@ -383,7 +383,7 @@ def _print_summary(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Cassius V2 Portfolio Monitor")
+    parser = argparse.ArgumentParser(description="Swarm Trader Portfolio Monitor")
     parser.add_argument(
         "--dry-run", "--no-sell",
         action="store_true",

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Trade Executor — Takes Cassius's JSON decisions and executes via Alpaca.
+Trade Executor — Takes Agent's JSON decisions and executes via Alpaca.
 
 Input: JSON on stdin or --file with format:
 {
@@ -291,7 +291,7 @@ def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Execute Cassius's trade decisions")
+    parser = argparse.ArgumentParser(description="Execute Agent's trade decisions")
     parser.add_argument("--file", type=str, help="JSON file with trade decisions")
     parser.add_argument("--dry-run", action="store_true", help="Validate but don't execute")
     parser.add_argument(

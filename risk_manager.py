@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Risk Manager — Hard rules enforcer for Cassius V2.
+Risk Manager — Hard rules enforcer for Swarm Trader.
 
 Every proposed trade passes through validate_trade() before execution.
 Rules are non-negotiable and code-enforced; no LLM can override them.
@@ -404,7 +404,7 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
 
     eq = portfolio_state["equity"]
     print(f"{'='*60}")
-    print(f"  CASSIUS V2 — RISK MANAGER STATUS")
+    print(f"  SWARM TRADER — RISK MANAGER STATUS")
     print(f"  Mode: {mode.upper()} — {mode_config['label']}")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
@@ -444,7 +444,7 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Cassius V2 Risk Manager")
+    parser = argparse.ArgumentParser(description="Swarm Trader Risk Manager")
     parser.add_argument("--status", action="store_true", help="Show current risk status")
     parser.add_argument(
         "--mode",

@@ -559,7 +559,7 @@ swarm-trader/
 ├── intel_exchange.py          # Peer signal sharing via A2A
 ├── trading_mode.json          # Mode steering file (auto/swing/day + overrides)
 ├── PLAYBOOK.md                # Complete operations guide
-├── CASSIUS_V2_DESIGN.md       # V2 design document
+├── CASSIUS_V2_DESIGN.md       # V2 design document (internal)
 ├── .env.example               # Secrets template
 ├── src/
 │   ├── config.py              # MODES dict — single source of truth per mode
@@ -614,7 +614,7 @@ from src.config import resolve_mode, set_mode
 mode = resolve_mode()  # "auto", "swing", or "day"
 
 # Agent sets mode
-set_mode("swing", reason="VIX 18, low vol", updated_by="cassius")
+set_mode("swing", reason="VIX 18, low vol", updated_by="agent")
 
 # Human override for 4 hours
 set_mode("day", reason="FOMC day", updated_by="human", override=True, override_hours=4)
