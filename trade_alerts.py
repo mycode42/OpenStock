@@ -2,19 +2,20 @@
 """
 Trade Alerts — Monitors for anomalies in Cassius's trading behavior.
 
-Run after each trading session or during heartbeats.
+All thresholds pulled from active mode config — no hardcoded values.
 
 Usage:
   poetry run python trade_alerts.py --check              # Check all alerts
+  poetry run python trade_alerts.py --check --mode day   # Day mode thresholds
   poetry run python trade_alerts.py --check --telegram   # Output for Telegram
   poetry run python trade_alerts.py --audit decisions.json  # Audit before execution
 
 Alerts:
-  1. Position concentration: any single position >25% of portfolio
-  2. Sector concentration: any category >50% of portfolio
-  3. Rapid trading: >15 trades in a single day
-  4. Cash depletion: cash <10% of equity
-  5. Drawdown: equity down >10% from peak
+  1. Position concentration: any single position > max_position_pct
+  2. Sector concentration: any category > max_sector_pct
+  3. Rapid trading: > max_trades_per_day trades in a day
+  4. Cash depletion: cash < min_cash_pct of equity
+  5. Drawdown: equity down >10% from peak (configurable)
   6. Trade size: individual trade >10% of portfolio (pre-execution check)
 """
 
@@ -30,6 +31,8 @@ load_dotenv()
 
 import requests
 
+from src.config import get_mode_config, resolve_mode
+
 ALERTS_LOG = Path(__file__).parent / "data" / "alerts.jsonl"
 PERF_DATA = Path(__file__).parent / "data" / "performance.json"
 JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
@@ -40,21 +43,10 @@ HEADERS = {
     "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
 }
 
-UNIVERSE = {
-    "ai_infra": ["NVDA", "AVGO", "SMCI", "TSM"],
-    "leveraged": ["TQQQ", "SOXL", "UPRO"],
-    "momentum": ["PLTR", "MSTR", "COIN", "RKLB"],
-    "moonshots": ["IONQ", "RGTI", "SOUN", "LUNR"],
-}
-ALL_UNIVERSE = [t for group in UNIVERSE.values() for t in group]
-
-# Alert thresholds
-MAX_POSITION_PCT = 25.0      # Single position max % of portfolio
-MAX_CATEGORY_PCT = 50.0      # Category max % of portfolio
-MAX_DAILY_TRADES = 15        # Max trades per day
-MIN_CASH_PCT = 10.0          # Minimum cash % of equity
-MAX_DRAWDOWN_PCT = 10.0      # Max drawdown from peak before alert
-MAX_TRADE_SIZE_PCT = 10.0    # Max single trade size
+# Drawdown alert threshold (not in mode config — applies to both modes)
+MAX_DRAWDOWN_PCT = 10.0
+# Trade size alert threshold (pre-execution check, as % of portfolio)
+MAX_TRADE_SIZE_PCT = 10.0
 
 
 def get_portfolio():
@@ -62,16 +54,22 @@ def get_portfolio():
         account = requests.get(f"{API_BASE}/account", headers=HEADERS, timeout=10).json()
         positions = requests.get(f"{API_BASE}/positions", headers=HEADERS, timeout=10).json()
         return account, positions
-    except Exception as e:
+    except Exception:
         return None, None
 
 
-def check_concentration(account, positions):
-    """Check position and sector concentration."""
+def check_concentration(account, positions, mode: str = "swing"):
+    """Check position and sector concentration using mode risk limits."""
     alerts = []
     equity = float(account.get("equity", 0))
     if equity <= 0:
         return alerts
+
+    risk = get_mode_config(mode)["risk"]
+    universe = get_mode_config(mode)["universe"]
+    category_map = {cat_key: cat_data["tickers"] for cat_key, cat_data in universe.items()}
+
+    max_position_pct = risk["max_position_pct"] * 100  # convert to %
 
     # Position concentration
     for p in positions:
@@ -79,53 +77,59 @@ def check_concentration(account, positions):
         mv = float(p.get("market_value", 0))
         pct = mv / equity * 100
 
-        if pct > MAX_POSITION_PCT:
+        if pct > max_position_pct:
             alerts.append({
                 "level": "warning",
                 "type": "position_concentration",
-                "message": f"🚨 {sym} is {pct:.1f}% of portfolio (max {MAX_POSITION_PCT}%)",
+                "message": f"🚨 {sym} is {pct:.1f}% of portfolio (max {max_position_pct:.0f}%)",
                 "ticker": sym,
                 "value": pct,
-                "threshold": MAX_POSITION_PCT,
+                "threshold": max_position_pct,
             })
 
-    # Category concentration
-    categories = {}
+    # Sector concentration — use per-sector caps from mode universe
+    categories: dict[str, float] = {}
     for p in positions:
         sym = p["symbol"]
-        cat = next((k for k, v in UNIVERSE.items() if sym in v), "other")
+        cat = next((k for k, v in category_map.items() if sym in v), "other")
         categories[cat] = categories.get(cat, 0) + float(p.get("market_value", 0))
 
     for cat, value in categories.items():
         pct = value / equity * 100
-        if pct > MAX_CATEGORY_PCT:
+        # Use per-sector cap if defined, else fall back to mode max_sector_pct
+        sector_cap = universe.get(cat, {}).get("max_sector_pct", risk["max_sector_pct"]) * 100
+        if pct > sector_cap:
+            cat_label = universe.get(cat, {}).get("label", cat)
             alerts.append({
                 "level": "warning",
                 "type": "sector_concentration",
-                "message": f"⚠️ {cat} category is {pct:.1f}% of portfolio (max {MAX_CATEGORY_PCT}%)",
+                "message": f"⚠️ {cat_label} sector is {pct:.1f}% of portfolio (max {sector_cap:.0f}%)",
                 "category": cat,
                 "value": pct,
-                "threshold": MAX_CATEGORY_PCT,
+                "threshold": sector_cap,
             })
 
     return alerts
 
 
-def check_cash(account):
-    """Check cash levels."""
+def check_cash(account, mode: str = "swing"):
+    """Check cash levels against mode's min_cash_pct."""
     equity = float(account.get("equity", 0))
     cash = float(account.get("cash", 0))
     if equity <= 0:
         return []
 
+    risk = get_mode_config(mode)["risk"]
+    min_cash_pct = risk["min_cash_pct"] * 100  # convert to %
+
     cash_pct = cash / equity * 100
-    if cash_pct < MIN_CASH_PCT:
+    if cash_pct < min_cash_pct:
         return [{
             "level": "warning",
             "type": "low_cash",
-            "message": f"💸 Cash at {cash_pct:.1f}% (${cash:,.2f}) — below {MIN_CASH_PCT}% threshold",
+            "message": f"💸 Cash at {cash_pct:.1f}% (${cash:,.2f}) — below {min_cash_pct:.0f}% threshold",
             "value": cash_pct,
-            "threshold": MIN_CASH_PCT,
+            "threshold": min_cash_pct,
         }]
     return []
 
@@ -159,10 +163,13 @@ def check_drawdown():
     return []
 
 
-def check_trading_frequency():
-    """Check if too many trades in a single day."""
+def check_trading_frequency(mode: str = "swing"):
+    """Check if too many trades in a single day against mode's max_trades_per_day."""
     if not JOURNAL_PATH.exists():
         return []
+
+    risk = get_mode_config(mode)["risk"]
+    max_daily_trades = risk["max_trades_per_day"]
 
     today = datetime.now().strftime("%Y-%m-%d")
     count = 0
@@ -175,18 +182,18 @@ def check_trading_frequency():
             except json.JSONDecodeError:
                 continue
 
-    if count > MAX_DAILY_TRADES:
+    if count > max_daily_trades:
         return [{
             "level": "warning",
             "type": "high_frequency",
-            "message": f"⚡ {count} trades today — exceeds {MAX_DAILY_TRADES} daily threshold",
+            "message": f"⚡ {count} trades today — exceeds {max_daily_trades} daily threshold ({mode} mode)",
             "value": count,
-            "threshold": MAX_DAILY_TRADES,
+            "threshold": max_daily_trades,
         }]
     return []
 
 
-def audit_decisions(decisions_file):
+def audit_decisions(decisions_file, mode: str = "swing"):
     """Pre-execution audit of trade decisions."""
     if decisions_file == "-":
         decisions = json.load(sys.stdin)
@@ -242,19 +249,23 @@ def main():
     parser.add_argument("--check", action="store_true", help="Run all alert checks")
     parser.add_argument("--audit", type=str, help="Audit trade decisions before execution")
     parser.add_argument("--telegram", action="store_true", help="Telegram format")
+    parser.add_argument("--mode", choices=["swing", "day"], default=None,
+                        help="Trading mode (default: resolved from trading_mode.json / env)")
     args = parser.parse_args()
 
+    mode = resolve_mode(cli_mode=args.mode)
+    risk = get_mode_config(mode)["risk"]
     alerts = []
 
     if args.audit:
-        alerts = audit_decisions(args.audit)
+        alerts = audit_decisions(args.audit, mode=mode)
     elif args.check:
         account, positions = get_portfolio()
         if account and positions:
-            alerts.extend(check_concentration(account, positions))
-            alerts.extend(check_cash(account))
+            alerts.extend(check_concentration(account, positions, mode=mode))
+            alerts.extend(check_cash(account, mode=mode))
         alerts.extend(check_drawdown())
-        alerts.extend(check_trading_frequency())
+        alerts.extend(check_trading_frequency(mode=mode))
     else:
         parser.print_help()
         return
@@ -265,14 +276,14 @@ def main():
         if args.telegram:
             critical = [a for a in alerts if a.get("level") == "critical"]
             warnings = [a for a in alerts if a.get("level") == "warning"]
-            print(f"🚨 Cassius Alert — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
+            print(f"🚨 Cassius Alert [{mode.upper()}] — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
             for a in critical:
                 print(f"  {a['message']}")
             for a in warnings:
                 print(f"  {a['message']}")
         else:
             print(f"{'='*50}")
-            print(f"  CASSIUS ALERTS — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
+            print(f"  CASSIUS ALERTS [{mode.upper()}] — {len(alerts)} issue{'s' if len(alerts) != 1 else ''}")
             print(f"{'='*50}")
             for a in alerts:
                 level = "🔴 CRITICAL" if a["level"] == "critical" else "🟡 WARNING"
@@ -280,9 +291,9 @@ def main():
             print()
     else:
         if args.telegram:
-            print("✅ No alerts — all within thresholds")
+            print(f"✅ No alerts — all within {mode.upper()} mode thresholds")
         else:
-            print("✅ All clear — no alerts triggered")
+            print(f"✅ All clear — no alerts triggered ({mode.upper()} mode)")
 
 
 if __name__ == "__main__":

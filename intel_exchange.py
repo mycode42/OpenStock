@@ -12,13 +12,22 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
+# Import mode config for context
+from src.config import get_mode_config, resolve_mode
+
 # Peer A2A config — loaded from environment variables
 PEER_URL = os.getenv("PEER_A2A_URL", "http://localhost:9092/a2a/tasks/send")
 PEER_TOKEN = os.getenv("PEER_A2A_TOKEN", "")
 
 
-def build_intel_packet(data_file: str, packet_type: str = "daily-brief") -> dict:
+def build_intel_packet(data_file: str, packet_type: str = "daily-brief", mode: str = None) -> dict:
     """Build an intel packet from gather_data.py output. Strips all position/portfolio data."""
+    
+    # Resolve mode for context
+    if mode is None:
+        mode = resolve_mode()
+        if mode == "auto":
+            mode = "swing"  # Fallback
     
     with open(data_file) as f:
         data = json.load(f)
@@ -112,6 +121,7 @@ def build_intel_packet(data_file: str, packet_type: str = "daily-brief") -> dict
         "from": os.getenv("SWARM_AGENT_NAME", "swarm-agent"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "type": packet_type,
+        "trading_mode": mode,  # Include current mode for context
         "tickers_watching": tickers_watching,
         "signals": signals,
         "macro": {
@@ -198,6 +208,8 @@ def main():
     parser.add_argument("--type", default="daily-brief",
                        choices=["daily-brief", "anomaly", "sector-signal", "evening-debrief"],
                        help="Intel packet type")
+    parser.add_argument("--mode", choices=["swing", "day"],
+                       help="Trading mode for context (default: auto-resolve)")
     parser.add_argument("--target", default="peer",
                        help="Target agent name (label only, used in output)")
     parser.add_argument("--dry-run", action="store_true",
@@ -212,7 +224,7 @@ def main():
         print("Run gather_data.py first to generate market data.")
         sys.exit(1)
     
-    packet = build_intel_packet(args.data, args.type)
+    packet = build_intel_packet(args.data, args.type, mode=args.mode)
     
     if args.json:
         print(json.dumps(packet, indent=2))

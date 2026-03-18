@@ -1,6 +1,6 @@
-# EXPERIMENT: selective_market_alignment
-# HYPOTHESIS: Current fitness=10.0739 with exceptional 88% win rate shows outstanding signal quality, but most parameters have reached diminishing returns. The SPY/QQQ market alignment thresholds (currently 0.3%) haven't been optimized recently. With such excellent signal quality, making alignment criteria more selective by raising from 0.3% to 0.4% should improve risk-adjusted metrics (Sharpe 35% + Sortino 25% = 60% fitness weight) by only applying confidence bonuses during stronger market moves, enhancing signal selectivity without disrupting the proven core performance.
-# CHANGE: Increase SPY/QQQ market alignment threshold from 0.3% to 0.4%
+# EXPERIMENT: vwap_threshold_tighten
+# HYPOTHESIS: Current fitness=10.0740 with exceptional 91.3% win rate shows outstanding signal quality. Most core parameters have reached diminishing returns through extensive testing. VWAP component has significant 30% confidence weight (second highest) but VWAP_NEAR_BAND_PCT hasn't been optimized recently. With such proven selectivity, reducing from 0.90% to 0.85% should narrow the neutral zone and allow price deviations of 0.85%-0.90% to contribute directional signals, potentially improving signal frequency and total returns (20% fitness weight) while the exceptional win rate provides cushion.
+# CHANGE: Reduce VWAP_NEAR_BAND_PCT from 0.90% to 0.85%
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "selective_market_alignment"
-EXPERIMENT_HYPOTHESIS = "Current fitness=10.0739 with exceptional 88% win rate shows outstanding signal quality, but most parameters have reached diminishing returns. The SPY/QQQ market alignment thresholds (currently 0.3%) haven't been optimized recently. With such excellent signal quality, making alignment criteria more selective by raising from 0.3% to 0.4% should improve risk-adjusted metrics (Sharpe 35% + Sortino 25% = 60% fitness weight) by only applying confidence bonuses during stronger market moves, enhancing signal selectivity without disrupting the proven core performance."
-EXPERIMENT_CHANGE = "Increase SPY/QQQ market alignment threshold from 0.3% to 0.4%"
+EXPERIMENT_NAME = "vwap_threshold_tighten"
+EXPERIMENT_HYPOTHESIS = "Current fitness=10.0740 with exceptional 91.3% win rate shows outstanding signal quality. Most core parameters have reached diminishing returns through extensive testing. VWAP component has significant 30% confidence weight (second highest) but VWAP_NEAR_BAND_PCT hasn't been optimized recently. With such proven selectivity, reducing from 0.90% to 0.85% should narrow the neutral zone and allow price deviations of 0.85%-0.90% to contribute directional signals, potentially improving signal frequency and total returns (20% fitness weight) while the exceptional win rate provides cushion."
+EXPERIMENT_CHANGE = "Reduce VWAP_NEAR_BAND_PCT from 0.90% to 0.85%"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -38,7 +38,7 @@ RSI_NEUTRAL_LOW = 48        # Weak bull zone lower bound
 RSI_NEUTRAL_HIGH = 53       # Weak bear zone upper bound
 
 # VWAP deviation bands (%)
-VWAP_NEAR_BAND_PCT = 0.90       # Within 0.90% = "at VWAP", no strong signal
+VWAP_NEAR_BAND_PCT = 0.85       # Within 0.85% = "at VWAP", no strong signal
 VWAP_EXTENDED_PCT = 1.50        # > 1.5% from VWAP = extended, caution
 
 # Volume ratio thresholds (today cumulative / 20d avg daily)

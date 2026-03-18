@@ -1,16 +1,12 @@
 """Alpaca paper trading integration for the AI hedge fund.
 
-Fetches positions, converts to portfolio format, and executes trades with safety rails.
+Fetches positions, converts to portfolio format, and executes trades.
+Trade validation is delegated to risk_manager.py (V2 hard rules) — no
+parallel safety rail logic lives here.
 
-Safety Rails (day trading mode):
-- Max single trade: 15% of portfolio value
-- Max daily trades: 20
-- Minimum 55% confidence from portfolio manager
-- Every buy order gets a bracket (stop + take profit) unless explicitly overridden
-- Circuit breaker: stop all trading if down 3% on the day (MAX_LOSS_PER_DAY)
-- Short selling supported: side='sell' with no existing position = short
-- Paper trading only (enforces paper-api endpoint)
-- DRY_RUN mode by default
+Helper functions (get_account, get_positions, etc.) are always safe to call.
+execute_decisions() routes buy/short orders through risk_manager.validate_trade()
+before placing.
 """
 
 import os
@@ -35,17 +31,6 @@ _HEADERS = {
     "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
     "Content-Type": "application/json",
 }
-
-# Safety rail constants — day trading mode
-MAX_TRADE_PCT    = 0.15    # Max 15% of portfolio per trade (day trading needs size)
-MAX_DAILY_TRADES = 20      # Max 20 trades per session
-MIN_CONFIDENCE   = 55      # Lower bar — more opportunities in intraday
-MAX_LOSS_PER_DAY = 0.03    # Circuit breaker: stop trading if down 3% today
-
-# Removed: MIN_KEEP_PCT — day traders exit fully, no partial holds
-
-# Track trades placed this session
-_session_trade_count = 0
 
 
 def get_alpaca_account() -> dict:
@@ -132,58 +117,6 @@ def get_daily_pnl(account: dict) -> float:
     if last_equity <= 0:
         return 0.0
     return (equity - last_equity) / last_equity
-
-
-def _validate_trade(
-    ticker: str,
-    action: str,
-    qty: int,
-    confidence: float,
-    current_price: float,
-    current_shares: int,
-    portfolio_value: float,
-    daily_pnl_pct: float = 0.0,
-) -> tuple[bool, str]:
-    """Validate a trade against all safety rails.
-
-    Returns:
-        (is_valid, reason_if_invalid)
-    """
-    global _session_trade_count
-
-    if action == "hold" or qty <= 0:
-        return False, "Hold or zero quantity — no trade needed"
-
-    # Rail 1: daily trade limit
-    if _session_trade_count >= MAX_DAILY_TRADES:
-        return False, f"Daily trade limit ({MAX_DAILY_TRADES}) reached for this session"
-
-    # Rail 2: confidence threshold
-    if confidence < MIN_CONFIDENCE:
-        return False, f"Confidence {confidence:.0f}% is below minimum {MIN_CONFIDENCE}%"
-
-    # Rail 3: max trade size
-    if current_price > 0:
-        trade_value = qty * current_price
-        max_trade_value = portfolio_value * MAX_TRADE_PCT
-        if trade_value > max_trade_value:
-            max_qty = int(max_trade_value / current_price)
-            return False, (
-                f"Trade value ${trade_value:,.0f} exceeds max ${max_trade_value:,.0f} "
-                f"({MAX_TRADE_PCT*100:.0f}% of ${portfolio_value:,.0f}). Max qty: {max_qty}"
-            )
-
-    # Rail 4: circuit breaker — stop all new buys if down MAX_LOSS_PER_DAY
-    if action in ("buy", "cover") and daily_pnl_pct <= -MAX_LOSS_PER_DAY:
-        return False, (
-            f"Circuit breaker triggered: down {abs(daily_pnl_pct)*100:.1f}% today "
-            f"(limit {MAX_LOSS_PER_DAY*100:.0f}%). No new buys until tomorrow."
-        )
-
-    # Note: MIN_KEEP_PCT removed — day traders exit fully
-    # Short selling is allowed: action='short' or action='sell' with no existing long
-
-    return True, ""
 
 
 def _place_alpaca_order(ticker: str, action: str, qty: int) -> dict:
@@ -346,26 +279,43 @@ def execute_decisions(
     positions_raw: list[dict],
     account: dict,
     dry_run: bool = True,
+    mode: str = None,
 ) -> list[dict]:
-    """Execute all trading decisions against safety rails.
+    """Execute trading decisions with V2 risk validation.
+
+    Validation for buy/short orders is delegated to risk_manager.validate_trade().
+    No internal safety rail logic — risk_manager is the single source of truth.
 
     Args:
         decisions: Dict of {ticker: {action, quantity, confidence, reasoning,
-                   stop_price (optional), take_profit (optional)}}
+                   stop_price (optional), take_profit (optional), order_type (optional)}}
                    If stop_price and take_profit are both provided, a bracket order is placed.
         positions_raw: Raw Alpaca positions list
         account: Raw Alpaca account dict
         dry_run: If True, validate but don't actually place orders
+        mode: Trading mode ("swing" or "day"). Resolved from env if not specified.
 
     Returns:
         List of result dicts with success/failure info per ticker
     """
-    global _session_trade_count
+    from src.config import resolve_mode
+    if mode is None:
+        mode = resolve_mode()
 
-    # Build position lookup
+    # Try to load V2 risk manager
+    risk_manager_available = False
+    rm_portfolio_state = None
+    try:
+        from risk_manager import validate_trade as rm_validate_trade, get_portfolio_state as rm_get_portfolio_state
+        risk_manager_available = True
+        try:
+            rm_portfolio_state = rm_get_portfolio_state(mode=mode)
+        except Exception:
+            rm_portfolio_state = None  # will be fetched per-trade by validate_trade
+    except ImportError:
+        pass
+
     positions_by_symbol: dict[str, dict] = {p["symbol"]: p for p in positions_raw}
-    portfolio_value = get_alpaca_portfolio_value(account, positions_raw)
-    daily_pnl_pct = get_daily_pnl(account)
 
     results = []
 
@@ -380,38 +330,6 @@ def execute_decisions(
         limit_price = decision.get("limit_price")
         trail_percent = decision.get("trail_percent")
 
-        # Auto-enforce bracket on buy orders: calculate stop/target from DEFAULT_STOP_PCT
-        # if agent didn't provide them.
-        if action in ("buy", "cover") and order_type not in ("limit", "stop", "trailing_stop", "oco"):
-            pos = positions_by_symbol.get(ticker, {})
-            entry_price = float(pos.get("current_price", 0))
-            if entry_price <= 0:
-                # Try to get from decision
-                entry_price = float(decision.get("limit_price") or decision.get("entry_price") or 0)
-            if entry_price > 0:
-                from src.config import DEFAULT_STOP_PCT, DEFAULT_TARGET_MULTIPLIER
-                if stop_price is None:
-                    stop_price = round(entry_price * (1 - DEFAULT_STOP_PCT), 2)
-                if take_profit is None and stop_price is not None:
-                    stop_dist = entry_price - float(stop_price)
-                    take_profit = round(entry_price + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
-
-        # Auto-enforce bracket on short orders: stop ABOVE entry, target BELOW entry
-        elif action == "short" and order_type not in ("limit", "stop", "trailing_stop", "oco"):
-            pos = positions_by_symbol.get(ticker, {})
-            entry_price = float(pos.get("current_price", 0))
-            if entry_price <= 0:
-                entry_price = float(decision.get("limit_price") or decision.get("entry_price") or 0)
-            if entry_price > 0:
-                from src.config import DEFAULT_STOP_PCT, DEFAULT_TARGET_MULTIPLIER
-                if stop_price is None:
-                    stop_price = round(entry_price * (1 + DEFAULT_STOP_PCT), 2)
-                if take_profit is None and stop_price is not None:
-                    stop_dist = float(stop_price) - entry_price
-                    take_profit = round(entry_price - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
-
-        use_bracket = stop_price is not None and take_profit is not None and order_type != "oco"
-
         if action == "hold" or qty <= 0:
             results.append({
                 "ticker": ticker,
@@ -423,31 +341,31 @@ def execute_decisions(
             })
             continue
 
-        pos = positions_by_symbol.get(ticker, {})
-        current_price = float(pos.get("current_price", 0))
-        current_shares = int(float(pos.get("qty", 0)))
+        # V2 risk manager validation for entries
+        if action in ("buy", "short") and risk_manager_available:
+            pos = positions_by_symbol.get(ticker, {})
+            entry_price = float(pos.get("current_price", 0)) or float(limit_price or 0)
+            rm_result = rm_validate_trade(
+                ticker=ticker,
+                action=action,
+                qty=qty,
+                entry_price=entry_price,
+                portfolio_state=rm_portfolio_state,
+                mode=mode,
+            )
+            if not rm_result.approved:
+                results.append({
+                    "ticker": ticker,
+                    "action": action,
+                    "qty": qty,
+                    "confidence": confidence,
+                    "success": False,
+                    "reason": rm_result.reason,
+                    "rule": rm_result.rule,
+                })
+                continue
 
-        is_valid, reason = _validate_trade(
-            ticker=ticker,
-            action=action,
-            qty=qty,
-            confidence=confidence,
-            current_price=current_price,
-            current_shares=current_shares,
-            portfolio_value=portfolio_value,
-            daily_pnl_pct=daily_pnl_pct,
-        )
-
-        if not is_valid:
-            results.append({
-                "ticker": ticker,
-                "action": action,
-                "qty": qty,
-                "confidence": confidence,
-                "success": False,
-                "reason": reason,
-            })
-            continue
+        use_bracket = stop_price is not None and take_profit is not None and order_type != "oco"
 
         if dry_run:
             dry_result: dict = {
@@ -488,8 +406,6 @@ def execute_decisions(
                 order_result = _place_trailing_stop(ticker, action, qty, float(trail_percent))
             else:
                 order_result = _place_alpaca_order(ticker, action, qty)
-            if order_result["success"]:
-                _session_trade_count += 1
             results.append({
                 "ticker": ticker,
                 "action": action,

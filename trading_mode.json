@@ -1,0 +1,23 @@
+{
+  "mode": "auto",
+  "override": null,
+  "override_until": null,
+  "auto_rules": {
+    "description": "When mode=auto, Cassius picks based on these conditions",
+    "prefer_day_when": [
+      "VIX > 25 (high volatility = more intraday opportunity)",
+      "Portfolio has >3 positions approaching stop loss",
+      "Major earnings/FOMC/CPI day (event-driven trading)",
+      "Morning gap >1% on major holdings"
+    ],
+    "prefer_swing_when": [
+      "VIX < 20 (low volatility = hold and let winners run)",
+      "Strong trend in core positions (why exit?)",
+      "Default \u2014 swing is the safer baseline"
+    ]
+  },
+  "last_mode_used": "auto",
+  "last_mode_reason": "Reset to auto for V2 launch",
+  "last_updated": "2026-03-17T19:30:40.475014",
+  "updated_by": "mordecai"
+}

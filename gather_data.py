@@ -29,12 +29,7 @@ load_dotenv()
 
 import requests
 
-from src.config import (
-    UNIVERSE_SIMPLE as UNIVERSE,
-    ALL_UNIVERSE_TICKERS as ALL_UNIVERSE,
-    ALL_DAY_TRADE_TICKERS,
-    DAY_TRADE_UNIVERSE,
-)
+from src.config import get_mode_config, resolve_mode
 
 # Alpaca trading API
 API_BASE = "https://paper-api.alpaca.markets/v2"
@@ -57,8 +52,13 @@ def alpaca_get(endpoint, base=API_BASE, params=None):
 # Portfolio state (shared between modes)
 # ---------------------------------------------------------------------------
 
-def get_portfolio_state():
+def get_portfolio_state(mode: str = "swing"):
     """Get account + positions from Alpaca."""
+    mode_config = get_mode_config(mode)
+    universe = mode_config["universe"]
+    category_map = {cat_key: cat_data["tickers"] for cat_key, cat_data in universe.items()}
+    all_universe = {t for tickers in category_map.values() for t in tickers}
+
     account = alpaca_get("account")
     positions = alpaca_get("positions")
 
@@ -73,8 +73,8 @@ def get_portfolio_state():
             "current_price": float(p.get("current_price", 0)),
             "unrealized_pl": float(p.get("unrealized_pl", 0)),
             "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
-            "in_universe": symbol in ALL_UNIVERSE,
-            "category": next((cat for cat, tickers in UNIVERSE.items() if symbol in tickers), "legacy"),
+            "in_universe": symbol in all_universe,
+            "category": next((cat for cat, tickers in category_map.items() if symbol in tickers), "legacy"),
         })
 
     equity = float(account.get("equity", 0))
@@ -400,9 +400,14 @@ def main():
         },
     }
 
+    # Load mode config for universe tickers
+    mode_config = get_mode_config(args.mode)
+    universe = mode_config["universe"]
+    universe_tickers = [t for cat_data in universe.values() for t in cat_data["tickers"]]
+
     # Portfolio state
     print("📡 Fetching portfolio state...", file=sys.stderr)
-    payload["portfolio"] = get_portfolio_state()
+    payload["portfolio"] = get_portfolio_state(mode=args.mode)
 
     # Determine tickers
     if args.tickers:
@@ -414,7 +419,6 @@ def main():
         tickers = held
 
     if args.include_universe:
-        universe_tickers = ALL_DAY_TRADE_TICKERS if args.mode == "day" else ALL_UNIVERSE
         for t in universe_tickers:
             if t not in tickers:
                 tickers.append(t)
