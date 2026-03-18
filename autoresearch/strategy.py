@@ -1,6 +1,6 @@
-# EXPERIMENT: continue_target_multiplier_success
-# HYPOTHESIS: Current fitness=10.0663 with exceptional 88% win rate shows outstanding signal quality. The recent TARGET_MULTIPLIER increases have been highly successful (3.0→3.1→3.2), each improving fitness by capturing more profit on the 88% winning trades. With such high win rate providing cushion against volatility, increasing from 3.2 to 3.3 should continue to boost total_return_pct (20% fitness weight) and profit_factor (10% fitness weight) while the exceptional performance provides margin for increased aggression.
-# CHANGE: Increase TARGET_MULTIPLIER from 3.2 to 3.3
+# EXPERIMENT: selective_market_alignment
+# HYPOTHESIS: Current fitness=10.0739 with exceptional 88% win rate shows outstanding signal quality, but most parameters have reached diminishing returns. The SPY/QQQ market alignment thresholds (currently 0.3%) haven't been optimized recently. With such excellent signal quality, making alignment criteria more selective by raising from 0.3% to 0.4% should improve risk-adjusted metrics (Sharpe 35% + Sortino 25% = 60% fitness weight) by only applying confidence bonuses during stronger market moves, enhancing signal selectivity without disrupting the proven core performance.
+# CHANGE: Increase SPY/QQQ market alignment threshold from 0.3% to 0.4%
 
 """
 Pure-Python intraday day trading strategy — NO LLM calls.
@@ -19,9 +19,9 @@ from typing import Literal
 # ---------------------------------------------------------------------------
 # Experiment metadata (updated by the evolution agent each iteration)
 # ---------------------------------------------------------------------------
-EXPERIMENT_NAME = "continue_target_multiplier_success"
-EXPERIMENT_HYPOTHESIS = "Current fitness=10.0663 with exceptional 88% win rate shows outstanding signal quality. The recent TARGET_MULTIPLIER increases have been highly successful (3.0→3.1→3.2), each improving fitness by capturing more profit on the 88% winning trades. With such high win rate providing cushion against volatility, increasing from 3.2 to 3.3 should continue to boost total_return_pct (20% fitness weight) and profit_factor (10% fitness weight) while the exceptional performance provides margin for increased aggression."
-EXPERIMENT_CHANGE = "Increase TARGET_MULTIPLIER from 3.2 to 3.3"
+EXPERIMENT_NAME = "selective_market_alignment"
+EXPERIMENT_HYPOTHESIS = "Current fitness=10.0739 with exceptional 88% win rate shows outstanding signal quality, but most parameters have reached diminishing returns. The SPY/QQQ market alignment thresholds (currently 0.3%) haven't been optimized recently. With such excellent signal quality, making alignment criteria more selective by raising from 0.3% to 0.4% should improve risk-adjusted metrics (Sharpe 35% + Sortino 25% = 60% fitness weight) by only applying confidence bonuses during stronger market moves, enhancing signal selectivity without disrupting the proven core performance."
+EXPERIMENT_CHANGE = "Increase SPY/QQQ market alignment threshold from 0.3% to 0.4%"
 
 # ---------------------------------------------------------------------------
 # Tunable parameters — agent may change any of these
@@ -324,16 +324,16 @@ def _ticker_signal(
 
     # SPY alignment — small bonus if trade aligns with broad market direction
     spy_chg = float(market_context.get("spy_change_pct") or 0.0)
-    if spy_chg > 0.3 and bull_score > bear_score:
+    if spy_chg > 0.4 and bull_score > bear_score:
         bull_score *= 1.05
-    elif spy_chg < -0.3 and bear_score > bull_score:
+    elif spy_chg < -0.4 and bear_score > bull_score:
         bear_score *= 1.05
 
     # QQQ alignment — independent tech-market confirmation bonus
     qqq_chg = float(market_context.get("qqq_change_pct") or 0.0)
-    if qqq_chg > 0.3 and bull_score > bear_score:
+    if qqq_chg > 0.4 and bull_score > bear_score:
         bull_score *= 1.05
-    elif qqq_chg < -0.3 and bear_score > bull_score:
+    elif qqq_chg < -0.4 and bear_score > bull_score:
         bear_score *= 1.05
 
     # --- Pick direction ---
