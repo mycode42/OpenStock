@@ -36,14 +36,28 @@ API_BASE = "https://paper-api.alpaca.markets/v2"
 # Alpaca market data API (separate base URL)
 DATA_BASE = "https://data.alpaca.markets/v2"
 
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
+def _alpaca_headers(mode: str = None) -> dict:
+    """Return Alpaca API headers for the given mode (swing/day)."""
+    if mode == "swing":
+        return {
+            "APCA-API-KEY-ID": os.environ.get("ALPACA_SWING_API_KEY", ""),
+            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SWING_API_SECRET", ""),
+        }
+    # Default / day mode uses the original keys
+    return {
+        "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
+        "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
+    }
 
+# Keep HEADERS as default for backwards compat (market data calls, etc.)
+HEADERS = _alpaca_headers()
 
-def alpaca_get(endpoint, base=API_BASE, params=None):
-    r = requests.get(f"{base}/{endpoint}", headers=HEADERS, params=params, timeout=15)
+# Module-level active mode — set by main() before any portfolio calls
+_active_mode: str = "swing"
+
+def alpaca_get(endpoint, base=API_BASE, params=None, mode=None):
+    headers = _alpaca_headers(mode or _active_mode) if base == API_BASE else _alpaca_headers(_active_mode)
+    r = requests.get(f"{base}/{endpoint}", headers=headers, params=params, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -399,6 +413,10 @@ def main():
             "min_keep_pct": 0.05,
         },
     }
+
+    # Set active mode for API routing
+    global _active_mode
+    _active_mode = args.mode
 
     # Load mode config for universe tickers
     mode_config = get_mode_config(args.mode)

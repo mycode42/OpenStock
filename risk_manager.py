@@ -163,7 +163,7 @@ def get_portfolio_state(mode: str = None) -> dict:
     except Exception:
         trade_count_today = 0
 
-    weekly_pnl_pct = _estimate_weekly_pnl(equity)
+    weekly_pnl_pct = _estimate_weekly_pnl(equity, mode=mode)
 
     return {
         "equity": equity,
@@ -178,8 +178,12 @@ def get_portfolio_state(mode: str = None) -> dict:
     }
 
 
-def _estimate_weekly_pnl(current_equity: float) -> float:
-    """Estimate weekly P&L by reading performance snapshots."""
+def _estimate_weekly_pnl(current_equity: float, mode: str = None) -> float:
+    """Estimate weekly P&L by reading performance snapshots.
+    
+    Filters by mode when available to avoid cross-account confusion
+    (e.g. swing $100K vs day $150K would show a false -34% drop).
+    """
     try:
         data_path = Path(__file__).parent / "data" / "performance.json"
         if not data_path.exists():
@@ -192,6 +196,20 @@ def _estimate_weekly_pnl(current_equity: float) -> float:
             return 0.0
         cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
         week_snaps = [s for s in snapshots if s["date"] >= cutoff]
+        # Filter by mode if snapshots have mode tags; if none are tagged
+        # and the equity delta exceeds 25%, assume cross-account contamination
+        # and return 0 (safe default for a fresh or different account).
+        if mode:
+            tagged = [s for s in week_snaps if s.get("mode") == mode]
+            if tagged:
+                week_snaps = tagged
+            else:
+                # No mode-tagged snapshots — check if base equity is wildly different
+                # (indicates mixed account data). Threshold: 25% difference.
+                if week_snaps:
+                    base = week_snaps[0]["equity"]
+                    if base > 0 and abs(current_equity - base) / base > 0.25:
+                        return 0.0  # Cross-account data, ignore
         if not week_snaps:
             return 0.0
         base_equity = week_snaps[0]["equity"]

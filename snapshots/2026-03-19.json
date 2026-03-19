@@ -1,14 +1,14 @@
 {
   "date": "2026-03-19",
-  "timestamp": "2026-03-19T09:31:29.145470",
-  "equity": 148271.79,
+  "timestamp": "2026-03-19T15:00:22.894953",
+  "equity": 149246.67,
   "cash": 51045.85,
-  "invested": 97225.94,
+  "invested": 98200.82,
   "position_count": 19,
-  "daily_pnl": -1636.2298676262726,
-  "daily_pnl_pct": -1.0915,
-  "spy_price": 657.8099975585938,
-  "spy_daily_pct": -0.5473,
-  "qqq_price": 590.3599853515625,
-  "qqq_daily_pct": -0.7632
+  "daily_pnl": -661.349867626268,
+  "daily_pnl_pct": -0.4412,
+  "spy_price": 659.7999877929688,
+  "spy_daily_pct": -0.2464,
+  "qqq_price": 593.02001953125,
+  "qqq_daily_pct": -0.316
 }
