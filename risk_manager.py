@@ -23,7 +23,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 import requests
 
@@ -36,11 +36,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("risk_manager")
 
+from src.accounts import get_account_for_mode
+
 API_BASE = "https://paper-api.alpaca.markets/v2"
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
 
 # Leveraged ETFs — blocked in swing mode, allowed in day mode
 LEVERAGED_ETFS = {
@@ -98,8 +96,9 @@ class ValidationResult:
     rule: Optional[str] = None  # which rule fired on rejection
 
 
-def _api(endpoint: str) -> dict | list:
-    r = requests.get(f"{API_BASE}/{endpoint}", headers=HEADERS, timeout=10)
+def _api(endpoint: str, mode: str = None) -> dict | list:
+    headers = get_account_for_mode(mode).headers
+    r = requests.get(f"{API_BASE}/{endpoint}", headers=headers, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -123,8 +122,8 @@ def get_portfolio_state(mode: str = None) -> dict:
 
     ticker_sector, _, _, _ = _get_universe_maps(mode)
 
-    account = _api("account")
-    positions_raw = _api("positions")
+    account = _api("account", mode=mode)
+    positions_raw = _api("positions", mode=mode)
 
     equity = float(account.get("equity", 0))
     cash = float(account.get("cash", 0))
@@ -153,7 +152,7 @@ def get_portfolio_state(mode: str = None) -> dict:
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     try:
-        orders = _api(f"orders?status=all&after={today_str}T00:00:00Z&limit=100")
+        orders = _api(f"orders?status=all&after={today_str}T00:00:00Z&limit=100", mode=mode)
         buy_orders_today = [
             o for o in orders
             if o.get("side") == "buy"

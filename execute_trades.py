@@ -46,13 +46,18 @@ logging.basicConfig(
 )
 log = logging.getLogger("execute_trades")
 
+from src.accounts import get_account_for_mode
+
 API_BASE = "https://paper-api.alpaca.markets/v2"
 DATA_BASE = "https://data.alpaca.markets/v2"
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-    "Content-Type": "application/json",
-}
+
+# Module-level mode — set once in main(), used by helpers
+_active_mode: str = "swing"
+
+
+def _headers() -> dict:
+    """Get API headers for the currently active trading mode."""
+    return get_account_for_mode(_active_mode).headers
 
 from src.config import get_mode_config, DEFAULT_TARGET_MULTIPLIER
 
@@ -67,13 +72,13 @@ except ImportError:
 
 
 def get_account():
-    r = requests.get(f"{API_BASE}/account", headers=HEADERS, timeout=10)
+    r = requests.get(f"{API_BASE}/account", headers=_headers(), timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def get_positions():
-    r = requests.get(f"{API_BASE}/positions", headers=HEADERS, timeout=10)
+    r = requests.get(f"{API_BASE}/positions", headers=_headers(), timeout=10)
     r.raise_for_status()
     return {p["symbol"]: p for p in r.json()}
 
@@ -89,7 +94,7 @@ def get_daily_pnl(account: dict) -> float:
 
 def flatten_all(dry_run: bool = False) -> dict:
     """Market-sell every open position. Used for end-of-day flatten."""
-    r = requests.get(f"{API_BASE}/positions", headers=HEADERS, timeout=10)
+    r = requests.get(f"{API_BASE}/positions", headers=_headers(), timeout=10)
     r.raise_for_status()
     positions = r.json()
 
@@ -116,7 +121,7 @@ def flatten_all(dry_run: bool = False) -> dict:
                 "type": "market",
                 "time_in_force": "day",
             }
-            resp = requests.post(f"{API_BASE}/orders", headers=HEADERS, json=order, timeout=10)
+            resp = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
             if resp.status_code in (200, 201):
                 data = resp.json()
                 results.append({
@@ -241,7 +246,7 @@ def place_order(
             "time_in_force": "day",
         }
 
-    r = requests.post(f"{API_BASE}/orders", headers=HEADERS, json=order, timeout=10)
+    r = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
     if r.status_code in (200, 201):
         data = r.json()
         result = {
@@ -312,7 +317,12 @@ def main():
     mode_config = get_mode_config(mode)
     mode_risk = mode_config["risk"]
 
-    log.info(f"Trading mode: {mode.upper()} — {mode_config['label']}")
+    # Set module-level mode so all API helpers route to the correct account
+    global _active_mode
+    _active_mode = mode
+
+    acct = get_account_for_mode(mode)
+    log.info(f"Trading mode: {mode.upper()} — {mode_config['label']} (account: {acct.name})")
 
     # Handle flatten command separately (works in both modes)
     if args.flatten:

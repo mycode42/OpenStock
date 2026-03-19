@@ -23,7 +23,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 import requests
 import yfinance as yf
@@ -37,12 +37,17 @@ logging.basicConfig(
 )
 log = logging.getLogger("portfolio_monitor")
 
+from src.accounts import get_account_for_mode
+
 API_BASE = "https://paper-api.alpaca.markets/v2"
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-    "Content-Type": "application/json",
-}
+
+# Module-level mode — set once when run_monitor() starts, used by helpers
+_active_mode: str = "swing"
+
+
+def _headers() -> dict:
+    """Get API headers for the currently active trading mode."""
+    return get_account_for_mode(_active_mode).headers
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +55,7 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 
 def _get(endpoint: str) -> dict | list:
-    r = requests.get(f"{API_BASE}/{endpoint}", headers=HEADERS, timeout=10)
+    r = requests.get(f"{API_BASE}/{endpoint}", headers=_headers(), timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -77,7 +82,7 @@ def place_market_sell(symbol: str, qty: int, reason: str, dry_run: bool) -> dict
         "type": "market",
         "time_in_force": "day",
     }
-    r = requests.post(f"{API_BASE}/orders", headers=HEADERS, json=order, timeout=10)
+    r = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
     if r.status_code in (200, 201):
         data = r.json()
         log.info(f"SOLD {qty} {symbol} — {reason}. Order ID: {data.get('id')}")
@@ -184,12 +189,16 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
     if mode is None:
         mode = os.environ.get("TRADING_MODE", "swing")
 
+    # Set module-level mode so all API helpers route to the correct account
+    global _active_mode
+    _active_mode = mode
+
     mode_config = get_mode_config(mode)
     mode_risk = mode_config["risk"]
     stop_loss_pct = mode_risk["stop_loss_pct"]
     trailing_stop_pct = mode_risk["trailing_stop_pct"]
 
-    log.info(f"Portfolio monitor starting (mode={mode}, dry_run={dry_run})")
+    log.info(f"Portfolio monitor starting (mode={mode}, dry_run={dry_run}, account={get_account_for_mode(mode).name})")
 
     account = get_account()
     positions = get_positions()

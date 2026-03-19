@@ -7,42 +7,52 @@ parallel safety rail logic lives here.
 Helper functions (get_account, get_positions, etc.) are always safe to call.
 execute_decisions() routes buy/short orders through risk_manager.validate_trade()
 before placing.
+
+Multi-account support: all functions accept an optional `mode` parameter.
+When provided, credentials are routed to the correct account (day vs swing).
+When omitted, the current trading mode (from trading_mode.json) is used.
 """
 
 import os
 import requests
 from datetime import datetime
 
-# Credentials — MUST be set via environment variables or .env file
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
-ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
-
-if not ALPACA_API_KEY or not ALPACA_API_SECRET:
-    raise EnvironmentError(
-        "ALPACA_API_KEY and ALPACA_API_SECRET must be set. "
-        "Add them to the .env file or export as environment variables."
-    )
+from src.accounts import get_account_for_mode, AlpacaAccount
 
 # Always paper trading - never use live endpoint
 ALPACA_BASE_URL = "https://paper-api.alpaca.markets/v2"
 
-_HEADERS = {
-    "APCA-API-KEY-ID": ALPACA_API_KEY,
-    "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
-    "Content-Type": "application/json",
-}
+
+def _get_headers(mode: str = None) -> dict:
+    """Get API headers for the appropriate account based on trading mode."""
+    account = get_account_for_mode(mode)
+    return account.headers
 
 
-def get_alpaca_account() -> dict:
-    """Fetch account information from Alpaca."""
-    resp = requests.get(f"{ALPACA_BASE_URL}/account", headers=_HEADERS, timeout=10)
+# Legacy module-level headers for backward compat (uses day account)
+_HEADERS = _get_headers("day")
+
+
+def get_alpaca_account(mode: str = None) -> dict:
+    """Fetch account information from Alpaca.
+
+    Args:
+        mode: Trading mode ("swing" or "day"). Routes to correct account.
+    """
+    headers = _get_headers(mode)
+    resp = requests.get(f"{ALPACA_BASE_URL}/account", headers=headers, timeout=10)
     resp.raise_for_status()
     return resp.json()
 
 
-def get_alpaca_positions() -> list[dict]:
-    """Fetch all open positions from Alpaca. Returns list of position dicts."""
-    resp = requests.get(f"{ALPACA_BASE_URL}/positions", headers=_HEADERS, timeout=10)
+def get_alpaca_positions(mode: str = None) -> list[dict]:
+    """Fetch all open positions from Alpaca. Returns list of position dicts.
+
+    Args:
+        mode: Trading mode ("swing" or "day"). Routes to correct account.
+    """
+    headers = _get_headers(mode)
+    resp = requests.get(f"{ALPACA_BASE_URL}/positions", headers=headers, timeout=10)
     resp.raise_for_status()
     return resp.json()
 
@@ -119,8 +129,9 @@ def get_daily_pnl(account: dict) -> float:
     return (equity - last_equity) / last_equity
 
 
-def _place_alpaca_order(ticker: str, action: str, qty: int) -> dict:
+def _place_alpaca_order(ticker: str, action: str, qty: int, mode: str = None) -> dict:
     """Place a market order via Alpaca API."""
+    headers = _get_headers(mode)
     side = "buy" if action in ("buy", "cover") else "sell"
     order_data = {
         "symbol": ticker,
@@ -131,7 +142,7 @@ def _place_alpaca_order(ticker: str, action: str, qty: int) -> dict:
     }
     resp = requests.post(
         f"{ALPACA_BASE_URL}/orders",
-        headers=_HEADERS,
+        headers=headers,
         json=order_data,
         timeout=10,
     )
@@ -154,6 +165,7 @@ def _place_bracket_order(
     qty: int,
     stop_price: float,
     take_profit_price: float,
+    mode: str = None,
 ) -> dict:
     """Place a bracket order via Alpaca API (entry + stop-loss + take-profit as one atomic order).
 
@@ -163,10 +175,12 @@ def _place_bracket_order(
         qty: Number of shares
         stop_price: Stop-loss trigger price
         take_profit_price: Take-profit limit price
+        mode: Trading mode for account routing
 
     Returns:
         Dict with success, order_id, status, or reason on failure
     """
+    headers = _get_headers(mode)
     side = "buy" if action in ("buy", "cover") else "sell"
     order_data = {
         "symbol": ticker,
@@ -180,7 +194,7 @@ def _place_bracket_order(
     }
     resp = requests.post(
         f"{ALPACA_BASE_URL}/orders",
-        headers=_HEADERS,
+        headers=headers,
         json=order_data,
         timeout=10,
     )
@@ -204,6 +218,7 @@ def flatten_positions(
     positions_raw: list[dict],
     dry_run: bool = True,
     tickers: list[str] | None = None,
+    mode: str = None,
 ) -> list[dict]:
     """Market-sell all open positions (end-of-day flatten).
 
@@ -211,10 +226,12 @@ def flatten_positions(
         positions_raw: Raw Alpaca positions list
         dry_run: If True, show what would be sold without placing orders
         tickers: If provided, only flatten these tickers. Default: all positions.
+        mode: Trading mode for account routing.
 
     Returns:
         List of result dicts per position flattened
     """
+    headers = _get_headers(mode)
     results = []
     for pos in positions_raw:
         symbol = pos["symbol"]
@@ -247,7 +264,7 @@ def flatten_positions(
             }
             resp = requests.post(
                 f"{ALPACA_BASE_URL}/orders",
-                headers=_HEADERS,
+                headers=headers,
                 json=order_data,
                 timeout=10,
             )
@@ -395,17 +412,17 @@ def execute_decisions(
             results.append(dry_result)
         else:
             if use_bracket:
-                order_result = _place_bracket_order(ticker, action, qty, float(stop_price), float(take_profit))
+                order_result = _place_bracket_order(ticker, action, qty, float(stop_price), float(take_profit), mode=mode)
             elif order_type == "oco" and stop_price is not None and take_profit is not None:
-                order_result = _place_oco_order(ticker, action, qty, float(stop_price), float(take_profit))
+                order_result = _place_oco_order(ticker, action, qty, float(stop_price), float(take_profit), mode=mode)
             elif order_type == "limit" and limit_price is not None:
-                order_result = _place_limit_order(ticker, action, qty, float(limit_price))
+                order_result = _place_limit_order(ticker, action, qty, float(limit_price), mode=mode)
             elif order_type == "stop" and stop_price is not None:
-                order_result = _place_stop_order(ticker, action, qty, float(stop_price))
+                order_result = _place_stop_order(ticker, action, qty, float(stop_price), mode=mode)
             elif order_type == "trailing_stop" and trail_percent is not None:
-                order_result = _place_trailing_stop(ticker, action, qty, float(trail_percent))
+                order_result = _place_trailing_stop(ticker, action, qty, float(trail_percent), mode=mode)
             else:
-                order_result = _place_alpaca_order(ticker, action, qty)
+                order_result = _place_alpaca_order(ticker, action, qty, mode=mode)
             results.append({
                 "ticker": ticker,
                 "action": action,
@@ -417,18 +434,20 @@ def execute_decisions(
     return results
 
 
-def get_open_orders(status: str = "open") -> list[dict]:
+def get_open_orders(status: str = "open", mode: str = None) -> list[dict]:
     """Fetch all open orders from Alpaca.
 
     Args:
         status: Order status filter — "open", "closed", or "all"
+        mode: Trading mode for account routing.
 
     Returns:
         List of order dicts from Alpaca
     """
+    headers = _get_headers(mode)
     resp = requests.get(
         f"{ALPACA_BASE_URL}/orders",
-        headers=_HEADERS,
+        headers=headers,
         params={"status": status, "limit": 100},
         timeout=10,
     )
@@ -436,25 +455,27 @@ def get_open_orders(status: str = "open") -> list[dict]:
     return resp.json()
 
 
-def get_order(order_id: str) -> dict:
+def get_order(order_id: str, mode: str = None) -> dict:
     """Fetch a single order by ID.
 
     Returns:
         Full order dict (status, filled_qty, etc.) or error dict
     """
-    resp = requests.get(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=_HEADERS, timeout=10)
+    headers = _get_headers(mode)
+    resp = requests.get(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=headers, timeout=10)
     if resp.status_code == 200:
         return resp.json()
     return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
 
 
-def cancel_order(order_id: str) -> dict:
+def cancel_order(order_id: str, mode: str = None) -> dict:
     """Cancel a single open order by ID.
 
     Returns:
         {"success": True/False, "order_id": ..., "reason": ...}
     """
-    resp = requests.delete(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=_HEADERS, timeout=10)
+    headers = _get_headers(mode)
+    resp = requests.delete(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=headers, timeout=10)
     if resp.status_code in (200, 204):
         return {"success": True, "order_id": order_id}
     return {
@@ -464,13 +485,14 @@ def cancel_order(order_id: str) -> dict:
     }
 
 
-def cancel_all_orders() -> dict:
+def cancel_all_orders(mode: str = None) -> dict:
     """Cancel all open orders.
 
     Returns:
         {"success": True/False, "cancelled_count": int}
     """
-    resp = requests.delete(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, timeout=10)
+    headers = _get_headers(mode)
+    resp = requests.delete(f"{ALPACA_BASE_URL}/orders", headers=headers, timeout=10)
     if resp.status_code in (200, 207):
         cancelled = resp.json() if resp.text else []
         return {"success": True, "cancelled_count": len(cancelled) if isinstance(cancelled, list) else 0}
@@ -487,8 +509,10 @@ def _place_limit_order(
     qty: int,
     limit_price: float,
     time_in_force: str = "day",
+    mode: str = None,
 ) -> dict:
     """Place a limit order via Alpaca API."""
+    headers = _get_headers(mode)
     side = "buy" if action in ("buy", "cover") else "sell"
     order_data = {
         "symbol": ticker,
@@ -498,7 +522,7 @@ def _place_limit_order(
         "time_in_force": time_in_force,
         "limit_price": str(round(limit_price, 2)),
     }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
     if resp.status_code in (200, 201):
         order = resp.json()
         return {
@@ -517,11 +541,13 @@ def _place_stop_order(
     qty: int,
     stop_price: float,
     time_in_force: str = "gtc",
+    mode: str = None,
 ) -> dict:
     """Place a standalone stop order via Alpaca API.
 
     Use this for stop-losses on EXISTING positions (not as part of a bracket entry).
     """
+    headers = _get_headers(mode)
     side = "buy" if action in ("buy", "cover") else "sell"
     order_data = {
         "symbol": ticker,
@@ -531,7 +557,7 @@ def _place_stop_order(
         "time_in_force": time_in_force,
         "stop_price": str(round(stop_price, 2)),
     }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
     if resp.status_code in (200, 201):
         order = resp.json()
         return {
@@ -550,12 +576,15 @@ def _place_trailing_stop(
     qty: int,
     trail_percent: float,
     time_in_force: str = "gtc",
+    mode: str = None,
 ) -> dict:
     """Place a trailing stop order via Alpaca API.
 
     Args:
         trail_percent: Percentage trail (e.g. 2.0 = 2% trailing stop)
+        mode: Trading mode for account routing.
     """
+    headers = _get_headers(mode)
     side = "buy" if action in ("buy", "cover") else "sell"
     order_data = {
         "symbol": ticker,
@@ -565,7 +594,7 @@ def _place_trailing_stop(
         "time_in_force": time_in_force,
         "trail_percent": str(round(trail_percent, 2)),
     }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
     if resp.status_code in (200, 201):
         order = resp.json()
         return {
@@ -584,12 +613,14 @@ def _place_oco_order(
     qty: int,
     stop_price: float,
     take_profit_price: float,
+    mode: str = None,
 ) -> dict:
     """Place an OCO (One-Cancels-Other) order via Alpaca API.
 
     Use for managing exits on ALREADY HELD positions — no new entry leg.
     Different from bracket: bracket = entry + exits; OCO = just exits.
     """
+    headers = _get_headers(mode)
     side = "buy" if action in ("buy", "cover") else "sell"
     order_data = {
         "symbol": ticker,
@@ -601,7 +632,7 @@ def _place_oco_order(
         "stop_loss": {"stop_price": str(round(stop_price, 2))},
         "take_profit": {"limit_price": str(round(take_profit_price, 2))},
     }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=_HEADERS, json=order_data, timeout=10)
+    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
     if resp.status_code in (200, 201):
         order = resp.json()
         return {

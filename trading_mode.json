@@ -1,5 +1,5 @@
 {
-  "mode": "auto",
+  "mode": "swing",
   "override": null,
   "override_until": null,
   "auto_rules": {
@@ -16,8 +16,8 @@
       "Default \u2014 swing is the safer baseline"
     ]
   },
-  "last_mode_used": "auto",
-  "last_mode_reason": "Reset to auto for V2 launch",
-  "last_updated": "2026-03-17T19:30:40.475014",
-  "updated_by": "mordecai"
+  "last_mode_used": "swing",
+  "last_mode_reason": "Mode locked to swing. VIX 25.2 borderline but no override set.",
+  "last_updated": "2026-03-19T09:30:21.848248",
+  "updated_by": "cassius"
 }

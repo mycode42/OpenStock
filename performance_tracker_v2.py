@@ -26,7 +26,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 import requests
 import yfinance as yf
