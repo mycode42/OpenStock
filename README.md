@@ -657,7 +657,7 @@ swarm-trader/
 ├── intel_exchange.py          # Peer signal sharing via A2A
 ├── trading_mode.json          # Mode steering file (auto/swing/day + overrides)
 ├── PLAYBOOK.md                # Complete operations guide
-├── CASSIUS_V2_DESIGN.md       # V2 design document (internal)
+├── DESIGN.md                  # V2 design document (architecture + rules)
 ├── .env.example               # Secrets template
 ├── src/
 │   ├── config.py              # MODES dict — single source of truth per mode

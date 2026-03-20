@@ -42,24 +42,24 @@ def _load_accounts() -> None:
     """Load account credentials from environment. Called once on import."""
     global _ACCOUNTS
 
-    # Swing account (original, has existing positions ~$148K)
+    # Swing account (primary — ALPACA_API_KEY / ALPACA_API_SECRET)
     swing_key = os.environ.get("ALPACA_API_KEY", "")
     swing_secret = os.environ.get("ALPACA_API_SECRET", "")
     if swing_key and swing_secret:
         _ACCOUNTS["swing"] = AlpacaAccount(
             name="Swing",
-            account_id="PA3JDEMM789Z",
+            account_id=os.environ.get("ALPACA_ACCOUNT_ID", "unknown"),
             api_key=swing_key,
             api_secret=swing_secret,
         )
 
-    # Day trading account (fresh $100K)
+    # Day trading account (optional — ALPACA_DAY_API_KEY / ALPACA_DAY_API_SECRET)
     day_key = os.environ.get("ALPACA_DAY_API_KEY", "")
     day_secret = os.environ.get("ALPACA_DAY_API_SECRET", "")
     if day_key and day_secret:
         _ACCOUNTS["day"] = AlpacaAccount(
             name="DayTrading",
-            account_id="PA3NVVU2WEOH",
+            account_id=os.environ.get("ALPACA_DAY_ACCOUNT_ID", "unknown"),
             api_key=day_key,
             api_secret=day_secret,
         )

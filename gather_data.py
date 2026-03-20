@@ -16,6 +16,7 @@ Usage:
   poetry run python gather_data.py --include-universe     # Holdings + full universe
   poetry run python gather_data.py --top 8               # Top 8 by value
 """
+from __future__ import annotations
 
 import argparse
 import json

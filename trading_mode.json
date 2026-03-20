@@ -1,9 +1,9 @@
 {
-  "mode": "swing",
+  "mode": "auto",
   "override": null,
   "override_until": null,
   "auto_rules": {
-    "description": "When mode=auto, Cassius picks based on these conditions",
+    "description": "When mode=auto, the agent picks based on these conditions",
     "prefer_day_when": [
       "VIX > 25 (high volatility = more intraday opportunity)",
       "Portfolio has >3 positions approaching stop loss",
@@ -13,11 +13,11 @@
     "prefer_swing_when": [
       "VIX < 20 (low volatility = hold and let winners run)",
       "Strong trend in core positions (why exit?)",
-      "Default \u2014 swing is the safer baseline"
+      "Default — swing is the safer baseline"
     ]
   },
-  "last_mode_used": "swing",
-  "last_mode_reason": "Swapped accounts: original $148K account is now swing, fresh $100K is day. Resuming swing management.",
-  "last_updated": "2026-03-19T15:59:56.266676",
-  "updated_by": "mordecai"
+  "last_mode_used": null,
+  "last_mode_reason": null,
+  "last_updated": null,
+  "updated_by": null
 }

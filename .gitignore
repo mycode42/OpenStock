@@ -68,3 +68,8 @@ outputs/
 app/backend/alembic/versions/__pycache__/.cache/
 .cache/
 autoresearch/data_cache/
+
+# Runtime data (generated per-deployment)
+snapshots/
+data/
+autoresearch/experiments/
