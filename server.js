@@ -49,6 +49,11 @@ app.post('/api/stocks', (req, res) => {
         if (!symbol || typeof symbol !== 'string') {
             return res.status(400).json({ error: 'Symbol is required' });
         }
+        // Validate stock symbol format (1-5 uppercase letters, common tickers)
+        const symbolRegex = /^[A-Z]{1,5}$/;
+        if (!symbolRegex.test(symbol.trim())) {
+            return res.status(400).json({ error: 'Invalid stock symbol format. Use 1-5 uppercase letters (e.g., AAPL, TSLA, NVDA)' });
+        }
         if (!name || typeof name !== 'string') {
             return res.status(400).json({ error: 'Name is required' });
         }
