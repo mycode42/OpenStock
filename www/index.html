@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenStock - Trading Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+nav{background:#1e293b;padding:1rem;display:flex;gap:1rem;flex-wrap:wrap;border-bottom:1px solid #334155}
+nav a{color:#94a3b8;text-decoration:none;padding:.5rem 1rem;border-radius:.5rem;font-weight:500;transition:all .2s}
+nav a:hover,nav a.active{background:#3b82f6;color:#fff}
+.container{max-width:1200px;margin:0 auto;padding:1.5rem}
+h1{font-size:1.75rem;color:#f8fafc;margin-bottom:.5rem}
+.subtitle{color:#94a3b8;font-size:.95rem}
+.card{background:#1e293b;border-radius:.75rem;padding:1.25rem;margin-bottom:1rem;border:1px solid #334155}
+.stock-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
+.stock-card{background:#334155;border-radius:.75rem;padding:1rem;border-left:4px solid #3b82f6}
+.stock-card.trigger-buy{border-left-color:#22c55e}
+.stock-card.trigger-sell{border-left-color:#ef4444}
+.stock-card.disabled{opacity:.5}
+.stock-symbol{font-size:1.25rem;font-weight:700;color:#f8fafc}
+.stock-name{color:#94a3b8;font-size:.85rem;margin-bottom:.75rem}
+.stock-price{font-size:1.5rem;font-weight:700;margin-bottom:.5rem}
+.stock-price.eu{color:#fbbf24}
+.stock-price.usd{color:#94a3b8;font-size:1rem}
+.thresholds{display:flex;gap:1rem;margin-bottom:.5rem;flex-wrap:wrap}
+.threshold{font-size:.8rem;padding:.2rem .5rem;border-radius:.25rem}
+.threshold.buy{background:rgba(34,197,94,.2);color:#22c55e}
+.threshold.sell{background:rgba(239,68,68,.2);color:#ef4444}
+.badge{display:inline-block;padding:.2rem .5rem;border-radius:.25rem;font-size:.75rem;font-weight:600;margin-right:.25rem}
+.badge.owned{background:rgba(34,197,94,.2);color:#22c55e}
+.badge.sold{background:rgba(100,116,139,.2);color:#94a3b8}
+.badge.enabled{background:rgba(59,130,246,.2);color:#3b82f6}
+.badge.disabled{background:rgba(100,116,139,.2);color:#64748b}
+.badge.buy-trigger{background:rgba(34,197,94,.3);color:#4ade80}
+.badge.sell-trigger{background:rgba(239,68,68,.3);color:#f87171}
+.stock-footer{display:flex;justify-content:space-between;font-size:.8rem;color:#64748b;margin-top:.75rem}
+.form-row{display:flex;gap:1rem;flex-wrap:wrap}
+.form-group{flex:1;min-width:200px}
+label{display:block;font-size:.85rem;color:#94a3b8;margin-bottom:.25rem}
+input,select{width:100%;padding:.6rem;background:#0f172a;border:1px solid #475569;border-radius:.5rem;color:#e2e8f0;font-size:.95rem}
+input:focus,select:focus{outline:none;border-color:#3b82f6}
+.btn{padding:.6rem 1.25rem;border:none;border-radius:.5rem;font-weight:600;cursor:pointer;font-size:.9rem;display:inline-block}
+.btn-primary{background:#3b82f6;color:#fff}
+.btn-primary:hover{background:#2563eb}
+.btn-success{background:#22c55e;color:#fff}
+.btn-success:hover{background:#16a34a}
+.btn-danger{background:#ef4444;color:#fff}
+.btn-danger:hover{background:#dc2626}
+.btn-secondary{background:#475569;color:#fff}
+.btn-secondary:hover{background:#64748b}
+.btn-sm{padding:.3rem .75rem;font-size:.8rem}
+.btn-group{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem}
+.table{width:100%;border-collapse:collapse}
+.table th,.table td{padding:.75rem;text-align:left;border-bottom:1px solid #475569}
+.table th{color:#94a3b8;font-size:.8rem;text-transform:uppercase}
+.table tr:hover{background:rgba(255,255,255,.03)}
+.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem}
+.summary-card{background:#1e293b;border-radius:.75rem;padding:1rem;border:1px solid #334155}
+.summary-label{font-size:.8rem;color:#64748b;text-transform:uppercase}
+.summary-value{font-size:1.5rem;font-weight:700}
+.alert-box{padding:.75rem 1rem;border-radius:.5rem;margin-bottom:.75rem;font-size:.9rem}
+.alert-box.info{background:rgba(59,130,246,.1);border-left:3px solid #3b82f6}
+.alert-box.error{background:rgba(239,68,68,.1);border-left:3px solid #ef4444}
+.alert-box.success{background:rgba(34,197,94,.1);border-left:3px solid #22c55e}
+.section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
+.section-title{font-size:1.25rem;color:#f8fafc}
+.hidden{display:none}
+.last-update{font-size:.8rem;color:#64748b;margin-bottom:1rem}
+.stock-actions{display:flex;gap:.5rem;margin-top:.5rem;flex-wrap:wrap}
+@media(max-width:640px){.stock-grid{grid-template-columns:1fr}.form-row{flex-direction:column}.form-group{min-width:100%}.thresholds{flex-direction:column;gap:.25rem}.summary{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<nav>
+<a href="/" class="active" data-page="dashboard">Dashboard</a>
+<a href="#/config" data-page="config">Configure</a>
+<a href="#/journal" data-page="journal">Journal</a>
+</nav>
+<div class="container">
+<div id="page-dashboard"></div>
+<div id="page-config" class="hidden"></div>
+<div id="page-journal" class="hidden"></div>
+</div>
+<script>
+const API='/api';let stocks=[],sMap={};
+function nav(h){const p=h.replace('#/','')||'dashboard';document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===p));['dashboard','config','journal'].forEach(x=>document.getElementById('page-'+x).classList.toggle('hidden',x!==p));if(p==='dashboard')rd();else if(p==='config')rc();else if(p==='journal')rj();window.location.hash=p==='dashboard'?'':'#/'+p}
+window.addEventListener('hashchange',()=>nav(window.location.hash));
+async function af(p,o={}){try{const r=await fetch(API+p,o);const d=await r.json();if(!r.ok){showA(d.error||'Error','error');return null}return d}catch(e){showA('Network: '+e.message,'error');return null}}
+function showA(m,t='i',c='ac'){const x=document.getElementById(c);if(!x)return;const d=document.createElement('div');d.className='alert-box '+t;d.textContent=m;x.appendChild(d);setTimeout(()=>d.remove(),5000)}
+async function rd(){const c=document.getElementById('page-dashboard');c.innerHTML='<div class="loading">Loading...</div>';const data=await af('/dashboard');if(!data)return;stocks=data.stocks;sMap={};stocks.forEach(s=>sMap[s.symbol]=s);let oc=0,ec=0,tc=0;stocks.forEach(s=>{if(s.owned)oc++;if(s.enabled)ec++;if(s.trigger_state==='BUY_TRIGGERED'||s.trigger_state==='SELL_TRIGGERED')tc++});c.innerHTML=`<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${ec} stocks · ${oc} owned · ${data.journal_count} journal entries</p></header><div id="ac"></div>${tc?'<div class="alert-box success">⚡ '+tc+' trigger(s) active</div>':''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${ec}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${oc}</div></div><div class="summary-card"><div class="summary-label">Journal</div><div class="summary-value">${data.journal_count}</div></div></div><div class="last-update">Last: ${data.stocks.reduce((m,s)=>{if(!s.last_price_update)return m;return!m||s.last_price_update>m?s.last_price_update:m},null)||'—'}</div><div class="stock-grid">${stocks.map(s=>`<div class="stock-card ${s.enabled?'':'disabled'} ${s.owned?'':'sold'} ${s.trigger_state==='BUY_TRIGGERED'?'trigger-buy':''} ${s.trigger_state==='SELL_TRIGGERED'?'trigger-sell':''}"><div class="stock-symbol">${s.symbol} <span class="badge ${s.owned?'owned':'sold'}">${s.owned?'OWNED':'SOLD'}</span> <span class="badge ${s.enabled?'enabled':'disabled'}">${s.enabled?'ON':'OFF'}</span> ${s.trigger_state==='BUY_TRIGGERED'?'<span class="badge buy-trigger">🔼 BUY</span>':''} ${s.trigger_state==='SELL_TRIGGERED'?'<span class="badge sell-trigger">🔽 SELL</span>':''}</div><div class="stock-name">${s.name||''}</div><div class="stock-price eu">€${s.current_price_eur?s.current_price_eur.toFixed(2):'—'}</div><div class="stock-price usd">$${s.current_price_usd?s.current_price_usd.toFixed(2):'—'}</div><div class="thresholds"><span class="threshold buy">Buy €${s.buy_threshold_eur.toFixed(2)}</span><span class="threshold sell">Sell €${s.sell_threshold_eur.toFixed(2)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="ajm('${s.symbol}')">+ Journal</button><button class="btn btn-sm btn-secondary" onclick="ts('${s.symbol}')">${s.enabled?'Disable':'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${s.symbol}')">Remove</button></div><div class="stock-footer">${s.last_price_update?'Updated '+s.last_price_update:'Never updated'}</div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="asm()">+ Add Stock</button></div><div style="margin-top:2rem"><div class="section-header"><div class="section-title">Recent</div><button class="btn btn-sm btn-primary" onclick="nav('#/journal')">View All</button></div><div class="card" style="overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th></tr></thead><tbody>${data.journal_count?data.journal.slice(0,10).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString()}</td><td>${e.symbol}</td><td><span class="badge ${e.action==='BUY'?'owned':'sold'}">${e.action}</span></td><td>€${e.price_eur.toFixed(2)}</td><td>${e.quantity}</td><td>${e.notes||'—'}</td></tr>`).join(''):'<tr><td colspan="6" style="color:#64748b">No entries</td></tr>'}</tbody></table></div></div>`}
+async function rc(){const c=document.getElementById('page-config');c.innerHTML=`<header><h1>⚙️ Stock Configuration</h1><p class="subtitle">Manage monitored stocks</p></header><div id="ac"></div><div class="card"><div class="section-header"><div class="section-title">${stocks.length}/25</div><button class="btn btn-primary" onclick="asm()">+ Add Stock</button></div><div style="overflow-x:auto"><table class="table"><thead><tr><th>Symbol</th><th>Name</th><th>€ Price</th><th>Buy</th><th>Sell</th><th>Status</th><th>On</th><th></th></tr></thead><tbody>${stocks.map(s=>`<tr><td><strong>${s.symbol}</strong></td><td>${s.name||'—'}</td><td>€${s.current_price_eur?s.current_price_eur.toFixed(2):'—'}</td><td>€${s.buy_threshold_eur.toFixed(2)}</td><td>€${s.sell_threshold_eur.toFixed(2)}</td><td><span class="badge ${s.owned?'owned':'sold'}">${s.owned?'OWNED':'SOLD'}</span></td><td><span class="badge ${s.enabled?'enabled':'disabled'}">${s.enabled?'ON':'OFF'}</span></td><td><button class="btn btn-sm btn-secondary" onclick="ts('${s.symbol}')">${s.enabled?'Disable':'Enable'}</button> <button class="btn btn-sm btn-danger" onclick="rs('${s.symbol}')">Remove</button></td></tr>`).join('')}</tbody></table></div><div style="margin-top:1rem"><h3>Add Stock</h3><div class="form-row"><div class="form-group"><label>Symbol</label><input id="as-sym" placeholder="AAPL"></div><div class="form-group"><label>Name</label><input id="as-nm" placeholder="Apple Inc."></div></div><div class="form-row"><div class="form-group"><label>Buy Target €</label><input id="as-buy" type="number" step=".01" min="0"></div><div class="form-group"><label>Sell Target €</label><input id="as-sell" type="number" step=".01" min="0"></div></div><div class="btn-group"><button class="btn btn-primary" onclick="ac()">Add</button></div></div><div id="as-result" style="margin-top:.75rem"></div></div>`}
+async function ac(){const sym=document.getElementById('as-sym').value.trim().toUpperCase();const nm=document.getElementById('as-nm').value.trim();const b=parseFloat(document.getElementById('as-buy').value);const s=parseFloat(document.getElementById('as-sell').value);if(!sym||!nm){showA('Symbol & name required','error');return}if(isNaN(b)||isNaN(s)||b>=s){showA('Invalid thresholds (buy < sell)','error');return}const r=await af('/stocks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym,name:nm,buy_threshold_eur:b,sell_threshold_eur:s})});if(r){showA('Added '+sym,'success');rc()}else{showA('Failed','error')}}
+async function ts(sym){const s=sMap[sym];if(!s)return;await af('/stocks/'+s.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:s.enabled?0:1})});nav(window.location.hash)}
+async function rs(sym){if(!confirm('Remove '+sym+'?'))return;const s=sMap[sym];await af('/stocks/'+s.id,{method:'DELETE'});nav(window.location.hash)}
+async function ajm(sym){const s=sMap[sym];nav('#/journal');setTimeout(()=>{const sel=document.getElementById('j-stock');if(sel)sel.value=s.id},100)}
+async function rj(){const c=document.getElementById('page-journal');const entries=await af('/journal');if(!entries)return;c.innerHTML=`<header><h1>📓 Trading Journal</h1><p class="subtitle">${entries.length} entries</p></header><div id="ac"></div><div class="card"><div class="section-header"><div class="section-title">New Entry</div></div><div class="form-row"><div class="form-group"><label>Stock</label><select id="j-stock">${stocks.map(s=>`<option value="${s.id}">${s.symbol}</option>`).join('')}</select></div><div class="form-group"><label>Action</label><select id="j-act"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></div></div><div class="form-row"><div class="form-group"><label>Price €</label><input id="j-px" type="number" step=".01" min=".01" placeholder="0.00"></div><div class="form-group"><label>Qty</label><input id="j-qty" type="number" step=".001" min=".001" placeholder="0.000"></div><div class="form-group"><label>Notes</label><input id="j-nt" placeholder="Reason..."></div></div><div class="btn-group"><button class="btn btn-success" onclick="aj()">+ Add Entry</button></div><div id="jr" style="margin-top:.75rem"></div></div><div class="card" style="margin-top:1rem;overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th><th></th></tr></thead><tbody>${entries.length?entries.map(e=>`<tr><td>${new Date(e.created_at).toLocaleString()}</td><td><strong>${e.symbol}</strong></td><td><span class="badge ${e.action==='BUY'?'owned':'sold'}">${e.action}</span></td><td>€${e.price_eur.toFixed(2)}</td><td>${e.quantity}</td><td>${e.notes||'—'}</td><td><button class="btn btn-sm btn-secondary" onclick="ej(${e.id})">Edit</button> <button class="btn btn-sm btn-danger" onclick="dj(${e.id})">✕</button></td></tr>`).join(''):'<tr><td colspan="7" style="color:#64748b">No entries</td></tr>'}</tbody></table></div>`}
+async function aj(){const sid=document.getElementById('j-stock').value;const act=document.getElementById('j-act').value;const px=parseFloat(document.getElementById('j-px').value);const qty=parseFloat(document.getElementById('j-qty').value);const nt=document.getElementById('j-nt').value.trim();if(!sid||isNaN(px)||px<=0||isNaN(qty)||qty<=0){showA('Fill all fields','error');return}const r=await af('/journal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stock_id:sid,action:act,price_eur:px,quantity:qty,notes:nt})});if(r){showA('Entry added','success');rj()}else{showA('Failed','error')}}
+async function ej(id){const entries=await af('/journal');const e=entries.find(x=>x.id===id);if(!e)return;const c=document.getElementById('page-journal');const m=document.createElement('div');m.className='card';m.style.marginTop='1rem';m.innerHTML=`<h3>Edit Entry</h3><div class="form-row"><div class="form-group"><label>Action</label><select id="ej-act"><option value="BUY" ${e.action==='BUY'?'selected':''}>BUY</option><option value="SELL" ${e.action==='SELL'?'selected':''}>SELL</option></select></div><div class="form-group"><label>Price €</label><input id="ej-px" type="number" step=".01" value="${e.price_eur}"></div><div class="form-group"><label>Qty</label><input id="ej-qty" type="number" step=".001" value="${e.quantity}"></div><div class="form-group"><label>Notes</label><input id="ej-nt" value="${(e.notes||'').replace(/"/g,'&quot;')}"></div></div><div class="btn-group"><button class="btn btn-primary" onclick="eju(${id})">Save</button><button class="btn btn-secondary" onclick="this.closest('.card').remove()">Cancel</button></div>`;c.appendChild(m)}
+async function eju(id){const px=parseFloat(document.getElementById('ej-px').value);const qty=parseFloat(document.getElementById('ej-qty').value);const nt=document.getElementById('ej-nt').value.trim();if(isNaN(px)||px<=0||isNaN(qty)||qty<=0){showA('Invalid values','error');return}const r=await af('/journal/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:document.getElementById('ej-act').value,price_eur:px,quantity:qty,notes:nt})});if(r){showA('Updated','success');rj()}else{showA('Failed','error')}}
+async function dj(id){if(!confirm('Delete entry?'))return;const r=await af('/journal/'+id,{method:'DELETE'});if(r)rj()}
+nav(window.location.hash);
+</script>
+</body>
+</html>

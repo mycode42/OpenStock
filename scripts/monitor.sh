@@ -1,0 +1,226 @@
+#!/bin/bash
+# OpenStock Monitoring Script
+# Reads stock config from database, fetches prices, evaluates triggers, sends Telegram
+
+set -u
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(dirname "$SCRIPT_DIR")"
+LOG_FILE="/home/ubuntu/openstock/memory/monitor.log"
+ERROR_LOG="/home/ubuntu/openstock/memory/monitor-error.log"
+
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
+errlog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$ERROR_LOG" >> "$LOG_FILE"; }
+
+# Load env
+if [ -f "$APP_DIR/.env" ]; then
+    export $(grep -v '^#' "$APP_DIR/.env" | xargs)
+fi
+
+if [ -z "${TWELVE_DATA_API_KEY:-}" ]; then
+    errlog "TWELVE_DATA_API_KEY not set"
+    exit 2
+fi
+
+if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+    errlog "TELEGRAM_BOT_TOKEN not set"
+    exit 2
+fi
+
+DB_PATH="${DATABASE_PATH:-$APP_DIR/database/openstock.db}"
+if [ ! -f "$DB_PATH" ]; then
+    errlog "Database not found: $DB_PATH"
+    exit 2
+fi
+
+EXCHANGE_RATE=""
+CACHE_FILE="/home/ubuntu/openstock/memory/exchange_rate_cache.json"
+CACHE_TTL=${EXCHANGE_RATE_CACHE_SECONDS:-3600}
+
+# Get exchange rate (USD/EUR) with caching
+get_exchange_rate() {
+    local now=$(date +%s)
+    
+    # Check cache
+    if [ -f "$CACHE_FILE" ]; then
+        local cached_rate=$(jq -r '.rate' "$CACHE_FILE" 2>/dev/null)
+        local cached_time=$(jq -r '.timestamp' "$CACHE_FILE" 2>/dev/null)
+        if [ -n "$cached_rate" ] && [ -n "$cached_time" ]; then
+            local age=$((now - cached_time))
+            if [ "$age" -lt "$CACHE_TTL" ]; then
+                echo "$cached_rate"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Fetch from Twelve Data
+    local response=$(curl -sf --max-time 10 "https://api.twelvedata.com/exchange_rate?symbol=USD/EUR&apikey=$TWELVE_DATA_API_KEY" 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$response" ]; then
+        errlog "Failed to fetch exchange rate from API"
+        return 1
+    fi
+    
+    local rate=$(echo "$response" | jq -r '.rate' 2>/dev/null)
+    if [ -z "$rate" ] || [ "$rate" = "null" ]; then
+        errlog "Invalid exchange rate response: $response"
+        return 1
+    fi
+    
+    # Cache
+    echo "{\"rate\":$rate,\"timestamp\":$now}" > "$CACHE_FILE" 2>/dev/null
+    echo "$rate"
+    return 0
+}
+
+# Send Telegram notification
+send_telegram() {
+    local message="$1"
+    local chat_id="${2:-${TELEGRAM_CHAT_ID:-}}"
+    
+    if [ -z "$chat_id" ]; then
+        # Get chat_id from owner allowlist
+        chat_id=$(cat /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null | jq -r '.allowFrom[0]' 2>/dev/null)
+    fi
+    
+    if [ -z "$chat_id" ] || [ "$chat_id" = "null" ]; then
+        errlog "No Telegram chat_id configured"
+        return 1
+    fi
+    
+    local response=$(curl -sf --max-time 10 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+        -d chat_id="$chat_id" \
+        -d text="$message" \
+        -d parse_mode="HTML" 2>/dev/null)
+    
+    if [ $? -ne 0 ]; then
+        errlog "Telegram send failed: $response"
+        return 1
+    fi
+    
+    echo "$response" | jq -r '.result.message_id // "sent"' 2>/dev/null || echo "sent"
+    return 0
+}
+
+# Fetch stock price
+get_stock_price() {
+    local symbol="$1"
+    local response=$(curl -sf --max-time 10 "https://api.twelvedata.com/quote?symbol=$symbol&apikey=$TWELVE_DATA_API_KEY" 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$response" ]; then
+        errlog "Failed to fetch price for $symbol"
+        return 1
+    fi
+    
+    local price=$(echo "$response" | jq -r '.close' 2>/dev/null)
+    local name=$(echo "$response" | jq -r '.name' 2>/dev/null)
+    
+    if [ -z "$price" ] || [ "$price" = "null" ] || [ "$price" = "0" ]; then
+        errlog "Invalid price for $symbol: $response"
+        return 1
+    fi
+    
+    echo "PRICE=$price"
+    echo "NAME=$name"
+    return 0
+}
+
+# Main monitoring cycle
+log "=== Monitoring cycle started ==="
+
+# Get exchange rate
+EXCHANGE_RATE=$(get_exchange_rate)
+if [ -z "$EXCHANGE_RATE" ]; then
+    errlog "Could not get exchange rate, skipping cycle"
+    exit 3
+fi
+log "USD/EUR rate: $EXCHANGE_RATE"
+
+# Get enabled stocks from DB
+STOCKS=$(sqlite3 "$DB_PATH" "SELECT id,symbol,buy_threshold_eur,sell_threshold_eur,trigger_state FROM stocks WHERE enabled=1 ORDER BY symbol" 2>/dev/null)
+if [ -z "$STOCKS" ]; then
+    log "No enabled stocks"
+    exit 0
+fi
+
+# Get owner chat_id
+CHAT_ID=$(cat /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null | jq -r '.allowFrom[0]' 2>/dev/null)
+if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "null" ]; then
+    errlog "No Telegram chat_id found"
+    exit 4
+fi
+
+# Process each stock
+while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
+    log "Processing $symbol (id=$id)"
+    
+    # Get price
+    PRICE_DATA=$(get_stock_price "$symbol")
+    if [ $? -ne 0 ]; then
+        log "Skipping $symbol due to API error"
+        continue
+    fi
+    
+    USD_PRICE=$(echo "$PRICE_DATA" | grep "^PRICE=" | cut -d= -f2)
+    STOCK_NAME=$(echo "$PRICE_DATA" | grep "^NAME=" | cut -d= -f2)
+    
+    if [ -z "$USD_PRICE" ]; then
+        log "No price for $symbol, skipping"
+        continue
+    fi
+    
+    # Calculate EUR price
+    EUR_PRICE=$(echo "$USD_PRICE $EXCHANGE_RATE" | awk '{printf "%.4f", $1 * $2}')
+    log "$symbol: \$${USD_PRICE} → €${EUR_PRICE} (buy=€${buy_threshold}, sell=€${sell_threshold}, state=${current_trigger})"
+    
+    # Update database
+    sqlite3 "$DB_PATH" "UPDATE stocks SET current_price_usd=$USD_PRICE, current_price_eur=$EUR_PRICE, last_price_update=datetime('now'), last_exchange_rate=$EXCHANGE_RATE, updated_at=datetime('now') WHERE id=$id" 2>/dev/null
+    
+    # Update name if empty
+    if [ -n "$STOCK_NAME" ] && [ "$STOCK_NAME" != "null" ]; then
+        sqlite3 "$DB_PATH" "UPDATE stocks SET name='$STOCK_NAME' WHERE id=$id AND (name IS NULL OR name='')" 2>/dev/null
+    fi
+    
+    # Evaluate triggers
+    NEW_TRIGGER="NONE"
+    
+    # Buy trigger: EUR price <= buy threshold
+    if [ "$(echo "$EUR_PRICE $buy_threshold" | awk '{print ($1 <= $2) ? 1 : 0}')" = "1" ]; then
+        NEW_TRIGGER="BUY_TRIGGERED"
+    fi
+    
+    # Sell trigger: EUR price >= sell threshold
+    if [ "$(echo "$EUR_PRICE $sell_threshold" | awk '{print ($1 >= $2) ? 1 : 0}')" = "1" ]; then
+        NEW_TRIGGER="SELL_TRIGGERED"
+    fi
+    
+    # Debouncing: only fire alert on state transition INTO trigger zone
+    if [ "$NEW_TRIGGER" != "$current_trigger" ]; then
+        sqlite3 "$DB_PATH" "UPDATE stocks SET trigger_state='$NEW_TRIGGER', updated_at=datetime('now') WHERE id=$id" 2>/dev/null
+        
+        # Send alert only when NEW_TRIGGER != NONE and transitioning INTO trigger
+        if [ "$NEW_TRIGGER" != "NONE" ]; then
+            log "TRIGGER: $symbol → $NEW_TRIGGER"
+            
+            # Format message
+            if [ "$NEW_TRIGGER" = "BUY_TRIGGERED" ]; then
+                MSG="🔼 <b>BUY TRIGGER</b>%0A%0A<b>$STOCK_NAME ($symbol)</b>%0ACurrent price: €$(printf '%.2f' $EUR_PRICE)%0ABuy target: €$(printf '%.2f' $buy_threshold)%0ASell target: €$(printf '%.2f' $sell_threshold)%0AExchange rate: $EXCHANGE_RATE%0ATime: $(date '+%Y-%m-%d %H:%M')"
+            else
+                MSG="🔽 <b>SELL TRIGGER</b>%0A%0A<b>$STOCK_NAME ($symbol)</b>%0ACurrent price: €$(printf '%.2f' $EUR_PRICE)%0ABuy target: €$(printf '%.2f' $buy_threshold)%0ASell target: €$(printf '%.2f' $sell_threshold)%0AExchange rate: $EXCHANGE_RATE%0ATime: $(date '+%Y-%m-%d %H:%M')"
+            fi
+            
+            RESULT=$(send_telegram "$MSG" "$CHAT_ID")
+            if [ $? -eq 0 ]; then
+                ALERT_TYPE="${NEW_TRIGGER%_TRIGGERED}"
+                sqlite3 "$DB_PATH" "INSERT INTO alerts_log (stock_id, alert_type, price_eur, threshold_eur, telegram_message_id) VALUES ($id, '$ALERT_TYPE', $EUR_PRICE, $([ "$ALERT_TYPE" = "BUY" ] && echo $buy_threshold || echo $sell_threshold), '$RESULT')" 2>/dev/null
+                log "Telegram sent: $RESULT"
+            else
+                errlog "Failed to send Telegram for $symbol"
+            fi
+        else
+            log "Trigger reset for $symbol"
+        fi
+    fi
+    
+done <<< "$STOCKS"
+
+log "=== Monitoring cycle complete ==="
+exit 0

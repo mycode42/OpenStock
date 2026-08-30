@@ -1,0 +1,28 @@
+# Environment and secrets
+.env
+
+# SQLite database files (main DB, WAL, SHM)
+database/*.db
+database/*.db-wal
+database/*.db-shm
+
+# Runtime logs
+memory/*.log
+memory/*.json
+
+# Node modules
+node_modules/
+
+# Package lock
+package-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Systemd unit files (installed system-wide)
+# These are in /etc/systemd/system/ on the host
