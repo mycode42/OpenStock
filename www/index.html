@@ -84,7 +84,7 @@ input:focus,select:focus{outline:none;border-color:#3b82f6}
 <div id="page-journal" class="hidden"></div>
 </div>
 <script>
-const API='/api';let stocks=[],sMap={};
+const API='./api';let stocks=[],sMap={};
 function nav(h){const p=h.replace('#/','')||'dashboard';document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===p));['dashboard','config','journal'].forEach(x=>document.getElementById('page-'+x).classList.toggle('hidden',x!==p));if(p==='dashboard')rd();else if(p==='config')rc();else if(p==='journal')rj();window.location.hash=p==='dashboard'?'':'#/'+p}
 window.addEventListener('hashchange',()=>nav(window.location.hash));
 async function af(p,o={}){try{const r=await fetch(API+p,o);const d=await r.json();if(!r.ok){showA(d.error||'Error','error');return null}return d}catch(e){showA('Network: '+e.message,'error');return null}}
