@@ -1,6 +1,6 @@
 #!/bin/bash
-# OpenStock Monitoring Script
-# Reads stock config from database, fetches prices, evaluates triggers, sends Telegram
+# OpenStock Monitoring Script using Yahoo Finance
+# Reads stock config from database, fetches prices from Yahoo Finance, evaluates triggers, sends Telegram
 
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,17 +13,9 @@ errlog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$ERROR_LOG"
 
 # Load env
 if [ -f "$APP_DIR/.env" ]; then
-    export $(grep -v '^#' "$APP_DIR/.env" | xargs)
-fi
-
-if [ -z "${TWELVE_DATA_API_KEY:-}" ]; then
-    errlog "TWELVE_DATA_API_KEY not set"
-    exit 2
-fi
-
-if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
-    errlog "TELEGRAM_BOT_TOKEN not set"
-    exit 2
+    set -a
+    source "$APP_DIR/.env"
+    set +a
 fi
 
 DB_PATH="${DATABASE_PATH:-$APP_DIR/database/openstock.db}"
@@ -53,14 +45,14 @@ get_exchange_rate() {
         fi
     fi
     
-    # Fetch from Twelve Data
-    local response=$(curl -sf --max-time 10 "https://api.twelvedata.com/exchange_rate?symbol=USD/EUR&apikey=$TWELVE_DATA_API_KEY" 2>/dev/null)
+    # Fetch from exchangerate-api.com
+    local response=$(curl -sf --max-time 10 "https://api.exchangerate-api.com/v4/latest/USD" 2>/dev/null)
     if [ $? -ne 0 ] || [ -z "$response" ]; then
         errlog "Failed to fetch exchange rate from API"
         return 1
     fi
     
-    local rate=$(echo "$response" | jq -r '.rate' 2>/dev/null)
+    local rate=$(echo "$response" | jq -r '.rates.EUR' 2>/dev/null)
     if [ -z "$rate" ] || [ "$rate" = "null" ]; then
         errlog "Invalid exchange rate response: $response"
         return 1
@@ -101,25 +93,51 @@ send_telegram() {
     return 0
 }
 
-# Fetch stock price
+# Fetch stock price from Yahoo Finance
 get_stock_price() {
     local symbol="$1"
-    local response=$(curl -sf --max-time 10 "https://api.twelvedata.com/quote?symbol=$symbol&apikey=$TWELVE_DATA_API_KEY" 2>/dev/null)
+    local response=$(curl -sf --max-time 10 \
+        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" \
+        -H "Accept: application/json" \
+        "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?range=1d&interval=1m" 2>/dev/null)
+    
     if [ $? -ne 0 ] || [ -z "$response" ]; then
         errlog "Failed to fetch price for $symbol"
         return 1
     fi
     
-    local price=$(echo "$response" | jq -r '.close' 2>/dev/null)
-    local name=$(echo "$response" | jq -r '.name' 2>/dev/null)
+    # Extract data using Python for better parsing
+    local python_script="
+import sys, json
+try:
+    data = json.loads(sys.stdin.read())
+    result = data.get('chart', {}).get('result', [])
+    if not result:
+        print('NO_DATA')
+        sys.exit(1)
     
-    if [ -z "$price" ] || [ "$price" = "null" ] || [ "$price" = "0" ]; then
-        errlog "Invalid price for $symbol: $response"
+    meta = result[0].get('meta', {})
+    price = meta.get('regularMarketPrice')
+    name = meta.get('shortName') or meta.get('longName') or ''
+    
+    if price:
+        print(f'PRICE={price}')
+        print(f'NAME={name}')
+    else:
+        print('NO_DATA')
+        sys.exit(1)
+except Exception as e:
+    print(f'ERROR: {str(e)}')
+    sys.exit(1)
+"
+    
+    local price_data=$(echo "$response" | python3 -c "$python_script" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        errlog "Failed to parse Yahoo Finance response for $symbol: $price_data"
         return 1
     fi
     
-    echo "PRICE=$price"
-    echo "NAME=$name"
+    echo "$price_data"
     return 0
 }
 
