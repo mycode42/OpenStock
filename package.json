@@ -14,5 +14,8 @@
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "sharp": "^0.35.4"
   }
 }

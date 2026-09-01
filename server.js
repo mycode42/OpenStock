@@ -296,6 +296,91 @@ app.get('/api/dashboard', (req, res) => {
     }
 });
 
+// ===== API: Refresh Prices =====
+app.post('/api/refresh-prices', async (req, res) => {
+    try {
+        // Get all enabled stocks
+        const stocks = db.getEnabledStocks();
+        if (stocks.length === 0) {
+            return res.json({ message: 'No enabled stocks to refresh', updated: 0 });
+        }
+        
+        // Get exchange rate (USD to EUR)
+        let exchangeRate = 1.0; // Default fallback
+        try {
+            const rateResponse = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+            const rateData = await rateResponse.json();
+            exchangeRate = rateData.rates.EUR || 1.0;
+        } catch (rateError) {
+            console.warn('Could not fetch exchange rate, using default 1.0:', rateError.message);
+        }
+        
+        let updatedCount = 0;
+        
+        // Process each stock
+        for (const stock of stocks) {
+            try {
+                // Fetch price from Yahoo Finance (free, no API key needed)
+                const symbol = stock.symbol;
+                const priceResponse = await fetch(
+                    `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1d&interval=1m`,
+                    {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                            'Accept': 'application/json'
+                        }
+                    }
+                );
+                
+                if (!priceResponse.ok) {
+                    console.warn(`Failed to fetch price for ${symbol}: ${priceResponse.status}`);
+                    continue;
+                }
+                
+                const priceData = await priceResponse.json();
+                const result = priceData.chart?.result?.[0];
+                
+                if (!result) {
+                    console.warn(`No price data for ${symbol}`);
+                    continue;
+                }
+                
+                const meta = result.meta;
+                const priceUsd = meta.regularMarketPrice;
+                const shortName = meta.shortName || meta.longName || '';
+                
+                if (!priceUsd) {
+                    console.warn(`Invalid price for ${symbol}: ${priceUsd}`);
+                    continue;
+                }
+                
+                // Calculate EUR price
+                const priceEur = priceUsd * exchangeRate;
+                
+                // Update stock in database using class method
+                db.updateStockPrice(stock.id, priceUsd, priceEur, exchangeRate);
+                updatedCount++;
+                
+                // Update name if it was empty and we got a name
+                if ((!stock.name || stock.name === '') && shortName) {
+                    db.updateStock(stock.id, { name: shortName });
+                }
+            } catch (stockError) {
+                console.warn(`Error processing stock ${stock.symbol}:`, stockError.message);
+                continue;
+            }
+        }
+        
+        res.json({ 
+            message: `Successfully refreshed ${updatedCount} stock prices`, 
+            updated: updatedCount 
+        });
+    } catch (e) {
+        console.error('Error refreshing prices:', e.message);
+        res.status(500).json({ error: 'Failed to refresh prices' });
+    }
+});
+
 // Health check
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -307,7 +392,7 @@ app.get('/', (req, res) => {
 });
 
 app.get('/config', (req, res) => {
-    res.sendFile(path.join(__dirname, 'www', 'config', 'index.html'));
+    res.sendFile(path.join(__dirname, 'www', 'index.html'));
 });
 
 app.get('/journal', (req, res) => {
