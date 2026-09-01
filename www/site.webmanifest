@@ -1,10 +1,11 @@
 {
   "name": "OpenStock",
   "short_name": "OpenStock",
-  "start_url": "/",
+  "start_url": "/stock-monitor/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#C8FF00",
+  "scope": "/stock-monitor/",
   "icons": [
     {
       "src": "/favicon-16.png",
