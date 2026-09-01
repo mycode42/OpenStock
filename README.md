@@ -2,6 +2,8 @@
 
 A production-ready MVP for monitoring stock prices, converting USD to EUR, and sending Telegram alerts when buy/sell thresholds are reached. Includes a trading journal for recording actual trades.
 
+> **Note:** Stock prices are fetched from **Yahoo Finance** — no API key required. The Twelve Data API key in `.env` is optional and kept for legacy compatibility only.
+
 ## Architecture
 
 ```
@@ -38,7 +40,7 @@ A production-ready MVP for monitoring stock prices, converting USD to EUR, and s
 │  - Fetches prices       │      │      └─────────────────────────┘
 │  - Converts USD→EUR     │      │
 │  - Evaluates triggers   │      │      ┌─────────────────────────┐
-│  - Sends Telegram       │──────┘      │  Twelve Data API        │
+│  - Sends Telegram       │──────┘      │  Yahoo Finance          │
 │  - Logs to alerts_log   │             │  (prices & exchange)    │
 └─────────────────────────┘             └─────────────────────────┘
 ```
@@ -47,9 +49,9 @@ A production-ready MVP for monitoring stock prices, converting USD to EUR, and s
 
 - Node.js v22.x or higher
 - SQLite 3.x (with CLI for debugging)
-- Twelve Data API key
 - Telegram Bot token
 - Tailscale (pre-configured)
+- **No stock price API key needed** — Yahoo Finance is used for free
 
 ## Configuration
 
@@ -63,7 +65,7 @@ cp .env.example .env
 
 | Variable | Description |
 |----------|-------------|
-| `TWELVE_DATA_API_KEY` | API key from twelvedata.com |
+| `TWELVE_DATA_API_KEY` | **Optional** — legacy only; prices come from Yahoo Finance |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `DATABASE_PATH` | Path to SQLite database |
 | `PORT` | Server port (default: 3000) |
@@ -148,7 +150,7 @@ sqlite3 /home/ubuntu/openstock/database/openstock.db ".tables"
 The `monitor.sh` script runs every minute via systemd timer and:
 
 1. Reads enabled stocks from database
-2. Fetches current USD price from Twelve Data
+2. Fetches current USD price from Yahoo Finance
 3. Gets USD→EUR exchange rate (cached for 1 hour)
 4. Calculates EUR price
 5. Stores price data in database
