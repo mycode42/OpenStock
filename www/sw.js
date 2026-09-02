@@ -1,4 +1,4 @@
-const CACHE_NAME = 'openstock-v1';
+const CACHE_NAME = 'openstock-v3';
 const REQUIRED_ASSETS = [
   '/',
   './index.html',
@@ -25,7 +25,15 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Only cache GET requests for same-origin requests
+  const url = new URL(event.request.url);
+
+  // Never cache API requests — always fetch fresh data
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/refresh-prices')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // Only cache GET requests for same-origin static assets
   if (event.request.method !== 'GET') return;
 
   event.respondWith(
@@ -34,14 +42,11 @@ self.addEventListener('fetch', (event) => {
         return cachedResponse;
       }
 
-      // Fetch from network and put in cache
       return fetch(event.request).then((networkResponse) => {
-        // Don't cache non-200 responses or non-GET requests
         if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
           return networkResponse;
         }
 
-        // Clone the response since it's a stream
         const responseToCache = networkResponse.clone();
         caches.open(CACHE_NAME).then((cache) => {
           cache.put(event.request, responseToCache);

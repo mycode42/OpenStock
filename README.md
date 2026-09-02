@@ -217,7 +217,7 @@ journalctl -u openstock-monitor.service -n 50
 ### Prices not updating
 
 ```bash
-curl "https://api.twelvedata.com/quote?symbol=AAPL&apikey=YOUR_KEY"
+curl -s -A "Mozilla/5.0" "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1m" | head -c 200
 ```
 
 ### Telegram alerts not sending
