@@ -15,6 +15,14 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use('/api', (req, res, next) => {
+    res.set({
+        'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+        Pragma: 'no-cache',
+        Expires: '0'
+    });
+    next();
+});
 app.use(express.static(path.join(__dirname, 'www')));
 
 // ===== API: Stocks =====
@@ -80,8 +88,9 @@ app.post('/api/stocks', (req, res) => {
             return res.status(400).json({ error: 'Maximum 25 stocks allowed' });
         }
 
-        db.addStock(symbol.toUpperCase(), name, currency, buyThreshold, sellThreshold);
-        res.status(201).json({ message: 'Stock added successfully' });
+        const result = db.addStock(symbol.toUpperCase(), name, currency, buyThreshold, sellThreshold);
+        const stock = db.getStockById(result.lastInsertRowid);
+        res.status(201).json({ message: 'Stock added successfully', stock });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT') {
             return res.status(409).json({ error: 'Stock symbol already exists' });
@@ -156,8 +165,12 @@ app.put('/api/stocks/:id', (req, res) => {
             return res.status(400).json({ error: 'No valid fields to update' });
         }
 
-        db.updateStock(req.params.id, updates);
-        res.json({ message: 'Stock updated successfully' });
+        const result = db.updateStock(req.params.id, updates);
+        if (result.changes === 0) {
+            return res.status(404).json({ error: 'Stock not found' });
+        }
+        const stock = db.getStockById(req.params.id);
+        res.json({ message: 'Stock updated successfully', stock });
     } catch (e) {
         console.error('Error updating stock:', e.message);
         res.status(500).json({ error: 'Failed to update stock' });
@@ -170,7 +183,7 @@ app.delete('/api/stocks/:id', (req, res) => {
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Stock not found' });
         }
-        res.json({ message: 'Stock deleted successfully' });
+        res.json({ message: 'Stock deleted successfully', deleted_id: Number(req.params.id) });
     } catch (e) {
         console.error('Error deleting stock:', e.message);
         res.status(500).json({ error: 'Failed to delete stock' });
@@ -218,8 +231,9 @@ app.post('/api/journal', (req, res) => {
             return res.status(404).json({ error: 'Stock not found' });
         }
 
-        db.addJournalEntry(stock_id, action.toUpperCase(), priceEur, qty, notes);
-        res.status(201).json({ message: 'Journal entry added successfully' });
+        const result = db.addJournalEntry(stock_id, action.toUpperCase(), priceEur, qty, notes);
+        const entry = db.getJournalEntryById(result.lastInsertRowid);
+        res.status(201).json({ message: 'Journal entry added successfully', entry });
     } catch (e) {
         console.error('Error adding journal entry:', e.message);
         res.status(500).json({ error: 'Failed to add journal entry' });
@@ -241,8 +255,12 @@ app.put('/api/journal/:id', (req, res) => {
             return res.status(400).json({ error: 'Invalid price or quantity' });
         }
 
-        db.updateJournalEntry(req.params.id, action.toUpperCase(), priceEur, qty, notes);
-        res.json({ message: 'Journal entry updated successfully' });
+        const result = db.updateJournalEntry(req.params.id, action.toUpperCase(), priceEur, qty, notes);
+        if (result.changes === 0) {
+            return res.status(404).json({ error: 'Journal entry not found' });
+        }
+        const entry = db.getJournalEntryById(req.params.id);
+        res.json({ message: 'Journal entry updated successfully', entry });
     } catch (e) {
         console.error('Error updating journal entry:', e.message);
         res.status(500).json({ error: 'Failed to update journal entry' });
@@ -255,7 +273,7 @@ app.delete('/api/journal/:id', (req, res) => {
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Journal entry not found' });
         }
-        res.json({ message: 'Journal entry deleted successfully' });
+        res.json({ message: 'Journal entry deleted successfully', deleted_id: Number(req.params.id) });
     } catch (e) {
         console.error('Error deleting journal entry:', e.message);
         res.status(500).json({ error: 'Failed to delete journal entry' });
@@ -302,7 +320,11 @@ app.post('/api/refresh-prices', async (req, res) => {
         // Get all enabled stocks
         const stocks = db.getEnabledStocks();
         if (stocks.length === 0) {
-            return res.json({ message: 'No enabled stocks to refresh', updated: 0 });
+            return res.json({
+                message: 'No enabled stocks to refresh',
+                updated: 0,
+                stocks: db.getAllStocks()
+            });
         }
         
         // Get exchange rate (USD to EUR)
@@ -373,7 +395,8 @@ app.post('/api/refresh-prices', async (req, res) => {
         
         res.json({ 
             message: `Successfully refreshed ${updatedCount} stock prices`, 
-            updated: updatedCount 
+            updated: updatedCount,
+            stocks: db.getAllStocks()
         });
     } catch (e) {
         console.error('Error refreshing prices:', e.message);

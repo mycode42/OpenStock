@@ -15,7 +15,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/stock-monitor/favicon-192.png">
 <link rel="icon" type="image/png" sizes="256x256" href="/stock-monitor/favicon-256.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/stock-monitor/apple-touch-icon.png">
-<link rel="stylesheet" href="/stock-monitor/styles.css?v=2">
+<link rel="stylesheet" href="/stock-monitor/styles.css?v=3">
 <meta name="theme-color" content="#000000">
 </head>
 <body>
@@ -29,13 +29,14 @@
 <div id="page-config" class="hidden"></div>
 <div id="page-journal" class="hidden"></div>
 </div>
-<script src="./app.js?v=2"></script>
+<script src="./app.js?v=3"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js')
+    navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' })
       .then((registration) => {
         console.log('ServiceWorker registration successful with scope: ', registration.scope);
+        registration.update();
       })
       .catch((error) => {
         console.log('ServiceWorker registration failed: ', error);

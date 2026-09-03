@@ -14,7 +14,8 @@ class OpenStockDB {
         return this.db.prepare(`
             SELECT id, symbol, name, currency, current_price_usd, current_price_eur,
                    buy_threshold_eur, sell_threshold_eur, owned, enabled,
-                   last_price_update, trigger_state
+                   last_price_update, last_exchange_rate, trigger_state,
+                   created_at, updated_at
             FROM stocks
             ORDER BY symbol ASC
         `).all();
@@ -131,6 +132,15 @@ class OpenStockDB {
             JOIN stocks s ON j.stock_id = s.id
             ORDER BY j.created_at DESC
         `).all();
+    }
+
+    getJournalEntryById(id) {
+        return this.db.prepare(`
+            SELECT j.*, s.symbol
+            FROM journal_entries j
+            JOIN stocks s ON j.stock_id = s.id
+            WHERE j.id = ?
+        `).get(id);
     }
 
     getJournalEntriesByStock(stockId) {

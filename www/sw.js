@@ -1,9 +1,9 @@
-const CACHE_NAME = 'openstock-v4';
+const CACHE_NAME = 'openstock-v5';
 const REQUIRED_ASSETS = [
-  '/',
+  './',
   './index.html',
-  './styles.css?v=2',
-  './app.js?v=2',
+  './styles.css?v=3',
+  './app.js?v=3',
   './site.webmanifest',
   './favicon-16.png',
   './favicon-32.png',
@@ -17,6 +17,7 @@ const REQUIRED_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(REQUIRED_ASSETS);
@@ -26,10 +27,15 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  const scopePath = new URL(self.registration.scope).pathname.replace(/\/$/, '');
+  const apiPrefixes = ['/api', `${scopePath}/api`];
+  const isApiRequest = apiPrefixes.some((prefix) =>
+    url.pathname === prefix || url.pathname.startsWith(`${prefix}/`)
+  );
 
   // Never cache API requests — always fetch fresh data
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/refresh-prices') || url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {
-    event.respondWith(fetch(event.request));
+  if (isApiRequest || url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {
+    event.respondWith(fetch(event.request, { cache: 'no-store' }));
     return;
   }
 
@@ -69,6 +75,6 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim())
   );
 });
