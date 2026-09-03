@@ -1,9 +1,9 @@
-const CACHE_NAME = 'openstock-v3';
+const CACHE_NAME = 'openstock-v4';
 const REQUIRED_ASSETS = [
   '/',
   './index.html',
-  './styles.css',
-  './app.js',
+  './styles.css?v=2',
+  './app.js?v=2',
   './site.webmanifest',
   './favicon-16.png',
   './favicon-32.png',
@@ -28,7 +28,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   // Never cache API requests — always fetch fresh data
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/refresh-prices')) {
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/refresh-prices') || url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {
     event.respondWith(fetch(event.request));
     return;
   }
