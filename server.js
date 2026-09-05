@@ -11,6 +11,25 @@ function toISODateTime(sqliteDateTime) {
     return sqliteDateTime.replace(' ', 'T') + 'Z';
 }
 
+function serializeStock(stock) {
+    if (!stock) return stock;
+    return {
+        ...stock,
+        last_price_update: toISODateTime(stock.last_price_update),
+        created_at: toISODateTime(stock.created_at),
+        updated_at: toISODateTime(stock.updated_at)
+    };
+}
+
+function serializeJournalEntry(entry) {
+    if (!entry) return entry;
+    return {
+        ...entry,
+        created_at: toISODateTime(entry.created_at),
+        updated_at: toISODateTime(entry.updated_at)
+    };
+}
+
 // Ensure database exists before starting server
 const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
 initDatabase();
@@ -36,12 +55,7 @@ app.use(express.static(path.join(__dirname, 'www')));
 app.get('/api/stocks', (req, res) => {
     try {
         const stocks = db.getAllStocks();
-        res.json(stocks.map(stock => ({
-            ...stock,
-            last_price_update: toISODateTime(stock.last_price_update),
-            created_at: toISODateTime(stock.created_at),
-            updated_at: toISODateTime(stock.updated_at)
-        })));
+        res.json(stocks.map(serializeStock));
     } catch (e) {
         console.error('Error fetching stocks:', e.message);
         res.status(500).json({ error: 'Failed to fetch stocks' });
@@ -54,12 +68,7 @@ app.get('/api/stocks/:id', (req, res) => {
         if (!stock) {
             return res.status(404).json({ error: 'Stock not found' });
         }
-        res.json({
-            ...stock,
-            last_price_update: toISODateTime(stock.last_price_update),
-            created_at: toISODateTime(stock.created_at),
-            updated_at: toISODateTime(stock.updated_at)
-        });
+        res.json(serializeStock(stock));
     } catch (e) {
         console.error('Error fetching stock:', e.message);
         res.status(500).json({ error: 'Failed to fetch stock' });
@@ -107,7 +116,7 @@ app.post('/api/stocks', (req, res) => {
 
         const result = db.addStock(symbol.toUpperCase(), name, currency, buyThreshold, sellThreshold);
         const stock = db.getStockById(result.lastInsertRowid);
-        res.status(201).json({ message: 'Stock added successfully', stock: { ...stock, last_price_update: toISODateTime(stock.last_price_update), created_at: toISODateTime(stock.created_at), updated_at: toISODateTime(stock.updated_at) } });
+        res.status(201).json({ message: 'Stock added successfully', stock: serializeStock(stock) });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT') {
             return res.status(409).json({ error: 'Stock symbol already exists' });
@@ -187,7 +196,7 @@ app.put('/api/stocks/:id', (req, res) => {
             return res.status(404).json({ error: 'Stock not found' });
         }
         const stock = db.getStockById(req.params.id);
-        res.json({ message: 'Stock updated successfully', stock: { ...stock, last_price_update: toISODateTime(stock.last_price_update), created_at: toISODateTime(stock.created_at), updated_at: toISODateTime(stock.updated_at) } });
+        res.json({ message: 'Stock updated successfully', stock: serializeStock(stock) });
     } catch (e) {
         console.error('Error updating stock:', e.message);
         res.status(500).json({ error: 'Failed to update stock' });
@@ -211,11 +220,7 @@ app.delete('/api/stocks/:id', (req, res) => {
 app.get('/api/journal', (req, res) => {
     try {
         const entries = db.getAllJournalEntries();
-        res.json(entries.map(entry => ({
-            ...entry,
-            created_at: toISODateTime(entry.created_at),
-            updated_at: toISODateTime(entry.updated_at)
-        })));
+        res.json(entries.map(serializeJournalEntry));
     } catch (e) {
         console.error('Error fetching journal:', e.message);
         res.status(500).json({ error: 'Failed to fetch journal entries' });
@@ -254,7 +259,7 @@ app.post('/api/journal', (req, res) => {
 
         const result = db.addJournalEntry(stock_id, action.toUpperCase(), priceEur, qty, notes);
         const entry = db.getJournalEntryById(result.lastInsertRowid);
-        res.status(201).json({ message: 'Journal entry added successfully', entry });
+        res.status(201).json({ message: 'Journal entry added successfully', entry: serializeJournalEntry(entry) });
     } catch (e) {
         console.error('Error adding journal entry:', e.message);
         res.status(500).json({ error: 'Failed to add journal entry' });
@@ -281,7 +286,7 @@ app.put('/api/journal/:id', (req, res) => {
             return res.status(404).json({ error: 'Journal entry not found' });
         }
         const entry = db.getJournalEntryById(req.params.id);
-        res.json({ message: 'Journal entry updated successfully', entry });
+        res.json({ message: 'Journal entry updated successfully', entry: serializeJournalEntry(entry) });
     } catch (e) {
         console.error('Error updating journal entry:', e.message);
         res.status(500).json({ error: 'Failed to update journal entry' });
@@ -325,7 +330,7 @@ app.get('/api/dashboard', (req, res) => {
         }
 
         res.json({
-            stocks,
+            stocks: stocks.map(serializeStock),
             journal_count: entries.length,
             realized_pl: realizedPl.toFixed(2)
         });
@@ -344,7 +349,7 @@ app.post('/api/refresh-prices', async (req, res) => {
             return res.json({
                 message: 'No enabled stocks to refresh',
                 updated: 0,
-                stocks: db.getAllStocks()
+                stocks: db.getAllStocks().map(serializeStock)
             });
         }
         
@@ -417,7 +422,7 @@ app.post('/api/refresh-prices', async (req, res) => {
         res.json({ 
             message: `Successfully refreshed ${updatedCount} stock prices`, 
             updated: updatedCount,
-            stocks: db.getAllStocks()
+            stocks: db.getAllStocks().map(serializeStock)
         });
     } catch (e) {
         console.error('Error refreshing prices:', e.message);
