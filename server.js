@@ -4,6 +4,13 @@ const path = require('path');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
 
+// Helper to convert SQLite datetime string to ISO 8601 UTC
+function toISODateTime(sqliteDateTime) {
+    if (!sqliteDateTime) return null;
+    // Format: YYYY-MM-DD HH:MM:SS -> YYYY-MM-DDTHH:MM:SSZ
+    return sqliteDateTime.replace(' ', 'T') + 'Z';
+}
+
 // Ensure database exists before starting server
 const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
 initDatabase();
@@ -29,7 +36,12 @@ app.use(express.static(path.join(__dirname, 'www')));
 app.get('/api/stocks', (req, res) => {
     try {
         const stocks = db.getAllStocks();
-        res.json(stocks);
+        res.json(stocks.map(stock => ({
+            ...stock,
+            last_price_update: toISODateTime(stock.last_price_update),
+            created_at: toISODateTime(stock.created_at),
+            updated_at: toISODateTime(stock.updated_at)
+        })));
     } catch (e) {
         console.error('Error fetching stocks:', e.message);
         res.status(500).json({ error: 'Failed to fetch stocks' });
@@ -42,7 +54,12 @@ app.get('/api/stocks/:id', (req, res) => {
         if (!stock) {
             return res.status(404).json({ error: 'Stock not found' });
         }
-        res.json(stock);
+        res.json({
+            ...stock,
+            last_price_update: toISODateTime(stock.last_price_update),
+            created_at: toISODateTime(stock.created_at),
+            updated_at: toISODateTime(stock.updated_at)
+        });
     } catch (e) {
         console.error('Error fetching stock:', e.message);
         res.status(500).json({ error: 'Failed to fetch stock' });
@@ -90,7 +107,7 @@ app.post('/api/stocks', (req, res) => {
 
         const result = db.addStock(symbol.toUpperCase(), name, currency, buyThreshold, sellThreshold);
         const stock = db.getStockById(result.lastInsertRowid);
-        res.status(201).json({ message: 'Stock added successfully', stock });
+        res.status(201).json({ message: 'Stock added successfully', stock: { ...stock, last_price_update: toISODateTime(stock.last_price_update), created_at: toISODateTime(stock.created_at), updated_at: toISODateTime(stock.updated_at) } });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT') {
             return res.status(409).json({ error: 'Stock symbol already exists' });
@@ -170,7 +187,7 @@ app.put('/api/stocks/:id', (req, res) => {
             return res.status(404).json({ error: 'Stock not found' });
         }
         const stock = db.getStockById(req.params.id);
-        res.json({ message: 'Stock updated successfully', stock });
+        res.json({ message: 'Stock updated successfully', stock: { ...stock, last_price_update: toISODateTime(stock.last_price_update), created_at: toISODateTime(stock.created_at), updated_at: toISODateTime(stock.updated_at) } });
     } catch (e) {
         console.error('Error updating stock:', e.message);
         res.status(500).json({ error: 'Failed to update stock' });
@@ -194,7 +211,11 @@ app.delete('/api/stocks/:id', (req, res) => {
 app.get('/api/journal', (req, res) => {
     try {
         const entries = db.getAllJournalEntries();
-        res.json(entries);
+        res.json(entries.map(entry => ({
+            ...entry,
+            created_at: toISODateTime(entry.created_at),
+            updated_at: toISODateTime(entry.updated_at)
+        })));
     } catch (e) {
         console.error('Error fetching journal:', e.message);
         res.status(500).json({ error: 'Failed to fetch journal entries' });

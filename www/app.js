@@ -197,6 +197,85 @@ function money(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number.toFixed(2) : '—';
 }
+// Format dates with Europe/Berlin timezone
+function formatLocalDate(isoString) {
+    if (!isoString) return '—';
+    try {
+        const date = new Date(isoString);
+        if (isNaN(date.getTime())) return isoString;
+        return date.toLocaleString('en-US', {
+            timeZone: 'Europe/Berlin',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    } catch (e) {
+        return isoString;
+    }
+}
+
+// Format stock update time with Europe/Berlin timezone
+function formatLocalDateTime(isoString) {
+    if (!isoString) return 'Never updated';
+    try {
+        const date = new Date(isoString);
+        if (isNaN(date.getTime())) return isoString;
+        return date.toLocaleString('en-US', {
+            timeZone: 'Europe/Berlin',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    } catch (e) {
+        return isoString;
+    }
+}
+
+// Format dates with Europe/Berlin timezone
+function formatLocalDate(isoString) {
+    if (!isoString) return '—';
+    try {
+        const date = new Date(isoString);
+        if (isNaN(date.getTime())) return isoString;
+        return date.toLocaleString('en-US', {
+            timeZone: 'Europe/Berlin',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    } catch (e) {
+        return isoString;
+    }
+}
+
+// Format stock update time with Europe/Berlin timezone
+function formatLocalDateTime(isoString) {
+    if (!isoString) return 'Never updated';
+    try {
+        const date = new Date(isoString);
+        if (isNaN(date.getTime())) return isoString;
+        return date.toLocaleString('en-US', {
+            timeZone: 'Europe/Berlin',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+    } catch (e) {
+        return isoString;
+    }
+}
 
 function renderDashboard() {
     const container = document.getElementById('page-dashboard');
@@ -213,7 +292,7 @@ function renderDashboard() {
         return !latest || stock.last_price_update > latest ? stock.last_price_update : latest;
     }, null) || '—';
 
-    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned · ${journalEntries.length} journal entries</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Journal</div><div class="summary-value">${journalEntries.length}</div></div></div><div class="last-update">Last: ${lastUpdate}</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="ajm('${stock.symbol}')">+ Journal</button><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${stock.last_price_update}` : 'Never updated'}</div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div><div style="margin-top:2rem"><div class="section-header"><div class="section-title">Recent</div><button class="btn btn-sm btn-primary" onclick="nav('#/journal')">View All</button></div><div class="card" style="overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th></tr></thead><tbody>${journalEntries.length ? journalEntries.slice(0, 10).map(entry => `<tr><td>${new Date(entry.created_at).toLocaleString()}</td><td>${entry.symbol}</td><td><span class="badge ${entry.action === 'BUY' ? 'owned' : 'sold'}">${entry.action}</span></td><td>€${money(entry.price_eur)}</td><td>${entry.quantity}</td><td>${entry.notes || '—'}</td></tr>`).join('') : '<tr><td colspan="6" style="color:#64748b">No entries</td></tr>'}</tbody></table></div></div>`;
+    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned · ${journalEntries.length} journal entries</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Journal</div><div class="summary-value">${journalEntries.length}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)}</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="ajm('${stock.symbol}')">+ Journal</button><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div><div style="margin-top:2rem"><div class="section-header"><div class="section-title">Recent</div><button class="btn btn-sm btn-primary" onclick="nav('#/journal')">View All</button></div><div class="card" style="overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th></tr></thead><tbody>${journalEntries.length ? journalEntries.slice(0, 10).map(entry => `<tr><td>${formatLocalDate(entry.created_at)}</td><td>${entry.symbol}</td><td><span class="badge ${entry.action === 'BUY' ? 'owned' : 'sold'}">${entry.action}</span></td><td>€${money(entry.price_eur)}</td><td>${entry.quantity}</td><td>${entry.notes || '—'}</td></tr>`).join('') : '<tr><td colspan="6" style="color:#64748b">No entries</td></tr>'}</tbody></table></div></div>`;
 }
 
 async function refreshPrices() {
@@ -395,7 +474,7 @@ function ajm(symbol) {
 
 function renderJournal() {
     const container = document.getElementById('page-journal');
-    container.innerHTML = `<header><h1>📓 Trading Journal</h1><p class="subtitle">${journalEntries.length} entries</p></header><div id="ac"></div><div class="card"><div class="section-header"><div class="section-title">New Entry</div></div><div class="form-row"><div class="form-group"><label>Stock</label><div class="dropdown" id="j-stock-d"><div class="dropdown-trigger" id="j-stock-trigger" onclick="dt('j-stock-d')">Select...</div><div class="dropdown-panel" id="j-stock-panel"></div><input type="hidden" id="j-stock"></div></div><div class="form-group"><label>Action</label><div class="dropdown" id="j-act-d"><div class="dropdown-trigger" id="j-act-trigger" onclick="dt('j-act-d')">BUY</div><div class="dropdown-panel" id="j-act-panel"></div><input type="hidden" id="j-act" value="BUY"></div></div></div><div class="form-row"><div class="form-group"><label>Price €</label><input id="j-px" type="number" step=".01" min=".01" placeholder="0.00"></div><div class="form-group"><label>Qty</label><input id="j-qty" type="number" step=".001" min=".001" placeholder="0.000"></div><div class="form-group"><label>Notes</label><input id="j-nt" placeholder="Reason..."></div></div><div class="btn-group"><button class="btn btn-success" onclick="aj()">+ Add Entry</button></div><div id="jr" style="margin-top:.75rem"></div></div><div class="card" style="margin-top:1rem;overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th><th></th></tr></thead><tbody>${journalEntries.length ? journalEntries.map(entry => `<tr><td>${new Date(entry.created_at).toLocaleString()}</td><td><strong>${entry.symbol}</strong></td><td><span class="badge ${entry.action === 'BUY' ? 'owned' : 'sold'}">${entry.action}</span></td><td>€${money(entry.price_eur)}</td><td>${entry.quantity}</td><td>${entry.notes || '—'}</td><td><button class="btn btn-sm btn-secondary" onclick="ej(${entry.id})">Edit</button> <button class="btn btn-sm btn-danger" onclick="dj(${entry.id})">✕</button></td></tr>`).join('') : '<tr><td colspan="7" style="color:#64748b">No entries</td></tr>'}</tbody></table></div>`;
+    container.innerHTML = `<header><h1>📓 Trading Journal</h1><p class="subtitle">${journalEntries.length} entries</p></header><div id="ac"></div><div class="card"><div class="section-header"><div class="section-title">New Entry</div></div><div class="form-row"><div class="form-group"><label>Stock</label><div class="dropdown" id="j-stock-d"><div class="dropdown-trigger" id="j-stock-trigger" onclick="dt('j-stock-d')">Select...</div><div class="dropdown-panel" id="j-stock-panel"></div><input type="hidden" id="j-stock"></div></div><div class="form-group"><label>Action</label><div class="dropdown" id="j-act-d"><div class="dropdown-trigger" id="j-act-trigger" onclick="dt('j-act-d')">BUY</div><div class="dropdown-panel" id="j-act-panel"></div><input type="hidden" id="j-act" value="BUY"></div></div></div><div class="form-row"><div class="form-group"><label>Price €</label><input id="j-px" type="number" step=".01" min=".01" placeholder="0.00"></div><div class="form-group"><label>Qty</label><input id="j-qty" type="number" step=".001" min=".001" placeholder="0.000"></div><div class="form-group"><label>Notes</label><input id="j-nt" placeholder="Reason..."></div></div><div class="btn-group"><button class="btn btn-success" onclick="aj()">+ Add Entry</button></div><div id="jr" style="margin-top:.75rem"></div></div><div class="card" style="margin-top:1rem;overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th><th></th></tr></thead><tbody>${journalEntries.length ? journalEntries.map(entry => `<tr><td>${formatLocalDate(entry.created_at)}</td><td><strong>${entry.symbol}</strong></td><td><span class="badge ${entry.action === 'BUY' ? 'owned' : 'sold'}">${entry.action}</span></td><td>€${money(entry.price_eur)}</td><td>${entry.quantity}</td><td>${entry.notes || '—'}</td><td><button class="btn btn-sm btn-secondary" onclick="ej(${entry.id})">Edit</button> <button class="btn btn-sm btn-danger" onclick="dj(${entry.id})">✕</button></td></tr>`).join('') : '<tr><td colspan="7" style="color:#64748b">No entries</td></tr>'}</tbody></table></div>`;
 
     if (stocks.length > 0) {
         const stockOptions = stocks.map(stock => ({ id: stock.id, symbol: stock.symbol }));
