@@ -1,6 +1,6 @@
-# OpenStock - Stock Price Monitoring & Trading Journal
+# OpenStock - Stock Price Monitoring
 
-A production-ready MVP for monitoring stock prices, converting USD to EUR, and sending Telegram alerts when buy/sell thresholds are reached. Includes a trading journal for recording actual trades.
+A production-ready MVP for monitoring stock prices, converting USD to EUR, and sending Telegram alerts when buy/sell thresholds are reached.
 
 > **Note:** Stock prices are fetched from **Yahoo Finance** — no API key required. The Twelve Data API key in `.env` is optional and kept for legacy compatibility only.
 
@@ -16,8 +16,7 @@ A production-ready MVP for monitoring stock prices, converting USD to EUR, and s
 │                 Web Application                        │
 │                 Port 3000 (127.0.0.1)                  │
 │  ┌───────────┐  ┌───────────┐  ┌──────────────┐       │
-│  │ Dashboard │  │ Stocks    │  │ Trading      │       │
-│  │           │  │ Config    │  │ Journal      │       │
+│  │ Dashboard │  │ Stocks    │  │ Config       │       │
 │  └───────────┘  └───────────┘  └──────────────┘       │
 └─────────────────────────────────────────────────────────┘
                                  │
@@ -25,8 +24,8 @@ A production-ready MVP for monitoring stock prices, converting USD to EUR, and s
 ┌────────────────────────────────▼─────────────────────────┐
 │                 SQLite Database (openstock.db)           │
 │  ┌───────────┐  ┌───────────┐  ┌──────────────┐        │
-│  │ stocks    │  │ alerts_log│  │ journal_     │        │
-│  │           │  │           │  │ entries      │        │
+│  │ stocks    │  │ alerts_log│  │ exchange_    │        │
+│  │           │  │           │  │ rates        │        │
 │  └───────────┘  └───────────┘  └──────────────┘        │
 └─────────────────────────────────────────────────────────┘
                                  │
@@ -176,7 +175,6 @@ Access the web app:
 
 - **Dashboard:** View all stocks with current prices and trigger status
 - **Configure Stocks:** Add/remove stocks, set thresholds, toggle ownership
-- **Trading Journal:** Record buy/sell transactions with notes
 
 ## Updating the Application
 
@@ -265,10 +263,6 @@ tail /home/ubuntu/openstock/memory/web.log
 | `/api/stocks` | POST | Add new stock |
 | `/api/stocks/:id` | PUT | Update stock |
 | `/api/stocks/:id` | DELETE | Remove stock |
-| `/api/journal` | GET | List journal entries |
-| `/api/journal` | POST | Add journal entry |
-| `/api/journal/:id` | PUT | Edit entry |
-| `/api/journal/:id` | DELETE | Delete entry |
 | `/api/dashboard` | GET | Dashboard data |
 | `/health` | GET | Health check |
 

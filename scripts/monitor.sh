@@ -159,11 +159,15 @@ if [ -z "$STOCKS" ]; then
     exit 0
 fi
 
-# Get owner chat_id
-CHAT_ID=$(cat /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null | jq -r '.allowFrom[0]' 2>/dev/null)
+# Resolve the Telegram recipient. A missing notification target must not stop
+# price collection or trigger-state updates; the delivery failure is logged.
+CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "null" ]; then
-    errlog "No Telegram chat_id found"
-    exit 4
+    CHAT_ID=$(jq -r '.allowFrom[0] // empty' /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null || true)
+fi
+if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "null" ]; then
+    errlog "No Telegram recipient configured; monitoring will continue without trigger notifications"
+    CHAT_ID=""
 fi
 
 # Process each stock

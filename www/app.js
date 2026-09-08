@@ -2,14 +2,10 @@ const API = './api';
 
 let stocks = [];
 let sMap = {};
-let journalEntries = [];
 let stockRevision = 0;
-let journalRevision = 0;
 let pageLoadId = 0;
 let editingStockSymbol = null;
-let pendingJournalStockId = null;
 const stockMutationTokens = new Map();
-const journalMutationTokens = new Map();
 
 function replaceStocks(nextStocks) {
     stocks = [...nextStocks].sort((a, b) => a.symbol.localeCompare(b.symbol));
@@ -24,21 +20,6 @@ function removeStockFromState(id) {
     replaceStocks(stocks.filter(stock => stock.id !== id));
 }
 
-function replaceJournalEntries(entries) {
-    journalEntries = [...entries].sort((a, b) => {
-        const timeComparison = String(b.created_at).localeCompare(String(a.created_at));
-        return timeComparison || b.id - a.id;
-    });
-}
-
-function upsertJournalEntry(entry) {
-    replaceJournalEntries([...journalEntries.filter(item => item.id !== entry.id), entry]);
-}
-
-function removeJournalEntryFromState(id) {
-    replaceJournalEntries(journalEntries.filter(entry => entry.id !== id));
-}
-
 function beginStockMutation(id) {
     const token = (stockMutationTokens.get(id) || 0) + 1;
     stockMutationTokens.set(id, token);
@@ -50,27 +31,16 @@ function isCurrentStockMutation(id, token) {
     return stockMutationTokens.get(id) === token;
 }
 
-function beginJournalMutation(id) {
-    const token = (journalMutationTokens.get(id) || 0) + 1;
-    journalMutationTokens.set(id, token);
-    journalRevision++;
-    return token;
-}
-
-function isCurrentJournalMutation(id, token) {
-    return journalMutationTokens.get(id) === token;
-}
-
 function pageFromHash(hash = window.location.hash) {
     const page = hash.replace('#/', '') || 'dashboard';
-    return ['dashboard', 'config', 'journal'].includes(page) ? page : 'dashboard';
+    return ['dashboard', 'config'].includes(page) ? page : 'dashboard';
 }
 
 function showPage(page) {
     document.querySelectorAll('nav a').forEach(link => {
         link.classList.toggle('active', link.dataset.page === page);
     });
-    ['dashboard', 'config', 'journal'].forEach(name => {
+    ['dashboard', 'config'].forEach(name => {
         document.getElementById(`page-${name}`).classList.toggle('hidden', name !== page);
     });
 }
@@ -112,40 +82,28 @@ async function af(path, options = {}) {
 async function loadPage(page) {
     const loadId = ++pageLoadId;
     const startingStockRevision = stockRevision;
-    const startingJournalRevision = journalRevision;
     showPage(page);
     document.getElementById(`page-${page}`).innerHTML = '<div class="loading">Loading...</div>';
 
     if (page === 'dashboard') {
-        const [dashboard, entries] = await Promise.all([af('/dashboard'), af('/journal')]);
+        const dashboard = await af('/dashboard');
         if (loadId !== pageLoadId || pageFromHash() !== page) return;
         if (dashboard && stockRevision === startingStockRevision) replaceStocks(dashboard.stocks);
-        if (entries && journalRevision === startingJournalRevision) replaceJournalEntries(entries);
         renderDashboard();
         return;
     }
 
-    if (page === 'config') {
-        const freshStocks = await af('/stocks');
-        if (loadId !== pageLoadId || pageFromHash() !== page) return;
-        if (freshStocks && stockRevision === startingStockRevision) replaceStocks(freshStocks);
-        renderConfig();
-        return;
-    }
-
-    const [freshStocks, entries] = await Promise.all([af('/stocks'), af('/journal')]);
+    const freshStocks = await af('/stocks');
     if (loadId !== pageLoadId || pageFromHash() !== page) return;
     if (freshStocks && stockRevision === startingStockRevision) replaceStocks(freshStocks);
-    if (entries && journalRevision === startingJournalRevision) replaceJournalEntries(entries);
-    renderJournal();
+    renderConfig();
 }
 
 function renderCurrentPage() {
     const page = pageFromHash();
     showPage(page);
     if (page === 'dashboard') renderDashboard();
-    else if (page === 'config') renderConfig();
-    else renderJournal();
+    else renderConfig();
 }
 
 function showA(message, type = 'i', containerId = 'ac') {
@@ -258,7 +216,7 @@ function renderDashboard() {
         return !latest || stock.last_price_update > latest ? stock.last_price_update : latest;
     }, null) || '—';
 
-    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned · ${journalEntries.length} journal entries</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Journal</div><div class="summary-value">${journalEntries.length}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)}</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="ajm('${stock.symbol}')">+ Journal</button><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div><div style="margin-top:2rem"><div class="section-header"><div class="section-title">Recent</div><button class="btn btn-sm btn-primary" onclick="nav('#/journal')">View All</button></div><div class="card" style="overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th></tr></thead><tbody>${journalEntries.length ? journalEntries.slice(0, 10).map(entry => `<tr><td>${formatLocalDate(entry.created_at)}</td><td>${entry.symbol}</td><td><span class="badge ${entry.action === 'BUY' ? 'owned' : 'sold'}">${entry.action}</span></td><td>€${money(entry.price_eur)}</td><td>${entry.quantity}</td><td>${entry.notes || '—'}</td></tr>`).join('') : '<tr><td colspan="6" style="color:#64748b">No entries</td></tr>'}</tbody></table></div></div>`;
+    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggers</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)}</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div>`;
 }
 
 async function refreshPrices() {
@@ -427,101 +385,6 @@ async function rs(symbol) {
         removeStockFromState(stock.id);
         renderCurrentPage();
         showA(`Removed ${symbol}`, 'success');
-    }
-}
-
-function ajm(symbol) {
-    const stock = sMap[symbol];
-    if (!stock) return;
-    pendingJournalStockId = stock.id;
-    if (pageFromHash() === 'journal') renderJournal();
-    else nav('#/journal');
-}
-
-function renderJournal() {
-    const container = document.getElementById('page-journal');
-    container.innerHTML = `<header><h1>📓 Trading Journal</h1><p class="subtitle">${journalEntries.length} entries</p></header><div id="ac"></div><div class="card"><div class="section-header"><div class="section-title">New Entry</div></div><div class="form-row"><div class="form-group"><label>Stock</label><div class="dropdown" id="j-stock-d"><div class="dropdown-trigger" id="j-stock-trigger" onclick="dt('j-stock-d')">Select...</div><div class="dropdown-panel" id="j-stock-panel"></div><input type="hidden" id="j-stock"></div></div><div class="form-group"><label>Action</label><div class="dropdown" id="j-act-d"><div class="dropdown-trigger" id="j-act-trigger" onclick="dt('j-act-d')">BUY</div><div class="dropdown-panel" id="j-act-panel"></div><input type="hidden" id="j-act" value="BUY"></div></div></div><div class="form-row"><div class="form-group"><label>Price €</label><input id="j-px" type="number" step=".01" min=".01" placeholder="0.00"></div><div class="form-group"><label>Qty</label><input id="j-qty" type="number" step=".001" min=".001" placeholder="0.000"></div><div class="form-group"><label>Notes</label><input id="j-nt" placeholder="Reason..."></div></div><div class="btn-group"><button class="btn btn-success" onclick="aj()">+ Add Entry</button></div><div id="jr" style="margin-top:.75rem"></div></div><div class="card" style="margin-top:1rem;overflow-x:auto"><table class="table"><thead><tr><th>Time</th><th>Stock</th><th>Action</th><th>€</th><th>Qty</th><th>Notes</th><th></th></tr></thead><tbody>${journalEntries.length ? journalEntries.map(entry => `<tr><td>${formatLocalDate(entry.created_at)}</td><td><strong>${entry.symbol}</strong></td><td><span class="badge ${entry.action === 'BUY' ? 'owned' : 'sold'}">${entry.action}</span></td><td>€${money(entry.price_eur)}</td><td>${entry.quantity}</td><td>${entry.notes || '—'}</td><td><button class="btn btn-sm btn-secondary" onclick="ej(${entry.id})">Edit</button> <button class="btn btn-sm btn-danger" onclick="dj(${entry.id})">✕</button></td></tr>`).join('') : '<tr><td colspan="7" style="color:#64748b">No entries</td></tr>'}</tbody></table></div>`;
-
-    if (stocks.length > 0) {
-        const stockOptions = stocks.map(stock => ({ id: stock.id, symbol: stock.symbol }));
-        const selectedIndex = Math.max(0, stockOptions.findIndex(stock => stock.id === pendingJournalStockId));
-        di('j-stock', stockOptions, selectedIndex, stock => stock.symbol, stock => stock.id);
-        di('j-act', ['BUY', 'SELL'], 0, action => action, action => action);
-    }
-    pendingJournalStockId = null;
-}
-
-async function aj() {
-    const stockId = document.getElementById('j-stock').value;
-    const action = document.getElementById('j-act').value || 'BUY';
-    const price = parseFloat(document.getElementById('j-px').value);
-    const quantity = parseFloat(document.getElementById('j-qty').value);
-    const notes = document.getElementById('j-nt').value.trim();
-    if (!stockId || isNaN(price) || price <= 0 || isNaN(quantity) || quantity <= 0) {
-        showA('Fill all fields', 'error');
-        return;
-    }
-    journalRevision++;
-    const result = await af('/journal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock_id: stockId, action, price_eur: price, quantity, notes })
-    });
-    if (result?.entry) {
-        upsertJournalEntry(result.entry);
-        renderJournal();
-        showA('Entry added', 'success');
-    }
-}
-
-function ej(id) {
-    const entry = journalEntries.find(item => item.id === id);
-    if (!entry) return;
-    document.getElementById('journal-editor')?.remove();
-    const container = document.getElementById('page-journal');
-    const editor = document.createElement('div');
-    editor.id = 'journal-editor';
-    editor.className = 'card';
-    editor.style.marginTop = '1rem';
-    editor.innerHTML = `<h3>Edit Entry</h3><div class="form-row"><div class="form-group"><label>Action</label><div class="dropdown" id="ej-d"><div class="dropdown-trigger" id="ej-trigger" onclick="dt('ej-d')">${entry.action}</div><div class="dropdown-panel" id="ej-panel"></div><input type="hidden" id="ej" value="${entry.action}"></div></div><div class="form-group"><label>Price €</label><input id="ej-px" type="number" step=".01" value="${entry.price_eur}"></div><div class="form-group"><label>Qty</label><input id="ej-qty" type="number" step=".001" value="${entry.quantity}"></div><div class="form-group"><label>Notes</label><input id="ej-nt" value="${(entry.notes || '').replace(/"/g, '&quot;')}"></div></div><div class="btn-group"><button class="btn btn-primary" onclick="eju(${id})">Save</button><button class="btn btn-secondary" onclick="document.getElementById('journal-editor').remove()">Cancel</button></div>`;
-    container.appendChild(editor);
-    di('ej', ['BUY', 'SELL'], entry.action === 'BUY' ? 0 : 1, action => action, action => action);
-}
-
-async function eju(id) {
-    const price = parseFloat(document.getElementById('ej-px').value);
-    const quantity = parseFloat(document.getElementById('ej-qty').value);
-    const notes = document.getElementById('ej-nt').value.trim();
-    if (isNaN(price) || price <= 0 || isNaN(quantity) || quantity <= 0) {
-        showA('Invalid values', 'error');
-        return;
-    }
-    const token = beginJournalMutation(id);
-    const result = await af(`/journal/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            action: document.getElementById('ej').value,
-            price_eur: price,
-            quantity,
-            notes
-        })
-    });
-    if (result?.entry && isCurrentJournalMutation(id, token)) {
-        upsertJournalEntry(result.entry);
-        renderJournal();
-        showA('Updated', 'success');
-    }
-}
-
-async function dj(id) {
-    if (!confirm('Delete entry?')) return;
-    const token = beginJournalMutation(id);
-    const result = await af(`/journal/${id}`, { method: 'DELETE' });
-    if (result && isCurrentJournalMutation(id, token)) {
-        removeJournalEntryFromState(id);
-        renderJournal();
-        showA('Entry deleted', 'success');
     }
 }
 

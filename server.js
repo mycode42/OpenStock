@@ -21,15 +21,6 @@ function serializeStock(stock) {
     };
 }
 
-function serializeJournalEntry(entry) {
-    if (!entry) return entry;
-    return {
-        ...entry,
-        created_at: toISODateTime(entry.created_at),
-        updated_at: toISODateTime(entry.updated_at)
-    };
-}
-
 // Ensure database exists before starting server
 const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
 initDatabase();
@@ -216,123 +207,12 @@ app.delete('/api/stocks/:id', (req, res) => {
     }
 });
 
-// ===== API: Journal =====
-app.get('/api/journal', (req, res) => {
-    try {
-        const entries = db.getAllJournalEntries();
-        res.json(entries.map(serializeJournalEntry));
-    } catch (e) {
-        console.error('Error fetching journal:', e.message);
-        res.status(500).json({ error: 'Failed to fetch journal entries' });
-    }
-});
-
-app.post('/api/journal', (req, res) => {
-    try {
-        const { stock_id, action, price_eur, quantity, notes = '' } = req.body;
-
-        if (!stock_id) {
-            return res.status(400).json({ error: 'Stock ID is required' });
-        }
-        if (!action || (action !== 'BUY' && action !== 'SELL')) {
-            return res.status(400).json({ error: 'Action must be BUY or SELL' });
-        }
-        if (!price_eur) {
-            return res.status(400).json({ error: 'Price is required' });
-        }
-        if (!quantity) {
-            return res.status(400).json({ error: 'Quantity is required' });
-        }
-
-        const priceEur = parseFloat(price_eur);
-        const qty = parseFloat(quantity);
-
-        if (isNaN(priceEur) || isNaN(qty) || priceEur <= 0 || qty <= 0) {
-            return res.status(400).json({ error: 'Invalid price or quantity' });
-        }
-
-        // Verify stock exists
-        const stock = db.getStockById(stock_id);
-        if (!stock) {
-            return res.status(404).json({ error: 'Stock not found' });
-        }
-
-        const result = db.addJournalEntry(stock_id, action.toUpperCase(), priceEur, qty, notes);
-        const entry = db.getJournalEntryById(result.lastInsertRowid);
-        res.status(201).json({ message: 'Journal entry added successfully', entry: serializeJournalEntry(entry) });
-    } catch (e) {
-        console.error('Error adding journal entry:', e.message);
-        res.status(500).json({ error: 'Failed to add journal entry' });
-    }
-});
-
-app.put('/api/journal/:id', (req, res) => {
-    try {
-        const { action, price_eur, quantity, notes = '' } = req.body;
-
-        if (!action || (action !== 'BUY' && action !== 'SELL')) {
-            return res.status(400).json({ error: 'Action must be BUY or SELL' });
-        }
-
-        const priceEur = parseFloat(price_eur);
-        const qty = parseFloat(quantity);
-
-        if (isNaN(priceEur) || isNaN(qty) || priceEur <= 0 || qty <= 0) {
-            return res.status(400).json({ error: 'Invalid price or quantity' });
-        }
-
-        const result = db.updateJournalEntry(req.params.id, action.toUpperCase(), priceEur, qty, notes);
-        if (result.changes === 0) {
-            return res.status(404).json({ error: 'Journal entry not found' });
-        }
-        const entry = db.getJournalEntryById(req.params.id);
-        res.json({ message: 'Journal entry updated successfully', entry: serializeJournalEntry(entry) });
-    } catch (e) {
-        console.error('Error updating journal entry:', e.message);
-        res.status(500).json({ error: 'Failed to update journal entry' });
-    }
-});
-
-app.delete('/api/journal/:id', (req, res) => {
-    try {
-        const result = db.deleteJournalEntry(req.params.id);
-        if (result.changes === 0) {
-            return res.status(404).json({ error: 'Journal entry not found' });
-        }
-        res.json({ message: 'Journal entry deleted successfully', deleted_id: Number(req.params.id) });
-    } catch (e) {
-        console.error('Error deleting journal entry:', e.message);
-        res.status(500).json({ error: 'Failed to delete journal entry' });
-    }
-});
-
 // ===== API: Dashboard data =====
 app.get('/api/dashboard', (req, res) => {
     try {
         const stocks = db.getAllStocks();
-        const entries = db.getAllJournalEntries();
-
-        // Calculate P/L summary
-        let realizedPl = 0;
-        const buyPositions = {};
-        
-        for (const entry of entries) {
-            if (entry.action === 'BUY') {
-                if (!buyPositions[entry.stock_id]) buyPositions[entry.stock_id] = [];
-                buyPositions[entry.stock_id].push(entry);
-            } else if (entry.action === 'SELL') {
-                const buys = buyPositions[entry.stock_id] || [];
-                if (buys.length > 0) {
-                    const buy = buys.shift(); // FIFO
-                    realizedPl += (entry.price_eur - buy.price_eur) * entry.quantity;
-                }
-            }
-        }
-
         res.json({
-            stocks: stocks.map(serializeStock),
-            journal_count: entries.length,
-            realized_pl: realizedPl.toFixed(2)
+            stocks: stocks.map(serializeStock)
         });
     } catch (e) {
         console.error('Error fetching dashboard:', e.message);
@@ -442,10 +322,6 @@ app.get('/', (req, res) => {
 
 app.get('/config', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'index.html'));
-});
-
-app.get('/journal', (req, res) => {
-    res.sendFile(path.join(__dirname, 'www', 'journal', 'index.html'));
 });
 
 app.listen(PORT, '127.0.0.1', () => {

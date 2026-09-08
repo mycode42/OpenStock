@@ -1,5 +1,4 @@
 const Database = require('better-sqlite3');
-const path = require('path');
 
 class OpenStockDB {
     constructor(dbPath) {
@@ -122,58 +121,6 @@ class OpenStockDB {
             INSERT INTO exchange_rates (rate) VALUES (?)
         `);
         return stmt.run(rate);
-    }
-
-    // ===== JOURNAL =====
-    getAllJournalEntries() {
-        return this.db.prepare(`
-            SELECT j.*, s.symbol
-            FROM journal_entries j
-            JOIN stocks s ON j.stock_id = s.id
-            ORDER BY j.created_at DESC
-        `).all();
-    }
-
-    getJournalEntryById(id) {
-        return this.db.prepare(`
-            SELECT j.*, s.symbol
-            FROM journal_entries j
-            JOIN stocks s ON j.stock_id = s.id
-            WHERE j.id = ?
-        `).get(id);
-    }
-
-    getJournalEntriesByStock(stockId) {
-        return this.db.prepare(`
-            SELECT j.*, s.symbol
-            FROM journal_entries j
-            JOIN stocks s ON j.stock_id = s.id
-            WHERE j.stock_id = ?
-            ORDER BY j.created_at DESC
-        `).all(stockId);
-    }
-
-    addJournalEntry(stockId, action, priceEur, quantity, notes) {
-        const stmt = this.db.prepare(`
-            INSERT INTO journal_entries (stock_id, action, price_eur, quantity, notes)
-            VALUES (?, ?, ?, ?, ?)
-        `);
-        return stmt.run(stockId, action, priceEur, quantity, notes);
-    }
-
-    updateJournalEntry(id, action, priceEur, quantity, notes) {
-        const stmt = this.db.prepare(`
-            UPDATE journal_entries
-            SET action = ?, price_eur = ?, quantity = ?, notes = ?,
-                updated_at = datetime('now')
-            WHERE id = ?
-        `);
-        return stmt.run(action, priceEur, quantity, notes, id);
-    }
-
-    deleteJournalEntry(id) {
-        const stmt = this.db.prepare('DELETE FROM journal_entries WHERE id = ?');
-        return stmt.run(id);
     }
 }
 
