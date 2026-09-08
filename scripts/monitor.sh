@@ -99,7 +99,9 @@ get_stock_price() {
     local response=$(curl -sf --max-time 10 \
         -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" \
         -H "Accept: application/json" \
-        "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?range=1d&interval=1m" 2>/dev/null)
+        -H "Cache-Control: no-cache" \
+        -H "Pragma: no-cache" \
+        "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?range=1d&interval=1m&includePrePost=true&corsDomain=finance.yahoo.com&_=$(date +%s)" 2>/dev/null)
     
     if [ $? -ne 0 ] || [ -z "$response" ]; then
         errlog "Failed to fetch price for $symbol"
@@ -116,12 +118,28 @@ try:
         print('NO_DATA')
         sys.exit(1)
     
+    chart = result[0]
     meta = result[0].get('meta', {})
-    price = meta.get('regularMarketPrice')
+    quote = chart.get('indicators', {}).get('quote', [{}])[0]
+    closes = quote.get('close', []) or []
+    price = None
+    for value in reversed(closes):
+        if value is not None:
+            price = value
+            break
+    source = 'chart_close'
+    if price is None:
+        price = meta.get('regularMarketPrice')
+        source = 'regularMarketPrice'
     name = meta.get('shortName') or meta.get('longName') or ''
+    timestamp = chart.get('timestamp', [])
+    last_time = timestamp[-1] if timestamp else None
     
     if price:
         print(f'PRICE={price}')
+        print(f'SOURCE={source}')
+        if last_time is not None:
+            print(f'QUOTE_TIME={last_time}')
         print(f'NAME={name}')
     else:
         print('NO_DATA')
@@ -182,6 +200,8 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
     fi
     
     USD_PRICE=$(echo "$PRICE_DATA" | grep "^PRICE=" | cut -d= -f2)
+    PRICE_SOURCE=$(echo "$PRICE_DATA" | grep "^SOURCE=" | cut -d= -f2)
+    QUOTE_TIME=$(echo "$PRICE_DATA" | grep "^QUOTE_TIME=" | cut -d= -f2)
     STOCK_NAME=$(echo "$PRICE_DATA" | grep "^NAME=" | cut -d= -f2)
     
     if [ -z "$USD_PRICE" ]; then
@@ -191,7 +211,12 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
     
     # Calculate EUR price
     EUR_PRICE=$(echo "$USD_PRICE $EXCHANGE_RATE" | awk '{printf "%.4f", $1 * $2}')
-    log "$symbol: \$${USD_PRICE} → €${EUR_PRICE} (buy=€${buy_threshold}, sell=€${sell_threshold}, state=${current_trigger})"
+    if [ -n "$QUOTE_TIME" ]; then
+        QUOTE_TIME_HUMAN=$(date -d "@$QUOTE_TIME" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || echo "$QUOTE_TIME")
+    else
+        QUOTE_TIME_HUMAN="unknown"
+    fi
+    log "$symbol [$PRICE_SOURCE @ $QUOTE_TIME_HUMAN]: \$${USD_PRICE} → €${EUR_PRICE} (buy=€${buy_threshold}, sell=€${sell_threshold}, state=${current_trigger})"
     
     # Update database
     sqlite3 "$DB_PATH" "UPDATE stocks SET current_price_usd=$USD_PRICE, current_price_eur=$EUR_PRICE, last_price_update=datetime('now'), last_exchange_rate=$EXCHANGE_RATE, updated_at=datetime('now') WHERE id=$id" 2>/dev/null
