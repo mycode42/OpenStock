@@ -123,23 +123,34 @@ try:
     quote = chart.get('indicators', {}).get('quote', [{}])[0]
     closes = quote.get('close', []) or []
     price = None
-    for value in reversed(closes):
+    quote_time = None
+    for index in range(len(closes) - 1, -1, -1):
+        value = closes[index]
         if value is not None:
             price = value
+            timestamps = chart.get('timestamp', []) or []
+            if index < len(timestamps):
+                quote_time = timestamps[index]
             break
-    source = 'chart_close'
+    periods = meta.get('currentTradingPeriod', {}) or {}
+    session = 'extended'
+    if quote_time is not None:
+        for candidate in ('pre', 'regular', 'post'):
+            period = periods.get(candidate, {}) or {}
+            if period.get('start', float('inf')) <= quote_time <= period.get('end', float('-inf')):
+                session = candidate
+                break
+    source = f'yahoo_{session}_close'
     if price is None:
         price = meta.get('regularMarketPrice')
-        source = 'regularMarketPrice'
+        source = 'yahoo_regular_market_price'
     name = meta.get('shortName') or meta.get('longName') or ''
-    timestamp = chart.get('timestamp', [])
-    last_time = timestamp[-1] if timestamp else None
-    
+
     if price:
         print(f'PRICE={price}')
         print(f'SOURCE={source}')
-        if last_time is not None:
-            print(f'QUOTE_TIME={last_time}')
+        if quote_time is not None:
+            print(f'QUOTE_TIME={quote_time}')
         print(f'NAME={name}')
     else:
         print('NO_DATA')
@@ -233,7 +244,7 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
         SNAPSHOT_QUOTE_SQL="'$SNAPSHOT_QUOTE_TIME'"
     fi
     case "$PRICE_SOURCE" in
-        chart_close|regularMarketPrice) ;;
+        yahoo_pre_close|yahoo_regular_close|yahoo_post_close|yahoo_extended_close|yahoo_regular_market_price) ;;
         *) PRICE_SOURCE="unknown" ;;
     esac
     sqlite3 "$DB_PATH" "INSERT INTO price_history (stock_id, price_usd, price_eur, exchange_rate, source, quote_time, recorded_at) VALUES ($id, $USD_PRICE, $EUR_PRICE, $EXCHANGE_RATE, '$PRICE_SOURCE', $SNAPSHOT_QUOTE_SQL, datetime('now')) ON CONFLICT(stock_id, recorded_at) DO UPDATE SET price_usd=excluded.price_usd, price_eur=excluded.price_eur, exchange_rate=excluded.exchange_rate, source=excluded.source, quote_time=excluded.quote_time" 2>/dev/null

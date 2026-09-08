@@ -21,6 +21,37 @@ function serializeStock(stock) {
     };
 }
 
+function latestYahooChartQuote(chart) {
+    const closes = chart?.indicators?.quote?.[0]?.close || [];
+    const timestamps = chart?.timestamp || [];
+    const meta = chart?.meta || {};
+    let latestIndex;
+    for (let index = closes.length - 1; index >= 0; index--) {
+        if (closes[index] !== null && Number.isFinite(Number(closes[index]))) {
+            latestIndex = index;
+            break;
+        }
+    }
+
+    if (latestIndex === undefined) {
+        const fallback = Number(meta.regularMarketPrice);
+        return Number.isFinite(fallback) && fallback > 0
+            ? { priceUsd: fallback, quoteTime: null, source: 'yahoo_regular_market_price' }
+            : null;
+    }
+
+    const quoteUnixTime = Number(timestamps[latestIndex]);
+    const periods = meta.currentTradingPeriod || {};
+    const session = ['pre', 'regular', 'post'].find(name => {
+        const period = periods[name];
+        return period && Number.isFinite(quoteUnixTime) && quoteUnixTime >= period.start && quoteUnixTime <= period.end;
+    }) || 'extended';
+    const quoteTime = Number.isFinite(quoteUnixTime)
+        ? new Date(quoteUnixTime * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '')
+        : null;
+    return { priceUsd: Number(closes[latestIndex]), quoteTime, source: `yahoo_${session}_close` };
+}
+
 // Ensure database exists before starting server
 const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
 initDatabase();
@@ -276,11 +307,14 @@ app.post('/api/refresh-prices', async (req, res) => {
                 // Fetch price from Yahoo Finance (free, no API key needed)
                 const symbol = stock.symbol;
                 const priceResponse = await fetch(
-                    `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1d&interval=1m`,
+                    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1m&includePrePost=true&corsDomain=finance.yahoo.com&_=${Date.now()}`,
                     {
+                        cache: 'no-store',
                         headers: {
                             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                            'Accept': 'application/json'
+                            'Accept': 'application/json',
+                            'Cache-Control': 'no-cache',
+                            Pragma: 'no-cache'
                         }
                     }
                 );
@@ -299,12 +333,8 @@ app.post('/api/refresh-prices', async (req, res) => {
                 }
                 
                 const meta = result.meta;
-                const closes = result.indicators?.quote?.[0]?.close || [];
-                const latestIndex = closes
-                    .map((price, index) => price !== null && Number.isFinite(Number(price)) ? index : -1)
-                    .filter(index => index >= 0)
-                    .pop();
-                const priceUsd = latestIndex === undefined ? meta.regularMarketPrice : Number(closes[latestIndex]);
+                const quote = latestYahooChartQuote(result);
+                const priceUsd = quote?.priceUsd;
                 const shortName = meta.shortName || meta.longName || '';
                 
                 if (!priceUsd) {
@@ -317,9 +347,7 @@ app.post('/api/refresh-prices', async (req, res) => {
                 
                 // Update stock in database using class method
                 db.updateStockPrice(stock.id, priceUsd, priceEur, exchangeRate);
-                const quoteUnixTime = latestIndex === undefined ? null : result.timestamp?.[latestIndex];
-                const quoteTime = Number.isFinite(quoteUnixTime) ? new Date(quoteUnixTime * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '') : null;
-                db.addPriceSnapshot(stock.id, priceUsd, priceEur, exchangeRate, 'manual_refresh', quoteTime);
+                db.addPriceSnapshot(stock.id, priceUsd, priceEur, exchangeRate, `manual_refresh_${quote.source}`, quote.quoteTime);
                 updatedCount++;
                 
                 // Update name if it was empty and we got a name
