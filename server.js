@@ -87,14 +87,17 @@ app.get('/api/stocks', (req, res) => {
 app.get('/api/stocks/:id/history', (req, res) => {
     const windows = {
         '1d': { since: '-1 day', bucketSeconds: 300 },
-        '7d': { since: '-7 days', bucketSeconds: 3600 },
+        '1mo': { since: '-1 month', bucketSeconds: 14400 },
+        '1y': { since: '-1 year', bucketSeconds: 86400 },
+        '5y': { since: '-5 years', bucketSeconds: 604800 },
+        // Keep the former endpoint working for bookmarked API consumers.
         '30d': { since: '-30 days', bucketSeconds: 14400 }
     };
     const range = req.query.range || '30d';
     const window = windows[range];
 
     if (!window) {
-        return res.status(400).json({ error: 'Range must be one of: 1d, 7d, 30d' });
+        return res.status(400).json({ error: 'Range must be one of: 1d, 1mo, 1y, 5y' });
     }
 
     try {

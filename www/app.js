@@ -210,7 +210,15 @@ function formatChartDate(value) {
     });
 }
 
-function renderHistoryChart(points) {
+function chartRangeLabel(range) {
+    return { '1d': '1-day', '1mo': '1-month', '1y': '1-year', '5y': '5-year' }[range] || range;
+}
+
+function chartRangeControls(activeRange) {
+    return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
+}
+
+function renderHistoryChart(points, range) {
     const clean = points.filter(point => Number.isFinite(Number(point.price_usd)) && parseOpenStockDate(point.recorded_at));
     if (clean.length < 2) return '<div class="history-empty">Collecting local price history…</div>';
 
@@ -222,46 +230,57 @@ function renderHistoryChart(points) {
     const high = max + padding;
     const width = 264;
     const height = 82;
-    const range = high - low || 1;
+    const verticalRange = high - low || 1;
     const polyline = clean.map((point, index) => {
         const x = (index / (clean.length - 1)) * width;
-        const y = height - ((Number(point.price_usd) - low) / range) * height;
+        const y = height - ((Number(point.price_usd) - low) / verticalRange) * height;
         return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(' ');
     const first = clean[0];
     const last = clean[clean.length - 1];
     const change = ((Number(last.price_usd) / Number(first.price_usd)) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
-    const lastY = height - ((Number(last.price_usd) - low) / range) * height;
+    const lastY = height - ((Number(last.price_usd) - low) / verticalRange) * height;
 
-    return `<div class="history-meta"><span>$${money(min)} – $${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div><svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="30 day USD price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}"><path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/><polyline class="history-line ${changeClass}" points="${polyline}"/><circle class="history-dot ${changeClass}" cx="${width}" cy="${lastY.toFixed(1)}" r="3"/></svg><div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
+    return `<div class="history-meta"><span>$${money(min)} – $${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div><svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${chartRangeLabel(range)} USD price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}"><path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/><polyline class="history-line ${changeClass}" points="${polyline}"/><circle class="history-dot ${changeClass}" cx="${width}" cy="${lastY.toFixed(1)}" r="3"/></svg><div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
 }
 
-async function loadCardHistory(card) {
+function renderHistoryPanel(panel, history, range) {
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD <span>${history.points.length} local points</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range)}`;
+}
+
+async function loadCardHistory(card, range = '1mo') {
     const stockId = Number(card.dataset.stockId);
     const panel = card.querySelector('.history-popover');
-    if (!Number.isInteger(stockId) || !panel || panel.dataset.loaded === 'true') return;
-    panel.dataset.loaded = 'true';
-    panel.innerHTML = '<div class="history-loading">Loading 30-day local history…</div>';
-    const key = `${stockId}:30d`;
+    if (!Number.isInteger(stockId) || !panel) return;
+    const key = `${stockId}:${range}`;
+    panel.dataset.requestedRange = range;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD</div>${chartRangeControls(range)}</div><div class="history-loading">Loading local history…</div>`;
     let history = historyCache.get(key);
     if (!history) {
-        history = await af(`/stocks/${stockId}/history?range=30d`);
+        history = await af(`/stocks/${stockId}/history?range=${range}`);
         if (history) historyCache.set(key, history);
     }
+    if (panel.dataset.requestedRange !== range) return;
     if (!history) {
-        panel.dataset.loaded = '';
         panel.innerHTML = '<div class="history-empty">History is unavailable.</div>';
         return;
     }
-    panel.innerHTML = `<div class="history-title">30-day price · USD <span>${history.points.length} local points</span></div>${renderHistoryChart(history.points)}`;
+    renderHistoryPanel(panel, history, range);
 }
 
 function attachChartHovers(container) {
     if (!window.matchMedia('(hover: hover) and (pointer: fine)').matches) return;
     container.querySelectorAll('.stock-card[data-stock-id]').forEach(card => {
-        card.addEventListener('mouseenter', () => loadCardHistory(card), { once: true });
-        card.addEventListener('focusin', () => loadCardHistory(card), { once: true });
+        card.addEventListener('mouseenter', () => loadCardHistory(card, '1mo'), { once: true });
+        card.addEventListener('focusin', () => loadCardHistory(card, '1mo'), { once: true });
+        card.querySelector('.history-popover').addEventListener('click', event => {
+            const button = event.target.closest('[data-history-range]');
+            if (!button) return;
+            event.preventDefault();
+            event.stopPropagation();
+            loadCardHistory(card, button.dataset.historyRange);
+        });
     });
 }
 
@@ -280,7 +299,7 @@ function renderDashboard() {
         return !latest || stock.last_price_update > latest ? stock.last_price_update : latest;
     }, null) || '—';
 
-    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggers</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Hover a stock on desktop for its 30-day USD chart.</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}" data-stock-id="${stock.id}" tabindex="0"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div><div class="history-popover" role="status" aria-live="polite"></div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div>`;
+    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggers</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Hover a stock on desktop to view its local USD chart.</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}" data-stock-id="${stock.id}" tabindex="0"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div><div class="history-popover" role="status" aria-live="polite"></div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div>`;
     attachChartHovers(container);
 }
 

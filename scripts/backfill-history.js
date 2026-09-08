@@ -7,6 +7,10 @@ const OpenStockDB = require('../database/db');
 const { initDatabase } = require('../database/init');
 
 const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
+const historyRange = process.env.HISTORY_RANGE || '1mo';
+if (!['1mo', '1y', '5y'].includes(historyRange)) {
+    throw new Error('HISTORY_RANGE must be one of: 1mo, 1y, 5y');
+}
 initDatabase();
 const db = new OpenStockDB(dbPath);
 
@@ -15,7 +19,7 @@ function sqliteTimestamp(unixSeconds) {
 }
 
 async function backfill(stock) {
-    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(stock.symbol)}?range=1mo&interval=1d&events=history`, {
+    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(stock.symbol)}?range=${historyRange}&interval=1d&events=history`, {
         headers: { 'User-Agent': 'Mozilla/5.0 OpenStock research history', Accept: 'application/json', 'Cache-Control': 'no-cache' }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -44,6 +48,6 @@ async function backfill(stock) {
             console.error(`${stock.symbol}: ${error.message}`);
         }
     }
-    console.log(`Backfill complete: ${total} points`);
+    console.log(`${historyRange} backfill complete: ${total} points`);
     db.db.close();
 })().catch(error => { console.error(error.message); db.db.close(); process.exit(1); });

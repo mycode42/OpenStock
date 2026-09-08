@@ -1,9 +1,9 @@
-const CACHE_NAME = 'openstock-v7';
+const CACHE_NAME = 'openstock-v8';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=5',
-  './app.js?v=5',
+  './styles.css?v=6',
+  './app.js?v=6',
   './site.webmanifest',
   './favicon-16.png',
   './favicon-32.png',
