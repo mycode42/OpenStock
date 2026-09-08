@@ -220,6 +220,23 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
     
     # Update database
     sqlite3 "$DB_PATH" "UPDATE stocks SET current_price_usd=$USD_PRICE, current_price_eur=$EUR_PRICE, last_price_update=datetime('now'), last_exchange_rate=$EXCHANGE_RATE, updated_at=datetime('now') WHERE id=$id" 2>/dev/null
+
+    # Keep an immutable local history. A unique (stock_id, recorded_at) pair
+    # makes simultaneous timer/manual refreshes idempotent at second precision.
+    if [[ "$QUOTE_TIME" =~ ^[0-9]+$ ]]; then
+        SNAPSHOT_QUOTE_TIME=$(date -u -d "@$QUOTE_TIME" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)
+    else
+        SNAPSHOT_QUOTE_TIME=""
+    fi
+    SNAPSHOT_QUOTE_SQL="NULL"
+    if [ -n "$SNAPSHOT_QUOTE_TIME" ]; then
+        SNAPSHOT_QUOTE_SQL="'$SNAPSHOT_QUOTE_TIME'"
+    fi
+    case "$PRICE_SOURCE" in
+        chart_close|regularMarketPrice) ;;
+        *) PRICE_SOURCE="unknown" ;;
+    esac
+    sqlite3 "$DB_PATH" "INSERT INTO price_history (stock_id, price_usd, price_eur, exchange_rate, source, quote_time, recorded_at) VALUES ($id, $USD_PRICE, $EUR_PRICE, $EXCHANGE_RATE, '$PRICE_SOURCE', $SNAPSHOT_QUOTE_SQL, datetime('now')) ON CONFLICT(stock_id, recorded_at) DO UPDATE SET price_usd=excluded.price_usd, price_eur=excluded.price_eur, exchange_rate=excluded.exchange_rate, source=excluded.source, quote_time=excluded.quote_time" 2>/dev/null
     
     # Update name if empty
     if [ -n "$STOCK_NAME" ] && [ "$STOCK_NAME" != "null" ]; then

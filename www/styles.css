@@ -8,7 +8,7 @@ h1{font-size:1.75rem;color:#ffffff;margin-bottom:.5rem}
 .subtitle{color:#94a3b8;font-size:.95rem}
 .card{background:#0a0a0a;border-radius:.75rem;padding:1.25rem;margin-bottom:1rem;border:1px solid #111111}
 .stock-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem}
-.stock-card{background:#111111;border-radius:.75rem;padding:1rem;border-left:4px solid rgba(200,255,0,.88)}
+.stock-card{background:#111111;border-radius:.75rem;padding:1rem;border-left:4px solid rgba(200,255,0,.88);position:relative}
 .stock-card.trigger-buy{border-left-color:#22c55e}
 .stock-card.trigger-sell{border-left-color:#ef4444}
 .stock-card.disabled{opacity:.7}
@@ -77,4 +77,6 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 .hidden{display:none}
 .last-update{font-size:.8rem;color:#64748b;margin-bottom:1rem}
 .stock-actions{display:flex;gap:.5rem;margin-top:.5rem;flex-wrap:wrap}
+.history-popover{display:none}
+@media (hover:hover) and (pointer:fine){.stock-card:hover,.stock-card:focus-within{z-index:2;outline:none}.stock-card:hover .history-popover,.stock-card:focus-within .history-popover{display:block}.history-popover{position:absolute;z-index:20;left:calc(100% + .75rem);top:0;width:288px;padding:.8rem;background:#0a0a0a;border:1px solid #34353b;border-radius:.65rem;box-shadow:0 12px 32px rgba(0,0,0,.65)}.stock-card:nth-child(3n) .history-popover{left:auto;right:calc(100% + .75rem)}.history-title{display:flex;justify-content:space-between;align-items:center;color:#f8fafc;font-size:.8rem;font-weight:600;margin-bottom:.55rem}.history-title span{color:#64748b;font-weight:400;font-size:.72rem}.history-meta,.history-dates{display:flex;justify-content:space-between;color:#94a3b8;font-size:.72rem}.history-meta{margin-bottom:.3rem}.history-dates{margin-top:.15rem}.history-change.up{color:#22c55e}.history-change.down{color:#f87171}.history-chart{display:block;width:100%;height:82px;overflow:visible}.history-grid{stroke:#25272c;stroke-width:1}.history-line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.history-line.up,.history-dot.up{stroke:#c8ff00;fill:#c8ff00}.history-line.down,.history-dot.down{stroke:#f87171;fill:#f87171}.history-loading,.history-empty{color:#94a3b8;font-size:.8rem;padding:.75rem 0}}
 @media(max-width:640px){.stock-grid{grid-template-columns:1fr}.form-row{flex-direction:column}.form-group{min-width:100%}.thresholds{flex-direction:column;gap:.25rem}.summary{grid-template-columns:1fr}}

@@ -43,8 +43,25 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
     fetched_at TEXT DEFAULT (datetime('now')) NOT NULL
 );
 
+-- Immutable price observations collected by the monitor and manual refreshes.
+-- `recorded_at` is when OpenStock observed the quote; `quote_time` is the
+-- timestamp supplied by the source when it is available.
+CREATE TABLE IF NOT EXISTS price_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL,
+    price_usd REAL NOT NULL,
+    price_eur REAL,
+    exchange_rate REAL,
+    source TEXT NOT NULL,
+    quote_time TEXT,
+    recorded_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE,
+    UNIQUE (stock_id, recorded_at)
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_stocks_symbol ON stocks(symbol);
 CREATE INDEX IF NOT EXISTS idx_stocks_enabled ON stocks(enabled);
 CREATE INDEX IF NOT EXISTS idx_alerts_log_stock_id ON alerts_log(stock_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_log_sent_at ON alerts_log(sent_at);
+CREATE INDEX IF NOT EXISTS idx_price_history_stock_recorded_at ON price_history(stock_id, recorded_at);

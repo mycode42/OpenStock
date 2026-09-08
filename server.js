@@ -53,6 +53,31 @@ app.get('/api/stocks', (req, res) => {
     }
 });
 
+app.get('/api/stocks/:id/history', (req, res) => {
+    const windows = {
+        '1d': { since: '-1 day', bucketSeconds: 300 },
+        '7d': { since: '-7 days', bucketSeconds: 3600 },
+        '30d': { since: '-30 days', bucketSeconds: 14400 }
+    };
+    const range = req.query.range || '30d';
+    const window = windows[range];
+
+    if (!window) {
+        return res.status(400).json({ error: 'Range must be one of: 1d, 7d, 30d' });
+    }
+
+    try {
+        const stock = db.getStockById(req.params.id);
+        if (!stock) return res.status(404).json({ error: 'Stock not found' });
+        const points = db.getPriceHistory(stock.id, window.since, window.bucketSeconds)
+            .map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
+        res.json({ stock_id: stock.id, symbol: stock.symbol, range, currency: 'USD', points });
+    } catch (e) {
+        console.error('Error fetching price history:', e.message);
+        res.status(500).json({ error: 'Failed to fetch price history' });
+    }
+});
+
 app.get('/api/stocks/:id', (req, res) => {
     try {
         const stock = db.getStockById(req.params.id);
@@ -274,7 +299,12 @@ app.post('/api/refresh-prices', async (req, res) => {
                 }
                 
                 const meta = result.meta;
-                const priceUsd = meta.regularMarketPrice;
+                const closes = result.indicators?.quote?.[0]?.close || [];
+                const latestIndex = closes
+                    .map((price, index) => price !== null && Number.isFinite(Number(price)) ? index : -1)
+                    .filter(index => index >= 0)
+                    .pop();
+                const priceUsd = latestIndex === undefined ? meta.regularMarketPrice : Number(closes[latestIndex]);
                 const shortName = meta.shortName || meta.longName || '';
                 
                 if (!priceUsd) {
@@ -287,6 +317,9 @@ app.post('/api/refresh-prices', async (req, res) => {
                 
                 // Update stock in database using class method
                 db.updateStockPrice(stock.id, priceUsd, priceEur, exchangeRate);
+                const quoteUnixTime = latestIndex === undefined ? null : result.timestamp?.[latestIndex];
+                const quoteTime = Number.isFinite(quoteUnixTime) ? new Date(quoteUnixTime * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '') : null;
+                db.addPriceSnapshot(stock.id, priceUsd, priceEur, exchangeRate, 'manual_refresh', quoteTime);
                 updatedCount++;
                 
                 // Update name if it was empty and we got a name

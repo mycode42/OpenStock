@@ -80,6 +80,36 @@ class OpenStockDB {
         return stmt.run(priceUsd, priceEur, exchangeRate, id);
     }
 
+    addPriceSnapshot(stockId, priceUsd, priceEur, exchangeRate, source, quoteTime = null, recordedAt = null) {
+        const stmt = this.db.prepare(`
+            INSERT INTO price_history (
+                stock_id, price_usd, price_eur, exchange_rate, source, quote_time, recorded_at
+            ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+            ON CONFLICT(stock_id, recorded_at) DO UPDATE SET
+                price_usd = excluded.price_usd,
+                price_eur = excluded.price_eur,
+                exchange_rate = excluded.exchange_rate,
+                source = excluded.source,
+                quote_time = excluded.quote_time
+        `);
+        return stmt.run(stockId, priceUsd, priceEur, exchangeRate, source, quoteTime, recordedAt);
+    }
+
+    getPriceHistory(stockId, since, bucketSeconds) {
+        return this.db.prepare(`
+            WITH sampled AS (
+                SELECT MAX(id) AS id
+                FROM price_history
+                WHERE stock_id = ? AND recorded_at >= datetime('now', ?)
+                GROUP BY CAST(strftime('%s', recorded_at) AS INTEGER) / ?
+            )
+            SELECT recorded_at, quote_time, price_usd, price_eur, source
+            FROM price_history
+            WHERE id IN (SELECT id FROM sampled)
+            ORDER BY recorded_at ASC
+        `).all(stockId, since, bucketSeconds);
+    }
+
     updateStockTriggerState(id, state) {
         const stmt = this.db.prepare(`
             UPDATE stocks SET trigger_state = ?, updated_at = datetime('now')
