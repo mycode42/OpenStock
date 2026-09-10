@@ -115,7 +115,7 @@ sudo systemctl enable --now openstock-monitor.timer
 ### Check service status
 
 ```bash
-sudo systemctl status openstock-web.service
+sudo systemctl status openstock.service
 sudo systemctl status openstock-monitor.timer
 sudo systemctl list-timers | grep openstock
 ```
@@ -124,13 +124,13 @@ sudo systemctl list-timers | grep openstock
 
 ```bash
 # Web server logs
-tail -f /home/ubuntu/openstock/memory/web.log
+journalctl -u openstock.service -f
 
 # Monitor logs
-tail -f /home/ubuntu/openstock/memory/monitor.log
+tail -f /opt/openstock/memory/monitor.log
 
 # Error logs
-tail -f /home/ubuntu/openstock/memory/monitor-error.log
+tail -f /opt/openstock/memory/monitor-error.log
 ```
 
 ## Database Location
@@ -140,8 +140,8 @@ tail -f /home/ubuntu/openstock/memory/monitor-error.log
 cat .env | grep DATABASE_PATH
 
 # Query directly
-sqlite3 /home/ubuntu/openstock/database/openstock.db "SELECT * FROM stocks;"
-sqlite3 /home/ubuntu/openstock/database/openstock.db ".tables"
+sqlite3 /opt/openstock/database/openstock.db "SELECT * FROM stocks;"
+sqlite3 /opt/openstock/database/openstock.db ".tables"
 ```
 
 ## Monitoring Behavior
@@ -195,14 +195,15 @@ git pull origin main
 npm install
 
 # Restart service
-sudo systemctl restart openstock-web.service
+sudo systemctl restart openstock.service
 ```
 
 ## Backup Considerations
 
 ```bash
 # Backup database
-cp /home/ubuntu/openstock/database/openstock.db /path/to/backup/
+mkdir -p /var/backups/openstock
+cp /opt/openstock/database/openstock.db /var/backups/openstock/openstock.db.$(date +%F-%H%M%S)
 
 # Include memory for audit trail
 tar -czf openstock-backup-$(date +%F).tar.gz \
@@ -234,20 +235,20 @@ curl -s -A "Mozilla/5.0" "https://query1.finance.yahoo.com/v8/finance/chart/AAPL
 curl "https://api.telegram.org/botYOUR_TOKEN/getMe"
 
 # Check chat ID
-cat /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json
+cat /home/openclaw/.openclaw/credentials/telegram-default-allowFrom.json
 
 # Check monitor error log
-cat /home/ubuntu/openstock/memory/monitor-error.log
+cat /opt/openstock/memory/monitor-error.log
 ```
 
 ### Database locked or corrupted
 
 ```bash
 # Check integrity
-sqlite3 /home/ubuntu/openstock/database/openstock.db "PRAGMA integrity_check;"
+sqlite3 /opt/openstock/database/openstock.db "PRAGMA integrity_check;"
 
 # If issues, restart the web server to release locks
-sudo systemctl restart openstock-web.service
+sudo systemctl restart openstock.service
 ```
 
 ### Web interface not accessible
@@ -260,7 +261,7 @@ ss -tlnp | grep 3000
 ps aux | grep "node server.js"
 
 # Check logs
-tail /home/ubuntu/openstock/memory/web.log
+journalctl -u openstock.service -n 50 --no-pager
 ```
 
 ## API Endpoints
