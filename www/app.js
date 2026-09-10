@@ -2,6 +2,10 @@ const API = './api';
 
 let stocks = [];
 let sMap = {};
+let tradingAnalytics = null;
+let trades = [];
+let capitalEvents = [];
+let editingTradeId = null;
 let stockRevision = 0;
 let pageLoadId = 0;
 let editingStockSymbol = null;
@@ -34,14 +38,14 @@ function isCurrentStockMutation(id, token) {
 
 function pageFromHash(hash = window.location.hash) {
     const page = hash.replace('#/', '') || 'dashboard';
-    return ['dashboard', 'config'].includes(page) ? page : 'dashboard';
+    return ['dashboard', 'config', 'journal'].includes(page) ? page : 'dashboard';
 }
 
 function showPage(page) {
     document.querySelectorAll('nav a').forEach(link => {
         link.classList.toggle('active', link.dataset.page === page);
     });
-    ['dashboard', 'config'].forEach(name => {
+    ['dashboard', 'config', 'journal'].forEach(name => {
         document.getElementById(`page-${name}`).classList.toggle('hidden', name !== page);
     });
 }
@@ -94,6 +98,19 @@ async function loadPage(page) {
         return;
     }
 
+    if (page === 'journal') {
+        const [freshStocks, freshTrades, freshEvents, freshAnalytics] = await Promise.all([
+            af('/stocks'), af('/trades'), af('/capital-events'), af('/analytics/dashboard')
+        ]);
+        if (loadId !== pageLoadId || pageFromHash() !== page) return;
+        if (freshStocks && stockRevision === startingStockRevision) replaceStocks(freshStocks);
+        if (freshTrades) trades = freshTrades;
+        if (freshEvents) capitalEvents = freshEvents;
+        if (freshAnalytics) tradingAnalytics = freshAnalytics;
+        renderJournal();
+        return;
+    }
+
     const freshStocks = await af('/stocks');
     if (loadId !== pageLoadId || pageFromHash() !== page) return;
     if (freshStocks && stockRevision === startingStockRevision) replaceStocks(freshStocks);
@@ -104,6 +121,7 @@ function renderCurrentPage() {
     const page = pageFromHash();
     showPage(page);
     if (page === 'dashboard') renderDashboard();
+    else if (page === 'journal') renderJournal();
     else renderConfig();
 }
 
@@ -286,20 +304,24 @@ function attachChartHovers(container) {
 
 function renderDashboard() {
     const container = document.getElementById('page-dashboard');
+    // The Dashboard is the active monitoring view. Disabled stocks remain in
+    // Configure, but are intentionally excluded from every dashboard metric
+    // and card.
+    const monitoredStocks = stocks.filter(stock => Number(stock.enabled) === 1);
     let ownedCount = 0;
     let enabledCount = 0;
     let triggerCount = 0;
-    stocks.forEach(stock => {
+    monitoredStocks.forEach(stock => {
         if (stock.owned) ownedCount++;
-        if (stock.enabled) enabledCount++;
+        enabledCount++;
         if (stock.trigger_state === 'BUY_TRIGGERED' || stock.trigger_state === 'SELL_TRIGGERED') triggerCount++;
     });
-    const lastUpdate = stocks.reduce((latest, stock) => {
+    const lastUpdate = monitoredStocks.reduce((latest, stock) => {
         if (!stock.last_price_update) return latest;
         return !latest || stock.last_price_update > latest ? stock.last_price_update : latest;
     }, null) || '—';
 
-    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggers</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Hover a stock on desktop to view its local USD chart.</div><div class="stock-grid">${stocks.map(stock => `<div class="stock-card ${stock.enabled ? '' : 'disabled'} ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}" data-stock-id="${stock.id}" tabindex="0"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'ON' : 'OFF'}</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">${stock.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div><div class="history-popover" role="status" aria-live="polite"></div></div>`).join('')}</div><div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div>`;
+    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} owned</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} trigger(s) active</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Owned</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggers</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Hover a stock on desktop to view its local USD chart.</div>${monitoredStocks.length ? `<div class="stock-grid">${monitoredStocks.map(stock => `<div class="stock-card ${stock.owned ? '' : 'sold'} ${stock.trigger_state === 'BUY_TRIGGERED' ? 'trigger-buy' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? 'trigger-sell' : ''}" data-stock-id="${stock.id}" tabindex="0"><div class="stock-symbol">${stock.symbol} <span class="badge ${stock.owned ? 'owned' : 'sold'}">${stock.owned ? 'OWNED' : 'SOLD'}</span> <span class="badge enabled">ON</span> ${stock.trigger_state === 'BUY_TRIGGERED' ? '<span class="badge buy-trigger">🔼 BUY</span>' : ''} ${stock.trigger_state === 'SELL_TRIGGERED' ? '<span class="badge sell-trigger">🔽 SELL</span>' : ''}</div><div class="stock-name">${stock.name || ''}</div><div class="stock-price eu">€${money(stock.current_price_eur)}</div><div class="stock-price usd">$${money(stock.current_price_usd)}</div><div class="thresholds"><span class="threshold buy">Buy €${money(stock.buy_threshold_eur)}</span><span class="threshold sell">Sell €${money(stock.sell_threshold_eur)}</span></div><div class="stock-actions"><button class="btn btn-sm btn-secondary" onclick="tos('${stock.symbol}')">${stock.owned ? 'Mark Sold' : 'Mark Owned'}</button><button class="btn btn-sm btn-secondary" onclick="ts('${stock.symbol}')">Disable</button><button class="btn btn-sm btn-danger" onclick="rs('${stock.symbol}')">Remove</button></div><div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div><div class="history-popover" role="status" aria-live="polite"></div></div>`).join('')}</div>` : '<div class="card empty-state">No stocks are enabled. Enable a stock in Configure to monitor it here.</div>'}<div style="margin-top:2rem"><button class="btn btn-primary" onclick="nav('#/config')">+ Add Stock</button> <button class="btn btn-secondary" onclick="refreshPrices()">Refresh Prices</button></div>`;
     attachChartHovers(container);
 }
 
@@ -470,6 +492,157 @@ async function rs(symbol) {
         renderCurrentPage();
         showA(`Removed ${symbol}`, 'success');
     }
+}
+
+function journalEscape(value) {
+    return String(value ?? '').replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
+}
+
+function journalMoney(value) {
+    return value === null || value === undefined || !Number.isFinite(Number(value)) ? 'N/A' : `€${Number(value).toFixed(2)}`;
+}
+
+function journalPercent(value) {
+    return value === null || value === undefined || !Number.isFinite(Number(value)) ? 'N/A' : `${Number(value).toFixed(2)}%`;
+}
+
+function journalSigned(value) {
+    return value === null || value === undefined || !Number.isFinite(Number(value)) ? 'N/A' : `${Number(value) > 0 ? '+' : ''}${journalMoney(value)}`;
+}
+
+function journalClass(value) {
+    return Number(value) > 0 ? 'positive' : Number(value) < 0 ? 'negative' : '';
+}
+
+function journalInputDate(value) {
+    const date = parseOpenStockDate(value);
+    if (!date) return '';
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 16);
+}
+
+function journalKpi(label, displayValue, hint = '', cssClass = '') {
+    return `<div class="journal-kpi" title="${journalEscape(hint)}"><div>${journalEscape(label)}</div><strong class="${cssClass}">${displayValue}</strong></div>`;
+}
+
+function renderEquityCurve(points) {
+    if (!points || points.length < 2) return '<div class="journal-empty">Insufficient data — equity snapshots begin after initial capital is recorded.</div>';
+    const values = points.map(point => Number(point.equity_eur));
+    const min = Math.min(...values), max = Math.max(...values), padding = Math.max((max - min) * 0.08, 1);
+    const width = 800, height = 220, low = min - padding, high = max + padding;
+    const line = values.map((value, index) => `${(index / (values.length - 1) * width).toFixed(1)},${(height - ((value - low) / (high - low) * height)).toFixed(1)}`).join(' ');
+    return `<div class="journal-chart-labels"><span>€${high.toFixed(0)}</span><span>€${low.toFixed(0)}</span></div><svg class="journal-equity-curve" viewBox="0 0 ${width} ${height}" role="img" aria-label="Equity curve"><path d="M0 55H${width} M0 110H${width} M0 165H${width}"/><polyline points="${line}"/></svg><div class="journal-chart-labels"><span>${formatLocalDate(points[0].at)}</span><span>Peak ${journalMoney(max)}</span><span>${formatLocalDate(points[points.length - 1].at)}</span></div>`;
+}
+
+function renderTradeRows(items) {
+    if (!items.length) return '<tr><td colspan="8" style="color:#64748b">No trades recorded.</td></tr>';
+    return items.map(trade => `<tr><td>${journalEscape(trade.trade_id)}</td><td><strong>${journalEscape(trade.symbol)}</strong></td><td><span class="badge ${trade.is_closed ? 'sold' : 'owned'}">${trade.is_closed ? 'CLOSED' : 'OPEN'}</span></td><td>${formatLocalDate(trade.opened_at)}</td><td>${trade.is_closed ? journalMoney(trade.dividend_eur) : '—'}</td><td class="${journalClass(trade.net_pnl_eur)}">${journalSigned(trade.net_pnl_eur)}</td><td class="${journalClass(trade.return_pct)}">${journalPercent(trade.return_pct)}</td><td><button class="btn btn-sm btn-secondary" onclick="editTrade(${trade.id})">Edit</button>${trade.is_closed ? '' : ` <button class="btn btn-sm btn-success" onclick="closeTrade(${trade.id})">Close</button>`}</td></tr>`).join('');
+}
+
+function renderJournal() {
+    const container = document.getElementById('page-journal');
+    queueJournalDividendEnhancements(container);
+    const analytics = tradingAnalytics;
+    const capital = analytics?.capital || {};
+    const realized = analytics?.realized || {};
+    const tradeStats = analytics?.trades || {};
+    const performance = analytics?.performance || {};
+    const risk = analytics?.risk || {};
+    const edit = editingTradeId ? trades.find(trade => trade.id === editingTradeId) : null;
+    const options = stocks.map(stock => `<option value="${stock.id}" ${edit?.stock_id === stock.id ? 'selected' : ''}>${journalEscape(stock.symbol)} — ${journalEscape(stock.name || '')}</option>`).join('');
+    const currentPnl = (Number(realized.net_eur) || 0) + (Number(capital.unrealized_pnl_eur) || 0);
+    container.innerHTML = `<header><h1>📓 Trading Journal</h1><p class="subtitle">Trades, performance and risk — separate from the stock-monitoring overview.</p></header><div id="ac"></div>${analytics?.equity_available ? '' : '<div class="alert-box info">Add an <strong>Initial capital</strong> event below to calculate current capital, return, exposure and an equity curve.</div>'}
+      <div class="journal-kpi-grid">${journalKpi('Current Capital', journalMoney(capital.current_eur), 'Cash plus priced open positions.')}${journalKpi('Net P/L', journalSigned(currentPnl), 'Realized plus unrealized P/L; capital events excluded.', journalClass(currentPnl))}${journalKpi('Return', journalPercent(capital.current_return_pct), 'Current capital less net owner contributions divided by net owner contributions.', journalClass(capital.current_return_pct))}${journalKpi('YTD P/L', journalSigned(performance.ytd_pnl_eur), 'Net P/L from completed trades this calendar year.', journalClass(performance.ytd_pnl_eur))}${journalKpi('Win Rate', journalPercent(tradeStats.win_rate_pct), 'Winning completed trades divided by completed trades.')}${journalKpi('Max Drawdown', journalPercent(risk.max_drawdown_pct), 'Largest peak-to-trough decline in equity snapshots.', journalClass(risk.max_drawdown_pct))}${journalKpi('Available Cash', journalMoney(capital.available_cash_eur), 'Capital events less purchases/fees plus sales.')}${journalKpi('Open Positions', String(tradeStats.open ?? 0), 'Lots not yet closed.')}</div>
+      <div class="card"><div class="section-header"><div><div class="section-title">Equity Curve</div><p class="subtitle">Current capital and peak equity over time.</p></div><div class="journal-small">Estimated yearly profit: ${journalMoney(performance.estimated_yearly_profit_eur)}<br>Annualized return: ${journalPercent(performance.annualized_return_pct)}</div></div>${renderEquityCurve(analytics?.equity_curve)}</div>
+      <div class="journal-columns"><div class="card"><div class="section-title">Trade Statistics</div><dl class="journal-metrics"><dt>Completed / winning / losing</dt><dd>${tradeStats.completed ?? 0} / ${tradeStats.winning ?? 0} / ${tradeStats.losing ?? 0}</dd><dt>Realized gains / losses</dt><dd><span class="positive">${journalSigned(realized.gains_eur)}</span> / <span class="negative">${journalSigned(realized.losses_eur)}</span></dd><dt>Net realized P/L</dt><dd class="${journalClass(realized.net_eur)}">${journalSigned(realized.net_eur)}</dd><dt>Average trade / profit factor</dt><dd>${journalSigned(tradeStats.expectancy_eur)} / ${tradeStats.profit_factor == null ? 'N/A' : Number(tradeStats.profit_factor).toFixed(2)}</dd><dt>Average holding / trades month</dt><dd>${tradeStats.average_holding_days == null ? 'N/A' : `${Number(tradeStats.average_holding_days).toFixed(1)} days`} / ${tradeStats.trades_per_month == null ? 'N/A' : Number(tradeStats.trades_per_month).toFixed(2)}</dd><dt>Volatility / Sharpe</dt><dd>${journalPercent(risk.volatility_pct)} / ${risk.sharpe_ratio == null ? 'Insufficient data' : Number(risk.sharpe_ratio).toFixed(2)}</dd></dl></div><div class="card"><div class="section-title">Monthly Performance</div>${analytics?.monthly_performance?.length ? `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Month</th><th>P/L</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody>${analytics.monthly_performance.slice(-12).reverse().map(row => `<tr><td>${row.month}</td><td class="${journalClass(row.pnl_eur)}">${journalSigned(row.pnl_eur)}</td><td>${row.trades}</td><td>${journalPercent(row.wins / row.trades * 100)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="journal-empty">No completed trades yet.</p>'}</div></div>
+      <div class="card"><div class="section-header"><div class="section-title">${edit ? `Edit ${journalEscape(edit.trade_id)}` : 'Record Trade'}</div>${edit ? '<button class="btn btn-sm btn-secondary" onclick="cancelTradeEdit()">Cancel</button>' : ''}</div><form onsubmit="saveTrade(event)"><div class="form-row"><div class="form-group"><label>Stock</label><select name="stock_id" required>${options}</select></div><div class="form-group"><label>Opened</label><input name="opened_at" type="datetime-local" required value="${journalInputDate(edit?.opened_at) || journalInputDate(new Date().toISOString())}"></div><div class="form-group"><label>Quantity</label><input name="quantity" type="number" min=".000001" step=".000001" required value="${edit?.quantity ?? ''}"></div></div><div class="form-row"><div class="form-group"><label>Currency</label><input name="currency" maxlength="3" required value="${journalEscape(edit?.currency || 'EUR')}"></div><div class="form-group"><label>Buy Price</label><input name="entry_price" type="number" min=".000001" step=".000001" required value="${edit?.entry_price ?? ''}"></div><div class="form-group"><label>EUR Rate at Buy</label><input name="entry_fx_rate" type="number" min=".000001" step=".000001" required value="${edit?.entry_fx_rate ?? 1}"></div><div class="form-group"><label>Buy Fees (€)</label><input name="entry_fee_eur" type="number" min="0" step=".01" value="${edit?.entry_fee_eur ?? 0}"></div></div><details ${edit?.closed_at ? 'open' : ''}><summary>Close trade now (optional)</summary><div class="form-row" style="margin-top:.75rem"><div class="form-group"><label>Closed</label><input name="closed_at" type="datetime-local" value="${journalInputDate(edit?.closed_at)}"></div><div class="form-group"><label>Sell Price</label><input name="exit_price" type="number" min=".000001" step=".000001" value="${edit?.exit_price ?? ''}"></div><div class="form-group"><label>EUR Rate at Sell</label><input name="exit_fx_rate" type="number" min=".000001" step=".000001" value="${edit?.exit_fx_rate ?? 1}"></div><div class="form-group"><label>Sell Fees (€)</label><input name="exit_fee_eur" type="number" min="0" step=".01" value="${edit?.exit_fee_eur ?? 0}"></div></div></details><div class="form-row" style="margin-top:.75rem"><div class="form-group"><label>Strategy / Reason</label><input name="strategy" value="${journalEscape(edit?.strategy || '')}"></div><div class="form-group"><label>Notes</label><input name="notes" value="${journalEscape(edit?.notes || '')}"></div></div><div class="btn-group"><button class="btn btn-primary">${edit ? 'Save Explicit Edit' : 'Record Trade'}</button></div></form></div>
+      <div class="card"><div class="section-title">Capital Events</div><p class="subtitle">Capital events change cash/equity, never trading P/L.</p><form class="journal-capital-form" onsubmit="saveCapitalEvent(event)"><select name="event_type"><option value="INITIAL">Initial Capital</option><option value="DEPOSIT">Deposit</option><option value="WITHDRAWAL">Withdrawal</option><option value="FINANCING">Financing / Debt</option></select><input name="amount_eur" type="number" min=".01" step=".01" placeholder="Amount €" required><input name="occurred_at" type="datetime-local" value="${journalInputDate(new Date().toISOString())}" required><input name="notes" placeholder="Optional note"><button class="btn btn-primary">Add Event</button></form>${capitalEvents.length ? `<div class="journal-events">${capitalEvents.map(event => `<span><strong>${journalEscape(event.event_type)}</strong> ${journalMoney(event.amount_eur)} · ${formatLocalDate(event.occurred_at)}</span>`).join('')}</div>` : '<p class="journal-empty">No capital events recorded.</p>'}</div>
+      <div class="card"><div class="section-title">Trades</div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade ID</th><th>Stock</th><th>Status</th><th>Opened</th><th>Net P/L</th><th>Return</th><th></th></tr></thead><tbody>${renderTradeRows(trades)}</tbody></table></div></div>
+      <div class="card"><div class="section-title">Per-Stock Analytics</div>${analytics?.stock_performance?.length ? `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Stock</th><th>P/L</th><th>Trades</th><th>Win Rate</th><th>Average Return</th><th>Average Hold</th></tr></thead><tbody>${analytics.stock_performance.map(row => `<tr><td><strong>${journalEscape(row.symbol)}</strong></td><td class="${journalClass(row.pnl_eur)}">${journalSigned(row.pnl_eur)}</td><td>${row.trades}</td><td>${journalPercent(row.win_rate_pct)}</td><td>${journalPercent(row.average_return_pct)}</td><td>${Number(row.average_holding_days).toFixed(1)} days</td></tr>`).join('')}</tbody></table></div>` : '<p class="journal-empty">Per-stock analytics appear after completed trades.</p>'}</div><div class="card"><p class="journal-help">Definitions: Net P/L = sell EUR value − buy EUR value − entry fees − exit fees. Return = net P/L ÷ (buy EUR value + entry fees). Realized metrics use closed trades only; unrealized P/L uses current monitored EUR prices for open positions. Annualized estimates need at least 30 calendar days from initial capital; volatility and Sharpe require at least 30 equity observations.</p></div>`;
+}
+
+function queueJournalDividendEnhancements(container) {
+    queueMicrotask(() => {
+        const closeDetails = container.querySelector('details');
+        const closeRow = closeDetails?.querySelector('.form-row');
+        if (closeRow && !closeRow.querySelector('[name="dividend_eur"]')) {
+            const edit = editingTradeId ? trades.find(trade => trade.id === editingTradeId) : null;
+            const dividends = Number.isFinite(Number(edit?.dividend_eur)) ? Number(edit.dividend_eur) : 0;
+            closeRow.insertAdjacentHTML('beforeend', `<div class="form-group"><label>Dividends received (€)</label><input name="dividend_eur" type="number" min="0" step=".01" value="${dividends}"></div>`);
+        }
+
+        const tradesCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Trades');
+        const tradeHeaders = tradesCard?.querySelector('thead tr');
+        if (tradeHeaders && ![...tradeHeaders.children].some(header => header.textContent === 'Dividends')) {
+            const dividendHeader = document.createElement('th');
+            dividendHeader.textContent = 'Dividends';
+            const netPnlHeader = [...tradeHeaders.children].find(header => header.textContent === 'Net P/L');
+            tradeHeaders.insertBefore(dividendHeader, netPnlHeader || null);
+        }
+
+        const statsCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Trade Statistics');
+        const metrics = statsCard?.querySelector('.journal-metrics');
+        if (metrics && ![...metrics.querySelectorAll('dt')].some(term => term.textContent === 'Dividends received')) {
+            metrics.insertAdjacentHTML('beforeend', `<dt>Dividends received</dt><dd class="positive">${journalSigned(tradingAnalytics?.realized?.dividends_eur)}</dd>`);
+        }
+
+        const help = container.querySelector('.journal-help');
+        if (help) help.textContent = 'Definitions: Net P/L = sell EUR value + received dividends − buy EUR value − entry fees − exit fees. Return = net P/L ÷ (buy EUR value + entry fees). Realized metrics use closed trades only; unrealized P/L uses current monitored EUR prices for open positions. Annualized estimates need at least 30 calendar days from initial capital; volatility and Sharpe require at least 30 equity observations.';
+    });
+}
+
+function formDataObject(form) {
+    return Object.fromEntries(new FormData(form).entries());
+}
+
+async function saveTrade(event) {
+    event.preventDefault();
+    const body = formDataObject(event.currentTarget);
+    if (!body.closed_at) {
+        delete body.exit_price;
+        delete body.exit_fx_rate;
+        delete body.exit_fee_eur;
+        delete body.dividend_eur;
+    }
+    const result = await af(editingTradeId ? `/trades/${editingTradeId}` : '/trades', { method: editingTradeId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!result) return;
+    editingTradeId = null;
+    await loadPage('journal');
+    showA(result.message, 'success');
+}
+
+function editTrade(id) {
+    editingTradeId = id;
+    renderJournal();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function cancelTradeEdit() {
+    editingTradeId = null;
+    renderJournal();
+}
+
+async function closeTrade(id) {
+    const exit_price = prompt('Sell price in the trade currency:');
+    if (exit_price === null) return;
+    const exit_fx_rate = prompt('EUR conversion rate at sale (1 for EUR):', '1');
+    if (exit_fx_rate === null) return;
+    const exit_fee_eur = prompt('Sell fees in EUR:', '0');
+    if (exit_fee_eur === null) return;
+    const dividend_eur = prompt('Dividends received in EUR:', '0');
+    if (dividend_eur === null) return;
+    const result = await af(`/trades/${id}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ exit_price, exit_fx_rate, exit_fee_eur, dividend_eur }) });
+    if (!result) return;
+    await loadPage('journal');
+    showA('Trade closed', 'success');
+}
+
+async function saveCapitalEvent(event) {
+    event.preventDefault();
+    const result = await af('/capital-events', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formDataObject(event.currentTarget)) });
+    if (!result) return;
+    await loadPage('journal');
+    showA('Capital event recorded', 'success');
 }
 
 loadPage(pageFromHash());

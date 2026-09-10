@@ -15,19 +15,21 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/stock-monitor/favicon-192.png">
 <link rel="icon" type="image/png" sizes="256x256" href="/stock-monitor/favicon-256.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/stock-monitor/apple-touch-icon.png">
-<link rel="stylesheet" href="/stock-monitor/styles.css?v=6">
+<link rel="stylesheet" href="/stock-monitor/styles.css?v=7">
 <meta name="theme-color" content="#000000">
 </head>
 <body>
 <nav>
 <a href="#/dashboard" class="active" data-page="dashboard">Dashboard</a>
+<a href="#/journal" data-page="journal">Journal</a>
 <a href="#/config" data-page="config">Configure</a>
 </nav>
 <div class="container">
 <div id="page-dashboard"></div>
+<div id="page-journal" class="hidden"></div>
 <div id="page-config" class="hidden"></div>
 </div>
-<script src="./app.js?v=6"></script>
+<script src="./app.js?v=7"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

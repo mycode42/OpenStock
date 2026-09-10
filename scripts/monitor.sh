@@ -181,8 +181,9 @@ if [ -z "$EXCHANGE_RATE" ]; then
 fi
 log "USD/EUR rate: $EXCHANGE_RATE"
 
-# Get enabled stocks from DB
-STOCKS=$(sqlite3 "$DB_PATH" "SELECT id,symbol,buy_threshold_eur,sell_threshold_eur,trigger_state FROM stocks WHERE enabled=1 ORDER BY symbol" 2>/dev/null)
+# Get enabled stocks from DB. Ownership is included so sold stocks can keep
+# collecting prices/history without generating buy/sell alerts.
+STOCKS=$(sqlite3 "$DB_PATH" "SELECT id,symbol,buy_threshold_eur,sell_threshold_eur,trigger_state,owned FROM stocks WHERE enabled=1 ORDER BY symbol" 2>/dev/null)
 if [ -z "$STOCKS" ]; then
     log "No enabled stocks"
     exit 0
@@ -200,7 +201,7 @@ if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "null" ]; then
 fi
 
 # Process each stock
-while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
+while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger owned; do
     log "Processing $symbol (id=$id)"
     
     # Get price
@@ -253,6 +254,16 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
     if [ -n "$STOCK_NAME" ] && [ "$STOCK_NAME" != "null" ]; then
         sqlite3 "$DB_PATH" "UPDATE stocks SET name='$STOCK_NAME' WHERE id=$id AND (name IS NULL OR name='')" 2>/dev/null
     fi
+
+    # Sold stocks remain price-monitored for history, but their triggers are
+    # inactive. This also self-heals older rows that still have a trigger state.
+    if [ "$owned" != "1" ]; then
+        if [ "$current_trigger" != "NONE" ]; then
+            sqlite3 "$DB_PATH" "UPDATE stocks SET trigger_state='NONE', updated_at=datetime('now') WHERE id=$id" 2>/dev/null
+            log "Triggers disabled for sold $symbol"
+        fi
+        continue
+    fi
     
     # Evaluate triggers
     NEW_TRIGGER="NONE"
@@ -296,6 +307,12 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger; do
     fi
     
 done <<< "$STOCKS"
+
+# Keep an auditable equity curve without changing monitoring thresholds or
+# alerts. A missing starting-capital event is expected and simply skips it.
+if ! node "$APP_DIR/scripts/capture-equity-snapshot.js" >> "$LOG_FILE" 2>> "$ERROR_LOG"; then
+    errlog "Equity snapshot capture failed"
+fi
 
 log "=== Monitoring cycle complete ==="
 exit 0

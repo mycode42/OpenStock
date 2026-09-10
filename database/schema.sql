@@ -59,9 +59,72 @@ CREATE TABLE IF NOT EXISTS price_history (
     UNIQUE (stock_id, recorded_at)
 );
 
+-- Capital movements are deliberately separate from trade performance. Amounts
+-- are in EUR and always positive; the event type determines their direction.
+CREATE TABLE IF NOT EXISTS capital_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL CHECK (event_type IN ('INITIAL', 'DEPOSIT', 'WITHDRAWAL', 'FINANCING')),
+    amount_eur REAL NOT NULL CHECK (amount_eur > 0),
+    occurred_at TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL
+);
+
+-- One row represents one trade lot. A trade without closed_at is an open
+-- position. Entry/exit conversion rates and EUR prices are frozen at entry so
+-- later performance calculations are reproducible.
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id TEXT NOT NULL UNIQUE,
+    stock_id INTEGER NOT NULL,
+    opened_at TEXT NOT NULL,
+    closed_at TEXT,
+    quantity REAL NOT NULL CHECK (quantity > 0),
+    currency TEXT NOT NULL DEFAULT 'EUR',
+    entry_price REAL NOT NULL CHECK (entry_price > 0),
+    entry_fx_rate REAL NOT NULL DEFAULT 1 CHECK (entry_fx_rate > 0),
+    entry_price_eur REAL NOT NULL CHECK (entry_price_eur > 0),
+    entry_fee_eur REAL NOT NULL DEFAULT 0 CHECK (entry_fee_eur >= 0),
+    exit_price REAL,
+    exit_fx_rate REAL,
+    exit_price_eur REAL,
+    exit_fee_eur REAL NOT NULL DEFAULT 0 CHECK (exit_fee_eur >= 0),
+    dividend_eur REAL NOT NULL DEFAULT 0 CHECK (dividend_eur >= 0),
+    strategy TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now')) NOT NULL,
+    FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE RESTRICT,
+    CHECK ((closed_at IS NULL AND exit_price IS NULL AND exit_fx_rate IS NULL AND exit_price_eur IS NULL)
+        OR (closed_at IS NOT NULL AND exit_price > 0 AND exit_fx_rate > 0 AND exit_price_eur > 0))
+);
+
+-- Periodic snapshots let historical equity and drawdown remain auditable even
+-- when today's positions/quotes change. Snapshots are taken by the monitor.
+CREATE TABLE IF NOT EXISTS equity_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_at TEXT NOT NULL UNIQUE,
+    cash_eur REAL NOT NULL,
+    position_value_eur REAL NOT NULL,
+    equity_eur REAL NOT NULL,
+    net_contributions_eur REAL NOT NULL,
+    financing_eur REAL NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'monitor'
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_stocks_symbol ON stocks(symbol);
 CREATE INDEX IF NOT EXISTS idx_stocks_enabled ON stocks(enabled);
 CREATE INDEX IF NOT EXISTS idx_alerts_log_stock_id ON alerts_log(stock_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_log_sent_at ON alerts_log(sent_at);
 CREATE INDEX IF NOT EXISTS idx_price_history_stock_recorded_at ON price_history(stock_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_capital_events_occurred_at ON capital_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_trades_stock_opened_at ON trades(stock_id, opened_at);
+CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
+CREATE INDEX IF NOT EXISTS idx_equity_snapshots_snapshot_at ON equity_snapshots(snapshot_at);
+
+CREATE TRIGGER IF NOT EXISTS update_trades_updated_at
+    AFTER UPDATE ON trades
+BEGIN
+    UPDATE trades SET updated_at = datetime('now') WHERE id = NEW.id;
+END;

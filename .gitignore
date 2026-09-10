@@ -10,3 +10,4 @@ memory/*.json
 *.db
 *.db-wal
 *.db-shm
+database/*.db.backup

@@ -1,6 +1,6 @@
-# OpenStock - Stock Price Monitoring
+# OpenStock - Stock Monitoring, Trading Journal & Performance Dashboard
 
-A production-ready MVP for monitoring stock prices, converting USD to EUR, and sending Telegram alerts when buy/sell thresholds are reached.
+A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. It converts USD to EUR and sends Telegram alerts when configured buy/sell thresholds are reached.
 
 > **Note:** Stock prices are fetched from **Yahoo Finance** — no API key required. The Twelve Data API key in `.env` is optional and kept for legacy compatibility only.
 
@@ -16,7 +16,7 @@ A production-ready MVP for monitoring stock prices, converting USD to EUR, and s
 │                 Web Application                        │
 │                 Port 3000 (127.0.0.1)                  │
 │  ┌───────────┐  ┌───────────┐  ┌──────────────┐       │
-│  │ Dashboard │  │ Stocks    │  │ Config       │       │
+│  │ Dashboard │  │ Journal   │  │ Config       │       │
 │  └───────────┘  └───────────┘  └──────────────┘       │
 └─────────────────────────────────────────────────────────┘
                                  │
@@ -24,8 +24,8 @@ A production-ready MVP for monitoring stock prices, converting USD to EUR, and s
 ┌────────────────────────────────▼─────────────────────────┐
 │                 SQLite Database (openstock.db)           │
 │  ┌───────────┐  ┌───────────┐  ┌──────────────┐        │
-│  │ stocks    │  │ alerts_log│  │ exchange_    │        │
-│  │           │  │           │  │ rates        │        │
+│  │ stocks    │  │ trades    │  │ capital_     │        │
+│  │           │  │           │  │ events       │        │
 │  └───────────┘  └───────────┘  └──────────────┘        │
 └─────────────────────────────────────────────────────────┘
                                  │
@@ -157,6 +157,7 @@ The `monitor.sh` script runs every minute via systemd timer and:
 7. Sends Telegram alert on threshold crossing
 8. Logs alert to `alerts_log` table (prevents duplicates)
 9. Updates trigger state in stocks table
+10. Stores a local price observation and, when capital is configured, an equity snapshot
 
 ### Trigger Debouncing
 
@@ -173,8 +174,16 @@ Access the web app:
 
 ### Features
 
-- **Dashboard:** View all stocks with current prices and trigger status
-- **Configure Stocks:** Add/remove stocks, set thresholds, toggle ownership
+- **Dashboard:** The original stock-monitoring overview with current prices, trigger state, quick stock actions, and local hover price-history charts.
+- **Trading Journal:** Record position lots, then explicitly edit or close them with frozen EUR conversion rates and fees. Its analytics section contains capital, P/L, risk, equity curve, monthly, and per-stock performance data.
+- **Capital events:** Record initial capital, deposits, withdrawals, and financing separately from trading performance.
+- **Configure Stocks:** Add stocks and manage monitoring thresholds.
+
+### Performance data model
+
+`trades` records one position lot. An open trade has no close date; a completed trade retains entry/exit prices, fees, currency and EUR conversion rates. `capital_events` never count as P/L. `equity_snapshots` are captured with the monitor so equity curves and drawdown do not have to be reconstructed from today's prices.
+
+The dashboard deliberately shows `N/A` or `Insufficient data` until the relevant history exists. Annualized return and estimated yearly profit require at least 30 calendar days since initial capital; volatility and Sharpe require 30 equity observations.
 
 ## Updating the Application
 
@@ -263,7 +272,12 @@ tail /home/ubuntu/openstock/memory/web.log
 | `/api/stocks` | POST | Add new stock |
 | `/api/stocks/:id` | PUT | Update stock |
 | `/api/stocks/:id` | DELETE | Remove stock |
-| `/api/dashboard` | GET | Dashboard data |
+| `/api/trades` | GET/POST | List or record position lots |
+| `/api/trades/:id` | PUT | Explicitly edit a trade |
+| `/api/trades/:id/close` | POST | Close an open trade |
+| `/api/capital-events` | GET/POST | List or record capital movements |
+| `/api/analytics/dashboard` | GET | Performance, risk and equity-curve data |
+| `/api/dashboard` | GET | Backward-compatible stock dashboard data |
 | `/health` | GET | Health check |
 
 ## License

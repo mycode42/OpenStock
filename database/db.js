@@ -58,6 +58,13 @@ class OpenStockDB {
             }
         }
 
+        // A sold stock must not retain an active buy/sell alert state. Keep
+        // collecting its prices/history when enabled, but disarm triggers as
+        // soon as ownership is changed to sold.
+        if (Object.prototype.hasOwnProperty.call(updates, 'owned') && !Number(updates.owned)) {
+            setClauses.push("trigger_state = 'NONE'");
+        }
+
         if (setClauses.length === 0) {
             throw new Error('No valid fields to update');
         }
@@ -108,6 +115,85 @@ class OpenStockDB {
             WHERE id IN (SELECT id FROM sampled)
             ORDER BY recorded_at ASC
         `).all(stockId, since, bucketSeconds);
+    }
+
+    // ===== TRADES =====
+    getAllTrades(filters = {}) {
+        const clauses = [];
+        const values = [];
+        if (filters.status === 'open') clauses.push('t.closed_at IS NULL');
+        if (filters.status === 'closed') clauses.push('t.closed_at IS NOT NULL');
+        if (filters.symbol) { clauses.push('s.symbol = ?'); values.push(filters.symbol); }
+        const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+        return this.db.prepare(`
+            SELECT t.*, s.symbol, s.name, s.current_price_eur
+            FROM trades t JOIN stocks s ON s.id = t.stock_id
+            ${where}
+            ORDER BY COALESCE(t.closed_at, t.opened_at) DESC, t.id DESC
+        `).all(...values);
+    }
+
+    getTradeById(id) {
+        return this.db.prepare(`
+            SELECT t.*, s.symbol, s.name, s.current_price_eur
+            FROM trades t JOIN stocks s ON s.id = t.stock_id
+            WHERE t.id = ?
+        `).get(id);
+    }
+
+    addTrade(trade) {
+        return this.db.prepare(`
+            INSERT INTO trades (
+                trade_id, stock_id, opened_at, closed_at, quantity, currency,
+                entry_price, entry_fx_rate, entry_price_eur, entry_fee_eur,
+                exit_price, exit_fx_rate, exit_price_eur, exit_fee_eur, dividend_eur, strategy, notes
+            ) VALUES (
+                @trade_id, @stock_id, @opened_at, @closed_at, @quantity, @currency,
+                @entry_price, @entry_fx_rate, @entry_price_eur, @entry_fee_eur,
+                @exit_price, @exit_fx_rate, @exit_price_eur, @exit_fee_eur, @dividend_eur, @strategy, @notes
+            )
+        `).run(trade);
+    }
+
+    updateTrade(id, trade) {
+        return this.db.prepare(`
+            UPDATE trades SET
+                stock_id=@stock_id, opened_at=@opened_at, closed_at=@closed_at, quantity=@quantity, currency=@currency,
+                entry_price=@entry_price, entry_fx_rate=@entry_fx_rate, entry_price_eur=@entry_price_eur, entry_fee_eur=@entry_fee_eur,
+                exit_price=@exit_price, exit_fx_rate=@exit_fx_rate, exit_price_eur=@exit_price_eur, exit_fee_eur=@exit_fee_eur, dividend_eur=@dividend_eur,
+                strategy=@strategy, notes=@notes, updated_at=datetime('now')
+            WHERE id=@id
+        `).run({ ...trade, id });
+    }
+
+    // ===== CAPITAL & EQUITY =====
+    getCapitalEvents() {
+        return this.db.prepare('SELECT * FROM capital_events ORDER BY occurred_at ASC, id ASC').all();
+    }
+
+    addCapitalEvent(event) {
+        return this.db.prepare(`
+            INSERT INTO capital_events (event_type, amount_eur, occurred_at, notes)
+            VALUES (@event_type, @amount_eur, @occurred_at, @notes)
+        `).run(event);
+    }
+
+    getEquitySnapshots(since = null) {
+        const query = since
+            ? 'SELECT * FROM equity_snapshots WHERE snapshot_at >= ? ORDER BY snapshot_at ASC'
+            : 'SELECT * FROM equity_snapshots ORDER BY snapshot_at ASC';
+        return since ? this.db.prepare(query).all(since) : this.db.prepare(query).all();
+    }
+
+    addEquitySnapshot(snapshot) {
+        return this.db.prepare(`
+            INSERT INTO equity_snapshots (snapshot_at, cash_eur, position_value_eur, equity_eur, net_contributions_eur, financing_eur, source)
+            VALUES (@snapshot_at, @cash_eur, @position_value_eur, @equity_eur, @net_contributions_eur, @financing_eur, @source)
+            ON CONFLICT(snapshot_at) DO UPDATE SET
+                cash_eur=excluded.cash_eur, position_value_eur=excluded.position_value_eur,
+                equity_eur=excluded.equity_eur, net_contributions_eur=excluded.net_contributions_eur,
+                financing_eur=excluded.financing_eur, source=excluded.source
+        `).run(snapshot);
     }
 
     updateStockTriggerState(id, state) {
