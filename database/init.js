@@ -66,7 +66,7 @@ function migrateLegacyJournal(db) {
 }
 
 function initDatabase({ silent = false } = {}) {
-    const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
+    const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
     const db = new Database(dbPath);
 
     // Read schema

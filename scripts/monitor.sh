@@ -5,8 +5,8 @@
 set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(dirname "$SCRIPT_DIR")"
-LOG_FILE="/home/ubuntu/openstock/memory/monitor.log"
-ERROR_LOG="/home/ubuntu/openstock/memory/monitor-error.log"
+LOG_FILE="/opt/openstock/memory/monitor.log"
+ERROR_LOG="/opt/openstock/memory/monitor-error.log"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"; }
 errlog() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$ERROR_LOG" >> "$LOG_FILE"; }
@@ -25,7 +25,7 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 
 EXCHANGE_RATE=""
-CACHE_FILE="/home/ubuntu/openstock/memory/exchange_rate_cache.json"
+CACHE_FILE="/opt/openstock/memory/exchange_rate_cache.json"
 CACHE_TTL=${EXCHANGE_RATE_CACHE_SECONDS:-3600}
 
 # Get exchange rate (USD/EUR) with caching
@@ -71,7 +71,7 @@ send_telegram() {
     
     if [ -z "$chat_id" ]; then
         # Get chat_id from owner allowlist
-        chat_id=$(cat /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null | jq -r '.allowFrom[0]' 2>/dev/null)
+        chat_id=$(cat /home/openclaw/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null | jq -r '.allowFrom[0]' 2>/dev/null)
     fi
     
     if [ -z "$chat_id" ] || [ "$chat_id" = "null" ]; then
@@ -193,7 +193,7 @@ fi
 # price collection or trigger-state updates; the delivery failure is logged.
 CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "null" ]; then
-    CHAT_ID=$(jq -r '.allowFrom[0] // empty' /home/ubuntu/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null || true)
+    CHAT_ID=$(jq -r '.allowFrom[0] // empty' /home/openclaw/.openclaw/credentials/telegram-default-allowFrom.json 2>/dev/null || true)
 fi
 if [ -z "$CHAT_ID" ] || [ "$CHAT_ID" = "null" ]; then
     errlog "No Telegram recipient configured; monitoring will continue without trigger notifications"

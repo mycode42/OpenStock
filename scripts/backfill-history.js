@@ -2,11 +2,11 @@
 /* Research-only Yahoo backfill. Run manually once to seed local dashboard charts.
  * Normal dashboard hovers never make Yahoo requests; all later points come from
  * the one-minute monitor snapshots. */
-require('dotenv').config({ path: '/home/ubuntu/openstock/.env' });
+require('dotenv').config({ path: '/opt/openstock/.env' });
 const OpenStockDB = require('../database/db');
 const { initDatabase } = require('../database/init');
 
-const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
+const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
 const historyRange = process.env.HISTORY_RANGE || '1mo';
 if (!['1mo', '1y', '5y'].includes(historyRange)) {
     throw new Error('HISTORY_RANGE must be one of: 1mo, 1y, 5y');

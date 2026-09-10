@@ -141,7 +141,7 @@ function latestYahooChartQuote(chart) {
 }
 
 // Ensure database exists before starting server
-const dbPath = process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db';
+const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
 initDatabase();
 
 const db = new OpenStockDB(dbPath);

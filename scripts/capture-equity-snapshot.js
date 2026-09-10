@@ -7,7 +7,7 @@ const { initDatabase } = require('../database/init');
 const { calculateDashboard } = require('../lib/analytics');
 
 initDatabase({ silent: true });
-const db = new OpenStockDB(process.env.DATABASE_PATH || '/home/ubuntu/openstock/database/openstock.db');
+const db = new OpenStockDB(process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db');
 try {
     const analytics = calculateDashboard({
         stocks: db.getAllStocks(),
