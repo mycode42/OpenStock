@@ -33,8 +33,8 @@ A private trading workspace for monitoring stock prices, recording position lots
               │                  │                  │
               ▼                  │                  ▼
 ┌─────────────────────────┐      │      ┌─────────────────────────┐
-│   Monitoring Script     │      │      │  Exchange Rate Cache    │
-│      (monitor.sh)       │      │      │   (JSON cache)          │
+│   Node.js Monitor       │      │      │  Exchange Rate Cache    │
+│      (monitor.js)       │      │      │   (JSON cache)          │
 │  - Runs every minute    │      │      │                         │
 │  - Fetches prices       │      │      └─────────────────────────┘
 │  - Converts USD→EUR     │      │
@@ -146,7 +146,7 @@ sqlite3 /opt/openstock/database/openstock.db ".tables"
 
 ## Monitoring Behavior
 
-The `monitor.sh` script runs every minute via systemd timer and:
+The `scripts/monitor.js` process runs every minute via a systemd timer. The former `monitor.sh` remains available only as a rollback target. The Node monitor:
 
 1. Reads enabled stocks from database
 2. Fetches current USD price from Yahoo Finance
@@ -158,6 +158,9 @@ The `monitor.sh` script runs every minute via systemd timer and:
 8. Logs alert to `alerts_log` table (prevents duplicates)
 9. Updates trigger state in stocks table
 10. Stores a local price observation and, when capital is configured, an equity snapshot
+11. Uses prepared SQLite statements, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
+
+Run one **live** monitoring cycle manually as the `openclaw` user with `npm run monitor` (`npm run monitor -- --help` only prints usage). The one-time systemd cutover and rollback procedure is documented in `docs/monitor-systemd-cutover.md`.
 
 ### Trigger Debouncing
 

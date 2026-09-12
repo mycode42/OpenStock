@@ -3,7 +3,7 @@ const express = require('express');
 const path = require('path');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
-const { calculateTrade, calculateDashboard } = require('./lib/analytics');
+const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/analytics');
 
 // Helper to convert SQLite datetime string to ISO 8601 UTC
 function toISODateTime(sqliteDateTime) {
@@ -96,7 +96,7 @@ function dashboardData() {
 function captureEquitySnapshot(source = 'dashboard') {
     const analytics = dashboardData();
     if (!analytics.equity_available) return null;
-    const at = new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+    const at = snapshotBucketAt(new Date());
     db.addEquitySnapshot({
         snapshot_at: at,
         cash_eur: analytics.capital.available_cash_eur,
@@ -164,7 +164,7 @@ app.use(express.static(path.join(__dirname, 'www')));
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
     try {
-        const stocks = db.getAllStocks();
+        const stocks = req.query.includeArchived === '1' ? db.getJournalStocks() : db.getConfigStocks();
         res.json(stocks.map(serializeStock));
     } catch (e) {
         console.error('Error fetching stocks:', e.message);
@@ -246,13 +246,25 @@ app.post('/api/stocks', (req, res) => {
             return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
         }
 
-        // Check stock limit
-        const count = db.getAllStocks().length;
-        if (count >= 25) {
-            return res.status(400).json({ error: 'Maximum 25 stocks allowed' });
+        const normalizedSymbol = symbol.trim().toUpperCase();
+        const existingStock = db.getStockBySymbol(normalizedSymbol);
+        if (existingStock && !Number(existingStock.archived)) {
+            return res.status(409).json({ error: 'Stock symbol already exists' });
         }
 
-        const result = db.addStock(symbol.toUpperCase(), name, currency, buyThreshold, sellThreshold);
+        // Disabled and archived stocks do not consume an active monitoring slot.
+        const count = db.getActiveStocks().length;
+        if (count >= 25) {
+            return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
+        }
+
+        if (existingStock) {
+            db.restoreArchivedStock(existingStock.id, { name: name.trim(), currency, buyThreshold, sellThreshold });
+            const stock = db.getStockById(existingStock.id);
+            return res.json({ message: 'Stock restored successfully', restored: true, stock: serializeStock(stock) });
+        }
+
+        const result = db.addStock(normalizedSymbol, name.trim(), currency, buyThreshold, sellThreshold);
         const stock = db.getStockById(result.lastInsertRowid);
         res.status(201).json({ message: 'Stock added successfully', stock: serializeStock(stock) });
     } catch (e) {
@@ -315,7 +327,14 @@ app.put('/api/stocks/:id', (req, res) => {
             if (!stock) {
                 return res.status(404).json({ error: 'Stock not found' });
             }
-            updates.enabled = enabled === 1 || enabled === '1' || enabled === true || enabled === 'true' ? 1 : 0;
+            const newEnabled = enabled === 1 || enabled === '1' || enabled === true || enabled === 'true';
+            if (newEnabled && Number(stock.archived)) {
+                return res.status(400).json({ error: 'Archived stocks must be restored by adding the symbol again' });
+            }
+            if (newEnabled && !Number(stock.enabled) && db.getActiveStocks().length >= 25) {
+                return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
+            }
+            updates.enabled = newEnabled ? 1 : 0;
         }
 
         if (name !== undefined) {
@@ -347,7 +366,7 @@ app.delete('/api/stocks/:id', (req, res) => {
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Stock not found' });
         }
-        res.json({ message: 'Stock deleted successfully', deleted_id: Number(req.params.id) });
+        res.json({ message: result.archived ? 'Stock archived; journal history retained' : 'Stock deleted successfully', deleted_id: Number(req.params.id), archived: result.archived });
     } catch (e) {
         console.error('Error deleting stock:', e.message);
         res.status(500).json({ error: 'Failed to delete stock' });
@@ -443,7 +462,7 @@ app.get('/api/analytics/dashboard', (req, res) => {
 // ===== API: Dashboard data =====
 app.get('/api/dashboard', (req, res) => {
     try {
-        const stocks = db.getAllStocks();
+        const stocks = db.getActiveStocks();
         res.json({
             stocks: stocks.map(serializeStock),
             analytics: dashboardData()

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS stocks (
     sell_threshold_eur REAL NOT NULL,
     owned INTEGER DEFAULT 0 NOT NULL, -- 0 = Sold, 1 = Owned
     enabled INTEGER DEFAULT 1 NOT NULL, -- 0 = Disabled, 1 = Enabled
+    archived INTEGER DEFAULT 0 NOT NULL, -- 0 = active catalogue, 1 = historical only
     last_price_update TEXT,
     last_exchange_rate REAL,
     trigger_state TEXT DEFAULT 'NONE', -- NONE, BUY_TRIGGERED, SELL_TRIGGERED

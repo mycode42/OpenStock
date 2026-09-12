@@ -255,27 +255,19 @@ while IFS='|' read -r id symbol buy_threshold sell_threshold current_trigger own
         sqlite3 "$DB_PATH" "UPDATE stocks SET name='$STOCK_NAME' WHERE id=$id AND (name IS NULL OR name='')" 2>/dev/null
     fi
 
-    # Sold stocks remain price-monitored for history, but their triggers are
-    # inactive. This also self-heals older rows that still have a trigger state.
-    if [ "$owned" != "1" ]; then
-        if [ "$current_trigger" != "NONE" ]; then
-            sqlite3 "$DB_PATH" "UPDATE stocks SET trigger_state='NONE', updated_at=datetime('now') WHERE id=$id" 2>/dev/null
-            log "Triggers disabled for sold $symbol"
-        fi
-        continue
-    fi
-    
     # Evaluate triggers
     NEW_TRIGGER="NONE"
     
-    # Buy trigger: EUR price <= buy threshold
-    if [ "$(echo "$EUR_PRICE $buy_threshold" | awk '{print ($1 <= $2) ? 1 : 0}')" = "1" ]; then
-        NEW_TRIGGER="BUY_TRIGGERED"
-    fi
-    
-    # Sell trigger: EUR price >= sell threshold
-    if [ "$(echo "$EUR_PRICE $sell_threshold" | awk '{print ($1 >= $2) ? 1 : 0}')" = "1" ]; then
-        NEW_TRIGGER="SELL_TRIGGERED"
+    # Evaluate the action that matches the current position state:
+    # unowned stocks can generate buy alerts; owned stocks can generate sell alerts.
+    if [ "$owned" = "1" ]; then
+        if [ "$(echo "$EUR_PRICE $sell_threshold" | awk '{print ($1 >= $2) ? 1 : 0}')" = "1" ]; then
+            NEW_TRIGGER="SELL_TRIGGERED"
+        fi
+    else
+        if [ "$(echo "$EUR_PRICE $buy_threshold" | awk '{print ($1 <= $2) ? 1 : 0}')" = "1" ]; then
+            NEW_TRIGGER="BUY_TRIGGERED"
+        fi
     fi
     
     # Debouncing: only fire alert on state transition INTO trigger zone

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { calculateTrade, calculateDashboard } = require('../lib/analytics');
+const { calculateTrade, calculateDashboard, scaleEquityCurve, snapshotBucketAt } = require('../lib/analytics');
 
 test('closed trade includes both fees in net P/L and return', () => {
     const trade = calculateTrade({ quantity: 10, entry_price_eur: 100, entry_fee_eur: 5, exit_price_eur: 120, exit_fee_eur: 5, opened_at: '2026-01-01 00:00:00', closed_at: '2026-01-11 00:00:00' });
@@ -43,6 +43,29 @@ test('open positions stay out of completed statistics and use current value only
     assert.equal(result.realized.net_eur, 0);
     assert.equal(result.capital.unrealized_pnl_eur, 95);
     assert.equal(result.capital.current_eur, 2095);
+});
+
+test('equity curve scaling chooses readable hourly samples for several days of minute data', () => {
+    const start = Date.parse('2026-01-01T00:00:00Z');
+    const points = Array.from({ length: 4 * 24 * 60 + 1 }, (_, index) => ({ at: new Date(start + index * 60000).toISOString(), equity_eur: 100 + index / 100 }));
+    const scaled = scaleEquityCurve(points);
+    assert.equal(scaled.resolution, 'hourly');
+    assert.ok(scaled.points.length >= 96 && scaled.points.length <= 98);
+    assert.equal(scaled.points[0], points[0]);
+    assert.equal(scaled.points.at(-1), points.at(-1));
+});
+
+test('equity snapshots share a stable fifteen-minute bucket', () => {
+    assert.equal(snapshotBucketAt(new Date('2026-01-01T12:01:00Z')), '2026-01-01 12:00:00');
+    assert.equal(snapshotBucketAt(new Date('2026-01-01T12:14:59Z')), '2026-01-01 12:00:00');
+    assert.equal(snapshotBucketAt(new Date('2026-01-01T12:15:00Z')), '2026-01-01 12:15:00');
+});
+
+test('minute snapshots are not misrepresented as daily volatility observations', () => {
+    const snapshots = Array.from({ length: 60 }, (_, index) => ({ snapshot_at: `2026-01-01 12:${String(index).padStart(2, '0')}:00`, equity_eur: 100 + index, cash_eur: 100 + index, position_value_eur: 0, net_contributions_eur: 100 }));
+    const result = calculateDashboard({ snapshots });
+    assert.equal(result.risk.volatility_pct, null);
+    assert.equal(result.risk.sharpe_ratio, null);
 });
 
 test('drawdown is calculated from snapshots and volatility needs sufficient data', () => {

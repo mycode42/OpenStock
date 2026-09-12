@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test",
-    "start": "node server.js"
+    "start": "node server.js",
+    "monitor": "node scripts/monitor.js"
   },
   "keywords": [],
   "author": "",

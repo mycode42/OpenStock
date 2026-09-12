@@ -10,6 +10,12 @@ function hasColumn(db, tableName, columnName) {
     return db.prepare(`PRAGMA table_info(${tableName})`).all().some(column => column.name === columnName);
 }
 
+function migrateStocks(db) {
+    if (hasTable(db, 'stocks') && !hasColumn(db, 'stocks', 'archived')) {
+        db.exec('ALTER TABLE stocks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+    }
+}
+
 function migrateTrades(db) {
     if (hasTable(db, 'trades') && !hasColumn(db, 'trades', 'dividend_eur')) {
         db.exec('ALTER TABLE trades ADD COLUMN dividend_eur REAL NOT NULL DEFAULT 0 CHECK (dividend_eur >= 0)');
@@ -75,6 +81,7 @@ function initDatabase({ silent = false } = {}) {
     
     // Execute schema
     db.exec(schema);
+    migrateStocks(db);
     migrateTrades(db);
     migrateLegacyJournal(db);
     if (!silent) console.log('Database schema initialized at:', dbPath);

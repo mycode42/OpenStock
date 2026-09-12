@@ -12,7 +12,7 @@ class OpenStockDB {
     getAllStocks() {
         return this.db.prepare(`
             SELECT id, symbol, name, currency, current_price_usd, current_price_eur,
-                   buy_threshold_eur, sell_threshold_eur, owned, enabled,
+                   buy_threshold_eur, sell_threshold_eur, owned, enabled, archived,
                    last_price_update, last_exchange_rate, trigger_state,
                    created_at, updated_at
             FROM stocks
@@ -20,12 +20,28 @@ class OpenStockDB {
         `).all();
     }
 
+    getConfigStocks() {
+        return this.db.prepare('SELECT * FROM stocks WHERE archived = 0 ORDER BY symbol ASC').all();
+    }
+
+    getActiveStocks() {
+        return this.db.prepare('SELECT * FROM stocks WHERE archived = 0 AND enabled = 1 ORDER BY symbol ASC').all();
+    }
+
+    getJournalStocks() {
+        return this.db.prepare(`
+            SELECT s.*, EXISTS(SELECT 1 FROM trades t WHERE t.stock_id = s.id) AS has_journal_history
+            FROM stocks s WHERE s.archived = 0 OR EXISTS(SELECT 1 FROM trades t WHERE t.stock_id = s.id)
+            ORDER BY s.symbol ASC
+        `).all();
+    }
+
     getEnabledStocks() {
         return this.db.prepare(`
             SELECT id, symbol, name, currency, buy_threshold_eur, sell_threshold_eur,
-                   enabled, trigger_state
+                   enabled, archived, trigger_state
             FROM stocks
-            WHERE enabled = 1
+            WHERE enabled = 1 AND archived = 0
             ORDER BY symbol ASC
         `).all();
     }
@@ -46,8 +62,16 @@ class OpenStockDB {
         return stmt.run(symbol, name, currency, buyThreshold, sellThreshold);
     }
 
+    restoreArchivedStock(id, { name, currency, buyThreshold, sellThreshold }) {
+        return this.db.prepare(`
+            UPDATE stocks SET name = ?, currency = ?, buy_threshold_eur = ?, sell_threshold_eur = ?,
+                archived = 0, enabled = 1, owned = 0, trigger_state = 'NONE', updated_at = datetime('now')
+            WHERE id = ? AND archived = 1
+        `).run(name, currency, buyThreshold, sellThreshold, id);
+    }
+
     updateStock(id, updates) {
-        const allowedFields = ['buy_threshold_eur', 'sell_threshold_eur', 'owned', 'enabled', 'name'];
+        const allowedFields = ['buy_threshold_eur', 'sell_threshold_eur', 'owned', 'enabled', 'name', 'archived'];
         const setClauses = [];
         const values = [];
 
@@ -205,8 +229,16 @@ class OpenStockDB {
     }
 
     removeStock(id) {
-        const stmt = this.db.prepare('DELETE FROM stocks WHERE id = ?');
-        return stmt.run(id);
+        const stock = this.db.prepare('SELECT id FROM stocks WHERE id = ?').get(id);
+        if (!stock) return { changes: 0, archived: false };
+        const history = this.db.prepare('SELECT 1 FROM trades WHERE stock_id = ? LIMIT 1').get(id);
+        if (history) {
+            const result = this.db.prepare(`UPDATE stocks SET archived = 1, enabled = 0, owned = 0,
+                trigger_state = 'NONE', updated_at = datetime('now') WHERE id = ?`).run(id);
+            return { changes: result.changes, archived: true };
+        }
+        const result = this.db.prepare('DELETE FROM stocks WHERE id = ?').run(id);
+        return { changes: result.changes, archived: false };
     }
 
     // ===== ALERTS LOG =====
