@@ -238,7 +238,7 @@ function chartRangeControls(activeRange) {
 
 function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, hoverPoints, ariaLabel }) {
     const encodedPoints = journalEscape(JSON.stringify(hoverPoints));
-    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" tabindex="0" role="img" aria-label="${journalEscape(ariaLabel)}" data-chart-label="${journalEscape(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}<polyline class="${lineClass}" points="${linePoints}"/><g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary" dy="10"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
+    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${journalEscape(ariaLabel)}" data-chart-label="${journalEscape(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}<polyline class="${lineClass}" points="${linePoints}"/><g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary" dy="10"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
 }
 
 function attachInteractiveLineCharts(root) {
