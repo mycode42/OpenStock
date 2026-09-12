@@ -21,7 +21,11 @@ test('hover labels compensate for responsive SVG stretching and support three li
 test('PWA asset versions include the chart interaction fix', () => {
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
+    const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
+    assert.match(index, /styles\.css\?v=12/);
     assert.match(index, /app\.js\?v=11/);
-    assert.match(worker, /openstock-v12/);
+    assert.match(worker, /openstock-v13/);
+    assert.match(worker, /styles\.css\?v=12/);
     assert.match(worker, /app\.js\?v=11/);
+    assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
 });
