@@ -10,10 +10,18 @@ test('responsive charts stretch their SVG interaction plane to the full visible 
     assert.match(source, /viewBox="0 0 \$\{width\} \$\{height\}" preserveAspectRatio="none"/);
 });
 
+test('hover labels compensate for responsive SVG stretching and support three lines', () => {
+    const source = fs.readFileSync(path.join(root, 'www/app.js'), 'utf8');
+    assert.match(source, /const compensateStretch =/);
+    assert.match(source, /text\.setAttribute\('transform', compensateStretch/);
+    assert.match(source, /class="chart-hover-tertiary"/);
+    assert.match(source, /tertiary: `Cash \$\{journalMoney\(point\.cash_eur\)\} · Positions/);
+});
+
 test('PWA asset versions include the chart interaction fix', () => {
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
-    assert.match(index, /app\.js\?v=10/);
-    assert.match(worker, /openstock-v11/);
-    assert.match(worker, /app\.js\?v=10/);
+    assert.match(index, /app\.js\?v=11/);
+    assert.match(worker, /openstock-v12/);
+    assert.match(worker, /app\.js\?v=11/);
 });

@@ -238,7 +238,7 @@ function chartRangeControls(activeRange) {
 
 function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, hoverPoints, ariaLabel }) {
     const encodedPoints = journalEscape(JSON.stringify(hoverPoints));
-    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${journalEscape(ariaLabel)}" data-chart-label="${journalEscape(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}<polyline class="${lineClass}" points="${linePoints}"/><g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary" dy="10"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
+    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${journalEscape(ariaLabel)}" data-chart-label="${journalEscape(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}<polyline class="${lineClass}" points="${linePoints}"/><g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
 }
 
 function attachInteractiveLineCharts(root) {
@@ -254,6 +254,7 @@ function attachInteractiveLineCharts(root) {
         const text = chart.querySelector('.chart-hover-text');
         const primary = chart.querySelector('.chart-hover-primary');
         const secondary = chart.querySelector('.chart-hover-secondary');
+        const tertiary = chart.querySelector('.chart-hover-tertiary');
         const hitArea = chart.querySelector('.chart-hit-area');
         let activeIndex = points.length - 1;
         let pinned = false;
@@ -263,15 +264,29 @@ function attachInteractiveLineCharts(root) {
             const point = points[activeIndex];
             const width = chart.viewBox.baseVal.width;
             const height = chart.viewBox.baseVal.height;
+            const bounds = chart.getBoundingClientRect();
+            const inverseScaleX = bounds.width ? width / bounds.width : 1;
+            const inverseScaleY = bounds.height ? height / bounds.height : 1;
+            const compensateStretch = (x, y) => `translate(${x} ${y}) scale(${inverseScaleX} ${inverseScaleY}) translate(${-x} ${-y})`;
             guide.setAttribute('x1', point.x); guide.setAttribute('x2', point.x);
             dot.setAttribute('cx', point.x); dot.setAttribute('cy', point.y);
+            dot.setAttribute('transform', compensateStretch(point.x, point.y));
             const anchor = point.x < width * 0.22 ? 'start' : point.x > width * 0.78 ? 'end' : 'middle';
-            const labelY = point.y < 25 ? Math.min(height - 18, point.y + 14) : point.y - 14;
+            const lineGap = point.lineGap || 9;
+            const lineCount = point.tertiary ? 3 : 2;
+            const blockHeight = (lineCount - 1) * lineGap;
+            const labelY = point.y > blockHeight + 18 ? point.y - blockHeight - 10 : point.y + 16;
             text.setAttribute('x', point.x); text.setAttribute('y', labelY); text.setAttribute('text-anchor', anchor);
-            primary.setAttribute('x', point.x); secondary.setAttribute('x', point.x);
-            primary.textContent = point.primary; secondary.textContent = point.secondary;
+            text.setAttribute('transform', compensateStretch(point.x, labelY));
+            primary.setAttribute('x', point.x);
+            secondary.setAttribute('x', point.x); secondary.setAttribute('dy', lineGap);
+            tertiary.setAttribute('x', point.x); tertiary.setAttribute('dy', lineGap);
+            primary.textContent = point.primary;
+            secondary.textContent = point.secondary;
+            tertiary.textContent = point.tertiary || '';
+            tertiary.toggleAttribute('hidden', !point.tertiary);
             hover.removeAttribute('hidden');
-            chart.setAttribute('aria-label', `${chart.dataset.chartLabel}. ${point.primary}. ${point.secondary}`);
+            chart.setAttribute('aria-label', `${chart.dataset.chartLabel}. ${point.primary}. ${point.secondary}${point.tertiary ? `. ${point.tertiary}` : ''}`);
         };
         const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
         const nearest = clientX => {
@@ -595,7 +610,7 @@ function renderEquityCurve(points, resolution = 'snapshot') {
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
     const coordinates = points.map((point, index) => ({ point, value: Number(point.equity_eur), x: (times[index] - firstTime) / timeRange * width, y: height - ((Number(point.equity_eur) - low) / (high - low || 1) * height) }));
     const line = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `Equity ${journalMoney(value)}`, secondary: `${formatLocalDateTime(point.at)} · Cash ${journalMoney(point.cash_eur)} · Positions ${journalMoney(point.position_value_eur)}` }));
+    const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `Equity ${journalMoney(value)}`, secondary: formatLocalDateTime(point.at), tertiary: `Cash ${journalMoney(point.cash_eur)} · Positions ${journalMoney(point.position_value_eur)}`, lineGap: 13 }));
     const ariaLabel = `Equity curve using ${resolution} closing samples from ${formatLocalDate(points[0].at)} to ${formatLocalDate(points[points.length - 1].at)}`;
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<path d="M0 55H${width} M0 110H${width} M0 165H${width}"/>`, lineClass: 'equity-line', linePoints: line, hoverPoints, ariaLabel });
     return `<div class="journal-chart-scale"><span>${points.length} ${resolution} samples</span><span>Hover or focus the line for exact values</span></div><div class="journal-chart-labels"><span>€${high.toFixed(0)}</span><span>€${low.toFixed(0)}</span></div>${chart}<div class="journal-chart-labels"><span>${formatLocalDate(points[0].at)}</span><span>Peak ${journalMoney(max)}</span><span>${formatLocalDate(points[points.length - 1].at)}</span></div>`;
