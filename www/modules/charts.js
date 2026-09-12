@@ -1,5 +1,5 @@
 import { escapeHtml } from './escape.js';
-import { money, parseOpenStockDate, formatLocalDateTime, formatChartDate, chartRangeLabel, chartRangeControls } from './formatting.js';
+import { money, parseOpenStockDate, formatLocalDateTime, formatChartDate, chartRangeLabel } from './formatting.js';
 
 export function createCharts({ request, historyCache }) {
 function chartRangeControls(activeRange) {
