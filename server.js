@@ -85,7 +85,7 @@ function normaliseTrade(body, existing = null) {
     };
 }
 
-function dashboardData() {
+function dashboardData(db) {
     return calculateDashboard({
         stocks: db.getAllStocks(),
         trades: db.getAllTrades(),
@@ -94,8 +94,8 @@ function dashboardData() {
     });
 }
 
-function captureEquitySnapshot(source = 'dashboard') {
-    const analytics = dashboardData();
+function captureEquitySnapshot(db, source = 'dashboard') {
+    const analytics = dashboardData(db);
     if (!analytics.equity_available) return null;
     const at = snapshotBucketAt(new Date());
     db.addEquitySnapshot({
@@ -141,20 +141,7 @@ function latestYahooChartQuote(chart) {
     return { priceUsd: Number(closes[latestIndex]), quoteTime, source: `yahoo_${session}_close` };
 }
 
-// Ensure database exists before starting server
-const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
-initDatabase();
-
-const db = new OpenStockDB(dbPath);
-const historyBackfill = new HistoryBackfillQueue({
-    db,
-    delayMs: process.env.HISTORY_BACKFILL_DELAY_MS || 1500,
-    range: process.env.HISTORY_RANGE || '5y'
-});
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-function queueStockHistory(stock) {
+function queueStockHistory(historyBackfill, stock) {
     try {
         historyBackfill.enqueue(stock);
     } catch (error) {
@@ -162,27 +149,47 @@ function queueStockHistory(stock) {
     }
 }
 
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use('/api', (req, res, next) => {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null } = {}) {
+    const db = suppliedDb || new OpenStockDB(dbPath);
+    const historyBackfill = backfill || new HistoryBackfillQueue({
+        db,
+        delayMs: process.env.HISTORY_BACKFILL_DELAY_MS || 1500,
+        range: process.env.HISTORY_RANGE || '5y',
+        fetchImpl
+    });
+    const app = express();
+    app.locals.db = db;
+    app.locals.historyBackfill = historyBackfill;
+    app.locals.fetchImpl = fetchImpl;
+    app.use(express.json());
+    app.use(express.urlencoded({ extended: false }));
+    app.use('/api', (req, res, next) => {
     res.set({
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         Pragma: 'no-cache',
         Expires: '0'
     });
     next();
-});
-app.use(express.static(path.join(__dirname, 'www')));
+    });
+    app.use(express.static(path.join(__dirname, 'www')));
 
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
     try {
-        const stocks = req.query.includeArchived === '1' ? db.getJournalStocks() : db.getConfigStocks();
+        const stocks = req.query.includeArchived === '1' ? req.app.locals.db.getJournalStocks() : req.app.locals.db.getConfigStocks();
         res.json(stocks.map(serializeStock));
     } catch (e) {
         console.error('Error fetching stocks:', e.message);
         res.status(500).json({ error: 'Failed to fetch stocks' });
+    }
+});
+
+app.get('/api/stocks/archived', (req, res) => {
+    try {
+        res.json(req.app.locals.db.getArchivedStocks().map(serializeStock));
+    } catch (e) {
+        console.error('Error fetching archived stocks:', e.message);
+        res.status(500).json({ error: 'Failed to fetch archived stocks' });
     }
 });
 
@@ -203,9 +210,9 @@ app.get('/api/stocks/:id/history', (req, res) => {
     }
 
     try {
-        const stock = db.getStockById(req.params.id);
+        const stock = req.app.locals.db.getStockById(req.params.id);
         if (!stock) return res.status(404).json({ error: 'Stock not found' });
-        const points = db.getPriceHistory(stock.id, window.since, window.bucketSeconds)
+        const points = req.app.locals.db.getPriceHistory(stock.id, window.since, window.bucketSeconds)
             .map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
         res.json({ stock_id: stock.id, symbol: stock.symbol, range, currency: 'USD', points });
     } catch (e) {
@@ -216,7 +223,7 @@ app.get('/api/stocks/:id/history', (req, res) => {
 
 app.get('/api/stocks/:id', (req, res) => {
     try {
-        const stock = db.getStockById(req.params.id);
+        const stock = req.app.locals.db.getStockById(req.params.id);
         if (!stock) {
             return res.status(404).json({ error: 'Stock not found' });
         }
@@ -261,27 +268,27 @@ app.post('/api/stocks', (req, res) => {
         }
 
         const normalizedSymbol = symbol.trim().toUpperCase();
-        const existingStock = db.getStockBySymbol(normalizedSymbol);
+        const existingStock = req.app.locals.db.getStockBySymbol(normalizedSymbol);
         if (existingStock && !Number(existingStock.archived)) {
             return res.status(409).json({ error: 'Stock symbol already exists' });
         }
 
         // Disabled and archived stocks do not consume an active monitoring slot.
-        const count = db.getActiveStocks().length;
+        const count = req.app.locals.db.getActiveStocks().length;
         if (count >= 25) {
             return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
         }
 
         if (existingStock) {
-            db.restoreArchivedStock(existingStock.id, { name: name.trim(), currency, buyThreshold, sellThreshold });
-            const stock = db.getStockById(existingStock.id);
-            queueStockHistory(stock);
+            req.app.locals.db.restoreArchivedStock(existingStock.id, { name: name.trim(), currency, buyThreshold, sellThreshold });
+            const stock = req.app.locals.db.getStockById(existingStock.id);
+            queueStockHistory(req.app.locals.historyBackfill, stock);
             return res.json({ message: 'Stock restored successfully', restored: true, stock: serializeStock(stock) });
         }
 
-        const result = db.addStock(normalizedSymbol, name.trim(), currency, buyThreshold, sellThreshold);
-        const stock = db.getStockById(result.lastInsertRowid);
-        queueStockHistory(stock);
+        const result = req.app.locals.db.addStock(normalizedSymbol, name.trim(), currency, buyThreshold, sellThreshold);
+        const stock = req.app.locals.db.getStockById(result.lastInsertRowid);
+        queueStockHistory(req.app.locals.historyBackfill, stock);
         res.status(201).json({ message: 'Stock added successfully', stock: serializeStock(stock) });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT') {
@@ -318,19 +325,19 @@ app.put('/api/stocks/:id', (req, res) => {
                 return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
             }
         } else if (buy_threshold_eur !== undefined) {
-            const existing = db.getStockById(req.params.id);
+            const existing = req.app.locals.db.getStockById(req.params.id);
             if (existing && updates.buy_threshold_eur >= existing.sell_threshold_eur) {
                 return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
             }
         } else if (sell_threshold_eur !== undefined) {
-            const existing = db.getStockById(req.params.id);
+            const existing = req.app.locals.db.getStockById(req.params.id);
             if (existing && updates.sell_threshold_eur <= existing.buy_threshold_eur) {
                 return res.status(400).json({ error: 'Sell threshold must be greater than buy threshold' });
             }
         }
 
         if (owned !== undefined) {
-            const stock = db.getStockById(req.params.id);
+            const stock = req.app.locals.db.getStockById(req.params.id);
             const newOwned = owned === 1 || owned === '1' || owned === true || owned === 'true';
             if (!stock) {
                 return res.status(404).json({ error: 'Stock not found' });
@@ -339,15 +346,15 @@ app.put('/api/stocks/:id', (req, res) => {
         }
 
         if (enabled !== undefined) {
-            const stock = db.getStockById(req.params.id);
+            const stock = req.app.locals.db.getStockById(req.params.id);
             if (!stock) {
                 return res.status(404).json({ error: 'Stock not found' });
             }
             const newEnabled = enabled === 1 || enabled === '1' || enabled === true || enabled === 'true';
             if (newEnabled && Number(stock.archived)) {
-                return res.status(400).json({ error: 'Archived stocks must be restored by adding the symbol again' });
+                return res.status(400).json({ error: 'Archived stocks must be restored with the restore action' });
             }
-            if (newEnabled && !Number(stock.enabled) && db.getActiveStocks().length >= 25) {
+            if (newEnabled && !Number(stock.enabled) && req.app.locals.db.getActiveStocks().length >= 25) {
                 return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
             }
             updates.enabled = newEnabled ? 1 : 0;
@@ -364,11 +371,11 @@ app.put('/api/stocks/:id', (req, res) => {
             return res.status(400).json({ error: 'No valid fields to update' });
         }
 
-        const result = db.updateStock(req.params.id, updates);
+        const result = req.app.locals.db.updateStock(req.params.id, updates);
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Stock not found' });
         }
-        const stock = db.getStockById(req.params.id);
+        const stock = req.app.locals.db.getStockById(req.params.id);
         res.json({ message: 'Stock updated successfully', stock: serializeStock(stock) });
     } catch (e) {
         console.error('Error updating stock:', e.message);
@@ -376,9 +383,31 @@ app.put('/api/stocks/:id', (req, res) => {
     }
 });
 
+app.post('/api/stocks/:id/restore', (req, res) => {
+    try {
+        const existing = req.app.locals.db.getStockById(req.params.id);
+        if (!existing || !Number(existing.archived)) return res.status(404).json({ error: 'Archived stock not found' });
+        if (req.app.locals.db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
+        const name = String(req.body.name ?? existing.name ?? '').trim();
+        const currency = String(req.body.currency ?? existing.currency ?? 'USD').trim().toUpperCase();
+        const buyThreshold = numberField(req.body.buy_threshold_eur ?? existing.buy_threshold_eur, 'Buy threshold', { minimum: Number.EPSILON });
+        const sellThreshold = numberField(req.body.sell_threshold_eur ?? existing.sell_threshold_eur, 'Sell threshold', { minimum: Number.EPSILON });
+        if (!name) return res.status(400).json({ error: 'Name is required' });
+        if (!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({ error: 'Currency must be a three-letter code' });
+        if (buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
+        req.app.locals.db.restoreArchivedStock(existing.id, { name, currency, buyThreshold, sellThreshold });
+        const stock = req.app.locals.db.getStockById(existing.id);
+        queueStockHistory(req.app.locals.historyBackfill, stock);
+        res.json({ message: 'Stock restored successfully', restored: true, stock: serializeStock(stock) });
+    } catch (e) {
+        console.error('Error restoring stock:', e.message);
+        res.status(400).json({ error: e.message || 'Failed to restore stock' });
+    }
+});
+
 app.delete('/api/stocks/:id', (req, res) => {
     try {
-        const result = db.removeStock(req.params.id);
+        const result = req.app.locals.db.removeStock(req.params.id);
         if (result.changes === 0) {
             return res.status(404).json({ error: 'Stock not found' });
         }
@@ -394,7 +423,7 @@ app.get('/api/trades', (req, res) => {
     try {
         const status = ['open', 'closed'].includes(req.query.status) ? req.query.status : undefined;
         const symbol = req.query.symbol ? String(req.query.symbol).toUpperCase() : undefined;
-        res.json(db.getAllTrades({ status, symbol }).map(serializeTrade));
+        res.json(req.app.locals.db.getAllTrades({ status, symbol }).map(serializeTrade));
     } catch (e) {
         console.error('Error fetching trades:', e.message);
         res.status(500).json({ error: 'Failed to fetch trades' });
@@ -404,10 +433,10 @@ app.get('/api/trades', (req, res) => {
 app.post('/api/trades', (req, res) => {
     try {
         const trade = normaliseTrade(req.body);
-        if (!Number.isInteger(trade.stock_id) || !db.getStockById(trade.stock_id)) return res.status(400).json({ error: 'A valid stock is required' });
-        const result = db.addTrade(trade);
-        captureEquitySnapshot('trade_create');
-        res.status(201).json({ message: 'Trade recorded', trade: serializeTrade(db.getTradeById(result.lastInsertRowid)) });
+        if (!Number.isInteger(trade.stock_id) || !req.app.locals.db.getStockById(trade.stock_id)) return res.status(400).json({ error: 'A valid stock is required' });
+        const result = req.app.locals.db.addTrade(trade);
+        captureEquitySnapshot(req.app.locals.db, 'trade_create');
+        res.status(201).json({ message: 'Trade recorded', trade: serializeTrade(req.app.locals.db.getTradeById(result.lastInsertRowid)) });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(409).json({ error: 'Trade ID already exists' });
         res.status(400).json({ error: e.message || 'Invalid trade' });
@@ -416,13 +445,13 @@ app.post('/api/trades', (req, res) => {
 
 app.put('/api/trades/:id', (req, res) => {
     try {
-        const existing = db.getTradeById(req.params.id);
+        const existing = req.app.locals.db.getTradeById(req.params.id);
         if (!existing) return res.status(404).json({ error: 'Trade not found' });
         const trade = normaliseTrade(req.body, existing);
-        if (!Number.isInteger(trade.stock_id) || !db.getStockById(trade.stock_id)) return res.status(400).json({ error: 'A valid stock is required' });
-        db.updateTrade(existing.id, trade);
-        captureEquitySnapshot('trade_edit');
-        res.json({ message: 'Trade updated explicitly', trade: serializeTrade(db.getTradeById(existing.id)) });
+        if (!Number.isInteger(trade.stock_id) || !req.app.locals.db.getStockById(trade.stock_id)) return res.status(400).json({ error: 'A valid stock is required' });
+        req.app.locals.db.updateTrade(existing.id, trade);
+        captureEquitySnapshot(req.app.locals.db, 'trade_edit');
+        res.json({ message: 'Trade updated explicitly', trade: serializeTrade(req.app.locals.db.getTradeById(existing.id)) });
     } catch (e) {
         res.status(400).json({ error: e.message || 'Invalid trade' });
     }
@@ -430,13 +459,13 @@ app.put('/api/trades/:id', (req, res) => {
 
 app.post('/api/trades/:id/close', (req, res) => {
     try {
-        const existing = db.getTradeById(req.params.id);
+        const existing = req.app.locals.db.getTradeById(req.params.id);
         if (!existing) return res.status(404).json({ error: 'Trade not found' });
         if (existing.closed_at) return res.status(409).json({ error: 'Trade is already closed; use explicit edit to correct it' });
         const trade = normaliseTrade({ ...req.body, closed_at: req.body.closed_at || new Date().toISOString() }, existing);
-        db.updateTrade(existing.id, trade);
-        captureEquitySnapshot('trade_close');
-        res.json({ message: 'Trade closed', trade: serializeTrade(db.getTradeById(existing.id)) });
+        req.app.locals.db.updateTrade(existing.id, trade);
+        captureEquitySnapshot(req.app.locals.db, 'trade_close');
+        res.json({ message: 'Trade closed', trade: serializeTrade(req.app.locals.db.getTradeById(existing.id)) });
     } catch (e) {
         res.status(400).json({ error: e.message || 'Invalid close details' });
     }
@@ -444,7 +473,7 @@ app.post('/api/trades/:id/close', (req, res) => {
 
 app.get('/api/capital-events', (req, res) => {
     try {
-        res.json(db.getCapitalEvents().map(event => ({ ...event, occurred_at: toISODateTime(event.occurred_at), created_at: toISODateTime(event.created_at) })));
+        res.json(req.app.locals.db.getCapitalEvents().map(event => ({ ...event, occurred_at: toISODateTime(event.occurred_at), created_at: toISODateTime(event.created_at) })));
     } catch (e) {
         res.status(500).json({ error: 'Failed to fetch capital events' });
     }
@@ -455,10 +484,10 @@ app.post('/api/capital-events', (req, res) => {
         const event_type = String(req.body.event_type || '').toUpperCase();
         if (!['INITIAL', 'DEPOSIT', 'WITHDRAWAL', 'FINANCING'].includes(event_type)) throw new Error('Event type must be INITIAL, DEPOSIT, WITHDRAWAL, or FINANCING');
         const event = { event_type, amount_eur: numberField(req.body.amount_eur, 'Amount', { minimum: Number.EPSILON }), occurred_at: toDatabaseDate(req.body.occurred_at || new Date().toISOString(), 'Event date/time'), notes: String(req.body.notes || '').trim() };
-        if (event_type === 'INITIAL' && db.getCapitalEvents().some(item => item.event_type === 'INITIAL')) throw new Error('An initial capital event already exists; add a deposit instead');
-        const result = db.addCapitalEvent(event);
-        captureEquitySnapshot('capital_event');
-        const saved = db.getCapitalEvents().find(item => item.id === Number(result.lastInsertRowid));
+        if (event_type === 'INITIAL' && req.app.locals.db.getCapitalEvents().some(item => item.event_type === 'INITIAL')) throw new Error('An initial capital event already exists; add a deposit instead');
+        const result = req.app.locals.db.addCapitalEvent(event);
+        captureEquitySnapshot(req.app.locals.db, 'capital_event');
+        const saved = req.app.locals.db.getCapitalEvents().find(item => item.id === Number(result.lastInsertRowid));
         res.status(201).json({ message: 'Capital event recorded', event: { ...saved, occurred_at: toISODateTime(saved.occurred_at), created_at: toISODateTime(saved.created_at) } });
     } catch (e) {
         res.status(400).json({ error: e.message || 'Invalid capital event' });
@@ -467,8 +496,8 @@ app.post('/api/capital-events', (req, res) => {
 
 app.get('/api/analytics/dashboard', (req, res) => {
     try {
-        captureEquitySnapshot('dashboard');
-        res.json(dashboardData());
+        captureEquitySnapshot(req.app.locals.db, 'dashboard');
+        res.json(dashboardData(req.app.locals.db));
     } catch (e) {
         console.error('Error calculating dashboard:', e.message);
         res.status(500).json({ error: 'Failed to calculate dashboard' });
@@ -478,10 +507,10 @@ app.get('/api/analytics/dashboard', (req, res) => {
 // ===== API: Dashboard data =====
 app.get('/api/dashboard', (req, res) => {
     try {
-        const stocks = db.getActiveStocks();
+        const stocks = req.app.locals.db.getActiveStocks();
         res.json({
             stocks: stocks.map(serializeStock),
-            analytics: dashboardData()
+            analytics: dashboardData(req.app.locals.db)
         });
     } catch (e) {
         console.error('Error fetching dashboard:', e.message);
@@ -493,19 +522,19 @@ app.get('/api/dashboard', (req, res) => {
 app.post('/api/refresh-prices', async (req, res) => {
     try {
         // Get all enabled stocks
-        const stocks = db.getEnabledStocks();
+        const stocks = req.app.locals.db.getEnabledStocks();
         if (stocks.length === 0) {
             return res.json({
                 message: 'No enabled stocks to refresh',
                 updated: 0,
-                stocks: db.getAllStocks().map(serializeStock)
+                stocks: req.app.locals.db.getAllStocks().map(serializeStock)
             });
         }
         
         // Get exchange rate (USD to EUR)
         let exchangeRate = 1.0; // Default fallback
         try {
-            const rateResponse = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+            const rateResponse = await fetchImpl('https://api.exchangerate-api.com/v4/latest/USD');
             const rateData = await rateResponse.json();
             exchangeRate = rateData.rates.EUR || 1.0;
         } catch (rateError) {
@@ -519,7 +548,7 @@ app.post('/api/refresh-prices', async (req, res) => {
             try {
                 // Fetch price from Yahoo Finance (free, no API key needed)
                 const symbol = stock.symbol;
-                const priceResponse = await fetch(
+                const priceResponse = await fetchImpl(
                     `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1m&includePrePost=true&corsDomain=finance.yahoo.com&_=${Date.now()}`,
                     {
                         cache: 'no-store',
@@ -559,13 +588,13 @@ app.post('/api/refresh-prices', async (req, res) => {
                 const priceEur = priceUsd * exchangeRate;
                 
                 // Update stock in database using class method
-                db.updateStockPrice(stock.id, priceUsd, priceEur, exchangeRate);
-                db.addPriceSnapshot(stock.id, priceUsd, priceEur, exchangeRate, `manual_refresh_${quote.source}`, quote.quoteTime);
+                req.app.locals.db.updateStockPrice(stock.id, priceUsd, priceEur, exchangeRate);
+                req.app.locals.db.addPriceSnapshot(stock.id, priceUsd, priceEur, exchangeRate, `manual_refresh_${quote.source}`, quote.quoteTime);
                 updatedCount++;
                 
                 // Update name if it was empty and we got a name
                 if ((!stock.name || stock.name === '') && shortName) {
-                    db.updateStock(stock.id, { name: shortName });
+                    req.app.locals.db.updateStock(stock.id, { name: shortName });
                 }
             } catch (stockError) {
                 console.warn(`Error processing stock ${stock.symbol}:`, stockError.message);
@@ -576,7 +605,7 @@ app.post('/api/refresh-prices', async (req, res) => {
         res.json({ 
             message: `Successfully refreshed ${updatedCount} stock prices`, 
             updated: updatedCount,
-            stocks: db.getAllStocks().map(serializeStock)
+            stocks: req.app.locals.db.getAllStocks().map(serializeStock)
         });
     } catch (e) {
         console.error('Error refreshing prices:', e.message);
@@ -586,6 +615,7 @@ app.post('/api/refresh-prices', async (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
+    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate', Pragma: 'no-cache', Expires: '0' });
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
@@ -604,21 +634,18 @@ try {
 } catch (error) {
     console.error('Unable to queue startup history backfill:', error.message);
 }
+    return app;
+}
 
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`OpenStock server listening on 127.0.0.1:${PORT}`);
-});
+if (require.main === module) {
+    const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
+    const port = process.env.PORT || 3000;
+    initDatabase({ dbPath });
+    const app = createApp({ dbPath });
+    const server = app.listen(port, '127.0.0.1', () => console.log(`OpenStock server listening on 127.0.0.1:${port}`));
+    const shutdown = () => { console.log('OpenStock shutting down...'); server.close(() => { app.locals.db.db.close(); process.exit(0); }); };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+}
 
-// Keep references for graceful shutdown
-let dbRef = db;
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down...');
-    dbRef.db.close();
-    process.exit(0);
-});
-
-process.on('SIGINT', () => {
-    console.log('SIGINT received, shutting down...');
-    dbRef.db.close();
-    process.exit(0);
-});
+module.exports = { createApp, serializeStock, serializeTrade, latestYahooChartQuote };

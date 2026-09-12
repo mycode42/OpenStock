@@ -302,7 +302,36 @@ journalctl -u openstock.service -n 50 --no-pager
 | `/api/capital-events` | GET/POST | List or record capital movements |
 | `/api/analytics/dashboard` | GET | Performance, risk and equity-curve data |
 | `/api/dashboard` | GET | Backward-compatible stock dashboard data |
+| `/api/stocks/archived` | GET | Archived stocks retained for journal/history management |
+| `/api/stocks/:id/restore` | POST | Restore an archived stock by identity |
 | `/health` | GET | Health check |
+
+## Architecture and migrations
+
+The browser uses native ES modules: `www/app.js` is the bootstrap, while
+`www/modules/` contains API access, state, chart, dashboard, journal, and
+configuration helpers. The app keeps the existing pointer, touch, focus, and
+keyboard chart interaction and exposes a small compatibility bridge for legacy
+inline markup.
+
+Server construction is separated from listening with `createApp()` exported by
+`server.js`. This allows route/integration tests to use temporary SQLite files
+and mocked quote/backfill fetches. Production startup remains `node server.js`
+and retains the systemd listener behavior.
+
+Database startup applies ordered, transactional migrations from
+`database/migrations/` and records versions in `schema_migrations`. Existing
+databases are adopted in place: archived stock state, trade dividends, and
+legacy journal entries are preserved. Tests never use
+`database/openstock.db`.
+
+Run verification with:
+
+```bash
+npm test
+for f in $(find . -path './node_modules' -prune -o -name '*.js' -print); do node --check "$f"; done
+git diff --check
+```
 
 ## License
 

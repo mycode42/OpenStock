@@ -36,6 +36,13 @@ class OpenStockDB {
         `).all();
     }
 
+    getArchivedStocks() {
+        return this.db.prepare(`
+            SELECT s.*, EXISTS(SELECT 1 FROM trades t WHERE t.stock_id = s.id) AS has_journal_history
+            FROM stocks s WHERE s.archived = 1 ORDER BY s.symbol ASC
+        `).all();
+    }
+
     getEnabledStocks() {
         return this.db.prepare(`
             SELECT id, symbol, name, currency, buy_threshold_eur, sell_threshold_eur,
