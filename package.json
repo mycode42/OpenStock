@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --test",
     "start": "node server.js",
-    "monitor": "node scripts/monitor.js"
+    "monitor": "node scripts/monitor.js",
+    "backfill-history": "node scripts/backfill-history.js"
   },
   "keywords": [],
   "author": "",

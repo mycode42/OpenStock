@@ -4,6 +4,7 @@ const path = require('path');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
 const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/analytics');
+const { HistoryBackfillQueue } = require('./lib/history-backfill');
 
 // Helper to convert SQLite datetime string to ISO 8601 UTC
 function toISODateTime(sqliteDateTime) {
@@ -145,8 +146,21 @@ const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.d
 initDatabase();
 
 const db = new OpenStockDB(dbPath);
+const historyBackfill = new HistoryBackfillQueue({
+    db,
+    delayMs: process.env.HISTORY_BACKFILL_DELAY_MS || 1500,
+    range: process.env.HISTORY_RANGE || '5y'
+});
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+function queueStockHistory(stock) {
+    try {
+        historyBackfill.enqueue(stock);
+    } catch (error) {
+        console.error(`Unable to queue history for ${stock?.symbol || 'stock'}:`, error.message);
+    }
+}
 
 // Middleware
 app.use(express.json());
@@ -261,11 +275,13 @@ app.post('/api/stocks', (req, res) => {
         if (existingStock) {
             db.restoreArchivedStock(existingStock.id, { name: name.trim(), currency, buyThreshold, sellThreshold });
             const stock = db.getStockById(existingStock.id);
+            queueStockHistory(stock);
             return res.json({ message: 'Stock restored successfully', restored: true, stock: serializeStock(stock) });
         }
 
         const result = db.addStock(normalizedSymbol, name.trim(), currency, buyThreshold, sellThreshold);
         const stock = db.getStockById(result.lastInsertRowid);
+        queueStockHistory(stock);
         res.status(201).json({ message: 'Stock added successfully', stock: serializeStock(stock) });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT') {
@@ -581,6 +597,13 @@ app.get('/', (req, res) => {
 app.get('/config', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'index.html'));
 });
+
+// Seed charts in the background. Queue failures are isolated from API startup.
+try {
+    historyBackfill.enqueueMissing();
+} catch (error) {
+    console.error('Unable to queue startup history backfill:', error.message);
+}
 
 app.listen(PORT, '127.0.0.1', () => {
     console.log(`OpenStock server listening on 127.0.0.1:${PORT}`);

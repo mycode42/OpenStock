@@ -168,6 +168,26 @@ Run one **live** monitoring cycle manually as the `openclaw` user with `npm run 
 - System tracks `trigger_state` in database: `NONE`, `BUY_TRIGGERED`, `SELL_TRIGGERED`
 - After alert fires, price must exit zone before new alert possible
 
+### Historical chart backfill
+
+The server queues missing history for active, non-archived stocks at startup and
+after a stock is added or restored. It uses one free Yahoo Finance chart request
+per stock for up to five years of daily closes, processes stocks sequentially,
+and waits 1.5 seconds between requests by default. Existing monitor/manual
+history is preserved; a stock with any `yahoo_backfill` row is not requested
+again. Backfill runs in the background, so Yahoo failures are logged without
+affecting API responses or server availability.
+
+The same prepared, idempotent queue can be run manually:
+
+```bash
+npm run backfill-history
+# Optional: HISTORY_BACKFILL_DELAY_MS=2000 HISTORY_RANGE=5y npm run backfill-history
+```
+
+No Yahoo request is made by chart rendering. Tests use mocked HTTP and temporary
+SQLite databases.
+
 ## Web Interface
 
 Access the web app:

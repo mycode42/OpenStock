@@ -126,13 +126,26 @@ class OpenStockDB {
         return stmt.run(stockId, priceUsd, priceEur, exchangeRate, source, quoteTime, recordedAt);
     }
 
+    hasDailyBackfill(stockId) {
+        return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'yahoo_backfill' LIMIT 1").get(stockId));
+    }
+
+    addHistoricalPriceSnapshots(stockId, points) {
+        const insert = this.db.prepare(`
+            INSERT INTO price_history (stock_id, price_usd, source, quote_time, recorded_at)
+            VALUES (?, ?, 'yahoo_backfill', ?, ?)
+            ON CONFLICT(stock_id, recorded_at) DO NOTHING
+        `);
+        return this.db.transaction(rows => rows.reduce((saved, point) => saved + insert.run(stockId, point.priceUsd, point.recordedAt, point.recordedAt).changes, 0))(Array.isArray(points) ? points : []);
+    }
+
     getPriceHistory(stockId, since, bucketSeconds) {
         return this.db.prepare(`
             WITH sampled AS (
                 SELECT MAX(id) AS id
                 FROM price_history
                 WHERE stock_id = ? AND recorded_at >= datetime('now', ?)
-                GROUP BY CAST(strftime('%s', recorded_at) AS INTEGER) / ?
+                GROUP BY CAST(CAST(strftime('%s', recorded_at) AS INTEGER) / ? AS INTEGER)
             )
             SELECT recorded_at, quote_time, price_usd, price_eur, source
             FROM price_history
