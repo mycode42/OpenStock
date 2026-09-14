@@ -25,6 +25,13 @@ test('dynamic browser templates route text through the shared escaping module', 
     }
 });
 
+test('dashboard leaves stock management controls in Configure', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'www/modules/dashboard.js'), 'utf8');
+    assert.doesNotMatch(source, /data-stock-action="toggle"/);
+    assert.doesNotMatch(source, /data-stock-action="remove"/);
+    assert.doesNotMatch(source, />Disable<|>Remove</);
+});
+
 test('browser modules link without missing named exports', async () => {
     const sourceDir = path.join(__dirname, '..', 'www/modules');
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-browser-modules-'));
