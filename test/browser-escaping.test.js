@@ -32,6 +32,14 @@ test('dashboard leaves stock management controls in Configure', () => {
     assert.doesNotMatch(source, />Disable<|>Remove</);
 });
 
+test('dashboard only shows position value for held stocks and nests USD beside EUR', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'www/modules/dashboard.js'), 'utf8');
+    assert.match(source, /const positionValue = quantity \* Number\(stock\.current_price_eur \|\| 0\)/);
+    assert.match(source, /position\.owned[\s\S]*Position value:/);
+    assert.match(source, /stock-price-usd">\(\$\$\{money\(usdPrice\)\}\)<\/span>/);
+    assert.doesNotMatch(source, /Position: \$\{money\(position\.quantity\)\}/);
+});
+
 test('browser modules link without missing named exports', async () => {
     const sourceDir = path.join(__dirname, '..', 'www/modules');
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-browser-modules-'));
