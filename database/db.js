@@ -269,12 +269,12 @@ class OpenStockDB {
             if (!(Number.isFinite(Number(row.quantity)) && Number(row.quantity) > 0 && Number.isFinite(Number(row.entry_price)) && Number(row.entry_price) > 0 && Number.isFinite(Number(row.entry_price_eur)) && Number(row.entry_price_eur) > 0 && Number.isFinite(Number(row.entry_fee_eur)) && Number(row.entry_fee_eur) >= 0)) throw new Error('Cannot merge an invalid open trade');
         }
         const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity), 0);
-        const entryPriceEur = rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price_eur), 0) / totalQuantity;
+        const entryPriceEur = Number((rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price_eur), 0) / totalQuantity).toFixed(4));
         const currencies = [...new Set(rows.map(row => String(row.currency).toUpperCase()))];
         const currency = currencies.length === 1 ? currencies[0] : 'EUR';
         const entryPrice = currency === 'EUR'
             ? entryPriceEur
-            : rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price), 0) / totalQuantity;
+            : Number((rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price), 0) / totalQuantity).toFixed(4));
         const entryFxRate = currency === 'EUR' ? 1 : entryPriceEur / entryPrice;
         const strategies = [...new Set(rows.map(row => String(row.strategy || '').trim()).filter(Boolean))];
         const notes = [...new Set(rows.map(row => String(row.notes || '').trim()).filter(Boolean))];

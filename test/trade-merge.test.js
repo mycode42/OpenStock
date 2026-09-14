@@ -55,6 +55,16 @@ test('a new same-stock purchase merges into the existing open trade without chan
     assert.equal(analytics.capital.unrealized_pnl_eur, 27);
 });
 
+test('merged unit prices are rounded to four decimal places', t => {
+    const { dir, db } = fixture();
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    db.addTrade(trade({ trade_id: 'R-1', quantity: 1, entry_price: 44.82, entry_price_eur: 44.82 }));
+    db.addTrade(trade({ trade_id: 'R-2', quantity: 2, entry_price: 44.85, entry_price_eur: 44.85 }));
+    const merged = db.getAllTrades({ status: 'open' })[0];
+    assert.equal(merged.entry_price, 44.84);
+    assert.equal(merged.entry_price_eur, 44.84);
+});
+
 test('existing duplicate open rows consolidate transactionally and retain source snapshots', t => {
     const { dir, db } = fixture();
     t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
