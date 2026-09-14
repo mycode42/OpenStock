@@ -76,6 +76,34 @@ async function bodyRequest(f, url, body, method = 'POST') {
     return f.request(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }
 
+test('alert-level API supports authoritative CRUD, validation, disable, rearm, and threshold rejection', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const created = (await (await bodyRequest(f, '/api/stocks', { symbol: 'LEVEL', name: 'Levels', buy_threshold_eur: 10, sell_threshold_eur: 20 })).json()).stock;
+    let response = await f.request(`/api/stocks/${created.id}/alert-levels`);
+    assert.equal((await response.json()).length, 2);
+    response = await bodyRequest(f, `/api/stocks/${created.id}/alert-levels`, { side: 'BUY', price_eur: 8 });
+    assert.equal(response.status, 201);
+    const level = (await response.json()).alert_level;
+    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { side: 'SELL', price_eur: 25, enabled: false }, 'PUT');
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).alert_level.active, 0);
+    response = await bodyRequest(f, `/api/alert-levels/${level.id}/rearm`, {});
+    assert.equal((await response.json()).alert_level.enabled, 1);
+    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { price_eur: 0 }, 'PUT');
+    assert.equal(response.status, 400);
+    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { enabled: 'not-a-boolean' }, 'PUT');
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /must be boolean/);
+    response = await bodyRequest(f, `/api/stocks/${created.id}`, { buy_threshold_eur: 7 }, 'PUT');
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /manage alert levels/);
+    f.db.addAlertForLevel(f.db.getAlertLevelById(level.id), 25, 123);
+    response = await f.request(`/api/alert-levels/${level.id}`, { method: 'DELETE' });
+    assert.equal(response.status, 200);
+    assert.equal(f.db.db.prepare('SELECT alert_level_id FROM alerts_log WHERE telegram_message_id=?').get('123').alert_level_id, null);
+});
+
 test('stock routes validate, update authoritatively, hard-delete, and archive journal identity', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });

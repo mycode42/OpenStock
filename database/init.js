@@ -2,7 +2,10 @@ const Database = require('better-sqlite3');
 const migrations = [
   require('./migrations/001_initial'),
   require('./migrations/002_legacy_compatibility'),
-  require('./migrations/003_indexes')
+  require('./migrations/003_indexes'),
+  require('./migrations/004_alert_levels'),
+  require('./migrations/005_alert_trigger_continuity'),
+  require('./migrations/006_alert_log_foreign_keys')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {
@@ -17,8 +20,16 @@ function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/
     })();
   }
   if (seedDefaults && db.prepare('SELECT COUNT(*) AS count FROM stocks').get().count === 0) {
-    const insert = db.prepare('INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur) VALUES (?, ?, ?, ?, ?)');
-    for (const stock of [['AAPL', 'Apple Inc.', 'USD', 150, 200], ['MSFT', 'Microsoft Corporation', 'USD', 250, 350], ['GOOGL', 'Alphabet Inc.', 'USD', 120, 180], ['TSLA', 'Tesla Inc.', 'USD', 200, 300], ['AMZN', 'Amazon.com Inc.', 'USD', 100, 150]]) insert.run(...stock);
+    const seed = db.transaction(() => {
+      const insertStock = db.prepare('INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur) VALUES (?, ?, ?, ?, ?)');
+      const insertLevel = db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
+      for (const stock of [['AAPL', 'Apple Inc.', 'USD', 150, 200], ['MSFT', 'Microsoft Corporation', 'USD', 250, 350], ['GOOGL', 'Alphabet Inc.', 'USD', 120, 180], ['TSLA', 'Tesla Inc.', 'USD', 200, 300], ['AMZN', 'Amazon.com Inc.', 'USD', 100, 150]]) {
+        const result = insertStock.run(...stock);
+        insertLevel.run(result.lastInsertRowid, 'BUY', stock[3]);
+        insertLevel.run(result.lastInsertRowid, 'SELL', stock[4]);
+      }
+    });
+    seed();
   }
   db.close();
   if (!silent) console.log('Database schema initialized at:', dbPath);

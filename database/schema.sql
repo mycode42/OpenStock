@@ -28,14 +28,35 @@ CREATE TABLE IF NOT EXISTS stocks (
 -- Trigger alert log (prevents duplicate alerts)
 CREATE TABLE IF NOT EXISTS alerts_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    stock_id INTEGER NOT NULL,
+    stock_id INTEGER,
     alert_type TEXT NOT NULL, -- BUY, SELL
     price_eur REAL NOT NULL,
     threshold_eur REAL NOT NULL,
     sent_at TEXT DEFAULT (datetime('now')) NOT NULL,
     telegram_message_id INTEGER,
-    FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE
+    alert_level_id INTEGER,
+    FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE SET NULL,
+    FOREIGN KEY (alert_level_id) REFERENCES alert_levels(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS alert_levels (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+    price_eur REAL NOT NULL CHECK (price_eur > 0),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    triggered INTEGER NOT NULL DEFAULT 0 CHECK (triggered IN (0, 1)),
+    retired INTEGER NOT NULL DEFAULT 0 CHECK (retired IN (0, 1)),
+    triggered_at TEXT,
+    retired_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE,
+    UNIQUE (stock_id, side, price_eur)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_levels_stock_state ON alert_levels(stock_id, enabled, active, triggered, retired);
+CREATE INDEX IF NOT EXISTS idx_alert_levels_side ON alert_levels(stock_id, side);
 
 -- Exchange rate cache (for auditability)
 CREATE TABLE IF NOT EXISTS exchange_rates (

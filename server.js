@@ -23,6 +23,23 @@ function serializeStock(stock) {
     };
 }
 
+function serializeAlertLevel(level) {
+    if (!level) return level;
+    return { ...level, price_eur: Number(level.price_eur), triggered_at: toISODateTime(level.triggered_at), retired_at: toISODateTime(level.retired_at), created_at: toISODateTime(level.created_at), updated_at: toISODateTime(level.updated_at) };
+}
+
+function alertLevelInput(body, existing = null) {
+    const side = String(body.side ?? existing?.side ?? '').toUpperCase();
+    if (!['BUY', 'SELL'].includes(side)) throw new Error('Side must be BUY or SELL');
+    return { side, price_eur: numberField(body.price_eur ?? existing?.price_eur, 'Alert price', { minimum: Number.EPSILON }) };
+}
+
+function booleanField(value, label) {
+    if ([true, 1, '1', 'true'].includes(value)) return 1;
+    if ([false, 0, '0', 'false'].includes(value)) return 0;
+    throw new Error(`${label} must be boolean`);
+}
+
 function serializeTrade(trade) {
     const calculated = calculateTrade(trade);
     return {
@@ -161,6 +178,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     app.locals.db = db;
     app.locals.historyBackfill = historyBackfill;
     app.locals.fetchImpl = fetchImpl;
+    const serializeConfiguredStock = stock => ({ ...serializeStock(stock), position: db.getPositionSummary(stock.id), alert_levels: db.getAlertLevels(stock.id).map(serializeAlertLevel) });
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
     app.use('/api', (req, res, next) => {
@@ -177,7 +195,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
 app.get('/api/stocks', (req, res) => {
     try {
         const stocks = req.query.includeArchived === '1' ? req.app.locals.db.getJournalStocks() : req.app.locals.db.getConfigStocks();
-        res.json(stocks.map(serializeStock));
+        res.json(stocks.map(serializeConfiguredStock));
     } catch (e) {
         console.error('Error fetching stocks:', e.message);
         res.status(500).json({ error: 'Failed to fetch stocks' });
@@ -186,7 +204,7 @@ app.get('/api/stocks', (req, res) => {
 
 app.get('/api/stocks/archived', (req, res) => {
     try {
-        res.json(req.app.locals.db.getArchivedStocks().map(serializeStock));
+        res.json(req.app.locals.db.getArchivedStocks().map(serializeConfiguredStock));
     } catch (e) {
         console.error('Error fetching archived stocks:', e.message);
         res.status(500).json({ error: 'Failed to fetch archived stocks' });
@@ -227,11 +245,52 @@ app.get('/api/stocks/:id', (req, res) => {
         if (!stock) {
             return res.status(404).json({ error: 'Stock not found' });
         }
-        res.json(serializeStock(stock));
+        res.json(serializeConfiguredStock(stock));
     } catch (e) {
         console.error('Error fetching stock:', e.message);
         res.status(500).json({ error: 'Failed to fetch stock' });
     }
+});
+
+app.get('/api/stocks/:id/alert-levels', (req, res) => {
+    try {
+        const stock = req.app.locals.db.getStockById(req.params.id);
+        if (!stock) return res.status(404).json({ error: 'Stock not found' });
+        res.json(req.app.locals.db.getAlertLevels(stock.id).map(serializeAlertLevel));
+    } catch (e) { res.status(500).json({ error: 'Failed to fetch alert levels' }); }
+});
+
+app.post('/api/stocks/:id/alert-levels', (req, res) => {
+    try {
+        const stock = req.app.locals.db.getStockById(req.params.id);
+        if (!stock) return res.status(404).json({ error: 'Stock not found' });
+        const input = alertLevelInput(req.body);
+        const level = req.app.locals.db.addAlertLevel(stock.id, input.side, input.price_eur);
+        res.status(201).json({ alert_level: serializeAlertLevel(level) });
+    } catch (e) { res.status(e.code === 'SQLITE_CONSTRAINT_UNIQUE' ? 409 : 400).json({ error: e.message || 'Invalid alert level' }); }
+});
+
+app.put('/api/alert-levels/:id', (req, res) => {
+    try {
+        const existing = req.app.locals.db.getAlertLevelById(req.params.id);
+        if (!existing) return res.status(404).json({ error: 'Alert level not found' });
+        const input = alertLevelInput(req.body, existing);
+        for (const key of ['enabled', 'active']) if (req.body[key] !== undefined) input[key] = booleanField(req.body[key], key);
+        res.json({ alert_level: serializeAlertLevel(req.app.locals.db.updateAlertLevel(existing.id, input)) });
+    } catch (e) { res.status(e.code === 'SQLITE_CONSTRAINT_UNIQUE' ? 409 : 400).json({ error: e.message || 'Invalid alert level' }); }
+});
+
+app.post('/api/alert-levels/:id/rearm', (req, res) => {
+    const existing = req.app.locals.db.getAlertLevelById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Alert level not found' });
+    res.json({ alert_level: serializeAlertLevel(req.app.locals.db.rearmAlertLevel(existing.id)) });
+});
+
+app.delete('/api/alert-levels/:id', (req, res) => {
+    const existing = req.app.locals.db.getAlertLevelById(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Alert level not found' });
+    req.app.locals.db.deleteAlertLevel(existing.id);
+    res.json({ deleted_id: existing.id });
 });
 
 app.post('/api/stocks', (req, res) => {
@@ -283,13 +342,13 @@ app.post('/api/stocks', (req, res) => {
             req.app.locals.db.restoreArchivedStock(existingStock.id, { name: name.trim(), currency, buyThreshold, sellThreshold });
             const stock = req.app.locals.db.getStockById(existingStock.id);
             queueStockHistory(req.app.locals.historyBackfill, stock);
-            return res.json({ message: 'Stock restored successfully', restored: true, stock: serializeStock(stock) });
+            return res.json({ message: 'Stock restored successfully', restored: true, stock: serializeConfiguredStock(stock) });
         }
 
         const result = req.app.locals.db.addStock(normalizedSymbol, name.trim(), currency, buyThreshold, sellThreshold);
         const stock = req.app.locals.db.getStockById(result.lastInsertRowid);
         queueStockHistory(req.app.locals.historyBackfill, stock);
-        res.status(201).json({ message: 'Stock added successfully', stock: serializeStock(stock) });
+        res.status(201).json({ message: 'Stock added successfully', stock: serializeConfiguredStock(stock) });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT') {
             return res.status(409).json({ error: 'Stock symbol already exists' });
@@ -302,39 +361,10 @@ app.post('/api/stocks', (req, res) => {
 app.put('/api/stocks/:id', (req, res) => {
     try {
         const { buy_threshold_eur, sell_threshold_eur, owned, enabled, name } = req.body;
+        if (buy_threshold_eur !== undefined || sell_threshold_eur !== undefined) {
+            return res.status(400).json({ error: 'Existing-stock threshold changes are no longer accepted; manage alert levels instead.' });
+        }
         const updates = {};
-
-        if (buy_threshold_eur !== undefined) {
-            const val = parseFloat(buy_threshold_eur);
-            if (isNaN(val) || val <= 0) {
-                return res.status(400).json({ error: 'Invalid buy threshold' });
-            }
-            updates.buy_threshold_eur = val;
-        }
-
-        if (sell_threshold_eur !== undefined) {
-            const val = parseFloat(sell_threshold_eur);
-            if (isNaN(val) || val <= 0) {
-                return res.status(400).json({ error: 'Invalid sell threshold' });
-            }
-            updates.sell_threshold_eur = val;
-        }
-
-        if (buy_threshold_eur !== undefined && sell_threshold_eur !== undefined) {
-            if (updates.buy_threshold_eur >= updates.sell_threshold_eur) {
-                return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
-            }
-        } else if (buy_threshold_eur !== undefined) {
-            const existing = req.app.locals.db.getStockById(req.params.id);
-            if (existing && updates.buy_threshold_eur >= existing.sell_threshold_eur) {
-                return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
-            }
-        } else if (sell_threshold_eur !== undefined) {
-            const existing = req.app.locals.db.getStockById(req.params.id);
-            if (existing && updates.sell_threshold_eur <= existing.buy_threshold_eur) {
-                return res.status(400).json({ error: 'Sell threshold must be greater than buy threshold' });
-            }
-        }
 
         if (owned !== undefined) {
             const stock = req.app.locals.db.getStockById(req.params.id);
@@ -376,7 +406,7 @@ app.put('/api/stocks/:id', (req, res) => {
             return res.status(404).json({ error: 'Stock not found' });
         }
         const stock = req.app.locals.db.getStockById(req.params.id);
-        res.json({ message: 'Stock updated successfully', stock: serializeStock(stock) });
+        res.json({ message: 'Stock updated successfully', stock: serializeConfiguredStock(stock) });
     } catch (e) {
         console.error('Error updating stock:', e.message);
         res.status(500).json({ error: 'Failed to update stock' });
@@ -398,7 +428,7 @@ app.post('/api/stocks/:id/restore', (req, res) => {
         req.app.locals.db.restoreArchivedStock(existing.id, { name, currency, buyThreshold, sellThreshold });
         const stock = req.app.locals.db.getStockById(existing.id);
         queueStockHistory(req.app.locals.historyBackfill, stock);
-        res.json({ message: 'Stock restored successfully', restored: true, stock: serializeStock(stock) });
+        res.json({ message: 'Stock restored successfully', restored: true, stock: serializeConfiguredStock(stock) });
     } catch (e) {
         console.error('Error restoring stock:', e.message);
         res.status(400).json({ error: e.message || 'Failed to restore stock' });
@@ -509,7 +539,7 @@ app.get('/api/dashboard', (req, res) => {
     try {
         const stocks = req.app.locals.db.getActiveStocks();
         res.json({
-            stocks: stocks.map(serializeStock),
+            stocks: stocks.map(serializeConfiguredStock),
             analytics: dashboardData(req.app.locals.db)
         });
     } catch (e) {
@@ -527,7 +557,7 @@ app.post('/api/refresh-prices', async (req, res) => {
             return res.json({
                 message: 'No enabled stocks to refresh',
                 updated: 0,
-                stocks: req.app.locals.db.getAllStocks().map(serializeStock)
+                stocks: req.app.locals.db.getAllStocks().map(serializeConfiguredStock)
             });
         }
         
@@ -605,7 +635,7 @@ app.post('/api/refresh-prices', async (req, res) => {
         res.json({ 
             message: `Successfully refreshed ${updatedCount} stock prices`, 
             updated: updatedCount,
-            stocks: req.app.locals.db.getAllStocks().map(serializeStock)
+            stocks: req.app.locals.db.getAllStocks().map(serializeConfiguredStock)
         });
     } catch (e) {
         console.error('Error refreshing prices:', e.message);

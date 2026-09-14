@@ -61,20 +61,76 @@ class OpenStockDB {
         return this.db.prepare('SELECT * FROM stocks WHERE symbol = ?').get(symbol);
     }
 
+    getPositionSummary(stockId) {
+        const history = this.db.prepare('SELECT EXISTS(SELECT 1 FROM trades WHERE stock_id = ?) AS present').get(stockId).present === 1;
+        const open = this.db.prepare('SELECT COALESCE(SUM(quantity), 0) AS quantity FROM trades WHERE stock_id = ? AND closed_at IS NULL').get(stockId);
+        const stock = this.getStockById(stockId);
+        const quantity = history ? Number(open.quantity || 0) : 0;
+        const manualOwned = Boolean(Number(stock?.owned));
+        return history
+            ? { quantity, owned: quantity > 0, source: 'journal', warning: null }
+            : { quantity: 0, owned: manualOwned, source: 'manual', warning: 'No journal history; manual ownership is a fallback.' };
+    }
+
+    getAlertLevels(stockId) { return this.db.prepare('SELECT al.*, s.symbol FROM alert_levels al JOIN stocks s ON s.id = al.stock_id WHERE al.stock_id = ? ORDER BY al.side, al.price_eur, al.id').all(stockId); }
+    getActiveAlertLevels(stockId) { return this.db.prepare('SELECT * FROM alert_levels WHERE stock_id = ? AND enabled = 1 AND active = 1 AND triggered = 0 AND retired = 0 ORDER BY side, price_eur, id').all(stockId); }
+    getAlertLevelById(id) { return this.db.prepare('SELECT al.*, s.symbol FROM alert_levels al JOIN stocks s ON s.id = al.stock_id WHERE al.id = ?').get(id); }
+    addAlertLevel(stockId, side, priceEur) {
+        if (!this.getStockById(stockId)) throw new Error('Stock not found');
+        if (!['BUY', 'SELL'].includes(String(side).toUpperCase())) throw new Error('Side must be BUY or SELL');
+        if (!Number.isFinite(Number(priceEur)) || Number(priceEur) <= 0) throw new Error('Alert price must be positive');
+        const result = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)').run(stockId, String(side).toUpperCase(), Number(priceEur)); return this.getAlertLevelById(result.lastInsertRowid);
+    }
+    updateAlertLevel(id, updates) {
+        const existing = this.getAlertLevelById(id);
+        if (!existing) throw new Error('Alert level not found');
+        if (updates.side !== undefined && !['BUY', 'SELL'].includes(String(updates.side).toUpperCase())) throw new Error('Side must be BUY or SELL');
+        if (updates.price_eur !== undefined && (!Number.isFinite(Number(updates.price_eur)) || Number(updates.price_eur) <= 0)) throw new Error('Alert price must be positive');
+        for (const key of ['enabled', 'active']) if (updates[key] !== undefined && ![0, 1, true, false].includes(updates[key])) throw new Error(`${key} must be boolean`);
+        if ((existing.triggered || existing.retired) && (updates.enabled === 1 || updates.enabled === true || updates.active === 1 || updates.active === true)) throw new Error('Retired alert levels must be rearmed explicitly');
+
+        const normalized = {};
+        if (updates.side !== undefined) normalized.side = String(updates.side).toUpperCase();
+        if (updates.price_eur !== undefined) normalized.price_eur = Number(updates.price_eur);
+        if (updates.enabled !== undefined) normalized.enabled = updates.enabled ? 1 : 0;
+        if (updates.active !== undefined) normalized.active = updates.active ? 1 : 0;
+        if (normalized.enabled === 0) normalized.active = 0;
+        if (normalized.enabled === 1 && updates.active === undefined) normalized.active = 1;
+        const effectiveEnabled = normalized.enabled ?? Number(existing.enabled);
+        if (normalized.active === 1 && effectiveEnabled !== 1) throw new Error('An active alert level must be enabled');
+
+        const entries = Object.entries(normalized);
+        if (!entries.length) throw new Error('No valid alert level fields to update');
+        const result = this.db.prepare(`UPDATE alert_levels SET ${entries.map(([key]) => `${key} = ?`).join(', ')} WHERE id = ?`).run(...entries.map(([, value]) => value), id);
+        if (!result.changes) throw new Error('Alert level not found');
+        return this.getAlertLevelById(id);
+    }
+    deleteAlertLevel(id) { return this.db.prepare('DELETE FROM alert_levels WHERE id = ?').run(id); }
+    rearmAlertLevel(id) { this.db.prepare("UPDATE alert_levels SET enabled=1, active=1, triggered=0, retired=0, triggered_at=NULL, retired_at=NULL WHERE id=?").run(id); return this.getAlertLevelById(id); }
+    retireAlertLevel(id) { return this.db.prepare("UPDATE alert_levels SET enabled=0, active=0, triggered=1, retired=1, triggered_at=datetime('now'), retired_at=datetime('now') WHERE id=?").run(id); }
+
     addStock(symbol, name, currency, buyThreshold, sellThreshold) {
         const stmt = this.db.prepare(`
             INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur)
             VALUES (?, ?, ?, ?, ?)
         `);
-        return stmt.run(symbol, name, currency, buyThreshold, sellThreshold);
+        return this.db.transaction(() => {
+            const result = stmt.run(symbol, name, currency, buyThreshold, sellThreshold);
+            const add = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
+            add.run(result.lastInsertRowid, 'BUY', buyThreshold);
+            add.run(result.lastInsertRowid, 'SELL', sellThreshold);
+            return result;
+        })();
     }
 
     restoreArchivedStock(id, { name, currency, buyThreshold, sellThreshold }) {
-        return this.db.prepare(`
+        const result = this.db.prepare(`
             UPDATE stocks SET name = ?, currency = ?, buy_threshold_eur = ?, sell_threshold_eur = ?,
                 archived = 0, enabled = 1, owned = 0, trigger_state = 'NONE', updated_at = datetime('now')
             WHERE id = ? AND archived = 1
         `).run(name, currency, buyThreshold, sellThreshold, id);
+        if (result.changes) this.db.prepare('UPDATE alert_levels SET enabled = CASE WHEN retired = 0 THEN 1 ELSE 0 END, active = CASE WHEN retired = 0 THEN 1 ELSE 0 END WHERE stock_id = ?').run(id);
+        return result;
     }
 
     updateStock(id, updates) {
@@ -255,6 +311,7 @@ class OpenStockDB {
         if (history) {
             const result = this.db.prepare(`UPDATE stocks SET archived = 1, enabled = 0, owned = 0,
                 trigger_state = 'NONE', updated_at = datetime('now') WHERE id = ?`).run(id);
+            this.db.prepare('UPDATE alert_levels SET enabled = 0, active = 0 WHERE stock_id = ?').run(id);
             return { changes: result.changes, archived: true };
         }
         const result = this.db.prepare('DELETE FROM stocks WHERE id = ?').run(id);
@@ -277,6 +334,10 @@ class OpenStockDB {
             VALUES (?, ?, ?, ?)
         `);
         return stmt.run(stockId, alertType, priceEur, thresholdEur);
+    }
+
+    addAlertForLevel(level, priceEur, messageId) {
+        return this.db.prepare('INSERT INTO alerts_log (stock_id, alert_level_id, alert_type, price_eur, threshold_eur, telegram_message_id) VALUES (?, ?, ?, ?, ?, ?)').run(level.stock_id, level.id, level.side, priceEur, level.price_eur, String(messageId));
     }
 
     // ===== EXCHANGE RATES =====
