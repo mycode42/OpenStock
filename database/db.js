@@ -62,14 +62,14 @@ class OpenStockDB {
     }
 
     getPositionSummary(stockId) {
-        const history = this.db.prepare('SELECT EXISTS(SELECT 1 FROM trades WHERE stock_id = ?) AS present').get(stockId).present === 1;
         const open = this.db.prepare('SELECT COALESCE(SUM(quantity), 0) AS quantity FROM trades WHERE stock_id = ? AND closed_at IS NULL').get(stockId);
-        const stock = this.getStockById(stockId);
-        const quantity = history ? Number(open.quantity || 0) : 0;
-        const manualOwned = Boolean(Number(stock?.owned));
-        return history
-            ? { quantity, owned: quantity > 0, source: 'journal', warning: null }
-            : { quantity: 0, owned: manualOwned, source: 'manual', warning: 'No journal history; manual ownership is a fallback.' };
+        const quantity = Number(open.quantity || 0);
+        return {
+            quantity,
+            owned: quantity > 0,
+            source: 'journal',
+            warning: quantity > 0 ? null : 'No open Journal position; SELL alerts are suppressed.'
+        };
     }
 
     getAlertLevels(stockId) { return this.db.prepare('SELECT al.*, s.symbol FROM alert_levels al JOIN stocks s ON s.id = al.stock_id WHERE al.stock_id = ? ORDER BY al.side, al.price_eur, al.id').all(stockId); }
@@ -134,7 +134,7 @@ class OpenStockDB {
     }
 
     updateStock(id, updates) {
-        const allowedFields = ['buy_threshold_eur', 'sell_threshold_eur', 'owned', 'enabled', 'name', 'archived'];
+        const allowedFields = ['buy_threshold_eur', 'sell_threshold_eur', 'enabled', 'name', 'archived'];
         const setClauses = [];
         const values = [];
 
@@ -143,13 +143,6 @@ class OpenStockDB {
                 setClauses.push(`${key} = ?`);
                 values.push(value);
             }
-        }
-
-        // A sold stock must not retain an active buy/sell alert state. Keep
-        // collecting its prices/history when enabled, but disarm triggers as
-        // soon as ownership is changed to sold.
-        if (Object.prototype.hasOwnProperty.call(updates, 'owned') && !Number(updates.owned)) {
-            setClauses.push("trigger_state = 'NONE'");
         }
 
         if (setClauses.length === 0) {

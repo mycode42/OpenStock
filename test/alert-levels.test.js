@@ -24,12 +24,11 @@ test('migration creates exactly one legacy BUY and SELL level and remains idempo
     check.db.close();
 });
 
-test('journal position wins over manual fallback and no-history stocks retain fallback', t => {
+test('positions are exclusively derived from open Journal lots', t => {
     const { dir, file } = fixture(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const db = new OpenStockDB(file);
-    db.addStock('MAN', 'Manual', 'USD', 10, 20);
-    db.updateStock(1, { owned: 1 });
-    assert.deepEqual(db.getPositionSummary(1), { quantity: 0, owned: true, source: 'manual', warning: 'No journal history; manual ownership is a fallback.' });
+    db.addStock('JOURNAL', 'Journal', 'USD', 10, 20);
+    assert.deepEqual(db.getPositionSummary(1), { quantity: 0, owned: false, source: 'journal', warning: 'No open Journal position; SELL alerts are suppressed.' });
     db.addTrade({ trade_id: 'T1', stock_id: 1, opened_at: '2026-01-01 00:00:00', closed_at: null, quantity: 3, currency: 'EUR', entry_price: 10, entry_fx_rate: 1, entry_price_eur: 10, entry_fee_eur: 0, exit_price: null, exit_fx_rate: null, exit_price_eur: null, exit_fee_eur: 0, dividend_eur: 0, strategy: '', notes: '' });
     assert.deepEqual(db.getPositionSummary(1), { quantity: 3, owned: true, source: 'journal', warning: null });
     db.db.close();
@@ -39,9 +38,8 @@ test('journal history with no open lots never falls back to manual ownership', t
     const { dir, file } = fixture(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const db = new OpenStockDB(file);
     db.addStock('CLOSED', 'Closed', 'USD', 10, 20);
-    db.updateStock(1, { owned: 1 });
     db.addTrade({ trade_id: 'C1', stock_id: 1, opened_at: '2026-01-01 00:00:00', closed_at: '2026-01-02 00:00:00', quantity: 2, currency: 'EUR', entry_price: 10, entry_fx_rate: 1, entry_price_eur: 10, entry_fee_eur: 0, exit_price: 12, exit_fx_rate: 1, exit_price_eur: 12, exit_fee_eur: 0, dividend_eur: 0, strategy: '', notes: '' });
-    assert.deepEqual(db.getPositionSummary(1), { quantity: 0, owned: false, source: 'journal', warning: null });
+    assert.deepEqual(db.getPositionSummary(1), { quantity: 0, owned: false, source: 'journal', warning: 'No open Journal position; SELL alerts are suppressed.' });
     db.db.close();
 });
 

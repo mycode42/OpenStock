@@ -336,10 +336,10 @@ git diff --check
 ## License
 
 MIT - Built for the OpenClaw ecosystem
-# Alert levels and transitional positions
+# Alert levels and Journal positions
 
 OpenStock stores independent one-shot BUY and SELL alert levels in migration 004. Existing stock thresholds are copied once into one BUY and one SELL level; the legacy threshold columns remain for compatibility, but monitoring uses `alert_levels`. Levels can be added, deleted, disabled, and rearmed through the API or Configure view. A level is marked triggered/retired only after Telegram confirms delivery. Alerts are notifications only and never execute trades.
 
-Position summaries use open Journal lots whenever a stock has any trade history (`position.source: journal`, with summed `position.quantity`). Stocks without journal history use the existing manual `owned` flag as a transitional fallback and expose a warning. Record SPCX's real trade in the Journal before relying on a journal-derived quantity.
+Position summaries and SELL eligibility are derived exclusively from open Journal lots (`position.source: journal`, with summed `position.quantity`). Manual ownership updates are rejected. Without an open Journal position, SELL levels stay configured but are suppressed until a position is recorded.
 
 Archiving disables alert levels while preserving their history. Explicit restore re-enables non-retired levels; retired levels require explicit rearm. Migration and verification must be run against a copied database, never the production file.

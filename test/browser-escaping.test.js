@@ -53,6 +53,15 @@ test('journal edit workflow normalizes numeric data IDs and uses visible accessi
     assert.doesNotMatch(source, /\bonclick=|\bonsubmit=/);
 });
 
+test('configuration uses a compact single-stock alert editor without legacy ownership controls', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'www/modules/config.js'), 'utf8');
+    assert.match(source, /expandedStockId/);
+    assert.match(source, /Manage alerts/);
+    assert.match(source, /Triggered · ready to rearm/);
+    assert.match(source, /open one stock at a time/);
+    assert.doesNotMatch(source, /Mark Owned|Mark Sold|\btos\b|data-stock-action="owned"/);
+});
+
 test('browser pages do not emit inline event handlers', () => {
     const root = path.join(__dirname, '..', 'www');
     for (const file of ['app.js', 'modules/dashboard.js', 'modules/config.js', 'modules/journal.js']) {

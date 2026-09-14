@@ -1,202 +1,204 @@
 import { escapeHtml } from './escape.js';
 import { money } from './formatting.js';
 
-
-
 export function createConfig(context) {
     let editingStockSymbol = null;
+    let stockFormOpen = false;
+    let expandedStockId = null;
     const { getStocks, getStockMap, request: af, replaceStocks, upsertStock, removeStockFromState, beginStockMutation, isCurrentStockMutation, incrementStockRevision, showA, renderCurrentPage, pageFromHash, nav } = context;
-function renderConfig() {
-    const container = document.getElementById('page-config');
-    container.innerHTML = `<header><h1>⚙️ Stock Configuration</h1><p class="subtitle">Manage monitoring stocks and independent alert levels</p></header><div id="ac"></div><div class="card"><div class="section-header"><div class="section-title">${getStocks().length}/25</div></div><div class="table-scroll"><table class="table"><thead><tr><th>Symbol</th><th>Name</th><th>Position</th><th>Stock</th><th></th></tr></thead><tbody>${getStocks().map(stock => { const position = stock.position || {}; return `<tr><td><strong>${escapeHtml(stock.symbol)}</strong></td><td>${escapeHtml(stock.name || '—')}</td><td><span class="badge ${position.owned ? 'owned' : 'sold'}">${position.owned ? 'HELD' : 'NOT HELD'}</span><small class="position-source">${escapeHtml(position.quantity ?? 0)} · ${escapeHtml(position.source || 'manual')}</small>${position.warning ? `<small class="warning-text">${escapeHtml(position.warning)}</small>` : ''}</td><td><span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'MONITORING' : 'DISABLED'}</span></td><td><button class="btn btn-sm btn-secondary" data-stock-action="edit" data-stock-symbol="${escapeHtml(stock.symbol)}">Edit name</button> <button class="btn btn-sm btn-secondary" data-stock-action="toggle" data-stock-symbol="${escapeHtml(stock.symbol)}">${stock.enabled ? 'Disable' : 'Enable'}</button> ${position.source === 'manual' ? `<button class="btn btn-sm btn-secondary" data-stock-action="owned" data-stock-symbol="${escapeHtml(stock.symbol)}">${position.owned ? 'Mark Sold (legacy)' : 'Mark Owned (legacy)'}</button>` : '<small class="journal-help">Journal-backed; use Journal</small>'} <button class="btn btn-sm btn-danger" data-stock-action="remove" data-stock-symbol="${escapeHtml(stock.symbol)}">Remove</button></td></tr>`; }).join('')}</tbody></table></div><div style="margin-top:1rem"><h3 id="stock-form-title">Add Stock</h3><p id="stock-form-help" class="journal-help">Initial BUY and SELL prices create the first alert levels. Existing-stock edits manage only the name; prices are managed below.</p><div class="form-row"><div class="form-group"><label>Symbol</label><input id="as-sym" placeholder="AAPL"></div><div class="form-group"><label>Name</label><input id="as-nm" placeholder="Apple Inc."></div></div><div class="form-row" id="initial-level-fields"><div class="form-group"><label for="as-buy">Initial BUY alert €</label><input id="as-buy" type="number" step=".01" min="0.01"></div><div class="form-group"><label for="as-sell">Initial SELL alert €</label><input id="as-sell" type="number" step=".01" min="0.01"></div></div><div class="btn-group"><button type="button" id="stock-form-submit" class="btn btn-primary" data-stock-editor-action="save">Add</button><button type="button" id="stock-form-cancel" class="btn btn-secondary hidden" data-stock-editor-action="cancel">Cancel</button></div></div><div id="as-result" style="margin-top:.75rem"></div></div>`;
-    container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => ({ edit: es, owned: tos, toggle: ts, remove: rs }[button.dataset.stockAction])?.(button.dataset.stockSymbol)));
-    container.querySelector('[data-stock-editor-action="save"]')?.addEventListener('click', () => editingStockSymbol ? esu(editingStockSymbol) : asm());
-    container.querySelector('[data-stock-editor-action="cancel"]')?.addEventListener('click', cancelStockEdit);
-    renderAlertLevelPanel(container);
-    const archivedSection = document.createElement('div');
-    archivedSection.id = 'archived-stocks';
-    archivedSection.className = 'card';
-    container.appendChild(archivedSection);
-    populateStockEditor();
-    loadArchivedStocks();
-}
 
-function renderAlertLevelPanel(container) {
-    const panel = document.createElement('section');
-    panel.className = 'card';
-    panel.innerHTML = `<h2>Alert levels</h2><p class="journal-help">BUY and SELL levels are independent one-shot notifications. Delivered alerts retire only that level; alerts never place trades. Disabled/retired levels remain visible.</p>${getStocks().map(stock => `<div class="alert-level-stock" data-level-stock="${escapeHtml(stock.id)}"><div class="section-header"><h3>${escapeHtml(stock.symbol)}</h3><span class="position-summary">${escapeHtml(stock.position?.source || 'manual')} position: ${escapeHtml(stock.position?.quantity ?? 0)}${stock.position?.warning ? ` · ${escapeHtml(stock.position.warning)}` : ''}</span></div><div class="alert-level-list">${(stock.alert_levels || []).map(level => `<form class="alert-level-row" data-alert-form data-alert-id="${escapeHtml(level.id)}"><label>Side<select data-alert-side aria-label="${escapeHtml(stock.symbol)} alert side"><option value="BUY" ${level.side === 'BUY' ? 'selected' : ''}>BUY</option><option value="SELL" ${level.side === 'SELL' ? 'selected' : ''}>SELL</option></select></label><label>Price €<input type="number" min="0.01" step="0.01" data-alert-price value="${escapeHtml(level.price_eur)}" aria-label="${escapeHtml(stock.symbol)} alert price"></label><label class="checkbox-label"><input type="checkbox" data-alert-enabled ${level.enabled ? 'checked' : ''} ${level.retired ? 'disabled' : ''}> Enabled</label><span class="level-status">${level.retired ? 'Triggered / retired' : level.active && level.enabled ? 'Active' : 'Disabled'}</span><button type="submit" class="btn btn-sm btn-secondary" data-alert-action="save">Save</button>${level.retired ? '<button type="button" class="btn btn-sm btn-secondary" data-alert-action="rearm">Rearm</button>' : ''}<button type="button" class="btn btn-sm btn-danger" data-alert-action="delete">Delete</button></form>`).join('') || '<p class="journal-empty">No levels yet.</p>'}</div><form class="alert-level-add" data-alert-add-form><label>New side<select data-alert-side aria-label="New alert side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select></label><label>Price €<input type="number" min="0.01" step="0.01" data-alert-price required></label><button type="submit" class="btn btn-primary" data-alert-action="add" data-stock-id="${escapeHtml(stock.id)}">Add level</button></form></div>`).join('')}`;
-    container.appendChild(panel);
-    panel.querySelectorAll('[data-alert-action="add"]').forEach(button => button.closest('form')?.addEventListener('submit', event => { event.preventDefault(); manageAlertLevel(button); }));
-    panel.querySelectorAll('[data-alert-action="save"]').forEach(button => button.closest('form')?.addEventListener('submit', event => { event.preventDefault(); manageAlertLevel(button); }));
-    panel.querySelectorAll('[data-alert-action="rearm"], [data-alert-action="delete"]').forEach(button => button.addEventListener('click', () => manageAlertLevel(button)));
-}
-
-async function manageAlertLevel(button) {
-    const action = button.dataset.alertAction;
-    let result;
-    if (action === 'add') {
-        const form = button.closest('form');
-        const price = Number(form.querySelector('[data-alert-price]').value);
-        if (!(price > 0)) return showA('Alert price must be positive', 'error');
-        result = await af(`/stocks/${button.dataset.stockId}/alert-levels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ side: form.querySelector('[data-alert-side]').value, price_eur: price }) });
-    } else if (action === 'rearm') result = await af(`/alert-levels/${button.closest('[data-alert-id]').dataset.alertId}/rearm`, { method: 'POST' });
-    else if (action === 'delete') result = await af(`/alert-levels/${button.closest('[data-alert-id]').dataset.alertId}`, { method: 'DELETE' });
-    else if (action === 'save') { const row = button.closest('[data-alert-id]'); result = await af(`/alert-levels/${row.dataset.alertId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ side: row.querySelector('[data-alert-side]').value, price_eur: Number(row.querySelector('[data-alert-price]').value), enabled: row.querySelector('[data-alert-enabled]').checked }) }); }
-    if (result) { const stocks = await af('/stocks'); if (stocks) replaceStocks(stocks); renderConfig(); }
-}
-
-async function loadArchivedStocks() {
-    const archived = await af('/stocks/archived');
-    const container = document.getElementById('archived-stocks');
-    if (!container || !archived) return;
-    container.innerHTML = archived.length
-        ? `<div class="section-title">Archived / historical stocks</div><p class="journal-help">Archived stocks stay out of monitoring and journal selectors until explicitly restored.</p><div class="journal-table-wrap"><table class="table"><thead><tr><th>Symbol</th><th>Name</th><th>Journal history</th><th></th></tr></thead><tbody>${archived.map(stock => `<tr><td><strong>${escapeHtml(stock.symbol)}</strong></td><td>${escapeHtml(stock.name || '—')}</td><td>${stock.has_journal_history ? 'Retained' : 'None'}</td><td><button type="button" class="btn btn-sm btn-secondary" data-restore-stock="${escapeHtml(stock.id)}">Restore</button></td></tr>`).join('')}</tbody></table></div>`
-        : '<div class="section-title">Archived / historical stocks</div><p class="journal-empty">No archived stocks.</p>';
-    container.querySelectorAll('[data-restore-stock]').forEach(button => button.addEventListener('click', () => restoreStock(button.dataset.restoreStock)));
-}
-
-async function restoreStock(id) {
-    const result = await af(`/stocks/${encodeURIComponent(id)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    if (!result?.stock) return;
-    upsertStock(result.stock);
-    renderConfig();
-    showA('Stock restored and history backfill queued', 'success');
-}
-
-function populateStockEditor() {
-    const stock = editingStockSymbol ? getStockMap()[editingStockSymbol] : null;
-    if (!stock) {
-        editingStockSymbol = null;
-        return;
+    function levelSummary(stock) {
+        const active = (stock.alert_levels || []).filter(level => level.enabled && level.active && !level.retired);
+        if (!active.length) return '<span class="config-level-empty">No active levels</span>';
+        return active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(level.side)} €${money(level.price_eur)}</span>`).join('');
     }
-    document.getElementById('stock-form-title').textContent = `Edit ${stock.symbol}`;
-    document.getElementById('as-sym').value = stock.symbol;
-    document.getElementById('as-sym').disabled = true;
-    document.getElementById('as-nm').value = stock.name || '';
-    document.getElementById('initial-level-fields').classList.add('hidden');
-    document.getElementById('stock-form-submit').textContent = 'Save';
-    document.getElementById('stock-form-cancel').classList.remove('hidden');
-}
 
-function cancelStockEdit() {
-    editingStockSymbol = null;
-    renderConfig();
-}
+    function positionSummary(stock) {
+        const quantity = Number(stock.position?.quantity || 0);
+        return quantity > 0
+            ? `<span class="config-position held">${money(quantity)} shares in Journal</span>`
+            : '<span class="config-position">No open Journal position</span>';
+    }
 
-async function asm() {
-    const symbolInput = document.getElementById('as-sym');
-    if (!symbolInput) {
-        nav('#/config');
-        return;
+    function stockEditor() {
+        if (!stockFormOpen && !editingStockSymbol) return '';
+        const editing = editingStockSymbol ? getStockMap()[editingStockSymbol] : null;
+        return `<section class="card config-editor-card" id="stock-editor">
+            <div class="section-header"><div><h2>${editing ? `Edit ${escapeHtml(editing.symbol)}` : 'Add stock'}</h2><p class="journal-help">${editing ? 'Update the display name. Alert prices are managed on the stock card.' : 'The initial prices create the first BUY and SELL alert levels.'}</p></div><button type="button" class="btn btn-sm btn-secondary" data-stock-editor-action="cancel">Close</button></div>
+            <div class="form-row"><div class="form-group"><label for="as-sym">Symbol</label><input id="as-sym" placeholder="AAPL" ${editing ? 'disabled' : ''} value="${escapeHtml(editing?.symbol || '')}"></div><div class="form-group"><label for="as-nm">Name</label><input id="as-nm" placeholder="Apple Inc." value="${escapeHtml(editing?.name || '')}"></div></div>
+            ${editing ? '' : '<div class="form-row" id="initial-level-fields"><div class="form-group"><label for="as-buy">Initial BUY alert €</label><input id="as-buy" type="number" step=".01" min="0.01"></div><div class="form-group"><label for="as-sell">Initial SELL alert €</label><input id="as-sell" type="number" step=".01" min="0.01"></div></div>'}
+            <div class="btn-group"><button type="button" class="btn btn-primary" data-stock-editor-action="save">${editing ? 'Save name' : 'Add stock'}</button></div>
+        </section>`;
     }
-    const symbol = symbolInput.value.trim().toUpperCase();
-    const name = document.getElementById('as-nm').value.trim();
-    const buyThreshold = parseFloat(document.getElementById('as-buy').value);
-    const sellThreshold = parseFloat(document.getElementById('as-sell').value);
-    if (!symbol || !name) {
-        showA('Symbol & name required', 'error');
-        return;
+
+    function alertEditor(stock) {
+        const levels = stock.alert_levels || [];
+        const editable = levels.filter(level => !level.retired);
+        const retired = levels.filter(level => level.retired);
+        return `<div class="config-alert-editor" data-level-stock="${escapeHtml(stock.id)}">
+            <div class="config-alert-heading"><div><strong>Alert levels</strong><p>Each delivered level retires once. Rearm it whenever you want another notification.</p></div>${positionSummary(stock)}</div>
+            <div class="config-alert-list">
+                ${editable.map(level => `<form class="config-alert-row" data-alert-id="${escapeHtml(level.id)}"><select data-alert-side aria-label="${escapeHtml(stock.symbol)} alert side"><option value="BUY" ${level.side === 'BUY' ? 'selected' : ''}>BUY</option><option value="SELL" ${level.side === 'SELL' ? 'selected' : ''}>SELL</option></select><div class="config-price-input"><span>€</span><input type="number" min="0.01" step="0.01" data-alert-price value="${escapeHtml(level.price_eur)}" aria-label="${escapeHtml(stock.symbol)} alert price"></div><label class="config-switch"><input type="checkbox" data-alert-enabled ${level.enabled ? 'checked' : ''}><span>${level.enabled ? 'Active' : 'Paused'}</span></label><button type="submit" class="btn btn-sm btn-secondary" data-alert-action="save">Save</button><button type="button" class="btn btn-sm btn-danger" data-alert-action="delete">Delete</button></form>`).join('') || '<p class="journal-empty">No active or paused levels.</p>'}
+                ${retired.length ? `<div class="config-retired"><div class="config-retired-title">Triggered · ready to rearm</div>${retired.map(level => `<div class="config-retired-row" data-alert-id="${escapeHtml(level.id)}"><span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(level.side)} €${money(level.price_eur)}</span><span>${level.triggered_at ? `Triggered ${escapeHtml(level.triggered_at)}` : 'Triggered'}</span><button type="button" class="btn btn-sm btn-success" data-alert-action="rearm">Rearm</button><button type="button" class="btn btn-sm btn-danger" data-alert-action="delete">Delete</button></div>`).join('')}</div>` : ''}
+            </div>
+            <form class="config-alert-add"><select data-alert-side aria-label="New alert side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select><div class="config-price-input"><span>€</span><input type="number" min="0.01" step="0.01" data-alert-price required placeholder="New price" aria-label="New alert price"></div><button type="submit" class="btn btn-primary" data-alert-action="add" data-stock-id="${escapeHtml(stock.id)}">Add level</button></form>
+        </div>`;
     }
-    if (isNaN(buyThreshold) || isNaN(sellThreshold) || buyThreshold >= sellThreshold) {
-        showA('Invalid thresholds (buy < sell)', 'error');
-        return;
+
+    function stockCards() {
+        if (!getStocks().length) return '<div class="empty-state">No stocks configured yet.</div>';
+        return `<div class="config-stock-list">${getStocks().map(stock => {
+            const expanded = String(expandedStockId) === String(stock.id);
+            const retiredCount = (stock.alert_levels || []).filter(level => level.retired).length;
+            return `<article class="config-stock-card ${expanded ? 'is-expanded' : ''}">
+                <div class="config-stock-main">
+                    <div class="config-stock-identity"><strong>${escapeHtml(stock.symbol)}</strong><span>${escapeHtml(stock.name || '—')}</span><small>€${money(stock.current_price_eur)}</small></div>
+                    <div class="config-level-summary">${levelSummary(stock)}${retiredCount ? `<span class="config-retired-count">${retiredCount} triggered</span>` : ''}</div>
+                    <div class="config-stock-status">${positionSummary(stock)}<span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'Monitoring' : 'Disabled'}</span></div>
+                    <div class="config-stock-actions"><button type="button" class="btn btn-sm ${expanded ? 'btn-primary' : 'btn-secondary'}" data-stock-action="levels" data-stock-symbol="${escapeHtml(stock.symbol)}" aria-expanded="${expanded}">${expanded ? 'Hide alerts' : 'Manage alerts'}</button><button type="button" class="btn btn-sm btn-secondary" data-stock-action="edit" data-stock-symbol="${escapeHtml(stock.symbol)}">Edit</button><button type="button" class="btn btn-sm btn-secondary" data-stock-action="toggle" data-stock-symbol="${escapeHtml(stock.symbol)}">${stock.enabled ? 'Disable' : 'Enable'}</button><button type="button" class="btn btn-sm btn-danger" data-stock-action="remove" data-stock-symbol="${escapeHtml(stock.symbol)}">Remove</button></div>
+                </div>${expanded ? alertEditor(stock) : ''}
+            </article>`;
+        }).join('')}</div>`;
     }
-    incrementStockRevision();
-    const result = await af('/stocks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            symbol,
-            name,
-            buy_threshold_eur: buyThreshold,
-            sell_threshold_eur: sellThreshold
-        })
-    });
-    if (result?.stock) {
+
+    function renderConfig() {
+        const container = document.getElementById('page-config');
+        container.innerHTML = `<header class="config-header"><div><h1>⚙️ Configure</h1><p class="subtitle">Compact stock controls with independent one-shot alert levels</p></div><button type="button" class="btn btn-primary" data-config-action="add-stock">+ Add stock</button></header><div id="ac"></div>${stockEditor()}<section class="card config-catalogue"><div class="section-header"><div><div class="section-title">Stocks</div><p class="journal-help">${getStocks().length}/25 configured · open one stock at a time to manage its alerts.</p></div></div>${stockCards()}</section><details class="card config-archive"><summary>Archived / historical stocks</summary><div id="archived-stocks"><p class="journal-empty">Loading…</p></div></details>`;
+        container.querySelector('[data-config-action="add-stock"]')?.addEventListener('click', () => { editingStockSymbol = null; stockFormOpen = true; renderConfig(); focusEditor(); });
+        container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => ({ edit: es, levels: toggleLevels, toggle: ts, remove: rs }[button.dataset.stockAction])?.(button.dataset.stockSymbol)));
+        container.querySelector('[data-stock-editor-action="save"]')?.addEventListener('click', () => editingStockSymbol ? esu(editingStockSymbol) : asm());
+        container.querySelector('[data-stock-editor-action="cancel"]')?.addEventListener('click', cancelStockEdit);
+        container.querySelectorAll('[data-alert-action="add"], [data-alert-action="save"]').forEach(button => button.closest('form')?.addEventListener('submit', event => { event.preventDefault(); manageAlertLevel(button); }));
+        container.querySelectorAll('[data-alert-action="rearm"], [data-alert-action="delete"]').forEach(button => button.addEventListener('click', () => manageAlertLevel(button)));
+        loadArchivedStocks();
+    }
+
+    function focusEditor() {
+        requestAnimationFrame(() => { const editor = document.getElementById('stock-editor'); editor?.scrollIntoView({ behavior: 'smooth', block: 'start' }); editor?.querySelector('input:not([disabled])')?.focus(); });
+    }
+
+    function toggleLevels(symbol) {
+        const stock = getStockMap()[symbol];
+        if (!stock) return;
+        expandedStockId = String(expandedStockId) === String(stock.id) ? null : stock.id;
+        renderConfig();
+    }
+
+    async function manageAlertLevel(button) {
+        const action = button.dataset.alertAction;
+        const row = button.closest('[data-alert-id]');
+        let result;
+        if (action === 'add') {
+            const form = button.closest('form');
+            const price = Number(form.querySelector('[data-alert-price]').value);
+            if (!(price > 0)) return showA('Alert price must be positive', 'error');
+            result = await af(`/stocks/${button.dataset.stockId}/alert-levels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ side: form.querySelector('[data-alert-side]').value, price_eur: price }) });
+        } else if (action === 'save') {
+            const price = Number(row.querySelector('[data-alert-price]').value);
+            if (!(price > 0)) return showA('Alert price must be positive', 'error');
+            result = await af(`/alert-levels/${row.dataset.alertId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ side: row.querySelector('[data-alert-side]').value, price_eur: price, enabled: row.querySelector('[data-alert-enabled]').checked }) });
+        } else if (action === 'rearm') {
+            result = await af(`/alert-levels/${row.dataset.alertId}/rearm`, { method: 'POST' });
+        } else if (action === 'delete') {
+            if (!confirm('Delete this alert level?')) return;
+            result = await af(`/alert-levels/${row.dataset.alertId}`, { method: 'DELETE' });
+        }
+        if (!result) return;
+        const stocks = await af('/stocks');
+        if (stocks) replaceStocks(stocks);
+        renderConfig();
+    }
+
+    async function loadArchivedStocks() {
+        const archived = await af('/stocks/archived');
+        const container = document.getElementById('archived-stocks');
+        if (!container || !archived) return;
+        container.innerHTML = archived.length
+            ? `<p class="journal-help">Archived stocks stay out of monitoring and Journal selectors until restored.</p><div class="config-archived-list">${archived.map(stock => `<div><span><strong>${escapeHtml(stock.symbol)}</strong> · ${escapeHtml(stock.name || '—')}</span><button type="button" class="btn btn-sm btn-secondary" data-restore-stock="${escapeHtml(stock.id)}">Restore</button></div>`).join('')}</div>`
+            : '<p class="journal-empty">No archived stocks.</p>';
+        container.querySelectorAll('[data-restore-stock]').forEach(button => button.addEventListener('click', () => restoreStock(button.dataset.restoreStock)));
+    }
+
+    async function restoreStock(id) {
+        const result = await af(`/stocks/${encodeURIComponent(id)}/restore`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        if (!result?.stock) return;
         upsertStock(result.stock);
         renderConfig();
-        showA(`Added ${symbol}`, 'success');
+        showA('Stock restored and history backfill queued', 'success');
     }
-}
 
-function es(symbol) {
-    if (!getStockMap()[symbol]) return;
-    editingStockSymbol = symbol;
-    if (pageFromHash() === 'config') renderConfig();
-    else nav('#/config');
-}
-
-async function esu(symbol) {
-    const stock = getStockMap()[symbol];
-    if (!stock) return;
-    const name = document.getElementById('as-nm').value.trim();
-    if (!name) {
-        showA('Name required', 'error');
-        return;
-    }
-    const token = beginStockMutation(stock.id);
-    const result = await af(`/stocks/${stock.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-    });
-    if (result?.stock && isCurrentStockMutation(stock.id, token)) {
+    function cancelStockEdit() {
         editingStockSymbol = null;
-        upsertStock(result.stock);
-        renderCurrentPage();
-        showA(`Updated ${symbol}`, 'success');
+        stockFormOpen = false;
+        renderConfig();
     }
-}
 
-async function ts(symbol) {
-    const stock = getStockMap()[symbol];
-    if (!stock) return;
-    const token = beginStockMutation(stock.id);
-    const result = await af(`/stocks/${stock.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: stock.enabled ? 0 : 1 })
-    });
-    if (result?.stock && isCurrentStockMutation(stock.id, token)) {
-        upsertStock(result.stock);
-        renderCurrentPage();
-        showA(`${symbol} ${result.stock.enabled ? 'enabled' : 'disabled'}`, 'success');
+    async function asm() {
+        const symbol = document.getElementById('as-sym')?.value.trim().toUpperCase();
+        const name = document.getElementById('as-nm')?.value.trim();
+        const buyThreshold = parseFloat(document.getElementById('as-buy')?.value);
+        const sellThreshold = parseFloat(document.getElementById('as-sell')?.value);
+        if (!symbol || !name) return showA('Symbol and name are required', 'error');
+        if (isNaN(buyThreshold) || isNaN(sellThreshold) || buyThreshold >= sellThreshold) return showA('Initial BUY price must be below the SELL price', 'error');
+        incrementStockRevision();
+        const result = await af('/stocks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol, name, buy_threshold_eur: buyThreshold, sell_threshold_eur: sellThreshold }) });
+        if (result?.stock) {
+            stockFormOpen = false;
+            upsertStock(result.stock);
+            expandedStockId = result.stock.id;
+            renderConfig();
+            showA(`Added ${symbol}`, 'success');
+        }
     }
-}
 
-async function tos(symbol) {
-    const stock = getStockMap()[symbol];
-    if (!stock) return;
-    if (stock.position?.source === 'journal') {
-        showA(`${symbol} is journal-backed; record or edit the journal trade`, 'error');
-        return;
+    function es(symbol) {
+        if (!getStockMap()[symbol]) return;
+        editingStockSymbol = symbol;
+        stockFormOpen = true;
+        if (pageFromHash() === 'config') { renderConfig(); focusEditor(); } else nav('#/config');
     }
-    const token = beginStockMutation(stock.id);
-    const result = await af(`/stocks/${stock.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ owned: stock.position?.owned ? 0 : 1 })
-    });
-    if (result?.stock && isCurrentStockMutation(stock.id, token)) {
-        upsertStock(result.stock);
-        renderCurrentPage();
-        showA(`${symbol} marked ${result.stock.position?.owned ? 'owned' : 'sold'}`, 'success');
+
+    async function esu(symbol) {
+        const stock = getStockMap()[symbol];
+        if (!stock) return;
+        const name = document.getElementById('as-nm')?.value.trim();
+        if (!name) return showA('Name required', 'error');
+        const token = beginStockMutation(stock.id);
+        const result = await af(`/stocks/${stock.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+        if (result?.stock && isCurrentStockMutation(stock.id, token)) {
+            editingStockSymbol = null;
+            stockFormOpen = false;
+            upsertStock(result.stock);
+            renderConfig();
+            showA(`Updated ${symbol}`, 'success');
+        }
     }
-}
 
-async function rs(symbol) {
-    const stock = getStockMap()[symbol];
-    if (!stock || !confirm(`Remove ${symbol}?`)) return;
-    const token = beginStockMutation(stock.id);
-    const result = await af(`/stocks/${stock.id}`, { method: 'DELETE' });
-    if (result && isCurrentStockMutation(stock.id, token)) {
-        if (editingStockSymbol === symbol) editingStockSymbol = null;
-        removeStockFromState(stock.id);
-        renderCurrentPage();
-        showA(result.archived ? `Archived ${symbol}; journal history retained` : `Removed ${symbol}`, 'success');
+    async function ts(symbol) {
+        const stock = getStockMap()[symbol];
+        if (!stock) return;
+        const token = beginStockMutation(stock.id);
+        const result = await af(`/stocks/${stock.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: stock.enabled ? 0 : 1 }) });
+        if (result?.stock && isCurrentStockMutation(stock.id, token)) {
+            upsertStock(result.stock);
+            renderConfig();
+            showA(`${symbol} ${result.stock.enabled ? 'enabled' : 'disabled'}`, 'success');
+        }
     }
-}
 
+    async function rs(symbol) {
+        const stock = getStockMap()[symbol];
+        if (!stock || !confirm(`Remove ${symbol}?`)) return;
+        const token = beginStockMutation(stock.id);
+        const result = await af(`/stocks/${stock.id}`, { method: 'DELETE' });
+        if (result && isCurrentStockMutation(stock.id, token)) {
+            if (editingStockSymbol === symbol) cancelStockEdit();
+            removeStockFromState(stock.id);
+            if (String(expandedStockId) === String(stock.id)) expandedStockId = null;
+            renderCurrentPage();
+            showA(result.archived ? `Archived ${symbol}; Journal history retained` : `Removed ${symbol}`, 'success');
+        }
+    }
 
-    return { renderConfig, loadArchivedStocks, restoreStock, asm, cancelStockEdit, es, esu, ts, tos, rs };
+    return { renderConfig, loadArchivedStocks, restoreStock, asm, cancelStockEdit, es, esu, ts, rs };
 }

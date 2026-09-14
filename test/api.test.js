@@ -80,6 +80,7 @@ test('alert-level API supports authoritative CRUD, validation, disable, rearm, a
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const created = (await (await bodyRequest(f, '/api/stocks', { symbol: 'LEVEL', name: 'Levels', buy_threshold_eur: 10, sell_threshold_eur: 20 })).json()).stock;
+    assert.equal(Object.hasOwn(created, 'owned'), false);
     let response = await f.request(`/api/stocks/${created.id}/alert-levels`);
     assert.equal((await response.json()).length, 2);
     response = await bodyRequest(f, `/api/stocks/${created.id}/alert-levels`, { side: 'BUY', price_eur: 8 });
@@ -98,6 +99,9 @@ test('alert-level API supports authoritative CRUD, validation, disable, rearm, a
     response = await bodyRequest(f, `/api/stocks/${created.id}`, { buy_threshold_eur: 7 }, 'PUT');
     assert.equal(response.status, 400);
     assert.match((await response.json()).error, /manage alert levels/);
+    response = await bodyRequest(f, `/api/stocks/${created.id}`, { owned: true }, 'PUT');
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /Manual ownership is no longer supported/);
     f.db.addAlertForLevel(f.db.getAlertLevelById(level.id), 25, 123);
     response = await f.request(`/api/alert-levels/${level.id}`, { method: 'DELETE' });
     assert.equal(response.status, 200);

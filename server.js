@@ -15,8 +15,9 @@ function toISODateTime(sqliteDateTime) {
 
 function serializeStock(stock) {
     if (!stock) return stock;
+    const { owned: _legacyOwned, ...publicStock } = stock;
     return {
-        ...stock,
+        ...publicStock,
         last_price_update: toISODateTime(stock.last_price_update),
         created_at: toISODateTime(stock.created_at),
         updated_at: toISODateTime(stock.updated_at)
@@ -367,12 +368,7 @@ app.put('/api/stocks/:id', (req, res) => {
         const updates = {};
 
         if (owned !== undefined) {
-            const stock = req.app.locals.db.getStockById(req.params.id);
-            const newOwned = owned === 1 || owned === '1' || owned === true || owned === 'true';
-            if (!stock) {
-                return res.status(404).json({ error: 'Stock not found' });
-            }
-            updates.owned = newOwned ? 1 : 0;
+            return res.status(400).json({ error: 'Manual ownership is no longer supported; use Journal positions and rearm alert levels.' });
         }
 
         if (enabled !== undefined) {
