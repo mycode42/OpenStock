@@ -121,6 +121,17 @@ CREATE TABLE IF NOT EXISTS trades (
         OR (closed_at IS NOT NULL AND exit_price > 0 AND exit_fx_rate > 0 AND exit_price_eur > 0))
 );
 
+-- Open purchases for the same stock are consolidated into one position row.
+-- This audit table preserves every merged source trade exactly as entered.
+CREATE TABLE IF NOT EXISTS trade_merge_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_trade_id INTEGER NOT NULL,
+    source_trade_id TEXT NOT NULL UNIQUE,
+    source_trade_json TEXT NOT NULL,
+    merged_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (target_trade_id) REFERENCES trades(id) ON DELETE RESTRICT
+);
+
 -- Periodic snapshots let historical equity and drawdown remain auditable even
 -- when today's positions/quotes change. Snapshots are taken by the monitor.
 CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -143,6 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_price_history_stock_recorded_at ON price_history(
 CREATE INDEX IF NOT EXISTS idx_capital_events_occurred_at ON capital_events(occurred_at);
 CREATE INDEX IF NOT EXISTS idx_trades_stock_opened_at ON trades(stock_id, opened_at);
 CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
+CREATE INDEX IF NOT EXISTS idx_trade_merge_events_target ON trade_merge_events(target_trade_id, merged_at);
 CREATE INDEX IF NOT EXISTS idx_equity_snapshots_snapshot_at ON equity_snapshots(snapshot_at);
 
 CREATE TRIGGER IF NOT EXISTS update_trades_updated_at

@@ -342,4 +342,6 @@ OpenStock stores independent one-shot BUY and SELL alert levels in migration 004
 
 Position summaries and SELL eligibility are derived exclusively from open Journal lots (`position.source: journal`, with summed `position.quantity`). Manual ownership updates are rejected. Without an open Journal position, SELL levels stay configured but are suppressed until a position is recorded.
 
+Recording another open purchase for a stock that already has an open Journal trade consolidates it into the oldest open trade. Quantity and fees are summed, EUR and native entry prices use quantity-weighted averages, and the earliest opening time is retained. Every absorbed trade is preserved verbatim in `trade_merge_events` before its duplicate open row is removed. Closed historical trades never merge.
+
 Archiving disables alert levels while preserving their history. Explicit restore re-enables non-retired levels; retired levels require explicit rearm. Migration and verification must be run against a copied database, never the production file.

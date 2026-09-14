@@ -71,7 +71,7 @@ function renderJournal() {
     const edit = editingTradeId ? getTrades().find(trade => String(trade.id) === String(editingTradeId)) : null;
     const isClosing = Boolean(edit && !edit.is_closed && editingIntent === 'close');
     const editorTitle = isClosing ? `Close ${escapeHtml(edit.trade_id)}` : edit ? `View / Edit ${escapeHtml(edit.trade_id)}` : 'Record Trade';
-    const editorContext = edit ? `Trade ${escapeHtml(edit.trade_id)} · ${edit.is_closed ? 'CLOSED' : 'OPEN'} · ID ${escapeHtml(edit.id)}` : 'Create a new trade record.';
+    const editorContext = edit ? `Trade ${escapeHtml(edit.trade_id)} · ${edit.is_closed ? 'CLOSED' : 'OPEN'} · ID ${escapeHtml(edit.id)}` : 'Create a trade. New purchases merge into an existing open position for the same stock using a weighted average.';
     const selectableStocks = getStocks().filter(stock => (Number(stock.archived) !== 1 && Number(stock.enabled) === 1) || String(edit?.stock_id) === String(stock.id));
     const options = selectableStocks.map(stock => `<option value="${stock.id}" ${String(edit?.stock_id) === String(stock.id) ? 'selected' : ''}>${escapeHtml(stock.symbol)} — ${escapeHtml(stock.name || '')}${stock.archived ? ' (archived history)' : ''}</option>`).join('');
     const currentPnl = (Number(realized.net_eur) || 0) + (Number(capital.unrealized_pnl_eur) || 0);

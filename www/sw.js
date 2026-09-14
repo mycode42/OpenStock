@@ -1,9 +1,9 @@
-const CACHE_NAME = 'openstock-v19';
+const CACHE_NAME = 'openstock-v20';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=19',
-  './app.js?v=19',
+  './styles.css?v=20',
+  './app.js?v=20',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',

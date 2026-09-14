@@ -461,8 +461,8 @@ app.post('/api/trades', (req, res) => {
         const trade = normaliseTrade(req.body);
         if (!Number.isInteger(trade.stock_id) || !req.app.locals.db.getStockById(trade.stock_id)) return res.status(400).json({ error: 'A valid stock is required' });
         const result = req.app.locals.db.addTrade(trade);
-        captureEquitySnapshot(req.app.locals.db, 'trade_create');
-        res.status(201).json({ message: 'Trade recorded', trade: serializeTrade(req.app.locals.db.getTradeById(result.lastInsertRowid)) });
+        captureEquitySnapshot(req.app.locals.db, result.merged ? 'trade_merge' : 'trade_create');
+        res.status(201).json({ message: result.merged ? 'Purchase merged into the existing open position' : 'Trade recorded', merged: result.merged, merged_count: result.mergedCount, trade: serializeTrade(req.app.locals.db.getTradeById(result.lastInsertRowid)) });
     } catch (e) {
         if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(409).json({ error: 'Trade ID already exists' });
         res.status(400).json({ error: e.message || 'Invalid trade' });

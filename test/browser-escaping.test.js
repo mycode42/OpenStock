@@ -50,6 +50,7 @@ test('journal edit workflow normalizes numeric data IDs and uses visible accessi
     assert.match(source, /editingIntent = 'close'/);
     assert.match(source, /`\/trades\/\$\{editingTradeId\}\/close`/);
     assert.match(source, /step="1"/);
+    assert.match(source, /merge into an existing open position.*weighted average/);
     assert.doesNotMatch(source, /\bonclick=|\bonsubmit=/);
 });
 

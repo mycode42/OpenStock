@@ -235,7 +235,7 @@ class OpenStockDB {
     }
 
     addTrade(trade) {
-        return this.db.prepare(`
+        const insert = this.db.prepare(`
             INSERT INTO trades (
                 trade_id, stock_id, opened_at, closed_at, quantity, currency,
                 entry_price, entry_fx_rate, entry_price_eur, entry_fee_eur,
@@ -245,7 +245,61 @@ class OpenStockDB {
                 @entry_price, @entry_fx_rate, @entry_price_eur, @entry_fee_eur,
                 @exit_price, @exit_fx_rate, @exit_price_eur, @exit_fee_eur, @dividend_eur, @strategy, @notes
             )
-        `).run(trade);
+        `);
+        return this.db.transaction(() => {
+            if (this.db.prepare('SELECT 1 FROM trades WHERE trade_id = ? UNION ALL SELECT 1 FROM trade_merge_events WHERE source_trade_id = ? LIMIT 1').get(trade.trade_id, trade.trade_id)) {
+                const error = new Error('Trade ID already exists');
+                error.code = 'SQLITE_CONSTRAINT_UNIQUE';
+                throw error;
+            }
+            if (trade.closed_at) return { ...insert.run(trade), merged: false, mergedCount: 0 };
+            const openTrades = this.db.prepare('SELECT * FROM trades WHERE stock_id = ? AND closed_at IS NULL ORDER BY opened_at, id').all(trade.stock_id);
+            if (!openTrades.length) return { ...insert.run(trade), merged: false, mergedCount: 0 };
+            return this.mergeOpenTradeRows(openTrades, trade);
+        })();
+    }
+
+    mergeOpenTradeRows(openTrades, incoming = null) {
+        if (!openTrades.length) throw new Error('No open trades to merge');
+        const target = openTrades[0];
+        const sources = [...openTrades.slice(1), ...(incoming ? [incoming] : [])];
+        if (!sources.length) return { lastInsertRowid: target.id, merged: false, mergedCount: 0 };
+        const rows = [target, ...sources];
+        for (const row of rows) {
+            if (!(Number.isFinite(Number(row.quantity)) && Number(row.quantity) > 0 && Number.isFinite(Number(row.entry_price)) && Number(row.entry_price) > 0 && Number.isFinite(Number(row.entry_price_eur)) && Number(row.entry_price_eur) > 0 && Number.isFinite(Number(row.entry_fee_eur)) && Number(row.entry_fee_eur) >= 0)) throw new Error('Cannot merge an invalid open trade');
+        }
+        const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity), 0);
+        const entryPriceEur = rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price_eur), 0) / totalQuantity;
+        const currencies = [...new Set(rows.map(row => String(row.currency).toUpperCase()))];
+        const currency = currencies.length === 1 ? currencies[0] : 'EUR';
+        const entryPrice = currency === 'EUR'
+            ? entryPriceEur
+            : rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price), 0) / totalQuantity;
+        const entryFxRate = currency === 'EUR' ? 1 : entryPriceEur / entryPrice;
+        const strategies = [...new Set(rows.map(row => String(row.strategy || '').trim()).filter(Boolean))];
+        const notes = [...new Set(rows.map(row => String(row.notes || '').trim()).filter(Boolean))];
+        const mergeNote = `Merged ${sources.length} additional purchase${sources.length === 1 ? '' : 's'}; source details retained in trade_merge_events.`;
+        if (!notes.includes(mergeNote)) notes.push(mergeNote);
+        const audit = this.db.prepare('INSERT INTO trade_merge_events (target_trade_id, source_trade_id, source_trade_json) VALUES (?, ?, ?)');
+        for (const source of sources) audit.run(target.id, source.trade_id, JSON.stringify(source));
+        const existingSourceIds = sources.filter(source => Number.isInteger(Number(source.id))).map(source => Number(source.id));
+        if (existingSourceIds.length) this.db.prepare(`DELETE FROM trades WHERE id IN (${existingSourceIds.map(() => '?').join(',')})`).run(...existingSourceIds);
+        this.db.prepare(`UPDATE trades SET opened_at=?, quantity=?, currency=?, entry_price=?, entry_fx_rate=?, entry_price_eur=?, entry_fee_eur=?, strategy=?, notes=?, updated_at=datetime('now') WHERE id=?`).run(
+            rows.map(row => row.opened_at).sort()[0], totalQuantity, currency, entryPrice, entryFxRate, entryPriceEur,
+            rows.reduce((sum, row) => sum + Number(row.entry_fee_eur || 0), 0), strategies.join(' | '), notes.join(' | '), target.id
+        );
+        return { lastInsertRowid: target.id, merged: true, mergedCount: sources.length };
+    }
+
+    consolidateOpenTrades(stockId) {
+        return this.db.transaction(() => {
+            const openTrades = this.db.prepare('SELECT * FROM trades WHERE stock_id = ? AND closed_at IS NULL ORDER BY opened_at, id').all(stockId);
+            return this.mergeOpenTradeRows(openTrades);
+        })();
+    }
+
+    getTradeMergeEvents(targetTradeId) {
+        return this.db.prepare('SELECT * FROM trade_merge_events WHERE target_trade_id = ? ORDER BY id').all(targetTradeId);
     }
 
     updateTrade(id, trade) {

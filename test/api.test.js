@@ -72,6 +72,26 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal(response.status, 400);
 });
 
+test('new purchases merge into an existing open position and return the authoritative aggregate', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'MERGE', name: 'Merge', buy_threshold_eur: 10, sell_threshold_eur: 20 })).json()).stock;
+    let response = await bodyRequest(f, '/api/trades', { trade_id: 'M-1', stock_id: stock.id, opened_at: '2026-09-14T10:00:00Z', quantity: 2, currency: 'EUR', entry_price: 10, entry_fx_rate: 1, entry_fee_eur: 1 });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).merged, false);
+    response = await bodyRequest(f, '/api/trades', { trade_id: 'M-2', stock_id: stock.id, opened_at: '2026-09-14T10:05:00Z', quantity: 3, currency: 'EUR', entry_price: 20, entry_fx_rate: 1, entry_fee_eur: 2 });
+    const merged = await response.json();
+    assert.equal(response.status, 201);
+    assert.equal(merged.merged, true);
+    assert.equal(merged.merged_count, 1);
+    assert.equal(merged.trade.quantity, 5);
+    assert.equal(merged.trade.entry_price_eur, 16);
+    assert.equal(merged.trade.entry_fee_eur, 3);
+    response = await f.request('/api/trades?status=open');
+    const open = await response.json();
+    assert.equal(open.filter(trade => trade.symbol === 'MERGE').length, 1);
+});
+
 async function bodyRequest(f, url, body, method = 'POST') {
     return f.request(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }
