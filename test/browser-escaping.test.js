@@ -40,3 +40,24 @@ test('browser modules link without missing named exports', async () => {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test('journal edit workflow normalizes numeric data IDs and uses visible accessible controls', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'www/modules/journal.js'), 'utf8');
+    assert.match(source, /String\(trade\.id\) === String\(editingTradeId\)/);
+    assert.match(source, /scrollIntoView\(\{ behavior: 'smooth', block: 'start' \}\)/);
+    assert.match(source, /data-trade-action="cancel"/);
+    assert.match(source, /id="trade-form"/);
+    assert.match(source, /editingIntent = 'close'/);
+    assert.match(source, /`\/trades\/\$\{editingTradeId\}\/close`/);
+    assert.match(source, /step="1"/);
+    assert.doesNotMatch(source, /\bonclick=|\bonsubmit=/);
+});
+
+test('browser pages do not emit inline event handlers', () => {
+    const root = path.join(__dirname, '..', 'www');
+    for (const file of ['app.js', 'modules/dashboard.js', 'modules/config.js', 'modules/journal.js']) {
+        assert.doesNotMatch(fs.readFileSync(path.join(root, file), 'utf8'), /\bonclick=|\bonsubmit=/, file);
+    }
+    const dashboard = fs.readFileSync(path.join(root, 'modules/dashboard.js'), 'utf8');
+    assert.match(dashboard, /const \{[^}]*\bnav\b[^}]*\} = context;/s);
+});
