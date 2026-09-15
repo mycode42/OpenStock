@@ -197,6 +197,8 @@ class OpenStockDB {
     hasDailyBackfill(stockId) {
         return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source IN ('yahoo_backfill', 'trade_republic_history') LIMIT 1").get(stockId));
     }
+    hasTradeRepublicHistory(stockId) { return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'trade_republic_history' LIMIT 1").get(stockId)); }
+    hasTradeRepublicHistory(stockId) { return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'trade_republic_history' LIMIT 1").get(stockId)); }
 
     addHistoricalPriceSnapshots(stockId, points, source = 'yahoo_backfill') {
         const insert = this.db.prepare(`
@@ -380,6 +382,7 @@ class OpenStockDB {
             this.db.prepare('UPDATE alert_levels SET enabled = 0, active = 0 WHERE stock_id = ?').run(id);
             return { changes: result.changes, archived: true };
         }
+        if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_instrument_mappings'").get()) this.db.prepare('DELETE FROM broker_instrument_mappings WHERE stock_id = ?').run(id);
         const result = this.db.prepare('DELETE FROM stocks WHERE id = ?').run(id);
         return { changes: result.changes, archived: false };
     }

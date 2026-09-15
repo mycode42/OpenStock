@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeInstrumentHistory, sanitizeAccount, sanitizeCollection, parseOrderResponse } = require('../lib/brokers/trade-republic');
+const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeInstrumentHistory, sanitizeAccount, sanitizeCollection, parseOrderResponse, brokerHistoryRange } = require('../lib/brokers/trade-republic');
+const { chooseTicker } = require('../lib/instrument-resolution');
 
 test('Trade Republic client sends X-API-Key server-side and never returns it', async () => {
   let seen;
@@ -66,4 +67,20 @@ test('transaction normalization reads nested amount values without exposing acco
 test('order parser never treats an order id alone as a fill', () => {
   assert.deepEqual(parseOrderResponse({ orderId: 'secret-id' }), { external_ref_masked: 'se••••id', status: 'UNKNOWN', execution: 'none' });
   assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id' }).execution, 'filled');
+});
+
+test('live listing fields produce recognizable non-TIB tickers and preferred names', () => {
+  const birk = sanitizeInstrument({ data: { id: 'JE00BS44BN30', shortName: 'Birkenstock', name: 'Birkenstock formal', primaryExchange: { id: 'XNAS', symbolAtExchange: 'BIRK', nameAtExchange: 'Birkenstock' }, listings: [{ exchange: { id: 'TIB' }, slug: 'JE00BS44BN30' }] } }, 'JE00BS44BN30');
+  const hims = sanitizeInstrument({ data: { id: 'US4330001060', nextGenName: 'Hims & Hers', listings: [{ exchange: { id: 'TIB' }, slug: 'US4330001060' }, { exchange: { id: 'XNAS' }, slug: 'HIMS', nameAtExchange: 'Hims & Hers Health' }] } }, 'US4330001060');
+  assert.equal(birk.name, 'Birkenstock'); assert.equal(chooseTicker(birk), 'BIRK');
+  assert.equal(hims.name, 'Hims & Hers'); assert.equal(chooseTicker(hims), 'HIMS');
+  assert.equal(chooseTicker({ isin: 'US46222L1089', ticker: 'US46222L1089', listings: [{ exchange: 'TIB', symbol: 'US46222L1089' }] }), 'US46222L1089');
+});
+
+test('Trade Republic history ranges map OpenStock names and preserve numeric resolution', async () => {
+  assert.equal(brokerHistoryRange('5y'), 'max'); assert.equal(brokerHistoryRange('1mo'), '1m'); assert.throws(() => brokerHistoryRange('30d'), /Unsupported/);
+  let body;
+  const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, fetchImpl: async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ aggregates: [], resolution: 86400000 }) }; } });
+  const result = await client.getInstrumentHistory({ isin: 'US4330001060', range: '5y' });
+  assert.equal(body.range, 'max'); assert.equal(result.resolution, 86400000);
 });

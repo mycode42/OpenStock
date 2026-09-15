@@ -7,6 +7,7 @@ const Database = require('better-sqlite3');
 const OpenStockDB = require('../database/db');
 const { HistoryBackfillQueue } = require('../lib/history-backfill');
 const { yahooChartUrl } = require('../lib/yahoo-chart');
+const { initDatabase } = require('../database/init');
 
 function makeDb() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-history-'));
@@ -77,4 +78,23 @@ test('historical writes do not overwrite an existing monitor observation and fai
     assert.equal(db.db.prepare("SELECT source FROM price_history WHERE stock_id = ? AND recorded_at = '2026-01-01 00:00:00'").get(good).source, 'monitor');
     assert.equal(errors.length, 1);
     assert.equal(db.db.prepare("SELECT COUNT(*) AS count FROM price_history WHERE source = 'yahoo_backfill'").get().count, 1);
+});
+
+test('forced Trade Republic sync augments and authoritatively updates existing Yahoo rows', async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-history-tr-'));
+    const file = path.join(dir, 'test.db');
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    const db = new OpenStockDB(file);
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const stockId = Number(db.addStock('BIRK', 'Birkenstock', 'EUR', 1, 2, 'JE00BS44BN30').lastInsertRowid);
+    db.saveBrokerMapping({ stock_id: stockId, broker: 'trade_republic', ticker: 'BIRK', isin: 'JE00BS44BN30', exchange: 'TIB', currency: 'EUR', broker_metadata_json: '{}', source: 'broker_verified', verified_at: '2026-01-01T00:00:00Z' });
+    db.addHistoricalPriceSnapshots(stockId, [{ recordedAt: '2026-01-01 00:00:00', quoteTime: '2026-01-01 00:00:00', priceUsd: 110, priceEur: 100, exchangeRate: 0.9 }], 'yahoo_backfill');
+    const queue = new HistoryBackfillQueue({ db, delayMs: 0, brokerClient: { getInstrumentHistory: async () => ({ range: 'max', resolution: 86400000, points: [
+        { recordedAt: '2026-01-01 00:00:00', quoteTime: '2026-01-01 00:00:00', priceEur: 101, priceUsd: null, exchangeRate: null },
+        { recordedAt: '2026-01-02 00:00:00', quoteTime: '2026-01-02 00:00:00', priceEur: 102, priceUsd: null, exchangeRate: null }
+    ] }) }, logger: { log() {}, error: assert.fail } });
+    const result = await queue.syncTradeRepublic(db.getStockById(stockId));
+    assert.equal(result.points, 2);
+    const rows = db.db.prepare('SELECT recorded_at, price_eur, price_usd, source FROM price_history WHERE stock_id=? ORDER BY recorded_at').all(stockId);
+    assert.deepEqual(rows, [{ recorded_at: '2026-01-01 00:00:00', price_eur: 101, price_usd: null, source: 'trade_republic_history' }, { recorded_at: '2026-01-02 00:00:00', price_eur: 102, price_usd: null, source: 'trade_republic_history' }]);
 });

@@ -6,6 +6,7 @@ const { initDatabase } = require('./database/init');
 const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/analytics');
 const { HistoryBackfillQueue } = require('./lib/history-backfill');
 const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount, sanitizeCollection, BrokerError } = require('./lib/brokers/trade-republic');
+const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
 
 // Helper to convert SQLite datetime string to ISO 8601 UTC
 function toISODateTime(sqliteDateTime) {
@@ -315,18 +316,9 @@ app.delete('/api/alert-levels/:id', (req, res) => {
 
 app.post('/api/instruments/resolve', async (req, res) => {
     try {
-        const isin = String(req.body?.isin || '').trim().toUpperCase();
-        if (!/^[A-Z0-9]{12}$/.test(isin)) return res.status(400).json({ error: 'A valid 12-character ISIN is required' });
-        const client = req.app.locals.brokerClient;
-        const [instrument, home] = await Promise.all([client.getInstrument(isin), client.getTradeRepublicInstrument(isin)]);
-        if (instrument.isin !== isin || home.isin !== isin) return res.status(422).json({ error: 'Broker returned a different ISIN', verified: false });
-        const exchange = String(home.exchange || instrument.exchange || '').toUpperCase();
-        const currency = String(home.currency || instrument.currency || '').toUpperCase();
-        if (!instrument.name || instrument.tradable === false || !['TIB', 'EUR'].every(() => true) || currency !== 'EUR' || exchange !== 'TIB') return res.status(422).json({ error: 'Instrument is not a tradable EUR TIB instrument', verified: false });
-        const listings = [...(instrument.listings || [])];
-        const preferred = instrument.intlSymbol || instrument.ticker || listings.find(item => ['XNAS', 'XNYS', 'XLON'].includes(item.exchange))?.symbol || listings.find(item => item.symbol)?.symbol || isin;
-        res.json({ verified: true, instrument: { ...instrument, exchange, currency, ticker: preferred }, home: { ...home, exchange, currency } });
-    } catch (e) { brokerError(res, e); }
+        const result = await resolveVerifiedInstrument(req.app.locals.brokerClient, req.body?.isin);
+        res.json({ verified: true, ...result });
+    } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message, verified: false }); brokerError(res, e); }
 });
 
 app.post('/api/stocks', async (req, res) => {
@@ -335,22 +327,19 @@ app.post('/api/stocks', async (req, res) => {
         const buyThreshold = Number(req.body?.buy_threshold_eur), sellThreshold = Number(req.body?.sell_threshold_eur);
         if (!/^[A-Z0-9]{12}$/.test(isin)) return res.status(400).json({ error: 'A valid 12-character ISIN is required' });
         if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
-        const client = req.app.locals.brokerClient;
-        const [instrument, home] = await Promise.all([client.getInstrument(isin), client.getTradeRepublicInstrument(isin)]);
-        const exchange = String(home.exchange || instrument.exchange || '').toUpperCase(), currency = String(home.currency || instrument.currency || '').toUpperCase();
-        if (instrument.isin !== isin || home.isin !== isin || !instrument.name || instrument.tradable === false || exchange !== 'TIB' || currency !== 'EUR') return res.status(422).json({ error: 'Broker identity, tradability, home exchange, or currency validation failed' });
+        const { instrument, home } = await resolveVerifiedInstrument(req.app.locals.brokerClient, isin);
+        const exchange = home.exchange, currency = home.currency;
         const existingIsin = req.app.locals.db.getConfigStocks().find(stock => stock.isin === isin) || req.app.locals.db.getArchivedStocks().find(stock => stock.isin === isin);
         if (existingIsin) return res.status(409).json({ error: existingIsin.archived ? 'ISIN belongs to an archived stock; restore that identity explicitly' : 'ISIN already exists', stock_id: existingIsin.id });
         if (req.app.locals.db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
-        const listings = instrument.listings || [];
-        const symbol = String(instrument.intlSymbol || instrument.ticker || listings.find(item => ['XNAS', 'XNYS', 'XLON'].includes(item.exchange))?.symbol || listings.find(item => item.symbol)?.symbol || isin).toUpperCase();
+        const symbol = instrument.ticker;
         const existingSymbol = req.app.locals.db.getStockBySymbol(symbol);
         if (existingSymbol) return res.status(409).json({ error: existingSymbol.archived ? 'Derived symbol belongs to an archived stock; restore that identity explicitly' : 'Derived symbol already exists' });
         const mapping = { broker: 'trade_republic', ticker: symbol, isin, exchange, currency, broker_metadata_json: JSON.stringify({ instrument, home }), source: 'broker_verified', verified_at: new Date().toISOString() };
         const result = req.app.locals.db.addStockWithMapping({ symbol, name: instrument.name, isin, currency, buyThreshold, sellThreshold, mapping });
         const stock = req.app.locals.db.getStockById(result.lastInsertRowid); queueStockHistory(req.app.locals.historyBackfill, stock);
         res.status(201).json({ message: 'Stock added from verified Trade Republic instrument', stock: serializeConfiguredStock(stock), mapping: req.app.locals.db.getBrokerMapping(stock.id) });
-    } catch (e) { if (e.code === 'SQLITE_CONSTRAINT') return res.status(409).json({ error: 'Stock ISIN or derived symbol already exists' }); console.error('Error adding stock:', e.message); res.status(500).json({ error: 'Failed to add stock' }); }
+    } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message }); if (e.code === 'SQLITE_CONSTRAINT') return res.status(409).json({ error: 'Stock ISIN or derived symbol already exists' }); console.error('Error adding stock:', e.message); res.status(500).json({ error: 'Failed to add stock' }); }
 });
 
 app.put('/api/stocks/:id', (req, res) => {
@@ -658,7 +647,8 @@ function brokerRows(raw, kind) {
 app.get('/api/broker/trade-republic/health', async (req, res) => { try { res.json({ broker: 'trade_republic', ...(await req.app.locals.brokerClient.health()), live_submission_enabled: process.env.TRADE_REPUBLIC_LIVE_ENABLED === 'true' && process.env.TRADE_REPUBLIC_DRY_RUN === 'false' }); } catch (e) { brokerError(res, e); } });
 app.get('/api/broker/trade-republic/accounts', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getAccounts()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/mappings', (req, res) => res.json(req.app.locals.db.getBrokerMappings().map(({ broker_metadata_json, ...m }) => ({ ...m, broker_metadata: JSON.parse(broker_metadata_json || '{}') }))));
-app.post('/api/broker/trade-republic/mappings', async (req, res) => { try { const b=req.body||{}; const stock=req.app.locals.db.getStockById(Number(b.stock_id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const isin=String(b.isin||'').toUpperCase(); if(!/^[A-Z0-9]{12}$/.test(isin)) return res.status(400).json({error:'Valid ISIN is required'}); const client=req.app.locals.brokerClient; const [instrument, home]=await Promise.all([client.getInstrument(isin), client.getTradeRepublicInstrument(isin)]); const exchange=String(home.exchange||instrument.exchange||'').toUpperCase(), currency=String(home.currency||instrument.currency||'').toUpperCase(); if(instrument.isin!==isin||home.isin!==isin||exchange!=='TIB'||currency!=='EUR'||instrument.tradable===false) return res.status(422).json({error:'Broker identity, tradability, home exchange, or currency validation failed', verified:false}); req.app.locals.db.saveBrokerMapping({stock_id:stock.id,broker:'trade_republic',ticker:stock.symbol,isin,exchange,currency,broker_metadata_json:JSON.stringify({instrument_name:instrument.name}),source:'broker_verified',verified_at:new Date().toISOString()}); req.app.locals.db.updateStock(stock.id,{isin,name:instrument.name,price_source:'trade_republic'}); res.status(201).json({mapping:req.app.locals.db.getBrokerMapping(stock.id)}); } catch(e) { brokerError(res,e); } });
+app.post('/api/broker/trade-republic/mappings', async (req, res) => { try { const b=req.body||{}; const stock=req.app.locals.db.getStockById(Number(b.stock_id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const { instrument, home } = await resolveVerifiedInstrument(req.app.locals.brokerClient, b.isin); const existing=req.app.locals.db.getConfigStocks().find(item => item.isin === instrument.isin && item.id !== stock.id) || req.app.locals.db.getArchivedStocks().find(item => item.isin === instrument.isin && item.id !== stock.id); if (existing) return res.status(409).json({error: existing.archived ? 'ISIN belongs to an archived stock; restore that identity explicitly' : 'ISIN already exists', stock_id: existing.id}); req.app.locals.db.saveBrokerMapping({stock_id:stock.id,broker:'trade_republic',ticker:instrument.ticker,isin:instrument.isin,exchange:home.exchange,currency:home.currency,broker_metadata_json:JSON.stringify({instrument,home}),source:'broker_verified',verified_at:new Date().toISOString()}); req.app.locals.db.updateStock(stock.id,{isin:instrument.isin,name:instrument.name,price_source:'trade_republic'}); res.status(201).json({mapping:req.app.locals.db.getBrokerMapping(stock.id), stock:serializeConfiguredStock(req.app.locals.db.getStockById(stock.id))}); } catch(e) { if (e.status) return res.status(e.status).json({error:e.message,verified:false}); brokerError(res,e); } });
+app.post('/api/stocks/:id/history/sync-tr', async (req, res) => { try { const stock=req.app.locals.db.getStockById(Number(req.params.id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const result=await req.app.locals.historyBackfill.syncTradeRepublic(stock); res.json({message:'Trade Republic history synchronized', ...result}); } catch(e) { res.status(e.message === 'verified Trade Republic mapping unavailable' ? 409 : 502).json({error:e.message || 'Trade Republic history unavailable'}); } });
 app.get('/api/broker/trade-republic/mapping-candidates', async (req, res) => { try { const portfolio=await req.app.locals.brokerClient.getPortfolio(); res.json({candidates:portfolio.filter(x=>x.instrument).map(x=>({ticker:null,isin:x.instrument,quantity:x.quantity,account_ref_masked:x.account_ref_masked,match:'unresolved',reason:'Ticker-to-ISIN mapping requires explicit verification'}))}); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/quote/:stockId', async (req, res) => { try { const mapping=req.app.locals.db.getBrokerMapping(Number(req.params.stockId)); if(!mapping) return res.status(409).json({error:'Stock has no verified broker mapping'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}); const quoteId=req.app.locals.db.addBrokerQuote({broker:'trade_republic',isin:mapping.isin,exchange:mapping.exchange,bid_eur:quote.bid_eur,ask_eur:quote.ask_eur,last_eur:quote.last_eur,currency:quote.currency,quote_time:quote.quote_time,observed_at:quote.observed_at,source:quote.source}).lastInsertRowid; res.json({...quote,quote_id:Number(quoteId),fresh:Date.now()-Date.parse(quote.observed_at)<15000}); } catch(e) { brokerError(res,e); } });
 app.post('/api/broker/trade-republic/sync', async (req, res) => { try { const client=req.app.locals.brokerClient, observed_at=new Date().toISOString(); const [accounts,portfolio,orders,transactions]=await Promise.all([client.getAccounts(),client.getPortfolio(),client.getOrders(),client.getTransactions()]); const accountRows=accounts.filter(Boolean).map(a=>({...a,broker:'trade_republic',observed_at,raw_hash:null})); const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',brokerRows(portfolio,'portfolio').filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',brokerRows(orders,'orders')),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',brokerRows(transactions,'transactions'))}; res.json({broker:'trade_republic',observed_at,counts}); } catch(e) { brokerError(res,e); } });

@@ -20,9 +20,21 @@ async function fixture() {
         return { ok: true, json: async () => ({ chart: { result: [{ meta: { shortName: symbol }, timestamp: [1767225600], indicators: { quote: [{ close: [100] }] } }] } }) };
     };
     const app = createApp({ db, backfill, fetchImpl });
+    app.locals.brokerClient = {
+        getInstrument: async isin => { const decoded = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, ''); const symbol = /^[A-Z0-9.-]+$/.test(decoded) && decoded ? decoded : `M${isin.slice(-5)}`; return { isin, name: `Mock ${symbol}`, shortName: `Mock ${symbol}`, intlSymbol: symbol, tradable: true, listings: [{ exchange: 'XNAS', symbolAtExchange: symbol }] }; },
+        getTradeRepublicInstrument: async isin => ({ isin, exchange: 'TIB', currency: 'EUR', tradable: true }),
+        getInstrumentHistory: async () => ({ points: [] })
+    };
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     const base = `http://127.0.0.1:${server.address().port}`;
-    const request = (url, options) => fetch(base + url, options);
+    const request = (url, options = {}) => {
+        if (url === '/api/stocks' && options.method === 'POST' && options.body) {
+            const body = JSON.parse(options.body);
+            if (!body.isin && body.symbol) body.isin = `US${Buffer.from(body.symbol).toString('hex').toUpperCase().padEnd(10, '0').slice(0, 10)}`;
+            options = { ...options, body: JSON.stringify(body) };
+        }
+        return fetch(base + url, options);
+    };
     return { db, dir, server, request };
 }
 
