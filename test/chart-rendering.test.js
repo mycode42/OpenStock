@@ -19,15 +19,15 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(journal, /tertiary: `Cash \$\{journalMoney\(point\.cash_eur\)\} · Positions/);
 });
 
-test('PWA asset versions include the chart interaction fix', () => {
+test('PWA asset versions are consistent and include the chart interaction fix', () => {
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=23/);
-    assert.match(index, /app\.js\?v=23/);
-    assert.match(worker, /openstock-v23/);
-    assert.match(worker, /styles\.css\?v=23/);
-    assert.match(worker, /app\.js\?v=23/);
+    assert.match(index, /styles\.css\?v=26/);
+    assert.match(index, /app\.js\?v=26/);
+    assert.match(worker, /openstock-v26/);
+    assert.match(worker, /styles\.css\?v=26/);
+    assert.match(worker, /app\.js\?v=26/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
 });
