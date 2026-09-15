@@ -7,6 +7,7 @@ const migrations = [
   require('./migrations/005_alert_trigger_continuity'),
   require('./migrations/006_alert_log_foreign_keys'),
   require('./migrations/007_trade_merge_audit')
+  ,require('./migrations/008_trade_republic')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {
