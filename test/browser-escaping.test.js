@@ -75,6 +75,8 @@ test('configuration uses a compact single-stock alert editor without legacy owne
     assert.match(source, /Manage alerts/);
     assert.match(source, /Triggered · ready to rearm/);
     assert.match(source, /open one stock at a time/);
+    assert.match(source, /automatic ISIN resolution/);
+    assert.doesNotMatch(source, /broker-mapping-form|broker-stock|broker-isin/);
     assert.doesNotMatch(source, /Mark Owned|Mark Sold|\btos\b|data-stock-action="owned"/);
 });
 

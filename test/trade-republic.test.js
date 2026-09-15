@@ -70,10 +70,11 @@ test('order parser never treats an order id alone as a fill', () => {
 });
 
 test('live listing fields produce recognizable non-TIB tickers and preferred names', () => {
-  const birk = sanitizeInstrument({ data: { id: 'JE00BS44BN30', shortName: 'Birkenstock', name: 'Birkenstock formal', primaryExchange: { id: 'XNAS', symbolAtExchange: 'BIRK', nameAtExchange: 'Birkenstock' }, listings: [{ exchange: { id: 'TIB' }, slug: 'JE00BS44BN30' }] } }, 'JE00BS44BN30');
-  const hims = sanitizeInstrument({ data: { id: 'US4330001060', nextGenName: 'Hims & Hers', listings: [{ exchange: { id: 'TIB' }, slug: 'US4330001060' }, { exchange: { id: 'XNAS' }, slug: 'HIMS', nameAtExchange: 'Hims & Hers Health' }] } }, 'US4330001060');
+  const birk = sanitizeInstrument({ data: { id: 'JE00BS44BN30', shortName: 'Birkenstock', name: 'Birkenstock formal', primaryExchange: { slug: 'XNYS', active: false, symbolAtExchange: 'BIRK', nameAtExchange: 'Birkenstock' }, listings: [{ slug: 'TIB', active: true, symbolAtExchange: 'JE00BS44BN30' }] } }, 'JE00BS44BN30');
+  const hims = sanitizeInstrument({ data: { id: 'US4330001060', nextGenName: 'Hims & Hers', listings: [{ slug: 'TIB', active: true, symbolAtExchange: 'US4330001060' }, { slug: 'XNAS', active: true, symbolAtExchange: 'HIMS', nameAtExchange: 'Hims & Hers Health' }] } }, 'US4330001060');
   assert.equal(birk.name, 'Birkenstock'); assert.equal(chooseTicker(birk), 'BIRK');
   assert.equal(hims.name, 'Hims & Hers'); assert.equal(chooseTicker(hims), 'HIMS');
+  assert.equal(birk.primaryExchange.exchange, 'XNYS'); assert.equal(hims.listings[1].exchange, 'XNAS');
   assert.equal(chooseTicker({ isin: 'US46222L1089', ticker: 'US46222L1089', listings: [{ exchange: 'TIB', symbol: 'US46222L1089' }] }), 'US46222L1089');
 });
 

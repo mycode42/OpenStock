@@ -198,7 +198,6 @@ class OpenStockDB {
         return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source IN ('yahoo_backfill', 'trade_republic_history') LIMIT 1").get(stockId));
     }
     hasTradeRepublicHistory(stockId) { return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'trade_republic_history' LIMIT 1").get(stockId)); }
-    hasTradeRepublicHistory(stockId) { return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'trade_republic_history' LIMIT 1").get(stockId)); }
 
     addHistoricalPriceSnapshots(stockId, points, source = 'yahoo_backfill') {
         const insert = this.db.prepare(`
