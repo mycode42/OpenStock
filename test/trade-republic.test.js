@@ -67,6 +67,20 @@ test('transaction normalization reads nested amount values without exposing acco
 test('order parser never treats an order id alone as a fill', () => {
   assert.deepEqual(parseOrderResponse({ orderId: 'secret-id' }), { external_ref_masked: 'se••••id', status: 'UNKNOWN', execution: 'none' });
   assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id' }).execution, 'filled');
+  assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id', executionPrice: 10, filledQuantity: 1, executedAt: '2026-09-15T10:00:00Z' }).execution_details, undefined);
+});
+
+test('place order maps validity to sidecar expiry.type and never sends a GTD date', async () => {
+  let body;
+  const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, fetchImpl: async (_url, options) => {
+    body = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ status: 'SUBMITTED', orderId: 'order-secret' }) };
+  } });
+  client.accountNumbers.set('DE••••56', 'DE1234567890123456');
+  await client.placeOrder({ account_ref_masked: 'DE••••56', instrument: 'US0000000001', exchange: 'TIB', type: 'buy', mode: 'market', quantity: 1, expiry: { type: 'GTD' } });
+  assert.deepEqual(body.expiry, { type: 'GTD' });
+  assert.equal('validity_date' in body, false);
+  assert.equal('validity' in body, false);
 });
 
 test('live listing fields produce recognizable non-TIB tickers and preferred names', () => {

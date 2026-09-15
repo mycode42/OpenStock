@@ -179,6 +179,11 @@ class OpenStockDB {
         return stmt.run(priceUsd, priceEur, exchangeRate, id);
     }
 
+    updateStockQuote(id, { bidEur, askEur, midpointEur, quoteTime = null }) {
+        const recordedAt = quoteTime ? String(quoteTime).replace('T', ' ').replace(/\.\d{3}Z$/, '').replace(/Z$/, '') : null;
+        return this.db.prepare(`UPDATE stocks SET current_price_usd=NULL, current_price_eur=?, current_bid_eur=?, current_ask_eur=?, current_midpoint_eur=?, last_exchange_rate=NULL, last_price_update=COALESCE(?, datetime('now')), updated_at=datetime('now') WHERE id=?`).run(midpointEur, bidEur, askEur, midpointEur, recordedAt, id);
+    }
+
     addPriceSnapshot(stockId, priceUsd, priceEur, exchangeRate, source, quoteTime = null, recordedAt = null) {
         const stmt = this.db.prepare(`
             INSERT INTO price_history (
@@ -437,6 +442,34 @@ class OpenStockDB {
     createBrokerOrderIntent(input) { return this.db.prepare(`INSERT INTO broker_order_intents (broker,idempotency_key,status,request_json,quote_id) VALUES (@broker,@idempotency_key,@status,@request_json,@quote_id)`).run(input); }
     getBrokerOrderIntent(key) { return this.db.prepare('SELECT * FROM broker_order_intents WHERE idempotency_key=?').get(key); }
     updateBrokerOrderIntent(id, input) { return this.db.prepare(`UPDATE broker_order_intents SET status=@status, response_json=@response_json, external_ref_masked=@external_ref_masked, reconciled_at=@reconciled_at, frozen_reason=@frozen_reason, updated_at=datetime('now') WHERE id=@id`).run({ ...input, id }); }
+    getBrokerExecution(identity) { return this.db.prepare('SELECT * FROM broker_executions WHERE execution_identity=?').get(identity); }
+    recordBrokerExecution(input) {
+        const existing = this.getBrokerExecution(input.execution_identity);
+        if (existing) return { existing: true, execution: existing };
+        const execution = this.db.transaction(() => {
+            this.db.prepare(`INSERT INTO broker_executions (broker,execution_identity,order_intent_id,stock_id,account_ref_masked,side,quantity,execution_price_eur,fees_eur,executed_at,currency) VALUES (@broker,@execution_identity,@order_intent_id,@stock_id,@account_ref_masked,@side,@quantity,@execution_price_eur,@fees_eur,@executed_at,@currency)`).run(input);
+            if (input.side === 'buy') {
+                this.addTrade({ trade_id: `TR-EXEC-${input.execution_identity}`, stock_id: input.stock_id, opened_at: input.executed_at.replace('T', ' ').replace(/\.\d{3}Z$/, ''), closed_at: null, quantity: input.quantity, currency: 'EUR', entry_price: input.execution_price_eur, entry_fx_rate: 1, entry_price_eur: input.execution_price_eur, entry_fee_eur: input.fees_eur, exit_price: null, exit_fx_rate: null, exit_price_eur: null, exit_fee_eur: 0, dividend_eur: 0, strategy: 'trade_republic_execution', notes: `Broker execution ${input.execution_identity}` });
+            } else {
+                let remaining = Number(input.quantity);
+                const lots = this.db.prepare('SELECT * FROM trades WHERE stock_id=? AND closed_at IS NULL ORDER BY opened_at, id').all(input.stock_id);
+                for (const lot of lots) {
+                    if (remaining <= 0) break;
+                    const sold = Math.min(remaining, Number(lot.quantity));
+                    const when = input.executed_at.replace('T', ' ').replace(/\.\d{3}Z$/, '');
+                    if (sold === Number(lot.quantity)) this.db.prepare("UPDATE trades SET closed_at=?, exit_price=?, exit_fx_rate=1, exit_price_eur=?, exit_fee_eur=?, notes=trim(COALESCE(notes,'')) || ?, updated_at=datetime('now') WHERE id=?").run(when, input.execution_price_eur, input.execution_price_eur, input.fees_eur, `Broker execution ${input.execution_identity}`, lot.id);
+                    else {
+                        this.db.prepare("UPDATE trades SET quantity=quantity-?, updated_at=datetime('now') WHERE id=?").run(sold, lot.id);
+                        this.db.prepare(`INSERT INTO trades (trade_id,stock_id,opened_at,closed_at,quantity,currency,entry_price,entry_fx_rate,entry_price_eur,entry_fee_eur,exit_price,exit_fx_rate,exit_price_eur,exit_fee_eur,dividend_eur,strategy,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(`TR-SELL-${input.execution_identity}-${lot.id}`, lot.stock_id, lot.opened_at, when, sold, lot.currency, lot.entry_price, lot.entry_fx_rate, lot.entry_price_eur, Number(lot.entry_fee_eur) * sold / Number(lot.quantity), input.execution_price_eur, 1, input.execution_price_eur, input.fees_eur, 0, 'trade_republic_execution', `Broker execution ${input.execution_identity}`);
+                    }
+                    remaining -= sold;
+                }
+                if (remaining > 0) throw new Error('Execution would oversell Journal lots');
+            }
+            return this.getBrokerExecution(input.execution_identity);
+        })();
+        return { existing: false, execution };
+    }
 }
 
 module.exports = OpenStockDB;

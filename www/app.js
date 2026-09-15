@@ -4,6 +4,7 @@ import { createCharts } from './modules/charts.js';
 import { createDashboard } from './modules/dashboard.js';
 import { createConfig } from './modules/config.js';
 import { createJournal } from './modules/journal.js';
+import { createTrading } from './modules/trading.js';
 
 const state = createState();
 let pageLoadId = 0;
@@ -15,20 +16,21 @@ function removeStockFromState(id) { replaceStocks(state.stocks.filter(stock => s
 function beginStockMutation(id) { const token=(stockMutationTokens.get(id)||0)+1; stockMutationTokens.set(id, token); stockRevision += 1; return token; }
 function isCurrentStockMutation(id, token) { return stockMutationTokens.get(id) === token; }
 function showA(message, type='i', containerId='ac') { const container=document.getElementById(containerId); if(!container)return; const alert=document.createElement('div'); alert.className=`alert-box ${type}`; alert.textContent=message; container.appendChild(alert); setTimeout(()=>alert.remove(),5000); }
-function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','config','journal'].includes(page)?page:'dashboard'; }
-function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','config','journal'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
+function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','config','journal','trading'].includes(page)?page:'dashboard'; }
+function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','config','journal','trading'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
 function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
 async function af(path, options={}) { return apiRequest(path, options, message=>showA(message,'error')); }
 const charts = createCharts({ request:af, historyCache:state.historyCache });
-function renderCurrentPage() { const page=pageFromHash(); showPage(page); if(page==='dashboard')dashboard.renderDashboard(); else if(page==='journal')journal.renderJournal(); else config.renderConfig(); }
+function renderCurrentPage() { const page=pageFromHash(); showPage(page); if(page==='dashboard')dashboard.renderDashboard(); else if(page==='journal')journal.renderJournal(); else if(page==='trading')trading.renderTrading(); else config.renderConfig(); }
 const context = { getStocks:()=>state.stocks, getStockMap:()=>state.stockMap, getTrades:()=>state.trades, getCapitalEvents:()=>state.capitalEvents, getAnalytics:()=>state.analytics, request:af, replaceStocks, upsertStock, removeStockFromState, beginStockMutation, isCurrentStockMutation, getStockRevision:()=>stockRevision, incrementStockRevision:()=>++stockRevision, showA, renderCurrentPage, pageFromHash, nav, charts, actions: {}, reloadJournal:()=>loadPage('journal') };
 const dashboard = createDashboard(context);
 const config = createConfig(context);
 const journal = createJournal(context);
+const trading = createTrading(context);
 Object.assign(context.actions, { edit: config.es, toggle: config.ts, remove: config.rs });
 function nav(hash) { const page=pageFromHash(hash); const target=page==='dashboard'?'':`#/${page}`; if(window.location.hash!==target){window.location.hash=target;return;} loadPage(page); }
-async function loadPage(page) { const loadId=++pageLoadId; const startRevision=stockRevision; showPage(page); document.getElementById(`page-${page}`).innerHTML='<div class="loading">Loading...</div>'; if(page==='dashboard'){const data=await af('/dashboard'); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(data&&stockRevision===startRevision)replaceStocks(data.stocks); dashboard.renderDashboard(); return;} if(page==='journal'){const [freshStocks,freshTrades,freshEvents,freshAnalytics]=await Promise.all([af('/stocks?includeArchived=1'),af('/trades'),af('/capital-events'),af('/analytics/dashboard')]); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks); if(freshTrades)state.trades=freshTrades; if(freshEvents)state.capitalEvents=freshEvents; if(freshAnalytics)state.analytics=freshAnalytics; journal.renderJournal(); return;} const freshStocks=await af('/stocks'); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks); config.renderConfig(); }
-Object.assign(window, { ...dashboard, ...config, ...journal, nav, dt, showA });
+async function loadPage(page) { const loadId=++pageLoadId; const startRevision=stockRevision; showPage(page); document.getElementById(`page-${page}`).innerHTML='<div class="loading">Loading...</div>'; if(page==='dashboard'){const data=await af('/dashboard'); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(data&&stockRevision===startRevision)replaceStocks(data.stocks); dashboard.renderDashboard(); return;} if(page==='journal'){const [freshStocks,freshTrades,freshEvents,freshAnalytics]=await Promise.all([af('/stocks?includeArchived=1'),af('/trades'),af('/capital-events'),af('/analytics/dashboard')]); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks); if(freshTrades)state.trades=freshTrades; if(freshEvents)state.capitalEvents=freshEvents; if(freshAnalytics)state.analytics=freshAnalytics; journal.renderJournal(); return;} const freshStocks=await af('/stocks'); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks); if(page==='trading')trading.renderTrading(); else config.renderConfig(); }
+Object.assign(window, { ...dashboard, ...config, ...journal, ...trading, nav, dt, showA });
 window.addEventListener('hashchange',()=>loadPage(pageFromHash()));
 document.addEventListener('click',event=>{ if(!event.target.closest('.dropdown'))document.querySelectorAll('.dropdown.open').forEach(dropdown=>dropdown.classList.remove('open')); });
 loadPage(pageFromHash());
