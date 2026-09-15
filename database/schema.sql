@@ -9,6 +9,7 @@ PRAGMA synchronous = NORMAL;
 CREATE TABLE IF NOT EXISTS stocks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL UNIQUE,
+    isin TEXT,
     name TEXT,
     currency TEXT DEFAULT 'USD',
     current_price_usd REAL,
@@ -71,7 +72,7 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
 CREATE TABLE IF NOT EXISTS price_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_id INTEGER NOT NULL,
-    price_usd REAL NOT NULL,
+    price_usd REAL,
     price_eur REAL,
     exchange_rate REAL,
     source TEXT NOT NULL,

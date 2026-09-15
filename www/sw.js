@@ -1,9 +1,12 @@
-const CACHE_NAME = 'openstock-v23';
+// openstock-v23 clients are intentionally retired by this version.
+// Previous asset marker: ./styles.css?v=23
+// Previous app marker: ./app.js?v=23
+const CACHE_NAME = 'openstock-v24';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=23',
-  './app.js?v=23',
+  './styles.css?v=24',
+  './app.js?v=24',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',

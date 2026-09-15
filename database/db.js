@@ -11,7 +11,7 @@ class OpenStockDB {
     // ===== STOCKS =====
     getAllStocks() {
         return this.db.prepare(`
-            SELECT id, symbol, name, currency, current_price_usd, current_price_eur,
+            SELECT id, symbol, name, isin, currency, current_price_usd, current_price_eur,
                    buy_threshold_eur, sell_threshold_eur, owned, enabled, archived,
                    last_price_update, last_exchange_rate, trigger_state,
                    created_at, updated_at
@@ -45,7 +45,7 @@ class OpenStockDB {
 
     getEnabledStocks() {
         return this.db.prepare(`
-            SELECT id, symbol, name, currency, buy_threshold_eur, sell_threshold_eur,
+            SELECT id, symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur,
                    enabled, archived, trigger_state
             FROM stocks
             WHERE enabled = 1 AND archived = 0
@@ -109,17 +109,29 @@ class OpenStockDB {
     rearmAlertLevel(id) { this.db.prepare("UPDATE alert_levels SET enabled=1, active=1, triggered=0, retired=0, triggered_at=NULL, retired_at=NULL WHERE id=?").run(id); return this.getAlertLevelById(id); }
     retireAlertLevel(id) { return this.db.prepare("UPDATE alert_levels SET enabled=0, active=0, triggered=1, retired=1, triggered_at=datetime('now'), retired_at=datetime('now') WHERE id=?").run(id); }
 
-    addStock(symbol, name, currency, buyThreshold, sellThreshold) {
+    addStock(symbol, name, currency, buyThreshold, sellThreshold, isin = null) {
         const stmt = this.db.prepare(`
-            INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO stocks (symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur)
+            VALUES (?, ?, ?, ?, ?, ?)
         `);
         return this.db.transaction(() => {
-            const result = stmt.run(symbol, name, currency, buyThreshold, sellThreshold);
+            const result = stmt.run(symbol, name, isin, currency, buyThreshold, sellThreshold);
             const add = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
             add.run(result.lastInsertRowid, 'BUY', buyThreshold);
             add.run(result.lastInsertRowid, 'SELL', sellThreshold);
             return result;
+        })();
+    }
+
+    addStockWithMapping({ symbol, name, isin, currency = 'EUR', buyThreshold, sellThreshold, mapping }) {
+        return this.db.transaction(() => {
+            const result = this.db.prepare(`INSERT INTO stocks (symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur, price_source, current_price_usd, last_exchange_rate)
+                VALUES (?, ?, ?, ?, ?, ?, 'trade_republic', NULL, NULL)`).run(symbol, name, isin, currency, buyThreshold, sellThreshold);
+            const stockId = Number(result.lastInsertRowid);
+            const add = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
+            add.run(stockId, 'BUY', buyThreshold); add.run(stockId, 'SELL', sellThreshold);
+            this.saveBrokerMapping({ ...mapping, stock_id: stockId });
+            return { lastInsertRowid: stockId };
         })();
     }
 
@@ -183,16 +195,23 @@ class OpenStockDB {
     }
 
     hasDailyBackfill(stockId) {
-        return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'yahoo_backfill' LIMIT 1").get(stockId));
+        return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source IN ('yahoo_backfill', 'trade_republic_history') LIMIT 1").get(stockId));
     }
 
-    addHistoricalPriceSnapshots(stockId, points) {
+    addHistoricalPriceSnapshots(stockId, points, source = 'yahoo_backfill') {
         const insert = this.db.prepare(`
-            INSERT INTO price_history (stock_id, price_usd, source, quote_time, recorded_at)
-            VALUES (?, ?, 'yahoo_backfill', ?, ?)
-            ON CONFLICT(stock_id, recorded_at) DO NOTHING
+            INSERT INTO price_history (stock_id, price_usd, price_eur, exchange_rate, source, quote_time, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(stock_id, recorded_at) DO UPDATE SET price_usd=excluded.price_usd, price_eur=excluded.price_eur,
+              exchange_rate=excluded.exchange_rate, source=excluded.source, quote_time=excluded.quote_time
         `);
-        return this.db.transaction(rows => rows.reduce((saved, point) => saved + insert.run(stockId, point.priceUsd, point.recordedAt, point.recordedAt).changes, 0))(Array.isArray(points) ? points : []);
+        if (source !== 'trade_republic_history') {
+            // Yahoo backfill never replaces an existing live observation.
+            const legacyInsert = this.db.prepare(`INSERT INTO price_history (stock_id, price_usd, price_eur, exchange_rate, source, quote_time, recorded_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(stock_id, recorded_at) DO NOTHING`);
+            return this.db.transaction(rows => rows.reduce((saved, point) => saved + legacyInsert.run(stockId, point.priceUsd ?? null, point.priceEur ?? null, point.exchangeRate ?? null, point.source || source, point.quoteTime || point.recordedAt, point.recordedAt).changes, 0))(Array.isArray(points) ? points : []);
+        }
+        return this.db.transaction(rows => rows.reduce((saved, point) => saved + insert.run(stockId, point.priceUsd ?? null, point.priceEur ?? null, point.exchangeRate ?? null, point.source || source, point.quoteTime || point.recordedAt, point.recordedAt).changes, 0))(Array.isArray(points) ? points : []);
     }
 
     getPriceHistory(stockId, since, bucketSeconds) {
@@ -399,11 +418,11 @@ class OpenStockDB {
         return stmt.run(rate);
     }
 
-    getBrokerMappings() { return this.db.prepare(`SELECT m.*, s.name FROM broker_instrument_mappings m JOIN stocks s ON s.id=m.stock_id ORDER BY m.ticker`).all(); }
-    getBrokerMapping(stockId) { return this.db.prepare('SELECT * FROM broker_instrument_mappings WHERE stock_id=?').get(stockId); }
+    getBrokerMappings() { if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_instrument_mappings'").get()) return []; return this.db.prepare(`SELECT m.*, s.name FROM broker_instrument_mappings m JOIN stocks s ON s.id=m.stock_id ORDER BY m.ticker`).all(); }
+    getBrokerMapping(stockId) { if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_instrument_mappings'").get()) return null; return this.db.prepare('SELECT * FROM broker_instrument_mappings WHERE stock_id=?').get(stockId); }
     saveBrokerMapping(input) { return this.db.prepare(`INSERT INTO broker_instrument_mappings (stock_id,broker,ticker,isin,exchange,currency,broker_metadata_json,source,verified_at) VALUES (@stock_id,@broker,@ticker,@isin,@exchange,@currency,@broker_metadata_json,@source,@verified_at) ON CONFLICT(stock_id) DO UPDATE SET broker=excluded.broker,ticker=excluded.ticker,isin=excluded.isin,exchange=excluded.exchange,currency=excluded.currency,broker_metadata_json=excluded.broker_metadata_json,source=excluded.source,verified_at=excluded.verified_at,updated_at=datetime('now')`).run(input); }
     addBrokerQuote(input) { return this.db.prepare(`INSERT INTO broker_quotes (broker,isin,exchange,bid_eur,ask_eur,last_eur,currency,quote_time,observed_at,source) VALUES (@broker,@isin,@exchange,@bid_eur,@ask_eur,@last_eur,@currency,@quote_time,@observed_at,@source)`).run(input); }
-    getLatestBrokerQuote(isin, exchange) { return this.db.prepare('SELECT * FROM broker_quotes WHERE broker=? AND isin=? AND exchange=? ORDER BY observed_at DESC LIMIT 1').get('trade_republic', isin, exchange); }
+    getLatestBrokerQuote(isin, exchange) { if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_quotes'").get()) return null; return this.db.prepare('SELECT * FROM broker_quotes WHERE broker=? AND isin=? AND exchange=? ORDER BY observed_at DESC LIMIT 1').get('trade_republic', isin, exchange); }
     getLatestBrokerAccount(accountRefMasked, maxAgeMs = 300000) {
         const row = this.db.prepare('SELECT * FROM broker_accounts WHERE broker=? AND account_ref_masked=? ORDER BY observed_at DESC LIMIT 1').get('trade_republic', accountRefMasked);
         return row && Date.now() - Date.parse(row.observed_at) >= 0 && Date.now() - Date.parse(row.observed_at) <= maxAgeMs ? row : null;

@@ -11,6 +11,8 @@ const migrations = [
   ,require('./migrations/009_trade_republic_order_audit')
   ,require('./migrations/010_verified_trade_republic_mappings')
   ,require('./migrations/011_price_source')
+  ,require('./migrations/012_isin_first_trade_republic')
+  ,require('./migrations/013_eur_history_nullable_usd')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {

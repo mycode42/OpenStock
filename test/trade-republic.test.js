@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { TradeRepublicClient, sanitizeQuote, sanitizeAccount, sanitizeCollection, parseOrderResponse } = require('../lib/brokers/trade-republic');
+const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeInstrumentHistory, sanitizeAccount, sanitizeCollection, parseOrderResponse } = require('../lib/brokers/trade-republic');
 
 test('Trade Republic client sends X-API-Key server-side and never returns it', async () => {
   let seen;
@@ -33,6 +33,13 @@ test('nested order-price maps sell price to executable bid and buy price to exec
   assert.equal(quote.bid_time, '2026-09-15T10:00:00.000Z');
   assert.equal(quote.ask_time, '2026-09-15T10:00:01.000Z');
   assert.equal(quote.bid_unit, 'EUR');
+});
+
+test('instrument and history sanitizers normalize broker identity without raw payloads', () => {
+  const instrument = sanitizeInstrument({ data: { id: 'US0000000001', name: 'Example Corp', intlSymbol: 'EXM', tradable: true, type: 'STOCK' } }, 'US0000000001');
+  assert.deepEqual({ isin: instrument.isin, name: instrument.name, ticker: instrument.intlSymbol, tradable: instrument.tradable }, { isin: 'US0000000001', name: 'Example Corp', ticker: 'EXM', tradable: true });
+  const history = sanitizeInstrumentHistory({ aggregates: [{ time: 1760529600, open: 10, high: 12, low: 9, close: 11, volume: 4, adjValue: 11 }], resolution: '1d' }, { isin: 'US0000000001', range: '1m' });
+  assert.equal(history.points[0].priceEur, 11); assert.equal(history.points[0].source, 'trade_republic_history'); assert.equal(JSON.stringify(history).includes('aggregates'), false);
 });
 
 test('portfolio keyed accounts and category positions are flattened and masked', () => {
