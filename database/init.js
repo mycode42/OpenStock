@@ -8,6 +8,9 @@ const migrations = [
   require('./migrations/006_alert_log_foreign_keys'),
   require('./migrations/007_trade_merge_audit')
   ,require('./migrations/008_trade_republic')
+  ,require('./migrations/009_trade_republic_order_audit')
+  ,require('./migrations/010_verified_trade_republic_mappings')
+  ,require('./migrations/011_price_source')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {

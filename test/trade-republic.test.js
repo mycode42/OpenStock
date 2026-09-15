@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { TradeRepublicClient, sanitizeQuote, sanitizeAccount } = require('../lib/brokers/trade-republic');
+const { TradeRepublicClient, sanitizeQuote, sanitizeAccount, sanitizeCollection, parseOrderResponse } = require('../lib/brokers/trade-republic');
 
 test('Trade Republic client sends X-API-Key server-side and never returns it', async () => {
   let seen;
@@ -18,4 +18,27 @@ test('sanitizers mask account references and preserve EUR bid/ask semantics', ()
 test('client timeout fails closed without exposing request details', async () => {
   const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, timeoutMs: 1000, fetchImpl: (_u, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))) });
   await assert.rejects(() => client.getAccounts(), error => error.code === 'TIMEOUT' && !String(error).includes('secret'));
+});
+
+test('nested order-price maps sell price to executable bid and buy price to executable ask', () => {
+  const quote = sanitizeQuote({ sell: { time: '2026-09-15T10:00:00Z', price: 101, bidPrice: 100, unit: 'EUR', size: 2 }, buy: { time: '2026-09-15T10:00:01Z', price: 103, askPrice: 104, unit: 'EUR', size: 3 } }, { isin: 'US0000000001', exchange: 'TIB' });
+  assert.equal(quote.bid_eur, 101);
+  assert.equal(quote.ask_eur, 103);
+  assert.equal(quote.bid_time, '2026-09-15T10:00:00.000Z');
+  assert.equal(quote.ask_time, '2026-09-15T10:00:01.000Z');
+  assert.equal(quote.bid_unit, 'EUR');
+});
+
+test('portfolio keyed accounts and category positions are flattened and masked', () => {
+  const rows = sanitizeCollection({ DE1234567890123456: { categories: [{ positions: [{ isin: 'JE00BS44BN30', quantity: 4, currentValue: 500, id: 'position-secret' }] }] } }, 'portfolio');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].instrument, 'JE00BS44BN30');
+  assert.equal(rows[0].quantity, 4);
+  assert.equal(rows[0].account_ref_masked, 'DE••••56');
+  assert.equal(JSON.stringify(rows).includes('1234567890123456'), false);
+});
+
+test('order parser never treats an order id alone as a fill', () => {
+  assert.deepEqual(parseOrderResponse({ orderId: 'secret-id' }), { external_ref_masked: 'se••••id', status: 'UNKNOWN', execution: 'none' });
+  assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id' }).execution, 'filled');
 });

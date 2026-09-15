@@ -14,7 +14,7 @@ test('fresh initialization is versioned and idempotent', t => {
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     const db = new Database(file);
-    assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), migrations.map(migration => migration.version));
     assert.equal(db.prepare('PRAGMA table_info(stocks)').all().some(row => row.name === 'archived'), true);
     db.close();
 });
@@ -78,7 +78,7 @@ test('an existing current schema is adopted without duplicate objects', t => {
     db.close();
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     const adopted = new Database(file);
-    assert.deepEqual(adopted.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(adopted.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), migrations.map(migration => migration.version));
     adopted.close();
 });
 

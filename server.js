@@ -363,7 +363,7 @@ app.post('/api/stocks', (req, res) => {
 
 app.put('/api/stocks/:id', (req, res) => {
     try {
-        const { buy_threshold_eur, sell_threshold_eur, owned, enabled, name } = req.body;
+        const { buy_threshold_eur, sell_threshold_eur, owned, enabled, name, price_source } = req.body;
         if (buy_threshold_eur !== undefined || sell_threshold_eur !== undefined) {
             return res.status(400).json({ error: 'Existing-stock threshold changes are no longer accepted; manage alert levels instead.' });
         }
@@ -393,6 +393,10 @@ app.put('/api/stocks/:id', (req, res) => {
                 return res.status(400).json({ error: 'Invalid name' });
             }
             updates.name = name.trim();
+        }
+        if (price_source !== undefined) {
+            if (!['yahoo', 'trade_republic'].includes(String(price_source))) return res.status(400).json({ error: 'Price source must be yahoo or trade_republic' });
+            updates.price_source = String(price_source);
         }
 
         if (Object.keys(updates).length === 0) {
@@ -574,6 +578,25 @@ app.post('/api/refresh-prices', async (req, res) => {
         // Process each stock
         for (const stock of stocks) {
             try {
+                const selectedSource = stock.price_source || process.env.TRADE_REPUBLIC_PRICE_SOURCE || 'yahoo';
+                if (selectedSource === 'trade_republic') {
+                    const mapping = req.app.locals.db.getBrokerMapping(stock.id);
+                    if (mapping && mapping.verified_at) {
+                        try {
+                            const brokerQuote = await req.app.locals.brokerClient.getQuote({ isin: mapping.isin, exchange: mapping.exchange });
+                            const eurPrice = brokerQuote.bid_eur && brokerQuote.ask_eur ? (brokerQuote.bid_eur + brokerQuote.ask_eur) / 2 : brokerQuote.bid_eur || brokerQuote.ask_eur;
+                            if (Number.isFinite(eurPrice) && eurPrice > 0 && brokerQuote.currency === 'EUR') {
+                                const usdPrice = eurPrice / exchangeRate;
+                                req.app.locals.db.updateStockPrice(stock.id, usdPrice, eurPrice, exchangeRate);
+                                req.app.locals.db.addPriceSnapshot(stock.id, usdPrice, eurPrice, exchangeRate, 'trade_republic_order_price', brokerQuote.quote_time);
+                                updatedCount++;
+                                continue;
+                            }
+                        } catch (brokerError) {
+                            console.warn(`Trade Republic quote unavailable for ${stock.symbol}; falling back to Yahoo:`, brokerError.code || 'UNAVAILABLE');
+                        }
+                    }
+                }
                 // Fetch price from Yahoo Finance (free, no API key needed)
                 const symbol = stock.symbol;
                 const priceResponse = await fetchImpl(
@@ -643,16 +666,65 @@ app.post('/api/refresh-prices', async (req, res) => {
 
 // ===== API: broker integration (sanitized, read-first) =====
 function brokerError(res, error) { return res.status(error instanceof BrokerError ? error.status : 502).json({ error: error.message || 'Broker unavailable', code: error.code || 'BROKER_ERROR' }); }
-function brokerRows(raw, kind) { return sanitizeCollection(raw, kind).map(row => ({ ...row, broker: 'trade_republic', observed_at: new Date().toISOString(), raw_hash: null })); }
+function brokerRows(raw, kind) { return (Array.isArray(raw) ? raw : sanitizeCollection(raw, kind)).map(row => ({ ...row, broker: 'trade_republic', observed_at: row.observed_at || new Date().toISOString(), raw_hash: null })); }
 app.get('/api/broker/trade-republic/health', async (req, res) => { try { res.json({ broker: 'trade_republic', ...(await req.app.locals.brokerClient.health()), live_submission_enabled: process.env.TRADE_REPUBLIC_LIVE_ENABLED === 'true' && process.env.TRADE_REPUBLIC_DRY_RUN === 'false' }); } catch (e) { brokerError(res, e); } });
 app.get('/api/broker/trade-republic/accounts', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getAccounts()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/mappings', (req, res) => res.json(req.app.locals.db.getBrokerMappings().map(({ broker_metadata_json, ...m }) => ({ ...m, broker_metadata: JSON.parse(broker_metadata_json || '{}') }))));
-app.post('/api/broker/trade-republic/mappings', (req, res) => { try { const b=req.body||{}; const stock=req.app.locals.db.getStockById(Number(b.stock_id)); if(!stock) return res.status(404).json({error:'Stock not found'}); if(!/^[A-Z0-9]{12}$/.test(String(b.isin||''))||!/^[A-Z0-9]{3,5}$/.test(String(b.exchange||''))||!/^[A-Z]{3}$/.test(String(b.currency||''))) return res.status(400).json({error:'Valid ISIN, exchange, and currency are required'}); req.app.locals.db.saveBrokerMapping({stock_id:stock.id,broker:'trade_republic',ticker:stock.symbol,isin:String(b.isin).toUpperCase(),exchange:String(b.exchange).toUpperCase(),currency:String(b.currency).toUpperCase(),broker_metadata_json:JSON.stringify(b.broker_metadata||{}),source:'manual',verified_at:null}); res.status(201).json({mapping:req.app.locals.db.getBrokerMapping(stock.id)}); } catch(e) { res.status(400).json({error:e.message||'Invalid mapping'}); } });
-app.get('/api/broker/trade-republic/mapping-candidates', async (req, res) => { try { const portfolio=await req.app.locals.brokerClient.getPortfolio(); res.json({candidates:sanitizeCollection(portfolio,'portfolio').filter(x=>x.instrument).map(x=>({ticker:null,isin:x.instrument,quantity:x.quantity,match:'unresolved',reason:'Ticker-to-ISIN mapping requires explicit verification'}))}); } catch(e) { brokerError(res,e); } });
+app.post('/api/broker/trade-republic/mappings', async (req, res) => { try { const b=req.body||{}; const stock=req.app.locals.db.getStockById(Number(b.stock_id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const isin=String(b.isin||'').toUpperCase(), exchange=String(b.exchange||'').toUpperCase(), currency=String(b.currency||'').toUpperCase(); if(!/^[A-Z0-9]{12}$/.test(isin)||!/^[A-Z0-9]{3,5}$/.test(exchange)||!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({error:'Valid ISIN, exchange, and currency are required'}); const client=req.app.locals.brokerClient; const [instrument, home]=await Promise.all([client.getInstrument(isin), client.getTradeRepublicInstrument(isin)]); if(instrument.isin!==isin||home.isin!==isin||home.exchange!==exchange||home.currency!==currency) return res.status(422).json({error:'Broker identity or home exchange validation failed', verified:false}); req.app.locals.db.saveBrokerMapping({stock_id:stock.id,broker:'trade_republic',ticker:stock.symbol,isin,exchange,currency,broker_metadata_json:JSON.stringify({instrument_name:instrument.name}),source:'broker_verified',verified_at:new Date().toISOString()}); res.status(201).json({mapping:req.app.locals.db.getBrokerMapping(stock.id)}); } catch(e) { brokerError(res,e); } });
+app.get('/api/broker/trade-republic/mapping-candidates', async (req, res) => { try { const portfolio=await req.app.locals.brokerClient.getPortfolio(); res.json({candidates:portfolio.filter(x=>x.instrument).map(x=>({ticker:null,isin:x.instrument,quantity:x.quantity,account_ref_masked:x.account_ref_masked,match:'unresolved',reason:'Ticker-to-ISIN mapping requires explicit verification'}))}); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/quote/:stockId', async (req, res) => { try { const mapping=req.app.locals.db.getBrokerMapping(Number(req.params.stockId)); if(!mapping) return res.status(409).json({error:'Stock has no verified broker mapping'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}); const quoteId=req.app.locals.db.addBrokerQuote({broker:'trade_republic',isin:mapping.isin,exchange:mapping.exchange,bid_eur:quote.bid_eur,ask_eur:quote.ask_eur,last_eur:quote.last_eur,currency:quote.currency,quote_time:quote.quote_time,observed_at:quote.observed_at,source:quote.source}).lastInsertRowid; res.json({...quote,quote_id:Number(quoteId),fresh:Date.now()-Date.parse(quote.observed_at)<15000}); } catch(e) { brokerError(res,e); } });
-app.post('/api/broker/trade-republic/sync', async (req, res) => { try { const client=req.app.locals.brokerClient, observed_at=new Date().toISOString(); const [accounts,portfolio,orders,transactions]=await Promise.all([client.getAccounts(),client.getPortfolio(),client.getOrders(),client.getTransactions()]); const accountRows=(Array.isArray(accounts)?accounts:[accounts?.data||accounts]).filter(Boolean).map(x=>{const a=sanitizeAccount(x);return {...a,broker:'trade_republic',observed_at,available_cash_eur:a.cash_eur,raw_hash:null};}); const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',brokerRows(portfolio,'portfolio').filter(x=>x.quantity!==null).map(x=>({...x,account_ref_masked:null}))),orders:req.app.locals.db.syncBrokerRows('broker_orders',brokerRows(orders,'orders').map(x=>({...x,side:null}))),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',brokerRows(transactions,'transactions'))}; res.json({broker:'trade_republic',observed_at,counts}); } catch(e) { brokerError(res,e); } });
+app.post('/api/broker/trade-republic/sync', async (req, res) => { try { const client=req.app.locals.brokerClient, observed_at=new Date().toISOString(); const [accounts,portfolio,orders,transactions]=await Promise.all([client.getAccounts(),client.getPortfolio(),client.getOrders(),client.getTransactions()]); const accountRows=accounts.filter(Boolean).map(a=>({...a,broker:'trade_republic',observed_at,available_cash_eur:a.cash_eur,raw_hash:null})); const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',brokerRows(portfolio,'portfolio').filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',brokerRows(orders,'orders')),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',brokerRows(transactions,'transactions'))}; res.json({broker:'trade_republic',observed_at,counts}); } catch(e) { brokerError(res,e); } });
 app.post('/api/broker/trade-republic/order-preview', async (req,res) => { try { const b=req.body||{}, mapping=req.app.locals.db.getBrokerMapping(Number(b.stock_id)); if(!mapping) return res.status(409).json({error:'Verified mapping required'}); if(!['buy','sell'].includes(b.type)||!Number.isInteger(Number(b.quantity))||Number(b.quantity)<=0) return res.status(400).json({error:'Valid side and integer quantity required'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}), side=b.type==='buy'?'ask_eur':'bid_eur'; if(!quote[side]) return res.status(502).json({error:'Fresh side quote unavailable'}); const fee=await req.app.locals.brokerClient.previewFees({account_ref_masked:b.account_ref,exchange:mapping.exchange,instrument:mapping.isin,mode:b.mode||'market',quantity:Number(b.quantity),type:b.type,limit:b.limit}); res.json({broker:'trade_republic',instrument:mapping.isin,exchange:mapping.exchange,side:b.type,quantity:Number(b.quantity),reference_price_eur:quote[side],fee_eur:fee.fee_eur,total_eur:null,quote}); } catch(e) { brokerError(res,e); } });
-app.post('/api/broker/trade-republic/orders', async (req,res) => { const b=req.body||{}, mapping=req.app.locals.db.getBrokerMapping(Number(b.stock_id)), q=mapping&&req.app.locals.db.getLatestBrokerQuote(mapping.isin,mapping.exchange); const gates={live_enabled:process.env.TRADE_REPUBLIC_LIVE_ENABLED==='true',dry_run_disabled:process.env.TRADE_REPUBLIC_DRY_RUN==='false',kill_switch_clear:process.env.TRADE_REPUBLIC_KILL_SWITCH!=='true',acknowledged:process.env.TRADE_REPUBLIC_LIVE_ACK==='true',cap_ok:Number(b.quantity||0)*Number(b.limit||0)<=Number(process.env.TRADE_REPUBLIC_MAX_ORDER_EUR||0),fresh_quote:Boolean(q&&Date.now()-Date.parse(q.observed_at)<15000),mapped:Boolean(mapping),account_selected:Boolean(b.account_ref),confirmed:b.confirmed===true,idempotency:Boolean(b.idempotency_key)}; if(Object.values(gates).some(x=>!x)) return res.status(409).json({error:'Live order rejected: safety gate not satisfied',gates}); return res.status(503).json({error:'Live submission is not implemented in this deployment',gates}); });
+app.post('/api/broker/trade-republic/orders', async (req,res) => {
+    const b=req.body||{}, db=req.app.locals.db, client=req.app.locals.brokerClient;
+    const mapping=db.getBrokerMapping(Number(b.stock_id));
+    const q=mapping&&db.getLatestBrokerQuote(mapping.isin,mapping.exchange);
+    const key=String(b.idempotency_key||'');
+    const quantity=Number(b.quantity), side=String(b.type||'').toLowerCase();
+    const executable=q && side === 'buy' ? q.ask_eur : q && side === 'sell' ? q.bid_eur : null;
+    const maxCap=Number(process.env.TRADE_REPUBLIC_MAX_ORDER_EUR||0);
+    const accountRef=String(b.account_ref||'');
+    const account=db.db.prepare('SELECT 1 FROM broker_accounts WHERE broker=? AND account_ref_masked=? LIMIT 1').get('trade_republic', accountRef);
+    const fresh=Boolean(q && q.observed_at && Date.now()-Date.parse(q.observed_at) >= 0 && Date.now()-Date.parse(q.observed_at) <= 15000);
+    const gates={
+        live_enabled:process.env.TRADE_REPUBLIC_LIVE_ENABLED==='true',
+        dry_run_disabled:process.env.TRADE_REPUBLIC_DRY_RUN==='false',
+        kill_switch_clear:process.env.TRADE_REPUBLIC_KILL_SWITCH!=='true',
+        acknowledged:process.env.TRADE_REPUBLIC_LIVE_ACK==='true',
+        cap_ok:Number.isFinite(quantity)&&quantity>0&&Number.isFinite(executable)&&executable>0&&maxCap>0&&quantity*executable<=maxCap,
+        fresh_quote:fresh,
+        executable_quote:Boolean(executable),
+        mapped:Boolean(mapping&&mapping.verified_at),
+        account_synchronized:Boolean(account),
+        account_selected:Boolean(accountRef),
+        account_resolvable:typeof client.resolveAccount !== 'function' || Boolean(client.resolveAccount(accountRef)),
+        confirmed:b.confirmation===`PLACE ${key}`,
+        idempotency:/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(key),
+        valid_side:['buy','sell'].includes(side),
+        valid_quantity:Number.isInteger(quantity)&&quantity>0
+    };
+    const existing=key ? db.getBrokerOrderIntent(key) : null;
+    if(existing) return res.status(existing.status==='REJECTED'?409:200).json({order:{idempotency_key:key,status:existing.status,external_ref_masked:existing.external_ref_masked||null},duplicate:true});
+    if(Object.values(gates).some(x=>!x)) {
+        if(gates.idempotency) db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isFinite(quantity)?quantity:null}),quote_id:q?.id||null});
+        return res.status(409).json({error:'Live order rejected: safety gate not satisfied',gates});
+    }
+    db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'PROPOSED',request_json:JSON.stringify({stock_id:Number(b.stock_id),type:side,quantity,mode:b.mode||'market',limit:b.limit??null,account_ref_masked:accountRef}),quote_id:q.id});
+    const intent=db.getBrokerOrderIntent(key);
+    const order={account_ref_masked:accountRef,exchange:mapping.exchange,instrument:mapping.isin,mode:b.mode||'market',quantity,type:side,limit:b.limit===undefined?undefined:Number(b.limit),validity:b.validity||'GFD'};
+    try {
+        const result=await client.placeOrder(order);
+        db.updateBrokerOrderIntent(intent.id,{status:['FILLED','EXECUTED'].includes(result.status)?'FILLED':result.status==='UNKNOWN'?'UNKNOWN':'SUBMITTED',response_json:JSON.stringify({status:result.status,execution:result.execution}),external_ref_masked:result.external_ref_masked,reconciled_at:null,frozen_reason:result.status==='UNKNOWN'?'Broker response was inconclusive':null});
+        return res.status(201).json({order:{idempotency_key:key,status:result.status,external_ref_masked:result.external_ref_masked,execution:result.execution},warning:result.execution==='filled'?null:'Order ID/status does not prove a fill'});
+    } catch(e) {
+        let reconciliation='inconclusive';
+        if(e.code==='TIMEOUT'||e.code==='UNAVAILABLE') {
+            try { await client.getOrders(); reconciliation='checked_without_authoritative_match'; } catch { reconciliation='reconciliation_unavailable'; }
+        }
+        db.updateBrokerOrderIntent(intent.id,{status:'UNKNOWN',response_json:JSON.stringify({code:e.code||'BROKER_ERROR'}),external_ref_masked:null,reconciled_at:new Date().toISOString(),frozen_reason:`Submission ambiguous; ${reconciliation}. Manual reconciliation required.`});
+        return res.status(503).json({error:'Order outcome is unknown and is frozen; reconcile before retrying',code:'ORDER_UNKNOWN',idempotency_key:key});
+    }
+});
 
 // Health check
 app.get('/health', (req, res) => {

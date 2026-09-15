@@ -134,7 +134,7 @@ class OpenStockDB {
     }
 
     updateStock(id, updates) {
-        const allowedFields = ['buy_threshold_eur', 'sell_threshold_eur', 'enabled', 'name', 'archived'];
+        const allowedFields = ['buy_threshold_eur', 'sell_threshold_eur', 'enabled', 'name', 'archived', 'price_source'];
         const setClauses = [];
         const values = [];
 
@@ -407,6 +407,7 @@ class OpenStockDB {
     syncBrokerRows(table, rows) { const allowed = { broker_accounts:['broker','account_ref_masked','currency','cash_eur','available_cash_eur','observed_at','raw_hash'], broker_portfolio:['broker','account_ref_masked','isin','quantity','currency','value_eur','observed_at','external_ref_masked'], broker_orders:['broker','external_ref_masked','status','isin','side','quantity','amount_eur','occurred_at','observed_at','raw_hash'], broker_transactions:['broker','external_ref_masked','status','isin','quantity','amount_eur','occurred_at','observed_at','raw_hash'] }[table]; if (!allowed) throw new Error('Invalid broker table'); if (!rows.length) return 0; const sql = `INSERT OR IGNORE INTO ${table} (${allowed.join(',')}) VALUES (${allowed.map(k=>`@${k}`).join(',')})`; const stmt = this.db.prepare(sql); return this.db.transaction(() => { let n=0; for (const row of rows) n += stmt.run(row).changes; return n; })(); }
     createBrokerOrderIntent(input) { return this.db.prepare(`INSERT INTO broker_order_intents (broker,idempotency_key,status,request_json,quote_id) VALUES (@broker,@idempotency_key,@status,@request_json,@quote_id)`).run(input); }
     getBrokerOrderIntent(key) { return this.db.prepare('SELECT * FROM broker_order_intents WHERE idempotency_key=?').get(key); }
+    updateBrokerOrderIntent(id, input) { return this.db.prepare(`UPDATE broker_order_intents SET status=@status, response_json=@response_json, external_ref_masked=@external_ref_masked, reconciled_at=@reconciled_at, frozen_reason=@frozen_reason, updated_at=datetime('now') WHERE id=@id`).run({ ...input, id }); }
 }
 
 module.exports = OpenStockDB;
