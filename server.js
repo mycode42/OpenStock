@@ -669,7 +669,16 @@ app.post('/api/refresh-prices', async (req, res) => {
 
 // ===== API: broker integration (sanitized, read-first) =====
 function brokerError(res, error) { return res.status(error instanceof BrokerError ? error.status : 502).json({ error: error.message || 'Broker unavailable', code: error.code || 'BROKER_ERROR' }); }
-function brokerRows(raw, kind) { return (Array.isArray(raw) ? raw : sanitizeCollection(raw, kind)).map(row => ({ ...row, broker: 'trade_republic', observed_at: row.observed_at || new Date().toISOString(), raw_hash: null })); }
+function brokerRows(raw, kind) {
+    const observedAt = new Date().toISOString();
+    const rows = Array.isArray(raw) ? raw : sanitizeCollection(raw, kind);
+    return rows.map(row => {
+        const base = { broker: 'trade_republic', observed_at: row.observed_at || observedAt, raw_hash: null };
+        if (kind === 'portfolio') return { ...base, account_ref_masked: row.account_ref_masked || '••••', isin: row.isin || row.instrument || null, quantity: row.quantity, currency: row.currency || 'EUR', value_eur: row.value_eur ?? row.amount_eur ?? null, external_ref_masked: row.external_ref_masked || '••••' };
+        if (kind === 'orders') return { ...base, external_ref_masked: row.external_ref_masked || '••••', status: row.status || 'UNKNOWN', isin: row.isin || row.instrument || null, side: row.side || null, quantity: row.quantity ?? null, amount_eur: row.amount_eur ?? null, occurred_at: row.occurred_at || null };
+        return { ...base, external_ref_masked: row.external_ref_masked || '••••', status: row.status || 'UNKNOWN', isin: row.isin || row.instrument || null, quantity: row.quantity ?? null, amount_eur: row.amount_eur ?? null, occurred_at: row.occurred_at || null };
+    });
+}
 app.get('/api/broker/trade-republic/health', async (req, res) => { try { res.json({ broker: 'trade_republic', ...(await req.app.locals.brokerClient.health()), live_submission_enabled: process.env.TRADE_REPUBLIC_LIVE_ENABLED === 'true' && process.env.TRADE_REPUBLIC_DRY_RUN === 'false' }); } catch (e) { brokerError(res, e); } });
 app.get('/api/broker/trade-republic/accounts', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getAccounts()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/mappings', (req, res) => res.json(req.app.locals.db.getBrokerMappings().map(({ broker_metadata_json, ...m }) => ({ ...m, broker_metadata: JSON.parse(broker_metadata_json || '{}') }))));

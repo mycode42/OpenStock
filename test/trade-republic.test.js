@@ -49,6 +49,13 @@ test('portfolio normalization falls back to virtualSize when netSize is absent',
   assert.equal(rows[0].quantity, 2);
 });
 
+test('transaction normalization reads nested amount values without exposing account data', () => {
+  const rows = sanitizeCollection([{ id: 'transaction-secret', timestamp: '2026-09-15T10:00:00Z', amount: { currency: 'EUR', value: 12.34, fractionDigits: 2 }, status: 'EXECUTED', cashAccountNumber: 'DE1234567890123456' }], 'transactions');
+  assert.equal(rows[0].amount_eur, 12.34);
+  assert.equal(rows[0].currency, 'EUR');
+  assert.equal(JSON.stringify(rows).includes('1234567890123456'), false);
+});
+
 test('order parser never treats an order id alone as a fill', () => {
   assert.deepEqual(parseOrderResponse({ orderId: 'secret-id' }), { external_ref_masked: 'se••••id', status: 'UNKNOWN', execution: 'none' });
   assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id' }).execution, 'filled');
