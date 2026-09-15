@@ -673,7 +673,7 @@ app.get('/api/broker/trade-republic/mappings', (req, res) => res.json(req.app.lo
 app.post('/api/broker/trade-republic/mappings', async (req, res) => { try { const b=req.body||{}; const stock=req.app.locals.db.getStockById(Number(b.stock_id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const isin=String(b.isin||'').toUpperCase(), exchange=String(b.exchange||'').toUpperCase(), currency=String(b.currency||'').toUpperCase(); if(!/^[A-Z0-9]{12}$/.test(isin)||!/^[A-Z0-9]{3,5}$/.test(exchange)||!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({error:'Valid ISIN, exchange, and currency are required'}); const client=req.app.locals.brokerClient; const [instrument, home]=await Promise.all([client.getInstrument(isin), client.getTradeRepublicInstrument(isin)]); if(instrument.isin!==isin||home.isin!==isin||home.exchange!==exchange||home.currency!==currency) return res.status(422).json({error:'Broker identity or home exchange validation failed', verified:false}); req.app.locals.db.saveBrokerMapping({stock_id:stock.id,broker:'trade_republic',ticker:stock.symbol,isin,exchange,currency,broker_metadata_json:JSON.stringify({instrument_name:instrument.name}),source:'broker_verified',verified_at:new Date().toISOString()}); res.status(201).json({mapping:req.app.locals.db.getBrokerMapping(stock.id)}); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/mapping-candidates', async (req, res) => { try { const portfolio=await req.app.locals.brokerClient.getPortfolio(); res.json({candidates:portfolio.filter(x=>x.instrument).map(x=>({ticker:null,isin:x.instrument,quantity:x.quantity,account_ref_masked:x.account_ref_masked,match:'unresolved',reason:'Ticker-to-ISIN mapping requires explicit verification'}))}); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/quote/:stockId', async (req, res) => { try { const mapping=req.app.locals.db.getBrokerMapping(Number(req.params.stockId)); if(!mapping) return res.status(409).json({error:'Stock has no verified broker mapping'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}); const quoteId=req.app.locals.db.addBrokerQuote({broker:'trade_republic',isin:mapping.isin,exchange:mapping.exchange,bid_eur:quote.bid_eur,ask_eur:quote.ask_eur,last_eur:quote.last_eur,currency:quote.currency,quote_time:quote.quote_time,observed_at:quote.observed_at,source:quote.source}).lastInsertRowid; res.json({...quote,quote_id:Number(quoteId),fresh:Date.now()-Date.parse(quote.observed_at)<15000}); } catch(e) { brokerError(res,e); } });
-app.post('/api/broker/trade-republic/sync', async (req, res) => { try { const client=req.app.locals.brokerClient, observed_at=new Date().toISOString(); const [accounts,portfolio,orders,transactions]=await Promise.all([client.getAccounts(),client.getPortfolio(),client.getOrders(),client.getTransactions()]); const accountRows=accounts.filter(Boolean).map(a=>({...a,broker:'trade_republic',observed_at,available_cash_eur:a.cash_eur,raw_hash:null})); const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',brokerRows(portfolio,'portfolio').filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',brokerRows(orders,'orders')),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',brokerRows(transactions,'transactions'))}; res.json({broker:'trade_republic',observed_at,counts}); } catch(e) { brokerError(res,e); } });
+app.post('/api/broker/trade-republic/sync', async (req, res) => { try { const client=req.app.locals.brokerClient, observed_at=new Date().toISOString(); const [accounts,portfolio,orders,transactions]=await Promise.all([client.getAccounts(),client.getPortfolio(),client.getOrders(),client.getTransactions()]); const accountRows=accounts.filter(Boolean).map(a=>({...a,broker:'trade_republic',observed_at,raw_hash:null})); const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',brokerRows(portfolio,'portfolio').filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',brokerRows(orders,'orders')),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',brokerRows(transactions,'transactions'))}; res.json({broker:'trade_republic',observed_at,counts}); } catch(e) { brokerError(res,e); } });
 app.post('/api/broker/trade-republic/order-preview', async (req,res) => { try { const b=req.body||{}, mapping=req.app.locals.db.getBrokerMapping(Number(b.stock_id)); if(!mapping) return res.status(409).json({error:'Verified mapping required'}); if(!['buy','sell'].includes(b.type)||!Number.isInteger(Number(b.quantity))||Number(b.quantity)<=0) return res.status(400).json({error:'Valid side and integer quantity required'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}), side=b.type==='buy'?'ask_eur':'bid_eur'; if(!quote[side]) return res.status(502).json({error:'Fresh side quote unavailable'}); const fee=await req.app.locals.brokerClient.previewFees({account_ref_masked:b.account_ref,exchange:mapping.exchange,instrument:mapping.isin,mode:b.mode||'market',quantity:Number(b.quantity),type:b.type,limit:b.limit}); res.json({broker:'trade_republic',instrument:mapping.isin,exchange:mapping.exchange,side:b.type,quantity:Number(b.quantity),reference_price_eur:quote[side],fee_eur:fee.fee_eur,total_eur:null,quote}); } catch(e) { brokerError(res,e); } });
 app.post('/api/broker/trade-republic/orders', async (req,res) => {
     const b=req.body||{}, db=req.app.locals.db, client=req.app.locals.brokerClient;
@@ -681,27 +681,38 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
     const q=mapping&&db.getLatestBrokerQuote(mapping.isin,mapping.exchange);
     const key=String(b.idempotency_key||'');
     const quantity=Number(b.quantity), side=String(b.type||'').toLowerCase();
+    const mode=String(b.mode||'market').toLowerCase(), validity=String(b.validity||'GFD').toUpperCase();
+    const limit=b.limit === undefined || b.limit === null || b.limit === '' ? null : Number(b.limit);
     const executable=q && side === 'buy' ? q.ask_eur : q && side === 'sell' ? q.bid_eur : null;
+    const conservativePrice=side === 'buy' ? Math.max(Number(executable)||0, Number.isFinite(limit) ? limit : 0) : Number(executable);
     const maxCap=Number(process.env.TRADE_REPUBLIC_MAX_ORDER_EUR||0);
     const accountRef=String(b.account_ref||'');
-    const account=db.db.prepare('SELECT 1 FROM broker_accounts WHERE broker=? AND account_ref_masked=? LIMIT 1').get('trade_republic', accountRef);
+    const account=db.getLatestBrokerAccount(accountRef);
+    const position=mapping&&account&&db.getLatestBrokerPosition(accountRef,mapping.isin);
+    const availableCash=account&&Number(account.available_cash_eur);
+    const feePreview=Number.isFinite(Number(b.fee_eur))&&Number(b.fee_eur)>=0 ? Number(b.fee_eur) : 0;
     const fresh=Boolean(q && q.observed_at && Date.now()-Date.parse(q.observed_at) >= 0 && Date.now()-Date.parse(q.observed_at) <= 15000);
     const gates={
         live_enabled:process.env.TRADE_REPUBLIC_LIVE_ENABLED==='true',
         dry_run_disabled:process.env.TRADE_REPUBLIC_DRY_RUN==='false',
         kill_switch_clear:process.env.TRADE_REPUBLIC_KILL_SWITCH!=='true',
         acknowledged:process.env.TRADE_REPUBLIC_LIVE_ACK==='true',
-        cap_ok:Number.isFinite(quantity)&&quantity>0&&Number.isFinite(executable)&&executable>0&&maxCap>0&&quantity*executable<=maxCap,
+        cap_ok:Number.isFinite(quantity)&&quantity>0&&Number.isFinite(conservativePrice)&&conservativePrice>0&&maxCap>0&&quantity*conservativePrice<=maxCap,
         fresh_quote:fresh,
         executable_quote:Boolean(executable),
         mapped:Boolean(mapping&&mapping.verified_at),
-        account_synchronized:Boolean(account),
+        account_synchronized:Boolean(account&&Number.isFinite(availableCash)),
         account_selected:Boolean(accountRef),
         account_resolvable:typeof client.resolveAccount !== 'function' || Boolean(client.resolveAccount(accountRef)),
         confirmed:b.confirmation===`PLACE ${key}`,
         idempotency:/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(key),
         valid_side:['buy','sell'].includes(side),
-        valid_quantity:Number.isInteger(quantity)&&quantity>0
+        valid_quantity:Number.isInteger(quantity)&&quantity>0,
+        valid_mode:['market','limit'].includes(mode),
+        valid_validity:['GFD','GTC'].includes(validity),
+        valid_limit:mode==='market' ? limit===null : Number.isFinite(limit)&&limit>0,
+        sufficient_cash:side!=='buy' || (Boolean(account)&&Number.isFinite(availableCash)&&availableCash >= quantity*conservativePrice+feePreview),
+        sufficient_position:side!=='sell' || (Boolean(position)&&Number(position.quantity)>=quantity)
     };
     const existing=key ? db.getBrokerOrderIntent(key) : null;
     if(existing) return res.status(existing.status==='REJECTED'?409:200).json({order:{idempotency_key:key,status:existing.status,external_ref_masked:existing.external_ref_masked||null},duplicate:true});
@@ -709,14 +720,21 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
         if(gates.idempotency) db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isFinite(quantity)?quantity:null}),quote_id:q?.id||null});
         return res.status(409).json({error:'Live order rejected: safety gate not satisfied',gates});
     }
-    db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'PROPOSED',request_json:JSON.stringify({stock_id:Number(b.stock_id),type:side,quantity,mode:b.mode||'market',limit:b.limit??null,account_ref_masked:accountRef}),quote_id:q.id});
+    db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'PROPOSED',request_json:JSON.stringify({stock_id:Number(b.stock_id),type:side,quantity,mode,limit,validity,account_ref_masked:accountRef}),quote_id:q.id});
     const intent=db.getBrokerOrderIntent(key);
-    const order={account_ref_masked:accountRef,exchange:mapping.exchange,instrument:mapping.isin,mode:b.mode||'market',quantity,type:side,limit:b.limit===undefined?undefined:Number(b.limit),validity:b.validity||'GFD'};
+    const order={account_ref_masked:accountRef,exchange:mapping.exchange,instrument:mapping.isin,mode,quantity,type:side,validity};
+    if (mode==='limit') order.limit=limit;
     try {
         const result=await client.placeOrder(order);
-        db.updateBrokerOrderIntent(intent.id,{status:['FILLED','EXECUTED'].includes(result.status)?'FILLED':result.status==='UNKNOWN'?'UNKNOWN':'SUBMITTED',response_json:JSON.stringify({status:result.status,execution:result.execution}),external_ref_masked:result.external_ref_masked,reconciled_at:null,frozen_reason:result.status==='UNKNOWN'?'Broker response was inconclusive':null});
+        const terminalRejected=['REJECTED','CANCELLED'].includes(String(result.status||'').toUpperCase());
+        db.updateBrokerOrderIntent(intent.id,{status:terminalRejected?'REJECTED':['FILLED','EXECUTED'].includes(result.status)?'FILLED':result.status==='UNKNOWN'?'UNKNOWN':'SUBMITTED',response_json:JSON.stringify({status:result.status,execution:result.execution}),external_ref_masked:result.external_ref_masked,reconciled_at:null,frozen_reason:terminalRejected?'Broker reported terminal rejection':result.status==='UNKNOWN'?'Broker response was inconclusive':null});
+        if (terminalRejected) return res.status(422).json({error:'Broker rejected or cancelled order',code:'ORDER_REJECTED',idempotency_key:key});
         return res.status(201).json({order:{idempotency_key:key,status:result.status,external_ref_masked:result.external_ref_masked,execution:result.execution},warning:result.execution==='filled'?null:'Order ID/status does not prove a fill'});
     } catch(e) {
+        if (e.code==='REJECTED' || [400,409,422].includes(e.status)) {
+            db.updateBrokerOrderIntent(intent.id,{status:'REJECTED',response_json:JSON.stringify({code:'REJECTED'}),external_ref_masked:null,reconciled_at:new Date().toISOString(),frozen_reason:'Broker deterministically rejected the order'});
+            return res.status(e.status || 422).json({error:'Broker rejected order',code:'ORDER_REJECTED',idempotency_key:key});
+        }
         let reconciliation='inconclusive';
         if(e.code==='TIMEOUT'||e.code==='UNAVAILABLE') {
             try { await client.getOrders(); reconciliation='checked_without_authoritative_match'; } catch { reconciliation='reconciliation_unavailable'; }

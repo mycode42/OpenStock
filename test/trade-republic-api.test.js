@@ -67,3 +67,51 @@ test('mapping verification requires both identity and home exchange', async t =>
   assert.equal(response.status, 422);
   assert.equal(f.db.getBrokerMapping(f.stockId).verified_at !== null, true); // existing verified mapping remains untouched
 });
+
+test('invalid mode, validity, and limit are rejected before place-order', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let calls = 0; f.app.locals.brokerClient = { placeOrder: async () => { calls++; } };
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
+  for (const body of [
+    { mode: 'stopMarket', validity: 'GFD' },
+    { mode: 'market', validity: 'DAY' },
+    { mode: 'limit', validity: 'GFD', limit: 0 }
+  ]) {
+    const key = `invalid-${body.mode}-${body.validity}-${body.limit || 'none'}`;
+    const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}`, ...body }) });
+    assert.equal(response.status, 409);
+  }
+  assert.equal(calls, 0);
+});
+
+test('buy cap uses the more conservative limit price', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let calls = 0; f.app.locals.brokerClient = { placeOrder: async () => { calls++; } };
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '50' }); t.after(restore);
+  const key = 'limit-cap-1';
+  const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, mode: 'limit', limit: 100, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
+  assert.equal(response.status, 409); assert.equal(calls, 0);
+});
+
+test('missing cash or position authority rejects buys and sells without broker calls', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let calls = 0; f.app.locals.brokerClient = { placeOrder: async () => { calls++; } };
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
+  f.db.db.prepare('UPDATE broker_accounts SET available_cash_eur=?').run(5);
+  for (const [type, key] of [['buy', 'cash-gate-1'], ['sell', 'oversell-gate-1']]) {
+    const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type, quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
+    assert.equal(response.status, 409);
+  }
+  assert.equal(calls, 0);
+});
+
+test('deterministic broker rejection is terminal and does not reconcile', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let orderCalls = 0; let reconcileCalls = 0;
+  f.app.locals.brokerClient = { placeOrder: async () => { orderCalls++; throw new BrokerError('rejected', 'REJECTED', 422); }, getOrders: async () => { reconcileCalls++; return []; } };
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
+  const key = 'deterministic-reject-1';
+  const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
+  assert.equal(response.status, 422); assert.equal(orderCalls, 1); assert.equal(reconcileCalls, 0);
+  assert.equal(f.db.db.prepare('SELECT status FROM broker_order_intents WHERE idempotency_key=?').get(key).status, 'REJECTED');
+});

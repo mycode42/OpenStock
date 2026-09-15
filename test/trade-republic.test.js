@@ -11,9 +11,15 @@ test('Trade Republic client sends X-API-Key server-side and never returns it', a
   assert.equal(JSON.stringify(quote).includes('secret-test-key'), false);
 });
 test('sanitizers mask account references and preserve EUR bid/ask semantics', () => {
-  const account = sanitizeAccount({ securitiesAccountNumber: 'DE1234567890123456', cashAmount: 42 });
+  const account = sanitizeAccount({ securitiesAccountNumber: 'DE1234567890123456', cashAmount: 42, availableCashAmount: 17 });
   assert.equal(account.account_ref_masked, 'DE••••56');
+  assert.equal(account.cash_eur, 42);
+  assert.equal(account.available_cash_eur, 17);
   assert.deepEqual(sanitizeQuote({ bid: 1, ask: 2, currency: 'USD' }, { isin: 'X', exchange: 'XETR' }).bid_eur, null);
+});
+test('deterministic broker HTTP rejection is classified terminal', async () => {
+  const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, fetchImpl: async () => ({ ok: false, status: 422, json: async () => ({ secret: 'do-not-return' }) }) });
+  await assert.rejects(() => client.getAccounts(), error => error.code === 'REJECTED' && error.status === 422 && !String(error).includes('do-not-return'));
 });
 test('client timeout fails closed without exposing request details', async () => {
   const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, timeoutMs: 1000, fetchImpl: (_u, { signal }) => new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))) });
