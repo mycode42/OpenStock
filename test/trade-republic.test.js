@@ -36,12 +36,17 @@ test('nested order-price maps sell price to executable bid and buy price to exec
 });
 
 test('portfolio keyed accounts and category positions are flattened and masked', () => {
-  const rows = sanitizeCollection({ DE1234567890123456: { categories: [{ positions: [{ isin: 'JE00BS44BN30', quantity: 4, currentValue: 500, id: 'position-secret' }] }] } }, 'portfolio');
+  const rows = sanitizeCollection({ DE1234567890123456: { categories: [{ positions: [{ isin: 'JE00BS44BN30', averageBuyIn: { amount: 100, currency: 'EUR' }, netSize: 4, virtualSize: 4, status: 'ACTIVE', currentValue: 500, id: 'position-secret' }] }] } }, 'portfolio');
   assert.equal(rows.length, 1);
   assert.equal(rows[0].instrument, 'JE00BS44BN30');
   assert.equal(rows[0].quantity, 4);
   assert.equal(rows[0].account_ref_masked, 'DE••••56');
   assert.equal(JSON.stringify(rows).includes('1234567890123456'), false);
+});
+
+test('portfolio normalization falls back to virtualSize when netSize is absent', () => {
+  const rows = sanitizeCollection({ DE1234567890123456: { categories: [{ positions: [{ isin: 'US2533931026', virtualSize: 2 }] }] } }, 'portfolio');
+  assert.equal(rows[0].quantity, 2);
 });
 
 test('order parser never treats an order id alone as a fill', () => {
