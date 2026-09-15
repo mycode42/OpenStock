@@ -51,6 +51,56 @@ test('all live gates submit once and duplicate idempotency does not resubmit', a
   assert.equal(f.db.db.prepare('SELECT status FROM broker_order_intents WHERE idempotency_key=?').get('all-gates-1').status, 'SUBMITTED');
 });
 
+test('euro-value preview floors to whole units and includes fees', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let feeOrder;
+  f.app.locals.brokerClient = {
+    getQuote: async () => ({ bid_eur: 10, ask_eur: 11, last_eur: null, currency: 'EUR', quote_time: new Date().toISOString(), observed_at: new Date().toISOString(), source: 'test' }),
+    previewFees: async order => { feeOrder = order; return { fee_eur: 1, currency: 'EUR' }; }
+  };
+  const response = await f.request('/api/broker/trade-republic/order-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', amount_eur: 25, account_ref: 'DE••••56' }) });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.quantity, 2);
+  assert.equal(body.sizing_mode, 'amount');
+  assert.equal(body.requested_amount_eur, 25);
+  assert.equal(body.sizing_price_eur, 11);
+  assert.equal(body.total_eur, 23);
+  assert.equal(feeOrder.quantity, 2);
+});
+
+test('euro-value live order uses a hidden key contract and generic confirmation', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let submitted;
+  f.app.locals.brokerClient = {
+    previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }),
+    placeOrder: async order => { submitted = order; return { external_ref_masked: 'ab••••yz', status: 'SUBMITTED', execution: 'none' }; }
+  };
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
+  const key = 'ui-amount-order-1';
+  const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', amount_eur: 25, account_ref: 'DE••••56', idempotency_key: key, confirmation: 'PLACE ORDER' }) });
+  assert.equal(response.status, 201);
+  assert.equal(submitted.quantity, 2);
+  assert.equal('amount_eur' in submitted, false);
+  const persisted = JSON.parse(f.db.db.prepare('SELECT request_json FROM broker_order_intents WHERE idempotency_key=?').get(key).request_json);
+  assert.equal(persisted.quantity, 2);
+  assert.equal(persisted.sizing_mode, 'amount');
+  assert.equal(persisted.requested_amount_eur, 25);
+});
+
+test('ambiguous or undersized sizing never reaches the broker', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let calls = 0;
+  f.app.locals.brokerClient = { previewFees: async () => { calls++; }, placeOrder: async () => { calls++; } };
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
+  for (const [index, sizing] of [{ quantity: 1, amount_eur: 25 }, { amount_eur: 5 }].entries()) {
+    const key = `invalid-sizing-${index}`;
+    const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', account_ref: 'DE••••56', idempotency_key: key, confirmation: 'PLACE ORDER', ...sizing }) });
+    assert.equal(response.status, 409);
+  }
+  assert.equal(calls, 0);
+});
+
 test('ambiguous submission is frozen after reconciliation check', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let orderCalls = 0; let reconcileCalls = 0; f.app.locals.brokerClient = { previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('timeout', 'TIMEOUT', 503); }, getOrders: async () => { reconcileCalls++; return []; } };

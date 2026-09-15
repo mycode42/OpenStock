@@ -86,6 +86,22 @@ test('configuration uses a compact single-stock alert editor without legacy owne
     assert.doesNotMatch(source, /Mark Owned|Mark Sold|\btos\b|data-stock-action="owned"/);
 });
 
+test('trading hides idempotency plumbing and supports account-aware euro sizing', () => {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'www/modules/trading.js'), 'utf8');
+    assert.doesNotMatch(source, /tr-key|Idempotency key/);
+    assert.match(source, /id="tr-size-mode"/);
+    assert.match(source, /id="tr-amount"/);
+    assert.match(source, /PLACE ORDER/);
+    assert.match(source, /crypto\?\.randomUUID/);
+    assert.match(source, /event\.target\.id === 'tr-confirm'/);
+    assert.match(source, /if \(place && reconciled\)/);
+    assert.match(source, /retain the same hidden safety key/);
+    assert.match(source, /trade-republic\/accounts/);
+    assert.match(source, /trade-republic\/portfolio/);
+    assert.match(source, /Available cash/);
+    assert.match(source, /held<\/strong>/);
+});
+
 test('browser pages do not emit inline event handlers', () => {
     const root = path.join(__dirname, '..', 'www');
     for (const file of ['app.js', 'modules/dashboard.js', 'modules/config.js', 'modules/journal.js', 'modules/trading.js']) {
