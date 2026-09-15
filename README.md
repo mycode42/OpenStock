@@ -70,6 +70,20 @@ cp .env.example .env
 | `PORT` | Server port (default: 3000) |
 | `EXCHANGE_RATE_CACHE_SECONDS` | How long to cache exchange rates (default: 3600) |
 | `TELEGRAM_BOT_USERNAME` | Your bot's username (e.g., `OpenStock_TelegramBot`) |
+| `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
+| `TRADE_REPUBLIC_API_KEY_FILE` | Server-only file containing the sidecar API key |
+| `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
+| `TRADE_REPUBLIC_LIVE_ENABLED` | Environment-only live-order gate; default `false` |
+| `TRADE_REPUBLIC_DRY_RUN` | Environment-only dry-run gate; default `true` |
+| `TRADE_REPUBLIC_LIVE_ACK` | Environment-only acknowledgement gate; default `false` |
+| `TRADE_REPUBLIC_KILL_SWITCH` | Immediate order kill switch; default `true` |
+| `TRADE_REPUBLIC_MAX_ORDER_EUR` | Hard maximum value per manual order; default `0` |
+
+### Trade Republic integration
+
+OpenStock connects only to the authenticated loopback UAPI. The API key remains server-side. The Configure view supports verified ticker-to-ISIN mappings, broker health, read-only account/portfolio/order/transaction synchronization, Trade Republic price selection with Yahoo fallback, and quote/fee previews.
+
+Manual order submission is fail-closed. It additionally requires a verified mapping, fresh executable quote, synchronized cash or position data, selected account, typed confirmation, idempotency key, and all environment gates above. A submitted broker order never creates a Journal execution unless a later broker reconciliation proves it filled.
 
 ### Telegram Setup
 
@@ -304,6 +318,12 @@ journalctl -u openstock.service -n 50 --no-pager
 | `/api/dashboard` | GET | Backward-compatible stock dashboard data |
 | `/api/stocks/archived` | GET | Archived stocks retained for journal/history management |
 | `/api/stocks/:id/restore` | POST | Restore an archived stock by identity |
+| `/api/broker/trade-republic/health` | GET | Sanitized broker connectivity and live-gate status |
+| `/api/broker/trade-republic/mappings` | GET/POST | List or broker-verify stock instrument mappings |
+| `/api/broker/trade-republic/sync` | POST | Synchronize normalized account, portfolio, order, and transaction data |
+| `/api/broker/trade-republic/quote/:stockId` | GET | Fetch and persist a sanitized executable quote |
+| `/api/broker/trade-republic/order-preview` | POST | Fetch quote and fee preview without placing an order |
+| `/api/broker/trade-republic/orders` | POST | Fail-closed manual order submission |
 | `/health` | GET | Health check |
 
 ## Architecture and migrations

@@ -180,7 +180,10 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     app.locals.db = db;
     app.locals.historyBackfill = historyBackfill;
     app.locals.fetchImpl = fetchImpl;
-    app.locals.brokerClient = new TradeRepublicClient({ fetchImpl });
+    app.locals.brokerClient = new TradeRepublicClient({
+        fetchImpl,
+        timeoutMs: Number(process.env.TRADE_REPUBLIC_TIMEOUT_MS || 30000)
+    });
     const serializeConfiguredStock = stock => ({ ...serializeStock(stock), position: db.getPositionSummary(stock.id), alert_levels: db.getAlertLevels(stock.id).map(serializeAlertLevel) });
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
