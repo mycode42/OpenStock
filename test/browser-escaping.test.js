@@ -19,7 +19,7 @@ test('shared browser escaping prevents hostile text and quote breakout', async (
 
 test('dynamic browser templates route text through the shared escaping module', () => {
     const root = path.join(__dirname, '..', 'www/modules');
-    for (const file of ['dashboard.js', 'config.js', 'journal.js']) {
+    for (const file of ['dashboard.js', 'config.js', 'journal.js', 'trading.js']) {
         const source = fs.readFileSync(path.join(root, file), 'utf8');
         assert.match(source, /escapeHtml/);
     }
@@ -51,6 +51,7 @@ test('browser modules link without missing named exports', async () => {
         await import(pathToFileURL(path.join(tempDir, 'modules/dashboard.js')).href);
         await import(pathToFileURL(path.join(tempDir, 'modules/config.js')).href);
         await import(pathToFileURL(path.join(tempDir, 'modules/journal.js')).href);
+        await import(pathToFileURL(path.join(tempDir, 'modules/trading.js')).href);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -82,7 +83,7 @@ test('configuration uses a compact single-stock alert editor without legacy owne
 
 test('browser pages do not emit inline event handlers', () => {
     const root = path.join(__dirname, '..', 'www');
-    for (const file of ['app.js', 'modules/dashboard.js', 'modules/config.js', 'modules/journal.js']) {
+    for (const file of ['app.js', 'modules/dashboard.js', 'modules/config.js', 'modules/journal.js', 'modules/trading.js']) {
         assert.doesNotMatch(fs.readFileSync(path.join(root, file), 'utf8'), /\bonclick=|\bonsubmit=/, file);
     }
     const dashboard = fs.readFileSync(path.join(root, 'modules/dashboard.js'), 'utf8');

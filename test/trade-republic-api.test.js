@@ -41,11 +41,11 @@ test('missing live gates make zero broker calls', async t => {
 
 test('all live gates submit once and duplicate idempotency does not resubmit', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let calls = 0; f.app.locals.brokerClient = { placeOrder: async order => { calls++; assert.equal(order.account_ref_masked, 'DE••••56'); return { external_ref_masked: 'ab••••yz', status: 'SUBMITTED', execution: 'none' }; } };
+  let calls = 0; let feeCalls = 0; f.app.locals.brokerClient = { previewFees: async order => { feeCalls++; assert.equal(order.validity, 'GFD'); return { fee_eur: 1, currency: 'EUR' }; }, placeOrder: async order => { calls++; assert.equal(order.account_ref_masked, 'DE••••56'); assert.equal(order.validity, 'GFD'); return { external_ref_masked: 'ab••••yz', status: 'SUBMITTED', execution: 'none' }; } };
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const body = { stock_id: f.stockId, type: 'buy', quantity: 2, account_ref: 'DE••••56', idempotency_key: 'all-gates-1', confirmation: 'PLACE all-gates-1' };
   let response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  assert.equal(response.status, 201); assert.equal(calls, 1);
+  assert.equal(response.status, 201); assert.equal(calls, 1); assert.equal(feeCalls, 1);
   response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal(response.status, 200); assert.equal(calls, 1);
   assert.equal(f.db.db.prepare('SELECT status FROM broker_order_intents WHERE idempotency_key=?').get('all-gates-1').status, 'SUBMITTED');
@@ -53,11 +53,24 @@ test('all live gates submit once and duplicate idempotency does not resubmit', a
 
 test('ambiguous submission is frozen after reconciliation check', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let orderCalls = 0; let reconcileCalls = 0; f.app.locals.brokerClient = { placeOrder: async () => { orderCalls++; throw new BrokerError('timeout', 'TIMEOUT', 503); }, getOrders: async () => { reconcileCalls++; return []; } };
+  let orderCalls = 0; let reconcileCalls = 0; f.app.locals.brokerClient = { previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('timeout', 'TIMEOUT', 503); }, getOrders: async () => { reconcileCalls++; return []; } };
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const key = 'ambiguous-1'; const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
   assert.equal(response.status, 503); assert.equal(orderCalls, 1); assert.equal(reconcileCalls, 1);
   assert.equal(f.db.db.prepare('SELECT status FROM broker_order_intents WHERE idempotency_key=?').get(key).status, 'UNKNOWN');
+});
+
+test('stock-derived read-only routes use the verified mapping and validated ranges', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  const calls=[]; f.app.locals.brokerClient={
+    getInstrument:async isin=>{calls.push(['instrument',isin]);return {isin};},
+    getTradeRepublicInstrument:async isin=>{calls.push(['tr-instrument',isin]);return {isin,exchange:'TIB'};},
+    getInstrumentHistory:async input=>{calls.push(['history',input]);return {isin:input.isin,range:input.range,points:[]};},
+    getExchangeSchedule:async exchange=>{calls.push(['schedule',exchange]);return {exchange};}
+  };
+  for (const url of [`/api/broker/trade-republic/instrument/${f.stockId}`,`/api/broker/trade-republic/tr-instrument/${f.stockId}`,`/api/broker/trade-republic/instrument-history/${f.stockId}?range=1m`,`/api/broker/trade-republic/schedule/${f.stockId}`]) assert.equal((await f.request(url)).status,200);
+  assert.deepEqual(calls,[['instrument','JE00BS44BN30'],['tr-instrument','JE00BS44BN30'],['history',{isin:'JE00BS44BN30',range:'1m'}],['schedule','TIB']]);
+  assert.equal((await f.request(`/api/broker/trade-republic/instrument-history/${f.stockId}?range=5y`)).status,400);
 });
 
 test('mapping verification requires both identity and home exchange', async t => {
@@ -108,10 +121,28 @@ test('missing cash or position authority rejects buys and sells without broker c
 test('deterministic broker rejection is terminal and does not reconcile', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let orderCalls = 0; let reconcileCalls = 0;
-  f.app.locals.brokerClient = { placeOrder: async () => { orderCalls++; throw new BrokerError('rejected', 'REJECTED', 422); }, getOrders: async () => { reconcileCalls++; return []; } };
+  f.app.locals.brokerClient = { previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('rejected', 'REJECTED', 422); }, getOrders: async () => { reconcileCalls++; return []; } };
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const key = 'deterministic-reject-1';
   const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
   assert.equal(response.status, 422); assert.equal(orderCalls, 1); assert.equal(reconcileCalls, 0);
   assert.equal(f.db.db.prepare('SELECT status FROM broker_order_intents WHERE idempotency_key=?').get(key).status, 'REJECTED');
+});
+
+
+test('authoritative fees are required and included in cash safety', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let orderCalls=0; f.db.db.prepare('UPDATE broker_accounts SET available_cash_eur=?').run(22);
+  f.app.locals.brokerClient={previewFees:async()=>({fee_eur:1,currency:'EUR'}),placeOrder:async()=>{orderCalls++;}};
+  const restore=env({TRADE_REPUBLIC_LIVE_ENABLED:'true',TRADE_REPUBLIC_DRY_RUN:'false',TRADE_REPUBLIC_LIVE_ACK:'true',TRADE_REPUBLIC_KILL_SWITCH:'false',TRADE_REPUBLIC_MAX_ORDER_EUR:'1000'}); t.after(restore);
+  const key='fee-cash-1'; const response=await f.request('/api/broker/trade-republic/orders',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stock_id:f.stockId,type:'buy',quantity:2,account_ref:'DE••••56',idempotency_key:key,confirmation:`PLACE ${key}`,fee_eur:0})});
+  assert.equal(response.status,409); assert.equal(orderCalls,0);
+});
+
+test('stopMarket and GTD use the documented sidecar fields', async t => {
+  const f=await fixture(); t.after(()=>{f.server.close();f.db.db.close();fs.rmSync(f.dir,{recursive:true,force:true});});
+  let submitted; f.app.locals.brokerClient={previewFees:async()=>({fee_eur:1,currency:'EUR'}),placeOrder:async order=>{submitted=order;return {external_ref_masked:'or••••01',status:'SUBMITTED',execution:'none'};}};
+  const restore=env({TRADE_REPUBLIC_LIVE_ENABLED:'true',TRADE_REPUBLIC_DRY_RUN:'false',TRADE_REPUBLIC_LIVE_ACK:'true',TRADE_REPUBLIC_KILL_SWITCH:'false',TRADE_REPUBLIC_MAX_ORDER_EUR:'1000'}); t.after(restore);
+  const key='stop-gtd-1'; const response=await f.request('/api/broker/trade-republic/orders',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stock_id:f.stockId,type:'buy',quantity:1,mode:'stopMarket',stop:12,validity:'GTD',account_ref:'DE••••56',idempotency_key:key,confirmation:`PLACE ${key}`})});
+  assert.equal(response.status,201); assert.equal(submitted.mode,'stopMarket'); assert.equal(submitted.stop,12); assert.equal(submitted.validity,'GTD'); assert.equal('expiry' in submitted,false);
 });
