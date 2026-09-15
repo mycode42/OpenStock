@@ -14,6 +14,7 @@ const migrations = [
   ,require('./migrations/012_isin_first_trade_republic')
   ,require('./migrations/013_eur_history_nullable_usd')
   ,require('./migrations/014_trade_republic_execution_and_quotes')
+  ,require('./migrations/015_broker_reconciliation_candidates')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {

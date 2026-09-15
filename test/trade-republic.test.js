@@ -58,7 +58,7 @@ test('portfolio normalization falls back to virtualSize when netSize is absent',
 });
 
 test('transaction normalization reads nested amount values without exposing account data', () => {
-  const rows = sanitizeCollection([{ id: 'transaction-secret', timestamp: '2026-09-15T10:00:00Z', amount: { currency: 'EUR', value: 12.34, fractionDigits: 2 }, status: 'EXECUTED', cashAccountNumber: 'DE1234567890123456' }], 'transactions');
+  const rows = sanitizeCollection([{ id: 'transaction-secret', timestamp: '2026-09-15T10:00:00Z', amount: { currency: 'EUR', value: 1234, fractionDigits: 2 }, status: 'EXECUTED', cashAccountNumber: 'DE1234567890123456' }], 'transactions');
   assert.equal(rows[0].amount_eur, 12.34);
   assert.equal(rows[0].currency, 'EUR');
   assert.equal(JSON.stringify(rows).includes('1234567890123456'), false);
@@ -98,4 +98,13 @@ test('Trade Republic history ranges map OpenStock names and preserve numeric res
   const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, fetchImpl: async (_url, options) => { body = JSON.parse(options.body); return { ok: true, json: async () => ({ aggregates: [], resolution: 86400000 }) }; } });
   const result = await client.getInstrumentHistory({ isin: 'US4330001060', range: '5y' });
   assert.equal(body.range, 'max'); assert.equal(result.resolution, 86400000);
+});
+
+test('live executed transaction amounts normalize minor units and remain non-execution data', () => {
+  const rows = sanitizeCollection([{ id: 'tx-secret', title: 'Trade Republic', subtitle: 'Achat', status: 'EXECUTED', timestamp: '2026-09-15T10:00:00Z', amount: { currency: 'EUR', value: -10001, fractionDigits: 2 }, presentation: null }], 'transactions');
+  assert.equal(rows[0].amount_eur, -100.01);
+  assert.equal(rows[0].execution_identity, null);
+  assert.equal(rows[0].instrument, null);
+  assert.equal(rows[0].quantity, null);
+  assert.equal(rows[0].execution_price_eur, null);
 });

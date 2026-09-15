@@ -36,3 +36,17 @@ test('read-only sanitizer removes account and card identifiers', () => {
   const safe=sanitizeReadOnly({ DE1234567890123456:{iban:'DE123',portfolio:4}, cardNumber:'4111111111111111', useful:'ok' }, 'portfolio');
   assert.equal(JSON.stringify(safe).includes('1234567890123456'), false); assert.equal(JSON.stringify(safe).includes('411111'), false); assert.equal(safe.data.useful,'ok');
 });
+
+test('read-only account maps mask IBAN-style and numeric account keys', () => {
+  const safe=sanitizeReadOnly({ DE1234567890123456:{value:1}, 1234567890:{value:2}, useful:'ok' }, 'portfolio');
+  assert.equal(safe.data['DE••••56'].value, 1); assert.equal(safe.data['12••••90'].value, 2); assert.equal(safe.data.useful, 'ok');
+  assert.equal(JSON.stringify(safe).includes('1234567890123456'), false);
+});
+
+test('executed transaction without authoritative fields becomes a pending candidate', async t => {
+  const f=await fixture(); t.after(()=>{f.server.close();f.db.db.close();fs.rmSync(f.dir,{recursive:true,force:true});});
+  f.app.locals.brokerClient={getAccounts:async()=>[],getPortfolio:async()=>[],getOrders:async()=>({}),getTransactions:async()=>[{id:'tx-1',title:'Trade Republic',subtitle:'Achat',status:'EXECUTED',timestamp:'2026-09-15T10:00:00Z',amount:{currency:'EUR',value:-10001,fractionDigits:2},presentation:null}]};
+  const response=await f.request('/api/broker/trade-republic/sync',{method:'POST'});
+  assert.equal(response.status,200); const body=await response.json(); assert.equal(body.pending_reconciliation,1);
+  const candidates=f.db.getBrokerReconciliationCandidates(); assert.equal(candidates[0].amount_eur,-100.01); assert.equal(candidates[0].reason.includes('missing'),true); assert.equal(f.db.getAllTrades().length,0);
+});
