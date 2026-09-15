@@ -37,6 +37,8 @@ test('dashboard only shows position value for held stocks and nests USD beside E
     assert.match(source, /const positionValue = quantity \* Number\(stock\.current_price_eur \|\| 0\)/);
     assert.match(source, /position\.owned[\s\S]*Position value:/);
     assert.match(source, /stock-price-usd">\(\$\$\{money\(usdPrice\)\}\)<\/span>/);
+    assert.match(source, /stock-quote">Bid €\$\{money\(stock\.broker_quote\.bid_eur\)\} · Ask €\$\{money\(stock\.broker_quote\.ask_eur\)\}/);
+    assert.doesNotMatch(source, /TR bid|spread €\$\{money\(stock\.broker_quote\.spread_eur\)\}/);
     assert.doesNotMatch(source, /Position: \$\{money\(position\.quantity\)\}/);
 });
 

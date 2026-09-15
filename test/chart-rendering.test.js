@@ -10,6 +10,15 @@ test('responsive charts stretch their SVG interaction plane to the full visible 
     assert.match(source, /viewBox="0 0 \$\{width\} \$\{height\}" preserveAspectRatio="none"/);
 });
 
+test('dashboard history charts are native EUR throughout', () => {
+    const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
+    assert.match(source, /Number\(point\.price_eur\)/);
+    assert.match(source, /primary: `€\$\{money\(point\.price_eur\)\}`/);
+    assert.match(source, /native EUR price chart/);
+    assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
+    assert.doesNotMatch(source, /point\.price_usd|USD price chart|· USD/);
+});
+
 test('hover labels compensate for responsive SVG stretching and support three lines', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
@@ -23,11 +32,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=27/);
-    assert.match(index, /app\.js\?v=27/);
-    assert.match(worker, /openstock-v27/);
-    assert.match(worker, /styles\.css\?v=27/);
-    assert.match(worker, /app\.js\?v=27/);
+    assert.match(index, /styles\.css\?v=28/);
+    assert.match(index, /app\.js\?v=28/);
+    assert.match(worker, /openstock-v28/);
+    assert.match(worker, /styles\.css\?v=28/);
+    assert.match(worker, /app\.js\?v=28/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
 });

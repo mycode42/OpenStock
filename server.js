@@ -252,9 +252,14 @@ app.get('/api/stocks/:id/history', (req, res) => {
     try {
         const stock = req.app.locals.db.getStockById(req.params.id);
         if (!stock) return res.status(404).json({ error: 'Stock not found' });
-        const points = req.app.locals.db.getPriceHistory(stock.id, window.since, window.bucketSeconds)
-            .map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
-        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: stock.currency === 'EUR' ? 'EUR' : 'USD', points });
+        const mapping = req.app.locals.db.getBrokerMapping(stock.id);
+        const nativeTradeRepublicEur = Boolean(mapping?.verified_at && mapping.currency === 'EUR');
+        const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'manual_refresh_trade_republic_order_price'];
+        const points = req.app.locals.db.getPriceHistory(stock.id, window.since, window.bucketSeconds, {
+            sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
+            eurOnly: true
+        }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
+        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);
         res.status(500).json({ error: 'Failed to fetch price history' });

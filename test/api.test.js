@@ -48,9 +48,17 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
     assert.equal(response.status, 201);
     const good = (await response.json()).stock;
-    f.db.addPriceSnapshot(good.id, 100, 90, 0.9, 'test', null, '2026-01-01 00:00:00');
+    f.db.addPriceSnapshot(good.id, 100, 90, 0.9, 'yahoo_regular_close', null, '2026-01-01 12:00:00');
+    f.db.addPriceSnapshot(good.id, null, 91, null, 'trade_republic_history', null, '2026-01-01 00:00:00');
     response = await f.request(`/api/stocks/${good.id}/history?range=1y`);
-    assert.equal((await response.json()).points.length, 1);
+    const history = await response.json();
+    assert.equal(history.currency, 'EUR');
+    assert.equal(history.native_eur, true);
+    assert.equal(history.source, 'trade_republic');
+    assert.equal(history.points.length, 1);
+    assert.equal(history.points[0].price_eur, 91);
+    assert.equal(history.points[0].price_usd, null);
+    assert.equal(history.points[0].source, 'trade_republic_history');
     assert.equal((await f.request('/api/stocks?includeArchived=1')).status, 200);
 
     await f.request('/api/capital-events', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event_type: 'INITIAL', amount_eur: 10000, occurred_at: '2026-01-01T00:00:00Z', notes: 'seed' }) });

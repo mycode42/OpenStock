@@ -85,27 +85,27 @@ function attachInteractiveLineCharts(root) {
 }
 
 function renderHistoryChart(points, range) {
-    const clean = points.filter(point => Number.isFinite(Number(point.price_usd)) && parseOpenStockDate(point.recorded_at));
-    if (clean.length < 2) return '<div class="history-empty">Collecting local price history…</div>';
-    const values = clean.map(point => Number(point.price_usd));
+    const clean = points.filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at));
+    if (clean.length < 2) return '<div class="history-empty">Collecting native EUR price history…</div>';
+    const values = clean.map(point => Number(point.price_eur));
     const min = Math.min(...values), max = Math.max(...values);
     const padding = Math.max((max - min) * 0.08, max * 0.002, 0.01);
     const low = min - padding, high = max + padding, width = 264, height = 82;
     const times = clean.map(point => parseOpenStockDate(point.recorded_at).getTime());
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
-    const coordinates = clean.map((point, index) => ({ point, x: (times[index] - firstTime) / timeRange * width, y: height - ((Number(point.price_usd) - low) / (high - low || 1) * height) }));
+    const coordinates = clean.map((point, index) => ({ point, x: (times[index] - firstTime) / timeRange * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
     const line = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `$${money(point.price_usd)} · €${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at) }));
+    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at) }));
     const first = clean[0], last = clean[clean.length - 1];
-    const change = (Number(last.price_usd) / Number(first.price_usd) - 1) * 100;
+    const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
-    const ariaLabel = `${chartRangeLabel(range)} USD price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
+    const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
     const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints: line, hoverPoints, ariaLabel });
-    return `<div class="history-meta"><span>$${money(min)} – $${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
+    return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD <span>${history.points.length} local samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range)}`;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range)}`;
     attachInteractiveLineCharts(panel);
 }
 
@@ -115,7 +115,7 @@ async function loadCardHistory(card, range = '1mo') {
     if (!Number.isInteger(stockId) || !panel) return;
     const key = `${stockId}:${range}`;
     panel.dataset.requestedRange = range;
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD</div>${chartRangeControls(range)}</div><div class="history-loading">Loading local history…</div>`;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">Loading native EUR history…</div>`;
     let history = historyCache.get(key);
     if (!history) {
         history = await request(`/stocks/${stockId}/history?range=${range}`);

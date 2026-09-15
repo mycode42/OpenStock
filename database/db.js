@@ -225,19 +225,22 @@ class OpenStockDB {
         return this.db.transaction(rows => rows.reduce((saved, point) => saved + insert.run(stockId, point.priceUsd ?? null, point.priceEur ?? null, point.exchangeRate ?? null, point.source || source, point.quoteTime || point.recordedAt, point.recordedAt).changes, 0))(Array.isArray(points) ? points : []);
     }
 
-    getPriceHistory(stockId, since, bucketSeconds) {
+    getPriceHistory(stockId, since, bucketSeconds, { sources = null, eurOnly = false } = {}) {
+        const selectedSources = Array.isArray(sources) ? sources.filter(Boolean) : [];
+        const sourceFilter = selectedSources.length ? ` AND source IN (${selectedSources.map(() => '?').join(', ')})` : '';
+        const eurFilter = eurOnly ? ' AND price_eur IS NOT NULL' : '';
         return this.db.prepare(`
             WITH sampled AS (
                 SELECT MAX(id) AS id
                 FROM price_history
-                WHERE stock_id = ? AND recorded_at >= datetime('now', ?)
+                WHERE stock_id = ? AND recorded_at >= datetime('now', ?)${sourceFilter}${eurFilter}
                 GROUP BY CAST(CAST(strftime('%s', recorded_at) AS INTEGER) / ? AS INTEGER)
             )
             SELECT recorded_at, quote_time, price_usd, price_eur, source
             FROM price_history
             WHERE id IN (SELECT id FROM sampled)
             ORDER BY recorded_at ASC
-        `).all(stockId, since, bucketSeconds);
+        `).all(stockId, since, ...selectedSources, bucketSeconds);
     }
 
     // ===== TRADES =====

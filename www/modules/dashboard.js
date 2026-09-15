@@ -40,7 +40,7 @@ function renderDashboard() {
             <div class="stock-symbol">${escapeHtml(stock.symbol)} <span class="badge ${position.owned ? 'owned' : 'sold'}">${position.owned ? 'HELD' : 'NOT HELD'}</span> <span class="badge enabled">${escapeHtml(position.source)}</span></div>
             <div class="stock-name">${escapeHtml(stock.name || '')}</div>
             <div class="stock-price eu">€${money(stock.current_price_eur)} ${usdPrice > 0 ? `<span class="stock-price-usd">($${money(usdPrice)})</span>` : ''}</div>
-            ${stock.broker_quote ? `<div class="stock-quote">TR bid €${money(stock.broker_quote.bid_eur)} · ask €${money(stock.broker_quote.ask_eur)} · spread €${money(stock.broker_quote.spread_eur)}</div>` : ''}
+            ${stock.broker_quote ? `<div class="stock-quote">Bid €${money(stock.broker_quote.bid_eur)} · Ask €${money(stock.broker_quote.ask_eur)}</div>` : ''}
             ${heldValue}
             <div class="level-summary"><strong>Active levels</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(level.side)} €${money(level.price_eur)}</span>`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(level.side)} €${money(level.price_eur)} · ${level.retired ? 'retired' : 'triggered'}</span>`).join('') : 'None'}</div></div>
             <div class="stock-footer">${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'}</div><div class="history-popover" role="status" aria-live="polite"></div>
