@@ -50,12 +50,18 @@ test('one-day history starts at 07:30 Berlin time and uses fifteen-minute bucket
     const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'DAY', name: 'Trading day', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
     const stock = (await response.json()).stock;
     f.db.addPriceSnapshot(stock.id, null, 99, null, 'trade_republic_history', '2026-09-16T05:20:00.000Z', '2026-09-16 05:20:00');
-    f.db.addPriceSnapshot(stock.id, null, 100, null, 'trade_republic_history', '2026-09-16T05:30:00.000Z', '2026-09-16 05:30:00');
-    f.db.addPriceSnapshot(stock.id, null, 101, null, 'trade_republic_history', '2026-09-16T05:45:00.000Z', '2026-09-16 05:45:00');
+    for (let minute = 0; minute < 60; minute += 1) {
+        const timestamp = new Date(Date.parse('2026-09-16T05:30:00.000Z') + minute * 60000).toISOString();
+        f.db.addPriceSnapshot(stock.id, null, 100 + minute, null, 'trade_republic_history', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
+    }
     const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1d`)).json();
     assert.equal(history.start_at, '2026-09-16T05:30:00.000Z');
     assert.equal(history.bucket_seconds, 900);
-    assert.deepEqual(history.points.map(point => point.price_eur), [100, 101]);
+    assert.equal(history.points.length, 48);
+    assert.equal(history.points[0].recorded_at, '2026-09-16T05:30:00.000Z');
+    assert.equal(history.points.at(-1).recorded_at, '2026-09-16T06:29:00.000Z');
+    assert.equal(history.points[0].price_eur, 100);
+    assert.equal(history.points.at(-1).price_eur, 159);
 });
 
 test('API factory covers lifecycle, history, journal, analytics, refresh isolation, and archive restore', async t => {

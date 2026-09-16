@@ -45,6 +45,15 @@ function berlinTradingDayStart(now = new Date()) {
     return new Date(timestamp);
 }
 
+function evenlySample(points, maximum) {
+    if (!Number.isInteger(maximum) || maximum < 2 || points.length <= maximum) return points;
+    const sampled = [points[0]];
+    const step = (points.length - 1) / (maximum - 1);
+    for (let index = 1; index < maximum - 1; index += 1) sampled.push(points[Math.round(index * step)]);
+    sampled.push(points[points.length - 1]);
+    return sampled;
+}
+
 function serializeStock(stock) {
     if (!stock) return stock;
     const { owned: _legacyOwned, ...publicStock } = stock;
@@ -264,12 +273,12 @@ app.get('/api/stocks/archived', (req, res) => {
 
 app.get('/api/stocks/:id/history', (req, res) => {
     const windows = {
-        '1d': { since: '-2 days', bucketSeconds: 900, maxLiveGapSeconds: 1800 },
-        '1mo': { since: '-1 month', bucketSeconds: 28800, maxLiveGapSeconds: 43200 },
-        '1y': { since: '-1 year', bucketSeconds: 345600, maxLiveGapSeconds: 172800 },
-        '5y': { since: '-5 years', bucketSeconds: 1814400, maxLiveGapSeconds: 1209600 },
+        '1d': { since: '-2 days', queryBucketSeconds: 60, bucketSeconds: 900, maxPoints: 48, maxLiveGapSeconds: 1800 },
+        '1mo': { since: '-1 month', bucketSeconds: 28800, maxPoints: 72, maxLiveGapSeconds: 43200 },
+        '1y': { since: '-1 year', bucketSeconds: 345600, maxPoints: 96, maxLiveGapSeconds: 172800 },
+        '5y': { since: '-5 years', bucketSeconds: 1814400, maxPoints: 96, maxLiveGapSeconds: 1209600 },
         // Keep the former endpoint working for bookmarked API consumers.
-        '30d': { since: '-30 days', bucketSeconds: 28800, maxLiveGapSeconds: 43200 }
+        '30d': { since: '-30 days', bucketSeconds: 28800, maxPoints: 72, maxLiveGapSeconds: 43200 }
     };
     const range = req.query.range || '30d';
     const window = windows[range];
@@ -285,11 +294,12 @@ app.get('/api/stocks/:id/history', (req, res) => {
         const nativeTradeRepublicEur = Boolean(mapping?.verified_at && mapping.currency === 'EUR');
         const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'manual_refresh_trade_republic_order_price'];
         const tradingDayStart = range === '1d' ? berlinTradingDayStart(now()) : null;
-        const points = req.app.locals.db.getPriceHistory(stock.id, window.since, window.bucketSeconds, {
+        const eligiblePoints = req.app.locals.db.getPriceHistory(stock.id, window.since, window.queryBucketSeconds || window.bucketSeconds, {
             sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
             eurOnly: true
         }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }))
             .filter(point => !tradingDayStart || Date.parse(point.recorded_at) >= tradingDayStart.getTime());
+        const points = evenlySample(eligiblePoints, window.maxPoints);
         res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, start_at: tradingDayStart?.toISOString() || null, points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);
