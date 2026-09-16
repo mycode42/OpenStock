@@ -8,6 +8,8 @@ const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/
 const { HistoryBackfillQueue } = require('./lib/history-backfill');
 const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount, sanitizeCollection, BrokerError } = require('./lib/brokers/trade-republic');
 const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
+const { fetchYahooFallbackQuote } = require('./lib/monitor');
+const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
 function toISODateTime(value) {
@@ -69,8 +71,13 @@ function serializeBrokerStock(stock, db) {
     if (!stock) return stock;
     const mapping = db.getBrokerMapping(stock.id);
     const quote = mapping ? db.getLatestBrokerQuote(mapping.isin, mapping.exchange) : null;
-    const safeQuote = quote ? { bid_eur: quote.bid_eur, ask_eur: quote.ask_eur, spread_eur: quote.bid_eur !== null && quote.ask_eur !== null ? quote.ask_eur - quote.bid_eur : null, quote_time: quote.quote_time, observed_at: quote.observed_at, source: quote.source } : null;
+    const observation = db.getLatestPriceObservation(stock.id);
+    const brokerPriceIsCurrent = Boolean(quote && observation?.source?.startsWith('trade_republic'));
+    const safeQuote = brokerPriceIsCurrent ? { bid_eur: quote.bid_eur, ask_eur: quote.ask_eur, spread_eur: quote.bid_eur !== null && quote.ask_eur !== null ? quote.ask_eur - quote.bid_eur : null, quote_time: quote.quote_time, observed_at: quote.observed_at, source: quote.source } : null;
+    const fallback = stock.price_source === 'trade_republic' && Boolean(observation && !observation.source.startsWith('trade_republic'));
+    const marketLabel = !observation ? 'No quote' : fallback ? 'Yahoo Finance fallback' : observation.source.startsWith('trade_republic') ? 'Trade Republic' : 'Yahoo Finance';
     return { ...serializeStock(stock), broker_mapping: mapping ? { broker: mapping.broker, ticker: mapping.ticker, isin: mapping.isin, exchange: mapping.exchange, currency: mapping.currency, verified_at: mapping.verified_at, source: mapping.source } : null, broker_quote: safeQuote,
+        market_data: { source: observation?.source || null, label: marketLabel, fallback, quote_time: toISODateTime(observation?.quote_time) },
         position: db.getPositionSummary(stock.id), alert_levels: db.getAlertLevels(stock.id).map(serializeAlertLevel) };
 }
 
@@ -178,37 +185,6 @@ function captureEquitySnapshot(db, source = 'dashboard') {
     return at;
 }
 
-function latestYahooChartQuote(chart) {
-    const closes = chart?.indicators?.quote?.[0]?.close || [];
-    const timestamps = chart?.timestamp || [];
-    const meta = chart?.meta || {};
-    let latestIndex;
-    for (let index = closes.length - 1; index >= 0; index--) {
-        if (closes[index] !== null && Number.isFinite(Number(closes[index]))) {
-            latestIndex = index;
-            break;
-        }
-    }
-
-    if (latestIndex === undefined) {
-        const fallback = Number(meta.regularMarketPrice);
-        return Number.isFinite(fallback) && fallback > 0
-            ? { priceUsd: fallback, quoteTime: null, source: 'yahoo_regular_market_price' }
-            : null;
-    }
-
-    const quoteUnixTime = Number(timestamps[latestIndex]);
-    const periods = meta.currentTradingPeriod || {};
-    const session = ['pre', 'regular', 'post'].find(name => {
-        const period = periods[name];
-        return period && Number.isFinite(quoteUnixTime) && quoteUnixTime >= period.start && quoteUnixTime <= period.end;
-    }) || 'extended';
-    const quoteTime = Number.isFinite(quoteUnixTime)
-        ? new Date(quoteUnixTime * 1000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '')
-        : null;
-    return { priceUsd: Number(closes[latestIndex]), quoteTime, source: `yahoo_${session}_close` };
-}
-
 function queueStockHistory(historyBackfill, stock) {
     try {
         historyBackfill.enqueue(stock);
@@ -245,7 +221,8 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     res.set({
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         Pragma: 'no-cache',
-        Expires: '0'
+        Expires: '0',
+        'X-OpenStock-Version': APP_VERSION
     });
     next();
     });
@@ -609,59 +586,23 @@ app.post('/api/refresh-prices', async (req, res) => {
                         }
                     } catch (brokerError) { console.warn(`Trade Republic quote unavailable for ${stock.symbol}; Yahoo fallback: ${brokerError.code || 'UNAVAILABLE'}`); }
                 }
-                let exchangeRate = 1;
-                try { const fx = await fetchImpl('https://api.exchangerate-api.com/v4/latest/USD'); exchangeRate = Number((await fx.json())?.rates?.EUR); if (!(exchangeRate > 0)) throw new Error('invalid FX'); }
-                catch (rateError) { console.warn(`Yahoo fallback FX unavailable for ${stock.symbol}: ${rateError.message}`); continue; }
-                // Fetch price from Yahoo Finance (free, no API key needed)
-                const symbol = stock.symbol;
-                const priceResponse = await fetchImpl(
-                    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1m&includePrePost=true&corsDomain=finance.yahoo.com&_=${Date.now()}`,
-                    {
-                        cache: 'no-store',
-                        headers: {
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                            'Accept': 'application/json',
-                            'Cache-Control': 'no-cache',
-                            Pragma: 'no-cache'
-                        }
-                    }
-                );
-                
-                if (!priceResponse.ok) {
-                    console.warn(`Failed to fetch price for ${symbol}: ${priceResponse.status}`);
-                    continue;
-                }
-                
-                const priceData = await priceResponse.json();
-                const result = priceData.chart?.result?.[0];
-                
-                if (!result) {
-                    console.warn(`No price data for ${symbol}`);
-                    continue;
-                }
-                
-                const meta = result.meta;
-                const quote = latestYahooChartQuote(result);
-                const priceUsd = quote?.priceUsd;
-                const shortName = meta.shortName || meta.longName || '';
-                
-                if (!priceUsd) {
-                    console.warn(`Invalid price for ${symbol}: ${priceUsd}`);
-                    continue;
-                }
-                
-                // Calculate EUR price
-                const priceEur = priceUsd * exchangeRate;
-                
-                // Update stock in database using class method
-                req.app.locals.db.updateStockPrice(stock.id, priceUsd, priceEur, exchangeRate);
-                req.app.locals.db.addPriceSnapshot(stock.id, priceUsd, priceEur, exchangeRate, `manual_refresh_${quote.source}`, quote.quoteTime);
+                const quote = await fetchYahooFallbackQuote({
+                    symbol: stock.symbol,
+                    yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart',
+                    fx: {
+                        cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'),
+                        ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000,
+                        url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD'
+                    },
+                    fetchImpl: req.app.locals.fetchImpl,
+                    timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000),
+                    now: Date.now(),
+                    log: message => console.warn(message)
+                });
+                req.app.locals.db.updateStockPrice(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate);
+                req.app.locals.db.addPriceSnapshot(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate, `manual_refresh_${quote.source}`, quote.quoteTime);
                 updatedCount++;
-                
-                // Update name if it was empty and we got a name
-                if ((!stock.name || stock.name === '') && shortName) {
-                    req.app.locals.db.updateStock(stock.id, { name: shortName });
-                }
+                if ((!stock.name || stock.name === '') && quote.name) req.app.locals.db.updateStock(stock.id, { name: quote.name });
             } catch (stockError) {
                 console.warn(`Error processing stock ${stock.symbol}:`, stockError.message);
                 continue;
@@ -890,8 +831,8 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate', Pragma: 'no-cache', Expires: '0' });
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.set({ 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate', Pragma: 'no-cache', Expires: '0', 'X-OpenStock-Version': APP_VERSION });
+    res.json({ status: 'ok', version: APP_VERSION, timestamp: new Date().toISOString() });
 });
 
 // Serve index.html for all other routes (SPA fallback)
@@ -923,4 +864,4 @@ if (require.main === module) {
     process.on('SIGINT', shutdown);
 }
 
-module.exports = { createApp, serializeStock, serializeTrade, latestYahooChartQuote, berlinTradingDayStart };
+module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart };

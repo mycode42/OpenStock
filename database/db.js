@@ -15,14 +15,7 @@ class OpenStockDB {
 
     // ===== STOCKS =====
     getAllStocks() {
-        return this.db.prepare(`
-            SELECT id, symbol, name, isin, currency, current_price_usd, current_price_eur,
-                   buy_threshold_eur, sell_threshold_eur, owned, enabled, archived,
-                   last_price_update, last_exchange_rate, trigger_state,
-                   created_at, updated_at
-            FROM stocks
-            ORDER BY symbol ASC
-        `).all();
+        return this.db.prepare('SELECT * FROM stocks ORDER BY symbol ASC').all();
     }
 
     getConfigStocks() {
@@ -64,6 +57,10 @@ class OpenStockDB {
 
     getStockBySymbol(symbol) {
         return this.db.prepare('SELECT * FROM stocks WHERE symbol = ?').get(symbol);
+    }
+
+    getLatestPriceObservation(stockId) {
+        return this.db.prepare('SELECT source, quote_time, recorded_at FROM price_history WHERE stock_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1').get(stockId) || null;
     }
 
     getPositionSummary(stockId) {

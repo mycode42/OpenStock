@@ -70,6 +70,8 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     let response = await f.request('/health');
     assert.equal(response.status, 200);
     assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.equal(response.headers.get('x-openstock-version'), '1.0.0');
+    assert.equal((await response.json()).version, '1.0.0');
 
     response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
     assert.equal(response.status, 201);
@@ -105,6 +107,12 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     const refreshed = await response.json();
     assert.equal(response.status, 200);
     assert.equal(refreshed.updated, 1);
+    const fallbackStock = refreshed.stocks.find(stock => stock.id === good.id);
+    assert.equal(fallbackStock.current_price_usd, 100);
+    assert.equal(fallbackStock.current_price_eur, 90);
+    assert.equal(fallbackStock.last_exchange_rate, 0.9);
+    assert.equal(fallbackStock.broker_quote, null);
+    assert.deepEqual({ label: fallbackStock.market_data.label, fallback: fallbackStock.market_data.fallback }, { label: 'Yahoo Finance fallback', fallback: true });
 
     response = await f.request(`/api/stocks/${good.id}`, { method: 'DELETE' });
     assert.equal((await response.json()).archived, true);
