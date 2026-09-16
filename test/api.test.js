@@ -6,6 +6,7 @@ const path = require('node:path');
 const { initDatabase } = require('../database/init');
 const OpenStockDB = require('../database/db');
 const { createApp, berlinTradingDayStart } = require('../server');
+const APP_VERSION = require('../package.json').version;
 
 async function fixture({ now } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-api-'));
@@ -70,8 +71,8 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     let response = await f.request('/health');
     assert.equal(response.status, 200);
     assert.match(response.headers.get('cache-control'), /no-store/);
-    assert.equal(response.headers.get('x-openstock-version'), '1.0.0');
-    assert.equal((await response.json()).version, '1.0.0');
+    assert.equal(response.headers.get('x-openstock-version'), APP_VERSION);
+    assert.equal((await response.json()).version, APP_VERSION);
 
     response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
     assert.equal(response.status, 201);
