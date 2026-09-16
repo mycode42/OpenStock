@@ -48,6 +48,8 @@ async function main() {
         log('=== Monitoring cycle started ===');
         return await runMonitor({ db, log, error, config: {
             timeoutMs,
+            concurrency: positiveSetting('MONITOR_CONCURRENCY', 3),
+            cycleDeadlineMs: positiveSetting('MONITOR_CYCLE_DEADLINE_MS', 45000),
             yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart',
             lockPath: process.env.MONITOR_LOCK_PATH || path.join(memoryDir, 'monitor.lock'),
             fx: { cachePath: process.env.FX_CACHE_FILE || path.join(memoryDir, 'exchange_rate_cache.json'), ttlMs: fxTtlMs, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' },

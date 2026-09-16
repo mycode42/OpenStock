@@ -8,7 +8,8 @@ const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/
 const { HistoryBackfillQueue } = require('./lib/history-backfill');
 const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount, sanitizeCollection, BrokerError } = require('./lib/brokers/trade-republic');
 const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
-const { fetchYahooFallbackQuote } = require('./lib/monitor');
+const { QuoteService } = require('./lib/quote-service');
+const { normalizedBrokerRows } = require('./lib/broker-sync-service');
 const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
@@ -427,12 +428,10 @@ app.post('/api/stocks/:id/restore', (req, res) => {
         if (req.app.locals.db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
         const name = String(req.body.name ?? existing.name ?? '').trim();
         const currency = String(req.body.currency ?? existing.currency ?? 'USD').trim().toUpperCase();
-        const buyThreshold = numberField(req.body.buy_threshold_eur ?? existing.buy_threshold_eur, 'Buy threshold', { minimum: Number.EPSILON });
-        const sellThreshold = numberField(req.body.sell_threshold_eur ?? existing.sell_threshold_eur, 'Sell threshold', { minimum: Number.EPSILON });
+        if (req.body.buy_threshold_eur !== undefined || req.body.sell_threshold_eur !== undefined) return res.status(400).json({ error: 'Restore does not change alert levels; manage them separately after restoring.' });
         if (!name) return res.status(400).json({ error: 'Name is required' });
         if (!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({ error: 'Currency must be a three-letter code' });
-        if (buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy threshold must be less than sell threshold' });
-        req.app.locals.db.restoreArchivedStock(existing.id, { name, currency, buyThreshold, sellThreshold });
+        req.app.locals.db.restoreArchivedStock(existing.id, { name, currency });
         const stock = req.app.locals.db.getStockById(existing.id);
         queueStockHistory(req.app.locals.historyBackfill, stock);
         res.json({ message: 'Stock restored successfully', restored: true, stock: serializeConfiguredStock(stock) });
@@ -558,7 +557,6 @@ app.get('/api/dashboard', (req, res) => {
 // ===== API: Refresh Prices =====
 app.post('/api/refresh-prices', async (req, res) => {
     try {
-        // Get all enabled stocks
         const stocks = req.app.locals.db.getEnabledStocks();
         if (stocks.length === 0) {
             return res.json({
@@ -570,39 +568,12 @@ app.post('/api/refresh-prices', async (req, res) => {
         
         let updatedCount = 0;
         
-        // Process each stock
         for (const stock of stocks) {
             try {
-                const mapping = req.app.locals.db.getBrokerMapping(stock.id);
-                if (mapping?.verified_at && mapping.currency === 'EUR') {
-                    try {
-                        const brokerQuote = await req.app.locals.brokerClient.getQuote({ isin: mapping.isin, exchange: mapping.exchange });
-                        const eurPrice = Number.isFinite(brokerQuote.bid_eur) && Number.isFinite(brokerQuote.ask_eur) ? (brokerQuote.bid_eur + brokerQuote.ask_eur) / 2 : brokerQuote.bid_eur || brokerQuote.ask_eur;
-                        if (Number.isFinite(eurPrice) && eurPrice > 0 && brokerQuote.currency === 'EUR') {
-                            req.app.locals.db.updateStockQuote(stock.id, { bidEur: brokerQuote.bid_eur, askEur: brokerQuote.ask_eur, midpointEur: eurPrice, quoteTime: brokerQuote.quote_time });
-                            req.app.locals.db.addPriceSnapshot(stock.id, null, eurPrice, null, 'manual_refresh_trade_republic_order_price', brokerQuote.quote_time);
-                            req.app.locals.db.addBrokerQuote({ broker:'trade_republic', isin:mapping.isin, exchange:mapping.exchange, bid_eur:brokerQuote.bid_eur, ask_eur:brokerQuote.ask_eur, last_eur:brokerQuote.last_eur || null, currency:brokerQuote.currency, quote_time:brokerQuote.quote_time, observed_at:brokerQuote.observed_at, source:brokerQuote.source });
-                            updatedCount++; continue;
-                        }
-                    } catch (brokerError) { console.warn(`Trade Republic quote unavailable for ${stock.symbol}; Yahoo fallback: ${brokerError.code || 'UNAVAILABLE'}`); }
-                }
-                const quote = await fetchYahooFallbackQuote({
-                    symbol: stock.symbol,
-                    yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart',
-                    fx: {
-                        cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'),
-                        ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000,
-                        url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD'
-                    },
-                    fetchImpl: req.app.locals.fetchImpl,
-                    timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000),
-                    now: Date.now(),
-                    log: message => console.warn(message)
-                });
-                req.app.locals.db.updateStockPrice(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate);
-                req.app.locals.db.addPriceSnapshot(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate, `manual_refresh_${quote.source}`, quote.quoteTime);
+                const service = new QuoteService({ db: req.app.locals.db, brokerClient: req.app.locals.brokerClient, fetchImpl: req.app.locals.fetchImpl, now: () => now(), log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
+                const quote = await service.fetch({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) });
+                service.persist(stock, quote);
                 updatedCount++;
-                if ((!stock.name || stock.name === '') && quote.name) req.app.locals.db.updateStock(stock.id, { name: quote.name });
             } catch (stockError) {
                 console.warn(`Error processing stock ${stock.symbol}:`, stockError.message);
                 continue;
@@ -622,16 +593,6 @@ app.post('/api/refresh-prices', async (req, res) => {
 
 // ===== API: broker integration (sanitized, read-first) =====
 function brokerError(res, error) { return res.status(error instanceof BrokerError ? error.status : 502).json({ error: error.message || 'Broker unavailable', code: error.code || 'BROKER_ERROR' }); }
-function brokerRows(raw, kind) {
-    const observedAt = new Date().toISOString();
-    const rows = Array.isArray(raw) && !raw.some(row => row?.amount && typeof row.amount === 'object') ? raw : sanitizeCollection(raw, kind);
-    return rows.map(row => {
-        const base = { broker: 'trade_republic', observed_at: row.observed_at || observedAt, raw_hash: null };
-        if (kind === 'portfolio') return { ...base, account_ref_masked: row.account_ref_masked || '••••', isin: row.isin || row.instrument || null, quantity: row.quantity, currency: row.currency || 'EUR', value_eur: row.value_eur ?? row.amount_eur ?? null, external_ref_masked: row.external_ref_masked || '••••' };
-        if (kind === 'orders') return { ...base, external_ref_masked: row.external_ref_masked || '••••', status: row.status || 'UNKNOWN', isin: row.isin || row.instrument || null, side: row.side || null, quantity: row.quantity ?? null, amount_eur: row.amount_eur ?? null, occurred_at: row.occurred_at || null, execution_identity: row.execution_identity || null, execution_price_eur: row.execution_price_eur ?? null, execution_fees_eur: row.execution_fees_eur ?? null, executed_at: row.executed_at || null, title: row.title || null, subtitle: row.subtitle || null };
-        return { ...base, external_ref_masked: row.external_ref_masked || '••••', status: row.status || 'UNKNOWN', isin: row.isin || row.instrument || null, side: row.side || null, quantity: row.quantity ?? null, amount_eur: row.amount_eur ?? null, occurred_at: row.occurred_at || null, execution_identity: row.execution_identity || null, execution_price_eur: row.execution_price_eur ?? null, execution_fees_eur: row.execution_fees_eur ?? null, executed_at: row.executed_at || null, title: row.title || null, subtitle: row.subtitle || null };
-    });
-}
 app.get('/api/broker/trade-republic/health', async (req, res) => { try { res.json({ broker: 'trade_republic', ...(await req.app.locals.brokerClient.health()), live_submission_enabled: process.env.TRADE_REPUBLIC_LIVE_ENABLED === 'true' && process.env.TRADE_REPUBLIC_DRY_RUN === 'false' }); } catch (e) { brokerError(res, e); } });
 app.get('/api/broker/trade-republic/accounts', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getAccounts()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/portfolio', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getPortfolio()); } catch(e) { brokerError(res,e); } });
@@ -652,15 +613,15 @@ app.get('/api/broker/trade-republic/mappings', (req, res) => res.json(req.app.lo
 app.post('/api/broker/trade-republic/mappings', async (req, res) => { try { const b=req.body||{}; const stock=req.app.locals.db.getStockById(Number(b.stock_id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const { instrument, home } = await resolveVerifiedInstrument(req.app.locals.brokerClient, b.isin); const existing=req.app.locals.db.getConfigStocks().find(item => item.isin === instrument.isin && item.id !== stock.id) || req.app.locals.db.getArchivedStocks().find(item => item.isin === instrument.isin && item.id !== stock.id); if (existing) return res.status(409).json({error: existing.archived ? 'ISIN belongs to an archived stock; restore that identity explicitly' : 'ISIN already exists', stock_id: existing.id}); req.app.locals.db.saveBrokerMapping({stock_id:stock.id,broker:'trade_republic',ticker:instrument.ticker,isin:instrument.isin,exchange:home.exchange,currency:home.currency,broker_metadata_json:JSON.stringify({instrument,home}),source:'broker_verified',verified_at:new Date().toISOString()}); req.app.locals.db.updateStock(stock.id,{isin:instrument.isin,name:instrument.name,price_source:'trade_republic'}); res.status(201).json({mapping:req.app.locals.db.getBrokerMapping(stock.id), stock:serializeConfiguredStock(req.app.locals.db.getStockById(stock.id))}); } catch(e) { if (e.status) return res.status(e.status).json({error:e.message,verified:false}); brokerError(res,e); } });
 app.post('/api/stocks/:id/history/sync-tr', async (req, res) => { try { const stock=req.app.locals.db.getStockById(Number(req.params.id)); if(!stock) return res.status(404).json({error:'Stock not found'}); const result=await req.app.locals.historyBackfill.syncTradeRepublic(stock); res.json({message:'Trade Republic history synchronized', ...result}); } catch(e) { res.status(e.message === 'verified Trade Republic mapping unavailable' ? 409 : 502).json({error:e.message || 'Trade Republic history unavailable'}); } });
 app.get('/api/broker/trade-republic/mapping-candidates', async (req, res) => { try { const portfolio=await req.app.locals.brokerClient.getPortfolio(); res.json({candidates:portfolio.filter(x=>x.instrument).map(x=>({ticker:null,isin:x.instrument,quantity:x.quantity,account_ref_masked:x.account_ref_masked,match:'unresolved',reason:'Ticker-to-ISIN mapping requires explicit verification'}))}); } catch(e) { brokerError(res,e); } });
-app.get('/api/broker/trade-republic/quote/:stockId', async (req, res) => { try { const mapping=req.app.locals.db.getBrokerMapping(Number(req.params.stockId)); if(!mapping) return res.status(409).json({error:'Stock has no verified broker mapping'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}); const quoteId=req.app.locals.db.addBrokerQuote({broker:'trade_republic',isin:mapping.isin,exchange:mapping.exchange,bid_eur:quote.bid_eur,ask_eur:quote.ask_eur,last_eur:quote.last_eur,currency:quote.currency,quote_time:quote.quote_time,observed_at:quote.observed_at,source:quote.source}).lastInsertRowid; res.json({...quote,quote_id:Number(quoteId),fresh:Date.now()-Date.parse(quote.observed_at)<15000}); } catch(e) { brokerError(res,e); } });
+app.get('/api/broker/trade-republic/quote/:stockId', async (req, res) => { try { const mapping=req.app.locals.db.getBrokerMapping(Number(req.params.stockId)); if(!mapping?.verified_at || mapping.currency !== 'EUR') return res.status(409).json({error:'Verified EUR broker mapping required'}); const quote=await req.app.locals.brokerClient.getQuote({isin:mapping.isin,exchange:mapping.exchange}); const quoteId=req.app.locals.db.addBrokerQuote({broker:'trade_republic',isin:mapping.isin,exchange:mapping.exchange,bid_eur:quote.bid_eur,ask_eur:quote.ask_eur,last_eur:quote.last_eur,currency:quote.currency,quote_time:quote.quote_time,observed_at:quote.observed_at,source:quote.source}).lastInsertRowid; res.json({...quote,quote_id:Number(quoteId),fresh:Date.now()-Date.parse(quote.observed_at)<15000}); } catch(e) { brokerError(res,e); } });
 app.post('/api/broker/trade-republic/sync', async (req, res) => {
   try {
     const client=req.app.locals.brokerClient, observed_at=new Date().toISOString();
     const [accounts,portfolio,orders,transactions]=await Promise.all([client.getAccounts(),client.getPortfolio(),client.getOrders(),client.getTransactions()]);
     const accountRows=accounts.filter(Boolean).map(a=>({...a,broker:'trade_republic',observed_at,raw_hash:null}));
-    const orderRows=brokerRows(orders,'orders');
-    const transactionRows=brokerRows(transactions,'transactions');
-    const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',brokerRows(portfolio,'portfolio').filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',orderRows),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',transactionRows)};
+    const orderRows=normalizedBrokerRows(orders,'orders',sanitizeCollection,observed_at);
+    const transactionRows=normalizedBrokerRows(transactions,'transactions',sanitizeCollection,observed_at);
+    const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',normalizedBrokerRows(portfolio,'portfolio',sanitizeCollection,observed_at).filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',orderRows),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',transactionRows)};
     const candidates=[...orderRows,...transactionRows].filter(row=>['FILLED','EXECUTED'].includes(String(row.status).toUpperCase()) && !(row.execution_identity && req.app.locals.db.getBrokerExecution(row.execution_identity))).map(row=>{
       const complete=Boolean(row.execution_identity && row.instrument && row.side && row.quantity>0 && row.execution_price_eur>0 && row.execution_fees_eur!==null && row.execution_fees_eur!==undefined && row.executed_at);
       const candidateKey=crypto.createHash('sha256').update(JSON.stringify([row.external_ref_masked||null,row.occurred_at||null,row.title||null,row.amount_eur??null])).digest('hex');

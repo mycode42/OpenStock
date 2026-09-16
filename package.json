@@ -2,7 +2,7 @@
   "name": "openstock",
   "version": "1.0.0",
   "description": "Reliable TR-first stock monitoring with Yahoo Finance EUR fallback",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "test": "node --test --test-reporter=dot",
     "test:verbose": "node --test --test-reporter=spec",

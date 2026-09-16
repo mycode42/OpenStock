@@ -1,8 +1,8 @@
 # OpenStock - Stock Monitoring, Trading Journal & Performance Dashboard
 
-A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. It converts USD to EUR and sends Telegram alerts when configured buy/sell thresholds are reached.
+A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. Trade Republic EUR quotes are preferred for verified instruments; Yahoo USD quotes are converted to EUR only as a fallback.
 
-> **Note:** Stock prices are fetched from **Yahoo Finance** — no API key required. The Twelve Data API key in `.env` is optional and kept for legacy compatibility only.
+> **Note:** Verified EUR instruments use Trade Republic quotes; **Yahoo Finance** remains the free fallback. No stock-price API key is required.
 
 ## Architecture
 
@@ -37,10 +37,10 @@ A private trading workspace for monitoring stock prices, recording position lots
 │      (monitor.js)       │      │      │   (JSON cache)          │
 │  - Runs every minute    │      │      │                         │
 │  - Fetches prices       │      │      └─────────────────────────┘
-│  - Converts USD→EUR     │      │
+│  - Uses bounded workers │      │
 │  - Evaluates triggers   │      │      ┌─────────────────────────┐
 │  - Sends Telegram       │──────┘      │  Yahoo Finance          │
-│  - Logs to alerts_log   │             │  (prices & exchange)    │
+│  - Durable alert outbox │             │  (fallback prices/FX)   │
 └─────────────────────────┘             └─────────────────────────┘
 ```
 
@@ -50,7 +50,7 @@ A private trading workspace for monitoring stock prices, recording position lots
 - SQLite 3.x (with CLI for debugging)
 - Telegram Bot token
 - Tailscale (pre-configured)
-- **No stock price API key needed** — Yahoo Finance is used for free
+- **No stock price API key needed** — Trade Republic uses the local sidecar; Yahoo Finance is free fallback
 
 ## Configuration
 
@@ -64,11 +64,13 @@ cp .env.example .env
 
 | Variable | Description |
 |----------|-------------|
-| `TWELVE_DATA_API_KEY` | **Optional** — legacy only; prices come from Yahoo Finance |
+| `TWELVE_DATA_API_KEY` | **Optional** — unused legacy compatibility setting |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `DATABASE_PATH` | Path to SQLite database |
 | `PORT` | Server port (default: 3000) |
 | `EXCHANGE_RATE_CACHE_SECONDS` | How long to cache exchange rates (default: 3600) |
+| `MONITOR_CONCURRENCY` | Maximum parallel quote requests per monitor cycle (default: 3) |
+| `MONITOR_CYCLE_DEADLINE_MS` | Stop starting new stock work after this cycle budget (default: 45000) |
 | `TELEGRAM_BOT_USERNAME` | Your bot's username (e.g., `OpenStock_TelegramBot`) |
 | `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
 | `TRADE_REPUBLIC_API_KEY_FILE` | Server-only file containing the sidecar API key |
@@ -160,34 +162,34 @@ sqlite3 /opt/openstock/database/openstock.db ".tables"
 
 ## Monitoring Behavior
 
-The `scripts/monitor.js` process runs every minute via a systemd timer. The former `monitor.sh` remains available only as a rollback target. The Node monitor:
+The `scripts/monitor.js` process runs every minute via a systemd timer. It uses Trade Republic EUR order quotes for stocks with verified EUR mappings and falls back to Yahoo Finance plus cached USD→EUR conversion when direct pricing is unavailable. The monitor:
 
 1. Reads enabled stocks from database
-2. Fetches current USD price from Yahoo Finance
-3. Gets USD→EUR exchange rate (cached for 1 hour)
-4. Calculates EUR price
+2. Fetches a verified Trade Republic EUR quote when configured, otherwise Yahoo Finance
+3. Gets USD→EUR exchange rate for Yahoo quotes (cached for 1 hour)
+4. Calculates EUR price only for Yahoo fallback quotes
 5. Stores price data in database
 6. Evaluates buy/sell thresholds
 7. Sends Telegram alert on threshold crossing
-8. Logs alert to `alerts_log` table (prevents duplicates)
-9. Updates trigger state in stocks table
-10. Stores a local price observation and, when capital is configured, an equity snapshot
-11. Uses prepared SQLite statements, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
+8. Creates a durable alert-outbox record, sends Telegram, then atomically records/retire the delivered alert level
+9. Stores a local price observation and, when capital is configured, an equity snapshot
+10. Uses bounded concurrency, a per-cycle deadline, prepared SQLite statements, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
 
-Run one **live** monitoring cycle manually as the `openclaw` user with `npm run monitor` (`npm run monitor -- --help` only prints usage). The one-time systemd cutover and rollback procedure is documented in `docs/monitor-systemd-cutover.md`.
+Run one monitoring cycle manually as the `openclaw` user with `npm run monitor` (`npm run monitor -- --help` only prints usage). Use the tracked systemd override in `ops/systemd/` when deploying monitor configuration changes.
 
 ### Trigger Debouncing
 
-- Alerts only fire when price **crosses into** trigger zone
-- System tracks `trigger_state` in database: `NONE`, `BUY_TRIGGERED`, `SELL_TRIGGERED`
-- After alert fires, price must exit zone before new alert possible
+- Each alert level is independently one-shot and is retired only after Telegram confirms delivery.
+- Rearm a retired level explicitly through the alert-level API/UI.
+- `trigger_state` and the stock-level threshold columns are legacy compatibility data; `alert_levels` and open Journal trades are authoritative.
 
 ### Historical chart backfill
 
 The server queues missing history for active, non-archived stocks at startup and
-after a stock is added or restored. It uses one free Yahoo Finance chart request
-per stock for up to five years of daily closes, processes stocks sequentially,
-and waits 1.5 seconds between requests by default. Existing monitor/manual
+after a stock is added or restored. Verified Trade Republic mappings use tracked
+multi-range broker history; incomplete ranges remain eligible for retry. Other
+stocks use one free Yahoo Finance chart request per stock for up to five years of
+daily closes. Existing monitor/manual
 history is preserved; a stock with any `yahoo_backfill` row is not requested
 again. Backfill runs in the background, so Yahoo failures are logged without
 affecting API responses or server availability.

@@ -44,7 +44,7 @@ class OpenStockDB {
     getEnabledStocks() {
         return this.db.prepare(`
             SELECT id, symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur,
-                   enabled, archived, trigger_state
+                   enabled, archived, trigger_state, price_source
             FROM stocks
             WHERE enabled = 1 AND archived = 0
             ORDER BY symbol ASC
@@ -137,9 +137,11 @@ class OpenStockDB {
         })();
     }
 
-    restoreArchivedStock(id, { name, currency, buyThreshold, sellThreshold }) {
+    // Alert levels are canonical for monitoring. Legacy threshold columns are
+    // retained as compatibility metadata for direct database callers only.
+    restoreArchivedStock(id, { name, currency, buyThreshold = null, sellThreshold = null }) {
         const result = this.db.prepare(`
-            UPDATE stocks SET name = ?, currency = ?, buy_threshold_eur = ?, sell_threshold_eur = ?,
+            UPDATE stocks SET name = ?, currency = ?, buy_threshold_eur = COALESCE(?, buy_threshold_eur), sell_threshold_eur = COALESCE(?, sell_threshold_eur),
                 archived = 0, enabled = 1, owned = 0, trigger_state = 'NONE', updated_at = datetime('now')
             WHERE id = ? AND archived = 1
         `).run(name, currency, buyThreshold, sellThreshold, id);
@@ -186,6 +188,17 @@ class OpenStockDB {
         return this.db.prepare(`UPDATE stocks SET current_price_usd=NULL, current_price_eur=?, current_bid_eur=?, current_ask_eur=?, current_midpoint_eur=?, last_exchange_rate=NULL, last_price_update=COALESCE(?, datetime('now')), updated_at=datetime('now') WHERE id=?`).run(midpointEur, bidEur, askEur, midpointEur, recordedAt, id);
     }
 
+    persistQuote(stock, quote, { recordedAt = null } = {}) {
+        const isBrokerQuote = String(quote.source || '').startsWith('trade_republic');
+        return this.db.transaction(() => {
+            if (isBrokerQuote) this.updateStockQuote(stock.id, { bidEur: quote.bidEur ?? null, askEur: quote.askEur ?? null, midpointEur: quote.priceEur, quoteTime: quote.quoteTime });
+            else this.updateStockPrice(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate);
+            this.addPriceSnapshot(stock.id, quote.priceUsd ?? null, quote.priceEur, isBrokerQuote ? null : (quote.exchangeRate ?? null), quote.source, quote.quoteTime, recordedAt);
+            if (quote.name && (!stock.name || stock.name === '')) this.updateStock(stock.id, { name: quote.name });
+            if (isBrokerQuote && stock.mapping) this.addBrokerQuote({ broker: 'trade_republic', isin: stock.mapping.isin, exchange: stock.mapping.exchange, bid_eur: quote.bidEur ?? null, ask_eur: quote.askEur ?? null, last_eur: quote.lastEur ?? null, currency: 'EUR', quote_time: quote.quoteTime, observed_at: quote.observedAt || new Date().toISOString(), source: quote.source });
+        })();
+    }
+
     addPriceSnapshot(stockId, priceUsd, priceEur, exchangeRate, source, quoteTime = null, recordedAt = null) {
         const stmt = this.db.prepare(`
             INSERT INTO price_history (
@@ -210,6 +223,17 @@ class OpenStockDB {
             WHERE stock_id = ? AND source = 'trade_republic_history' AND recorded_at >= datetime('now', '-35 days')`).get(stockId);
         return Number(row?.count || 0) >= minimumRecentPoints;
     }
+    hasCompletedHistoryBackfill(stockId, source, ranges) {
+        if (!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='history_backfill_runs'").get()) return false;
+        const expected = Array.isArray(ranges) ? ranges : [];
+        if (!expected.length) return false;
+        const rows = this.db.prepare(`SELECT range FROM history_backfill_runs WHERE stock_id=? AND source=? AND status='SUCCEEDED'`).all(stockId, source);
+        const done = new Set(rows.map(row => row.range));
+        return expected.every(range => done.has(range));
+    }
+    startHistoryBackfill(stockId, source, range) { return this.db.prepare(`INSERT INTO history_backfill_runs(stock_id,source,range,status,started_at,completed_at,last_error) VALUES (?,?,?,'RUNNING',datetime('now'),NULL,NULL) ON CONFLICT(stock_id,source,range) DO UPDATE SET status='RUNNING',started_at=datetime('now'),completed_at=NULL,last_error=NULL`).run(stockId, source, range); }
+    completeHistoryBackfill(stockId, source, range, pointsSaved) { return this.db.prepare(`UPDATE history_backfill_runs SET status='SUCCEEDED',points_saved=?,completed_at=datetime('now'),last_error=NULL WHERE stock_id=? AND source=? AND range=?`).run(pointsSaved, stockId, source, range); }
+    failHistoryBackfill(stockId, source, range, error) { return this.db.prepare(`INSERT INTO history_backfill_runs(stock_id,source,range,status,last_error,completed_at) VALUES (?,?,?,'FAILED',?,datetime('now')) ON CONFLICT(stock_id,source,range) DO UPDATE SET status='FAILED',last_error=excluded.last_error,completed_at=excluded.completed_at`).run(stockId, source, range, String(error || 'unknown error').slice(0, 300)); }
 
     addHistoricalPriceSnapshots(stockId, points, source = 'yahoo_backfill') {
         const insert = this.db.prepare(`
@@ -454,7 +478,20 @@ class OpenStockDB {
         const row = this.db.prepare('SELECT * FROM broker_portfolio WHERE broker=? AND account_ref_masked=? AND isin=? ORDER BY observed_at DESC LIMIT 1').get('trade_republic', accountRefMasked, isin);
         return row && Date.now() - Date.parse(row.observed_at) >= 0 && Date.now() - Date.parse(row.observed_at) <= maxAgeMs ? row : null;
     }
-    syncBrokerRows(table, rows) { const allowed = { broker_accounts:['broker','account_ref_masked','currency','cash_eur','available_cash_eur','observed_at','raw_hash'], broker_portfolio:['broker','account_ref_masked','isin','quantity','currency','value_eur','observed_at','external_ref_masked'], broker_orders:['broker','external_ref_masked','status','isin','side','quantity','amount_eur','occurred_at','observed_at','raw_hash'], broker_transactions:['broker','external_ref_masked','status','isin','quantity','amount_eur','occurred_at','observed_at','raw_hash'] }[table]; if (!allowed) throw new Error('Invalid broker table'); if (!rows.length) return 0; const sql = `INSERT OR IGNORE INTO ${table} (${allowed.join(',')}) VALUES (${allowed.map(k=>`@${k}`).join(',')})`; const stmt = this.db.prepare(sql); return this.db.transaction(() => { let n=0; for (const row of rows) n += stmt.run(row).changes; return n; })(); }
+    syncBrokerRows(table, rows) {
+        const definitions = {
+            broker_accounts: { columns:['broker','account_ref_masked','currency','cash_eur','available_cash_eur','observed_at','raw_hash'], key:['broker','account_ref_masked'] },
+            broker_portfolio: { columns:['broker','account_ref_masked','isin','quantity','currency','value_eur','observed_at','external_ref_masked'], key:['broker','account_ref_masked','isin','observed_at'] },
+            broker_orders: { columns:['broker','external_ref_masked','status','isin','side','quantity','amount_eur','occurred_at','observed_at','raw_hash'], key:['broker','external_ref_masked'] },
+            broker_transactions: { columns:['broker','external_ref_masked','status','isin','quantity','amount_eur','occurred_at','observed_at','raw_hash'], key:['broker','external_ref_masked'] }
+        };
+        const definition = definitions[table];
+        if (!definition) throw new Error('Invalid broker table');
+        if (!rows.length) return 0;
+        const updates = definition.columns.filter(column => !definition.key.includes(column)).map(column => `${column}=excluded.${column}`).join(',');
+        const stmt = this.db.prepare(`INSERT INTO ${table} (${definition.columns.join(',')}) VALUES (${definition.columns.map(key=>`@${key}`).join(',')}) ON CONFLICT(${definition.key.join(',')}) DO UPDATE SET ${updates}`);
+        return this.db.transaction(() => rows.reduce((count, row) => count + stmt.run(row).changes, 0))();
+    }
     addBrokerReconciliationCandidate(input) { return this.db.prepare(`INSERT OR IGNORE INTO broker_reconciliation_candidates (broker,candidate_key,external_ref_masked,status,title,subtitle,amount_eur,currency,occurred_at,reason) VALUES (@broker,@candidate_key,@external_ref_masked,@status,@title,@subtitle,@amount_eur,@currency,@occurred_at,@reason)`).run(input); }
     getBrokerReconciliationCandidates() { return this.db.prepare('SELECT id,broker,candidate_key,external_ref_masked,status,title,subtitle,amount_eur,currency,occurred_at,reason,created_at FROM broker_reconciliation_candidates WHERE resolved_at IS NULL ORDER BY occurred_at DESC, id DESC').all(); }
     createBrokerOrderIntent(input) { return this.db.prepare(`INSERT INTO broker_order_intents (broker,idempotency_key,status,request_json,quote_id) VALUES (@broker,@idempotency_key,@status,@request_json,@quote_id)`).run(input); }

@@ -17,6 +17,7 @@ const migrations = [
   ,require('./migrations/015_broker_reconciliation_candidates')
   ,require('./migrations/016_broker_health_state')
   ,require('./migrations/017_broker_health_notification_status')
+  ,require('./migrations/018_reliable_monitoring')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {
