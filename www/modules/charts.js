@@ -6,12 +6,25 @@ function chartRangeControls(activeRange) {
     return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
 }
 
-function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, lineSegments = null, gapSegments = null, hoverPoints, ariaLabel }) {
+function smoothCoordinatePath(points) {
+    const coordinates = String(points || '').trim().split(/\s+/).map(pair => pair.split(',').map(Number)).filter(pair => pair.length === 2 && pair.every(Number.isFinite));
+    if (coordinates.length < 2) return '';
+    let path = `M${coordinates[0][0]},${coordinates[0][1]}`;
+    for (let index = 1; index < coordinates.length; index += 1) {
+        const previous = coordinates[index - 1], current = coordinates[index];
+        const midpoint = (previous[0] + current[0]) / 2;
+        path += ` C${midpoint},${previous[1]} ${midpoint},${current[1]} ${current[0]},${current[1]}`;
+    }
+    return path;
+}
+
+function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, lineSegments = null, smooth = false, hoverPoints, ariaLabel }) {
     const encodedPoints = escapeHtml(JSON.stringify(hoverPoints));
     const segments = Array.isArray(lineSegments) ? lineSegments : [linePoints];
-    const gaps = (Array.isArray(gapSegments) ? gapSegments : []).filter(Boolean).map(points => `<polyline class="${lineClass} history-gap-line" points="${points}"/>`).join('');
-    const lines = segments.filter(Boolean).map(points => `<polyline class="${lineClass}" points="${points}"/>`).join('');
-    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${escapeHtml(ariaLabel)}" data-chart-label="${escapeHtml(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}${gaps}${lines}<g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
+    const lines = segments.filter(Boolean).map(points => smooth
+        ? `<path class="${lineClass}" d="${smoothCoordinatePath(points)}"/>`
+        : `<polyline class="${lineClass}" points="${points}"/>`).join('');
+    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${escapeHtml(ariaLabel)}" data-chart-label="${escapeHtml(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}${lines}<g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
 }
 
 function attachInteractiveLineCharts(root) {
@@ -87,7 +100,7 @@ function attachInteractiveLineCharts(root) {
     });
 }
 
-function renderHistoryChart(points, range, maxGapSeconds = 0) {
+function renderHistoryChart(points, range) {
     const clean = points
         .filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at))
         .sort((left, right) => parseOpenStockDate(left.recorded_at).getTime() - parseOpenStockDate(right.recorded_at).getTime());
@@ -96,33 +109,19 @@ function renderHistoryChart(points, range, maxGapSeconds = 0) {
     const min = Math.min(...values), max = Math.max(...values);
     const padding = Math.max((max - min) * 0.08, max * 0.002, 0.01);
     const low = min - padding, high = max + padding, width = 264, height = 82;
-    const times = clean.map(point => parseOpenStockDate(point.recorded_at).getTime());
-    const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
-    const coordinates = clean.map((point, index) => ({ point, x: (times[index] - firstTime) / timeRange * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
-    const maxGapMs = Math.max(0, Number(maxGapSeconds) || 0) * 1000;
-    const coordinateSegments = [[]];
-    coordinates.forEach((coordinate, index) => {
-        if (index > 0 && maxGapMs && times[index] - times[index - 1] > maxGapMs) coordinateSegments.push([]);
-        coordinateSegments[coordinateSegments.length - 1].push(coordinate);
-    });
-    const lineSegments = coordinateSegments.filter(segment => segment.length > 1).map(segment => segment.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
-    const gapSegments = coordinateSegments.slice(0, -1).map((segment, index) => {
-        const next = coordinateSegments[index + 1];
-        if (!segment.length || !next?.length) return '';
-        const from = segment[segment.length - 1], to = next[0];
-        return `${from.x.toFixed(1)},${from.y.toFixed(1)} ${to.x.toFixed(1)},${to.y.toFixed(1)}`;
-    });
+    const coordinates = clean.map((point, index) => ({ point, x: index / (clean.length - 1) * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
+    const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
     const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at) }));
     const first = clean[0], last = clean[clean.length - 1];
     const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
     const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
-    const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, lineSegments, gapSegments, hoverPoints, ariaLabel });
+    const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints, smooth: true, hoverPoints, ariaLabel });
     return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, history.max_gap_seconds)}`;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range)}`;
     attachInteractiveLineCharts(panel);
 }
 

@@ -5,9 +5,9 @@ const os = require('node:os');
 const path = require('node:path');
 const { initDatabase } = require('../database/init');
 const OpenStockDB = require('../database/db');
-const { createApp } = require('../server');
+const { createApp, berlinTradingDayStart } = require('../server');
 
-async function fixture() {
+async function fixture({ now } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-api-'));
     const file = path.join(dir, 'test.db');
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
@@ -19,7 +19,7 @@ async function fixture() {
         if (symbol === 'BAD') return { ok: false, status: 503, json: async () => ({}) };
         return { ok: true, json: async () => ({ chart: { result: [{ meta: { shortName: symbol }, timestamp: [1767225600], indicators: { quote: [{ close: [100] }] } }] } }) };
     };
-    const app = createApp({ db, backfill, fetchImpl });
+    const app = createApp({ db, backfill, fetchImpl, now });
     app.locals.brokerClient = {
         getInstrument: async isin => { const decoded = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, ''); const symbol = /^[A-Z0-9.-]+$/.test(decoded) && decoded ? decoded : `M${isin.slice(-5)}`; return { isin, name: `Mock ${symbol}`, shortName: `Mock ${symbol}`, intlSymbol: symbol, tradable: true, listings: [{ exchange: 'XNAS', symbolAtExchange: symbol }] }; },
         getTradeRepublicInstrument: async isin => ({ isin, exchange: 'TIB', currency: 'EUR', tradable: true }),
@@ -37,6 +37,26 @@ async function fixture() {
     };
     return { db, dir, server, request };
 }
+
+test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
+    assert.equal(berlinTradingDayStart(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T05:30:00.000Z');
+    assert.equal(berlinTradingDayStart(new Date('2026-12-16T12:00:00Z')).toISOString(), '2026-12-16T06:30:00.000Z');
+    assert.equal(berlinTradingDayStart(new Date('2026-09-16T04:00:00Z')).toISOString(), '2026-09-15T05:30:00.000Z');
+});
+
+test('one-day history starts at 07:30 Berlin time and uses fifteen-minute buckets', async t => {
+    const f = await fixture({ now: () => new Date('2026-09-16T15:45:00Z') });
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'DAY', name: 'Trading day', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
+    const stock = (await response.json()).stock;
+    f.db.addPriceSnapshot(stock.id, null, 99, null, 'trade_republic_history', '2026-09-16T05:20:00.000Z', '2026-09-16 05:20:00');
+    f.db.addPriceSnapshot(stock.id, null, 100, null, 'trade_republic_history', '2026-09-16T05:30:00.000Z', '2026-09-16 05:30:00');
+    f.db.addPriceSnapshot(stock.id, null, 101, null, 'trade_republic_history', '2026-09-16T05:45:00.000Z', '2026-09-16 05:45:00');
+    const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1d`)).json();
+    assert.equal(history.start_at, '2026-09-16T05:30:00.000Z');
+    assert.equal(history.bucket_seconds, 900);
+    assert.deepEqual(history.points.map(point => point.price_eur), [100, 101]);
+});
 
 test('API factory covers lifecycle, history, journal, analytics, refresh isolation, and archive restore', async t => {
     const f = await fixture();
@@ -61,7 +81,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal(history.points[0].source, 'trade_republic_history');
     assert.equal(history.points[0].recorded_at, '2026-01-01T00:00:00.000Z');
     assert.equal(history.points[0].quote_time, '2026-01-01T00:00:00.000Z');
-    assert.equal(history.bucket_seconds, 86400);
+    assert.equal(history.bucket_seconds, 345600);
     assert.equal(history.max_gap_seconds, 172800);
     assert.equal((await f.request('/api/stocks?includeArchived=1')).status, 200);
 

@@ -18,6 +18,33 @@ function toISODateTime(value) {
     return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+const BERLIN_DATE_TIME = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+});
+
+function berlinDateTimeParts(value) {
+    return Object.fromEntries(BERLIN_DATE_TIME.formatToParts(value).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+}
+
+function berlinTradingDayStart(now = new Date()) {
+    const local = berlinDateTimeParts(now);
+    let dateAtMidnight = Date.UTC(local.year, local.month - 1, local.day);
+    if (local.hour * 60 + local.minute < 7 * 60 + 30) dateAtMidnight -= 86400000;
+    const tradingDate = new Date(dateAtMidnight);
+    const desired = {
+        year: tradingDate.getUTCFullYear(), month: tradingDate.getUTCMonth() + 1, day: tradingDate.getUTCDate(),
+        hour: 7, minute: 30, second: 0
+    };
+    let timestamp = Date.UTC(desired.year, desired.month - 1, desired.day, desired.hour, desired.minute, desired.second);
+    for (let pass = 0; pass < 2; pass += 1) {
+        const actual = berlinDateTimeParts(new Date(timestamp));
+        timestamp += Date.UTC(desired.year, desired.month - 1, desired.day, desired.hour, desired.minute, desired.second)
+            - Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
+    }
+    return new Date(timestamp);
+}
+
 function serializeStock(stock) {
     if (!stock) return stock;
     const { owned: _legacyOwned, ...publicStock } = stock;
@@ -181,7 +208,7 @@ function queueStockHistory(historyBackfill, stock) {
     }
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null } = {}) {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, now = () => new Date() } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -237,12 +264,12 @@ app.get('/api/stocks/archived', (req, res) => {
 
 app.get('/api/stocks/:id/history', (req, res) => {
     const windows = {
-        '1d': { since: '-1 day', bucketSeconds: 300, maxLiveGapSeconds: 1800 },
-        '1mo': { since: '-1 month', bucketSeconds: 14400, maxLiveGapSeconds: 43200 },
-        '1y': { since: '-1 year', bucketSeconds: 86400, maxLiveGapSeconds: 172800 },
-        '5y': { since: '-5 years', bucketSeconds: 604800, maxLiveGapSeconds: 1209600 },
+        '1d': { since: '-2 days', bucketSeconds: 900, maxLiveGapSeconds: 1800 },
+        '1mo': { since: '-1 month', bucketSeconds: 28800, maxLiveGapSeconds: 43200 },
+        '1y': { since: '-1 year', bucketSeconds: 345600, maxLiveGapSeconds: 172800 },
+        '5y': { since: '-5 years', bucketSeconds: 1814400, maxLiveGapSeconds: 1209600 },
         // Keep the former endpoint working for bookmarked API consumers.
-        '30d': { since: '-30 days', bucketSeconds: 14400, maxLiveGapSeconds: 43200 }
+        '30d': { since: '-30 days', bucketSeconds: 28800, maxLiveGapSeconds: 43200 }
     };
     const range = req.query.range || '30d';
     const window = windows[range];
@@ -257,11 +284,13 @@ app.get('/api/stocks/:id/history', (req, res) => {
         const mapping = req.app.locals.db.getBrokerMapping(stock.id);
         const nativeTradeRepublicEur = Boolean(mapping?.verified_at && mapping.currency === 'EUR');
         const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'manual_refresh_trade_republic_order_price'];
+        const tradingDayStart = range === '1d' ? berlinTradingDayStart(now()) : null;
         const points = req.app.locals.db.getPriceHistory(stock.id, window.since, window.bucketSeconds, {
             sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
             eurOnly: true
-        }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
-        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, points });
+        }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }))
+            .filter(point => !tradingDayStart || Date.parse(point.recorded_at) >= tradingDayStart.getTime());
+        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, start_at: tradingDayStart?.toISOString() || null, points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);
         res.status(500).json({ error: 'Failed to fetch price history' });
@@ -884,4 +913,4 @@ if (require.main === module) {
     process.on('SIGINT', shutdown);
 }
 
-module.exports = { createApp, serializeStock, serializeTrade, latestYahooChartQuote };
+module.exports = { createApp, serializeStock, serializeTrade, latestYahooChartQuote, berlinTradingDayStart };
