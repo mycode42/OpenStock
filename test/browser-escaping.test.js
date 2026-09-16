@@ -82,7 +82,7 @@ test('configuration uses a compact single-stock alert editor without legacy owne
     assert.match(source, /Triggered · ready to rearm/);
     assert.match(source, /open one stock at a time/);
     assert.match(source, /automatic ISIN resolution/);
-    assert.match(source, /stock\.isin \? 'Trade Republic' : 'Legacy · no TR mapping'/);
+    assert.doesNotMatch(source, /stock\.isin \? 'Trade Republic' : 'Legacy · no TR mapping'/);
     assert.doesNotMatch(source, /TR · \$\{escapeHtml\(stock\.isin\)\}/);
     assert.doesNotMatch(source, /sync-tr-history|Sync TR history/);
     assert.doesNotMatch(source, /broker-mapping-form|broker-stock|broker-isin/);
