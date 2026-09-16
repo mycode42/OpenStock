@@ -128,6 +128,17 @@ test('history sampling collapses repeated observations with one stale quote time
     assert.deepEqual(points.map(point => point.observed_at), ['2026-01-02 05:00:00', '2026-01-02 08:00:00']);
 });
 
+test('history sampling sorts mixed SQLite and ISO quote timestamps chronologically', t => {
+    const { db, dir } = makeDb();
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const stockId = Number(db.addStock('ORDERED', 'Ordered', 'EUR', 1, 2).lastInsertRowid);
+    db.addPriceSnapshot(stockId, null, 102, null, 'trade_republic_order_price', '2026-09-16T15:30:00.000Z', '2026-09-16 15:30:01');
+    db.addPriceSnapshot(stockId, null, 100, null, 'trade_republic_history', '2026-09-16 00:00:00', '2026-09-16 00:00:00');
+    db.addPriceSnapshot(stockId, null, 101, null, 'trade_republic_history', '2026-09-16T05:30:00.000Z', '2026-09-16 05:30:00');
+    const points = db.getPriceHistory(stockId, '-10 years', 300, { eurOnly: true });
+    assert.deepEqual(points.map(point => point.price_eur), [100, 101, 102]);
+});
+
 test('historical writes do not overwrite an existing monitor observation and failures are isolated', async t => {
     const { db, dir } = makeDb();
     t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });

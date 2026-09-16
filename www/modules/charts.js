@@ -87,7 +87,9 @@ function attachInteractiveLineCharts(root) {
 }
 
 function renderHistoryChart(points, range, maxGapSeconds = 0) {
-    const clean = points.filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at));
+    const clean = points
+        .filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at))
+        .sort((left, right) => parseOpenStockDate(left.recorded_at).getTime() - parseOpenStockDate(right.recorded_at).getTime());
     if (clean.length < 2) return '<div class="history-empty">Collecting native EUR price history…</div>';
     const values = clean.map(point => Number(point.price_eur));
     const min = Math.min(...values), max = Math.max(...values);

@@ -250,7 +250,7 @@ class OpenStockDB {
             FROM sampled
             JOIN eligible ON eligible.id = sampled.id
             JOIN price_history ON price_history.id = sampled.id
-            ORDER BY eligible.chart_at ASC
+            ORDER BY CAST(strftime('%s', eligible.chart_at) AS INTEGER) ASC, eligible.id ASC
         `).all(stockId, since, ...selectedSources, bucketSeconds);
     }
 
