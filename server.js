@@ -261,7 +261,7 @@ app.get('/api/stocks/:id/history', (req, res) => {
             sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
             eurOnly: true
         }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
-        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_live_gap_seconds: window.maxLiveGapSeconds, points });
+        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);
         res.status(500).json({ error: 'Failed to fetch price history' });

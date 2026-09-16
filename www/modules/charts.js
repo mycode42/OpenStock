@@ -86,7 +86,7 @@ function attachInteractiveLineCharts(root) {
     });
 }
 
-function renderHistoryChart(points, range, maxLiveGapSeconds = 0) {
+function renderHistoryChart(points, range, maxGapSeconds = 0) {
     const clean = points.filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at));
     if (clean.length < 2) return '<div class="history-empty">Collecting native EUR price history…</div>';
     const values = clean.map(point => Number(point.price_eur));
@@ -96,11 +96,10 @@ function renderHistoryChart(points, range, maxLiveGapSeconds = 0) {
     const times = clean.map(point => parseOpenStockDate(point.recorded_at).getTime());
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
     const coordinates = clean.map((point, index) => ({ point, x: (times[index] - firstTime) / timeRange * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
-    const liveSources = new Set(['trade_republic_order_price', 'manual_refresh_trade_republic_order_price']);
-    const maxLiveGapMs = Math.max(0, Number(maxLiveGapSeconds) || 0) * 1000;
+    const maxGapMs = Math.max(0, Number(maxGapSeconds) || 0) * 1000;
     const coordinateSegments = [[]];
     coordinates.forEach((coordinate, index) => {
-        if (index > 0 && maxLiveGapMs && times[index] - times[index - 1] > maxLiveGapMs && (liveSources.has(clean[index - 1].source) || liveSources.has(clean[index].source))) coordinateSegments.push([]);
+        if (index > 0 && maxGapMs && times[index] - times[index - 1] > maxGapMs) coordinateSegments.push([]);
         coordinateSegments[coordinateSegments.length - 1].push(coordinate);
     });
     const lineSegments = coordinateSegments.filter(segment => segment.length > 1).map(segment => segment.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
@@ -114,7 +113,7 @@ function renderHistoryChart(points, range, maxLiveGapSeconds = 0) {
 }
 
 function renderHistoryPanel(panel, history, range) {
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, history.max_live_gap_seconds)}`;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, history.max_gap_seconds)}`;
     attachInteractiveLineCharts(panel);
 }
 

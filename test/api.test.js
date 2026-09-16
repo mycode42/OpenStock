@@ -62,7 +62,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal(history.points[0].recorded_at, '2026-01-01T00:00:00.000Z');
     assert.equal(history.points[0].quote_time, '2026-01-01T00:00:00.000Z');
     assert.equal(history.bucket_seconds, 86400);
-    assert.equal(history.max_live_gap_seconds, 172800);
+    assert.equal(history.max_gap_seconds, 172800);
     assert.equal((await f.request('/api/stocks?includeArchived=1')).status, 200);
 
     await f.request('/api/capital-events', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event_type: 'INITIAL', amount_eur: 10000, occurred_at: '2026-01-01T00:00:00Z', notes: 'seed' }) });

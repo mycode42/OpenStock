@@ -16,8 +16,10 @@ test('dashboard history charts are native EUR and break stale live gaps', () => 
     assert.match(source, /primary: `€\$\{money\(point\.price_eur\)\}`/);
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
-    assert.match(source, /maxLiveGapMs/);
+    assert.match(source, /maxGapMs/);
+    assert.match(source, /times\[index\] - times\[index - 1\] > maxGapMs/);
     assert.match(source, /coordinateSegments\.push\(\[\]\)/);
+    assert.doesNotMatch(source, /liveSources/);
     assert.doesNotMatch(source, /point\.price_usd|USD price chart|· USD/);
 });
 
@@ -34,11 +36,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=32/);
-    assert.match(index, /app\.js\?v=32/);
-    assert.match(worker, /openstock-v32/);
-    assert.match(worker, /styles\.css\?v=32/);
-    assert.match(worker, /app\.js\?v=32/);
+    assert.match(index, /styles\.css\?v=33/);
+    assert.match(index, /app\.js\?v=33/);
+    assert.match(worker, /openstock-v33/);
+    assert.match(worker, /styles\.css\?v=33/);
+    assert.match(worker, /app\.js\?v=33/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
 });
