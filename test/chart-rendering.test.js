@@ -32,11 +32,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=29/);
-    assert.match(index, /app\.js\?v=29/);
-    assert.match(worker, /openstock-v29/);
-    assert.match(worker, /styles\.css\?v=29/);
-    assert.match(worker, /app\.js\?v=29/);
+    assert.match(index, /styles\.css\?v=30/);
+    assert.match(index, /app\.js\?v=30/);
+    assert.match(worker, /openstock-v30/);
+    assert.match(worker, /styles\.css\?v=30/);
+    assert.match(worker, /app\.js\?v=30/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
 });
