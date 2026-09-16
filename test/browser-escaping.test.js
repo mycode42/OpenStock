@@ -32,11 +32,12 @@ test('dashboard leaves stock management controls in Configure', () => {
     assert.doesNotMatch(source, />Disable<|>Remove</);
 });
 
-test('dashboard only shows position value for held stocks and nests USD beside EUR', () => {
+test('dashboard shows only native EUR prices and position value for held stocks', () => {
     const source = fs.readFileSync(path.join(__dirname, '..', 'www/modules/dashboard.js'), 'utf8');
     assert.match(source, /const positionValue = quantity \* Number\(stock\.current_price_eur \|\| 0\)/);
     assert.match(source, /position\.owned[\s\S]*Position value:/);
-    assert.match(source, /stock-price-usd">\(\$\$\{money\(usdPrice\)\}\)<\/span>/);
+    assert.match(source, /stock-price eu">€\$\{money\(stock\.current_price_eur\)\}<\/div>/);
+    assert.doesNotMatch(source, /usdPrice|current_price_usd|stock-price-usd/);
     assert.match(source, /stock-quote">Bid €\$\{money\(stock\.broker_quote\.bid_eur\)\} · Ask €\$\{money\(stock\.broker_quote\.ask_eur\)\}/);
     assert.doesNotMatch(source, /TR bid|spread €\$\{money\(stock\.broker_quote\.spread_eur\)\}/);
     assert.doesNotMatch(source, /Position: \$\{money\(position\.quantity\)\}/);

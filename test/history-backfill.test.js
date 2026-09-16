@@ -22,6 +22,14 @@ function chart() {
     return { chart: { result: [{ timestamp: [1767225600, 1767312000], indicators: { quote: [{ close: [101, 102] }] } }] } };
 }
 
+function recentTradeRepublicPoints(count = 25) {
+    const end = Date.now();
+    return Array.from({ length: count }, (_, index) => {
+        const time = new Date(end - (count - index) * 4 * 60 * 60 * 1000).toISOString();
+        return { recordedAt: time.replace('T', ' ').replace(/\.\d{3}Z$/, ''), quoteTime: time, priceEur: 100 + index / 10, priceUsd: null, exchangeRate: null };
+    });
+}
+
 test('backfills only active stocks, uses one 5y daily request, and is idempotent', async t => {
     const { db, dir } = makeDb();
     t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -59,14 +67,15 @@ test('verified mappings backfill through Trade Republic without Yahoo', async t 
         db,
         delayMs: 0,
         fetchImpl: async () => { yahooCalls++; throw new Error('Yahoo must not be called for a verified Trade Republic mapping'); },
-        brokerClient: { getInstrumentHistory: async request => { brokerCalls.push(request); return { range: 'max', resolution: 86400000, points: [{ recordedAt: '2026-01-01 00:00:00', quoteTime: '2026-01-01 00:00:00', priceEur: 101, priceUsd: null, exchangeRate: null }] }; } },
+        brokerClient: { getInstrumentHistory: async request => { brokerCalls.push(request); return { range: request.range, resolution: 14400000, points: recentTradeRepublicPoints() }; } },
         logger: { log() {}, error: assert.fail }
     });
     assert.equal(queue.enqueueMissing(), 1);
     await queue.run();
-    assert.deepEqual(brokerCalls, [{ isin: 'US0000000001', range: '5y' }]);
+    assert.deepEqual(brokerCalls, ['5y', '1y', '1mo', '1d'].map(range => ({ isin: 'US0000000001', range })));
     assert.equal(yahooCalls, 0);
-    assert.deepEqual(db.db.prepare('SELECT price_eur, price_usd, source FROM price_history WHERE stock_id=?').all(stockId), [{ price_eur: 101, price_usd: null, source: 'trade_republic_history' }]);
+    assert.equal(db.db.prepare("SELECT COUNT(*) count FROM price_history WHERE stock_id=? AND source='trade_republic_history'").get(stockId).count, 25);
+    assert.equal(queue.enqueueMissing(), 0);
 });
 
 test('verified mappings fail closed when Trade Republic history is unavailable', async t => {
@@ -105,6 +114,20 @@ test('history sampling returns the latest observation from each integer time buc
     assert.deepEqual(points.map(point => point.price_usd), [101, 102]);
 });
 
+test('history sampling collapses repeated observations with one stale quote timestamp', t => {
+    const { db, dir } = makeDb();
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const stockId = Number(db.addStock('STALE', 'Stale', 'EUR', 1, 2).lastInsertRowid);
+    db.addPriceSnapshot(stockId, null, 100, null, 'trade_republic_order_price', '2026-01-01 16:00:00', '2026-01-01 16:00:00');
+    db.addPriceSnapshot(stockId, null, 100, null, 'trade_republic_order_price', '2026-01-01 16:00:00', '2026-01-01 23:00:00');
+    db.addPriceSnapshot(stockId, null, 100, null, 'trade_republic_order_price', '2026-01-01 16:00:00', '2026-01-02 05:00:00');
+    db.addPriceSnapshot(stockId, null, 101, null, 'trade_republic_order_price', '2026-01-02 08:00:00', '2026-01-02 08:00:00');
+    const points = db.getPriceHistory(stockId, '-10 years', 300, { sources: ['trade_republic_order_price'], eurOnly: true });
+    assert.equal(points.length, 2);
+    assert.deepEqual(points.map(point => point.recorded_at), ['2026-01-01 16:00:00', '2026-01-02 08:00:00']);
+    assert.deepEqual(points.map(point => point.observed_at), ['2026-01-02 05:00:00', '2026-01-02 08:00:00']);
+});
+
 test('historical writes do not overwrite an existing monitor observation and failures are isolated', async t => {
     const { db, dir } = makeDb();
     t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -137,12 +160,15 @@ test('forced Trade Republic sync augments and authoritatively updates existing Y
     const stockId = Number(db.addStock('BIRK', 'Birkenstock', 'EUR', 1, 2, 'JE00BS44BN30').lastInsertRowid);
     db.saveBrokerMapping({ stock_id: stockId, broker: 'trade_republic', ticker: 'BIRK', isin: 'JE00BS44BN30', exchange: 'TIB', currency: 'EUR', broker_metadata_json: '{}', source: 'broker_verified', verified_at: '2026-01-01T00:00:00Z' });
     db.addHistoricalPriceSnapshots(stockId, [{ recordedAt: '2026-01-01 00:00:00', quoteTime: '2026-01-01 00:00:00', priceUsd: 110, priceEur: 100, exchangeRate: 0.9 }], 'yahoo_backfill');
-    const queue = new HistoryBackfillQueue({ db, delayMs: 0, brokerClient: { getInstrumentHistory: async () => ({ range: 'max', resolution: 86400000, points: [
+    const calls = [];
+    const queue = new HistoryBackfillQueue({ db, delayMs: 0, brokerClient: { getInstrumentHistory: async request => { calls.push(request.range); return { range: request.range, resolution: 86400000, points: [
         { recordedAt: '2026-01-01 00:00:00', quoteTime: '2026-01-01 00:00:00', priceEur: 101, priceUsd: null, exchangeRate: null },
         { recordedAt: '2026-01-02 00:00:00', quoteTime: '2026-01-02 00:00:00', priceEur: 102, priceUsd: null, exchangeRate: null }
-    ] }) }, logger: { log() {}, error: assert.fail } });
+    ] }; } }, logger: { log() {}, error: assert.fail } });
     const result = await queue.syncTradeRepublic(db.getStockById(stockId));
-    assert.equal(result.points, 2);
+    assert.equal(result.points, 8);
+    assert.deepEqual(calls, ['5y', '1y', '1mo', '1d']);
+    assert.equal(result.ranges.length, 4);
     const rows = db.db.prepare('SELECT recorded_at, price_eur, price_usd, source FROM price_history WHERE stock_id=? ORDER BY recorded_at').all(stockId);
     assert.deepEqual(rows, [{ recorded_at: '2026-01-01 00:00:00', price_eur: 101, price_usd: null, source: 'trade_republic_history' }, { recorded_at: '2026-01-02 00:00:00', price_eur: 102, price_usd: null, source: 'trade_republic_history' }]);
 });

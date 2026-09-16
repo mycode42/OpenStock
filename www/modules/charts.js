@@ -6,9 +6,11 @@ function chartRangeControls(activeRange) {
     return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
 }
 
-function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, hoverPoints, ariaLabel }) {
+function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, lineSegments = null, hoverPoints, ariaLabel }) {
     const encodedPoints = escapeHtml(JSON.stringify(hoverPoints));
-    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${escapeHtml(ariaLabel)}" data-chart-label="${escapeHtml(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}<polyline class="${lineClass}" points="${linePoints}"/><g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
+    const segments = Array.isArray(lineSegments) ? lineSegments : [linePoints];
+    const lines = segments.filter(Boolean).map(points => `<polyline class="${lineClass}" points="${points}"/>`).join('');
+    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${escapeHtml(ariaLabel)}" data-chart-label="${escapeHtml(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}${lines}<g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
 }
 
 function attachInteractiveLineCharts(root) {
@@ -84,7 +86,7 @@ function attachInteractiveLineCharts(root) {
     });
 }
 
-function renderHistoryChart(points, range) {
+function renderHistoryChart(points, range, maxLiveGapSeconds = 0) {
     const clean = points.filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at));
     if (clean.length < 2) return '<div class="history-empty">Collecting native EUR price history…</div>';
     const values = clean.map(point => Number(point.price_eur));
@@ -94,18 +96,25 @@ function renderHistoryChart(points, range) {
     const times = clean.map(point => parseOpenStockDate(point.recorded_at).getTime());
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
     const coordinates = clean.map((point, index) => ({ point, x: (times[index] - firstTime) / timeRange * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
-    const line = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+    const liveSources = new Set(['trade_republic_order_price', 'manual_refresh_trade_republic_order_price']);
+    const maxLiveGapMs = Math.max(0, Number(maxLiveGapSeconds) || 0) * 1000;
+    const coordinateSegments = [[]];
+    coordinates.forEach((coordinate, index) => {
+        if (index > 0 && maxLiveGapMs && times[index] - times[index - 1] > maxLiveGapMs && (liveSources.has(clean[index - 1].source) || liveSources.has(clean[index].source))) coordinateSegments.push([]);
+        coordinateSegments[coordinateSegments.length - 1].push(coordinate);
+    });
+    const lineSegments = coordinateSegments.filter(segment => segment.length > 1).map(segment => segment.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
     const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at) }));
     const first = clean[0], last = clean[clean.length - 1];
     const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
     const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
-    const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints: line, hoverPoints, ariaLabel });
+    const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, lineSegments, hoverPoints, ariaLabel });
     return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range)}`;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, history.max_live_gap_seconds)}`;
     attachInteractiveLineCharts(panel);
 }
 

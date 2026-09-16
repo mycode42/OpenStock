@@ -15,7 +15,7 @@ h1{font-size:1.75rem;color:#ffffff;margin-bottom:.5rem}
 .stock-name{color:#94a3b8;font-size:.85rem;margin-bottom:.75rem}
 .stock-price{font-size:1.5rem;font-weight:700;margin-bottom:.5rem}
 .stock-price.eu{color:#fbbf24}
-.stock-price.usd{color:#94a3b8;font-size:1rem}.stock-price-usd{color:#94a3b8;font-size:.72em;font-weight:500;white-space:nowrap}
+.stock-price.usd{color:#94a3b8;font-size:1rem}
 .thresholds{display:flex;gap:1rem;margin-bottom:.5rem;flex-wrap:wrap}
 .threshold{font-size:.8rem;padding:.2rem .5rem;border-radius:.25rem}
 .threshold.buy{background:rgba(34,197,94,.2);color:#22c55e}

@@ -32,14 +32,13 @@ function renderDashboard() {
         const retired = levels.filter(level => level.triggered || level.retired);
         const quantity = Number(position.quantity || 0);
         const positionValue = quantity * Number(stock.current_price_eur || 0);
-        const usdPrice = Number(stock.current_price_usd || 0);
         const heldValue = position.owned
             ? `<div class="position-summary">Position value: ${money(quantity)} × €${money(stock.current_price_eur)} = <strong>€${money(positionValue)}</strong></div>`
             : '';
         return `<div class="stock-card ${position.owned ? '' : 'sold'}" data-stock-id="${escapeHtml(stock.id)}" tabindex="0">
             <div class="stock-symbol">${escapeHtml(stock.symbol)} <span class="badge ${position.owned ? 'owned' : 'sold'}">${position.owned ? 'HELD' : 'NOT HELD'}</span> <span class="badge enabled">${escapeHtml(position.source)}</span></div>
             <div class="stock-name">${escapeHtml(stock.name || '')}</div>
-            <div class="stock-price eu">€${money(stock.current_price_eur)} ${usdPrice > 0 ? `<span class="stock-price-usd">($${money(usdPrice)})</span>` : ''}</div>
+            <div class="stock-price eu">€${money(stock.current_price_eur)}</div>
             ${stock.broker_quote ? `<div class="stock-quote">Bid €${money(stock.broker_quote.bid_eur)} · Ask €${money(stock.broker_quote.ask_eur)}</div>` : ''}
             ${heldValue}
             <div class="level-summary"><strong>Active levels</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(level.side)} €${money(level.price_eur)}</span>`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(level.side)} €${money(level.price_eur)} · ${level.retired ? 'retired' : 'triggered'}</span>`).join('') : 'None'}</div></div>

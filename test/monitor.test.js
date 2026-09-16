@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { parseYahooQuote, parseTradeRepublicMonitorQuote, getExchangeRate, sendTelegram, formatAlert, runMonitor, acquireLock, EXIT } = require('../lib/monitor');
+const { parseYahooQuote, parseTradeRepublicMonitorQuote, getExchangeRate, sendTelegram, formatAlert, checkTradeRepublicConnectivity, runMonitor, acquireLock, EXIT } = require('../lib/monitor');
 const { initDatabase } = require('../database/init');
 
 function temp() { return fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-monitor-')); }
@@ -19,6 +19,35 @@ test('Trade Republic monitor quote uses executable midpoint and preserves timest
 test('FX uses fresh cache and stale fallback without network in those paths', async () => { const dir = temp(); const file = path.join(dir, 'fx.json'); fs.writeFileSync(file, JSON.stringify({ rate: 0.91, timestamp: Math.floor(Date.now() / 1000) })); const cached = await getExchangeRate({ cachePath: file, ttlMs: 3600000, url: 'mock', fetchImpl: () => { throw new Error('network used'); } }); assert.equal(cached.rate, 0.91); const stale = await getExchangeRate({ cachePath: file, ttlMs: 0, url: 'mock', fetchImpl: async () => { throw new Error('offline'); } }); assert.equal(stale.source, 'stale-cache'); });
 test('Telegram posts encoded message and returns message id', async () => { let request; const id = await sendTelegram('hello', { token: 'test-token', chatId: '42', fetchImpl: async (url, options) => { request = { url, options }; return { ok: true, json: async () => ({ ok: true, result: { message_id: 7 } }) }; } }); assert.equal(id, 7); assert.match(request.url, /sendMessage$/); assert.match(request.options.body.toString(), /chat_id=42/); });
 test('Telegram preview line starts with side, stock name, symbol, and target', () => { const message = formatAlert({ symbol: 'TEST', name: 'A&B', buy_threshold_eur: 1, sell_threshold_eur: 2 }, 'SELL_TRIGGERED', 2.5, 0.9, new Date('2026-01-01T12:00:00Z')); assert.equal(message.split('\n')[0], '<b>🔽 SELL · A&amp;B (TEST) · €2.00</b>'); assert.match(message, /Current price: €2\.50/); assert.match(message, /UTC/); });
+
+test('Trade Republic connectivity alerts once per transition and records recovery', async t => {
+    const dir = temp(); const file = path.join(dir, 'test.db');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    const db = new Database(file);
+    t.after(() => db.close());
+    let status = 'ok'; const messages = [];
+    const tradeRepublic = { health: async () => status === 'ok' ? { status: 'ok' } : { status: 'error', code: 'UNAVAILABLE' } };
+    const fetchImpl = async (url, options) => { messages.push(new URLSearchParams(options.body).get('text')); return { ok: true, json: async () => ({ ok: true, result: { message_id: messages.length } }) }; };
+    const telegram = { token: 'token', chatId: '42' };
+
+    let result = await checkTradeRepublicConnectivity({ db, tradeRepublic, telegram, fetchImpl, now: new Date('2026-09-16T12:00:00Z') });
+    assert.deepEqual({ online: result.online, notified: result.notified }, { online: true, notified: false });
+    assert.equal(messages.length, 0);
+
+    status = 'error';
+    result = await checkTradeRepublicConnectivity({ db, tradeRepublic, telegram, fetchImpl, now: new Date('2026-09-16T12:01:00Z') });
+    assert.deepEqual({ online: result.online, notified: result.notified }, { online: false, notified: true });
+    assert.match(messages[0], /sidecar offline/);
+    await checkTradeRepublicConnectivity({ db, tradeRepublic, telegram, fetchImpl, now: new Date('2026-09-16T12:02:00Z') });
+    assert.equal(messages.length, 1);
+
+    status = 'ok';
+    result = await checkTradeRepublicConnectivity({ db, tradeRepublic, telegram, fetchImpl, now: new Date('2026-09-16T12:03:00Z') });
+    assert.deepEqual({ online: result.online, notified: result.notified }, { online: true, notified: true });
+    assert.match(messages[1], /sidecar online/);
+    assert.deepEqual(db.prepare("SELECT status,last_notified_status,last_error FROM broker_health_state WHERE broker='trade_republic'").get(), { status: 'ONLINE', last_notified_status: 'ONLINE', last_error: null });
+});
 test('single-run lock is exclusive, releasable, and recovers a dead owner', () => { const dir = temp(); const lock = path.join(dir, 'lock'); const release = acquireLock(lock); assert.ok(release); assert.equal(acquireLock(lock), null); release(); fs.writeFileSync(lock, JSON.stringify({ pid: 2147483647, createdAt: 0 })); const recovered = acquireLock(lock); assert.ok(recovered); recovered(); });
 test('monitor requires migrated schema and does not create alert levels', async () => { const dir = temp(); const db = new Database(path.join(dir, 'test.db')); db.exec(fs.readFileSync(path.join(__dirname, '..', 'database/schema.sql'), 'utf8')); await assert.rejects(() => runMonitor({ db, now: new Date('2026-01-01T12:00:00Z'), config: { lockPath: path.join(dir, 'lock'), timeoutMs: 100, yahooUrl: 'mock', fx: { cachePath: path.join(dir, 'missing-fx.json'), ttlMs: 1000, url: 'fx' }, telegram: {} }, fetchImpl: async () => ({ ok: true, json: async () => ({ rates: { EUR: 1 } }) }) }), /Migrated alert-level schema/); db.close(); });
 test('monitor writes prepared quote/history, isolates failed stocks, and alerts independent levels', async () => { const dir = temp(); const file = path.join(dir, 'test.db'); initDatabase({ dbPath: file, seedDefaults: false, silent: true }); const db = new Database(file); db.prepare(`INSERT INTO stocks(symbol,name,buy_threshold_eur,sell_threshold_eur,owned) VALUES ('BAD','Bad',1,2,0),('GOOD','Good',100,200,0)`).run(); const stockId = db.prepare("SELECT id FROM stocks WHERE symbol='GOOD'").get().id; db.prepare("INSERT INTO alert_levels(stock_id,side,price_eur) VALUES (?, 'BUY', 100), (?, 'BUY', 95), (?, 'SELL', 80)").run(stockId, stockId, stockId); const calls = []; const code = await runMonitor({ db, now: new Date('2026-01-01T12:00:00Z'), config: { lockPath: path.join(dir, 'lock'), timeoutMs: 100, yahooUrl: 'mock', fx: { cachePath: path.join(dir, 'fx.json'), ttlMs: 999999, url: 'fx' }, telegram: { token: 'token', chatId: '42' } }, fetchImpl: async url => { calls.push(url); if (url === 'fx') return { ok: true, json: async () => ({ rates: { EUR: 1 } }) }; if (url.includes('/BAD?')) throw new Error('bad stock'); if (url.includes('api.telegram.org')) return { ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) }; return { ok: true, json: async () => yahoo(90) }; }, log: () => {}, error: () => {} }); assert.equal(code, EXIT.PARTIAL, 'exit'); assert.equal(db.prepare("SELECT current_price_eur FROM stocks WHERE symbol='GOOD'").get().current_price_eur, 90, 'price'); assert.equal(db.prepare('SELECT COUNT(*) count FROM price_history').get().count, 1, 'history'); assert.equal(db.prepare('SELECT COUNT(*) count FROM alerts_log').get().count, 2, 'two BUY levels'); assert.equal(db.prepare('SELECT COUNT(*) count FROM alert_levels WHERE triggered=1').get().count, 2, 'retired after delivery'); assert.equal(calls.length, 5, 'calls'); db.close(); });

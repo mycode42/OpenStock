@@ -208,6 +208,11 @@ class OpenStockDB {
         return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source IN ('yahoo_backfill', 'trade_republic_history') LIMIT 1").get(stockId));
     }
     hasTradeRepublicHistory(stockId) { return Boolean(this.db.prepare("SELECT 1 FROM price_history WHERE stock_id = ? AND source = 'trade_republic_history' LIMIT 1").get(stockId)); }
+    hasDenseTradeRepublicHistory(stockId, minimumRecentPoints = 20) {
+        const row = this.db.prepare(`SELECT COUNT(*) AS count FROM price_history
+            WHERE stock_id = ? AND source = 'trade_republic_history' AND recorded_at >= datetime('now', '-35 days')`).get(stockId);
+        return Number(row?.count || 0) >= minimumRecentPoints;
+    }
 
     addHistoricalPriceSnapshots(stockId, points, source = 'yahoo_backfill') {
         const insert = this.db.prepare(`
@@ -230,16 +235,22 @@ class OpenStockDB {
         const sourceFilter = selectedSources.length ? ` AND source IN (${selectedSources.map(() => '?').join(', ')})` : '';
         const eurFilter = eurOnly ? ' AND price_eur IS NOT NULL' : '';
         return this.db.prepare(`
-            WITH sampled AS (
-                SELECT MAX(id) AS id
+            WITH eligible AS (
+                SELECT id, COALESCE(NULLIF(quote_time, ''), recorded_at) AS chart_at
                 FROM price_history
-                WHERE stock_id = ? AND recorded_at >= datetime('now', ?)${sourceFilter}${eurFilter}
-                GROUP BY CAST(CAST(strftime('%s', recorded_at) AS INTEGER) / ? AS INTEGER)
+                WHERE stock_id = ?
+                  AND datetime(COALESCE(NULLIF(quote_time, ''), recorded_at)) >= datetime('now', ?)${sourceFilter}${eurFilter}
+            ), sampled AS (
+                SELECT MAX(id) AS id
+                FROM eligible
+                GROUP BY CAST(CAST(strftime('%s', chart_at) AS INTEGER) / ? AS INTEGER)
             )
-            SELECT recorded_at, quote_time, price_usd, price_eur, source
-            FROM price_history
-            WHERE id IN (SELECT id FROM sampled)
-            ORDER BY recorded_at ASC
+            SELECT eligible.chart_at AS recorded_at, price_history.recorded_at AS observed_at,
+                   price_history.quote_time, price_history.price_usd, price_history.price_eur, price_history.source
+            FROM sampled
+            JOIN eligible ON eligible.id = sampled.id
+            JOIN price_history ON price_history.id = sampled.id
+            ORDER BY eligible.chart_at ASC
         `).all(stockId, since, ...selectedSources, bucketSeconds);
     }
 

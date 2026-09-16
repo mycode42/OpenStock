@@ -9,11 +9,13 @@ const { HistoryBackfillQueue } = require('./lib/history-backfill');
 const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount, sanitizeCollection, BrokerError } = require('./lib/brokers/trade-republic');
 const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
 
-// Helper to convert SQLite datetime string to ISO 8601 UTC
-function toISODateTime(sqliteDateTime) {
-    if (!sqliteDateTime) return null;
-    // Format: YYYY-MM-DD HH:MM:SS -> YYYY-MM-DDTHH:MM:SSZ
-    return sqliteDateTime.replace(' ', 'T') + 'Z';
+// Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
+function toISODateTime(value) {
+    if (!value) return null;
+    const normalized = String(value).trim().replace(' ', 'T');
+    const zoned = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized) ? normalized : `${normalized}Z`;
+    const parsed = new Date(zoned);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 function serializeStock(stock) {
@@ -235,12 +237,12 @@ app.get('/api/stocks/archived', (req, res) => {
 
 app.get('/api/stocks/:id/history', (req, res) => {
     const windows = {
-        '1d': { since: '-1 day', bucketSeconds: 300 },
-        '1mo': { since: '-1 month', bucketSeconds: 14400 },
-        '1y': { since: '-1 year', bucketSeconds: 86400 },
-        '5y': { since: '-5 years', bucketSeconds: 604800 },
+        '1d': { since: '-1 day', bucketSeconds: 300, maxLiveGapSeconds: 1800 },
+        '1mo': { since: '-1 month', bucketSeconds: 14400, maxLiveGapSeconds: 43200 },
+        '1y': { since: '-1 year', bucketSeconds: 86400, maxLiveGapSeconds: 172800 },
+        '5y': { since: '-5 years', bucketSeconds: 604800, maxLiveGapSeconds: 1209600 },
         // Keep the former endpoint working for bookmarked API consumers.
-        '30d': { since: '-30 days', bucketSeconds: 14400 }
+        '30d': { since: '-30 days', bucketSeconds: 14400, maxLiveGapSeconds: 43200 }
     };
     const range = req.query.range || '30d';
     const window = windows[range];
@@ -259,7 +261,7 @@ app.get('/api/stocks/:id/history', (req, res) => {
             sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
             eurOnly: true
         }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }));
-        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', points });
+        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_live_gap_seconds: window.maxLiveGapSeconds, points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);
         res.status(500).json({ error: 'Failed to fetch price history' });
