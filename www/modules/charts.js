@@ -6,11 +6,12 @@ function chartRangeControls(activeRange) {
     return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
 }
 
-function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, lineSegments = null, hoverPoints, ariaLabel }) {
+function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, lineSegments = null, gapSegments = null, hoverPoints, ariaLabel }) {
     const encodedPoints = escapeHtml(JSON.stringify(hoverPoints));
     const segments = Array.isArray(lineSegments) ? lineSegments : [linePoints];
+    const gaps = (Array.isArray(gapSegments) ? gapSegments : []).filter(Boolean).map(points => `<polyline class="${lineClass} history-gap-line" points="${points}"/>`).join('');
     const lines = segments.filter(Boolean).map(points => `<polyline class="${lineClass}" points="${points}"/>`).join('');
-    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${escapeHtml(ariaLabel)}" data-chart-label="${escapeHtml(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}${lines}<g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
+    return `<svg class="${className} interactive-line-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" tabindex="0" role="img" aria-label="${escapeHtml(ariaLabel)}" data-chart-label="${escapeHtml(ariaLabel)}" data-chart-points="${encodedPoints}">${grid}${gaps}${lines}<g class="chart-hover" hidden><line class="chart-hover-guide" y1="0" y2="${height}"/><circle class="chart-hover-dot" r="4"/><text class="chart-hover-text"><tspan class="chart-hover-primary"/><tspan class="chart-hover-secondary"/><tspan class="chart-hover-tertiary"/></text></g><rect class="chart-hit-area" x="0" y="0" width="${width}" height="${height}"/></svg>`;
 }
 
 function attachInteractiveLineCharts(root) {
@@ -105,12 +106,18 @@ function renderHistoryChart(points, range, maxGapSeconds = 0) {
         coordinateSegments[coordinateSegments.length - 1].push(coordinate);
     });
     const lineSegments = coordinateSegments.filter(segment => segment.length > 1).map(segment => segment.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' '));
+    const gapSegments = coordinateSegments.slice(0, -1).map((segment, index) => {
+        const next = coordinateSegments[index + 1];
+        if (!segment.length || !next?.length) return '';
+        const from = segment[segment.length - 1], to = next[0];
+        return `${from.x.toFixed(1)},${from.y.toFixed(1)} ${to.x.toFixed(1)},${to.y.toFixed(1)}`;
+    });
     const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at) }));
     const first = clean[0], last = clean[clean.length - 1];
     const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
     const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
-    const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, lineSegments, hoverPoints, ariaLabel });
+    const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, lineSegments, gapSegments, hoverPoints, ariaLabel });
     return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
 }
 
