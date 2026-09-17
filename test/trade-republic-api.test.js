@@ -46,7 +46,8 @@ test('missing live gates make zero broker calls', async t => {
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'false', TRADE_REPUBLIC_DRY_RUN: 'true', TRADE_REPUBLIC_LIVE_ACK: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' });
   t.after(restore);
   const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: 'missing-gate-1', confirmation: 'PLACE missing-gate-1' }) });
-  assert.equal(response.status, 409); assert.equal(calls, 0);
+  const body = await response.json();
+  assert.equal(response.status, 409); assert.equal(body.code, 'ORDER_SAFETY_GATE'); assert.equal(body.failed_gates.includes('live_enabled'), true); assert.equal(calls, 0);
 });
 
 test('all live gates submit once and duplicate idempotency does not resubmit', async t => {
@@ -186,7 +187,8 @@ test('fresh Trade Republic account and position authority rejects buys and sells
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   for (const [type, key] of [['buy', 'cash-gate-1'], ['sell', 'oversell-gate-1']]) {
     const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type, quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
-    assert.equal(response.status, 409);
+    const body = await response.json();
+    assert.equal(response.status, 409); assert.equal(body.code, 'ORDER_SAFETY_GATE'); assert.equal(body.failed_gates.includes(type === 'buy' ? 'notional_cash_ok' : 'sufficient_position'), true);
   }
   assert.equal(calls, 0);
 });

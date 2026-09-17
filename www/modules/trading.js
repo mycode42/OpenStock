@@ -12,6 +12,7 @@ export function createTrading(context) {
     let intentKey = '';
     let intentSignature = '';
     let busy = false;
+    let brokerStateReady = false;
 
     el.innerHTML = `<header><h1>Trading</h1><p class="subtitle">Broker-derived instrument identity with fail-closed, live account and holding checks</p></header><div id="trading-alert"></div>
       <section class="card"><form id="trading-form"><div class="form-row"><div class="form-group"><label for="tr-stock">Stock</label><select id="tr-stock" required>${stocks.map(stock => `<option value="${escapeHtml(stock.id)}">${escapeHtml(stock.symbol)} · ${escapeHtml(stock.isin)}</option>`).join('')}</select></div><div class="form-group"><label for="tr-account">Account</label><select id="tr-account" required><option value="">Loading Trade Republic accounts…</option></select></div></div>
@@ -21,6 +22,8 @@ export function createTrading(context) {
       <section class="card"><div class="section-title">Read-only Trade Republic data</div><div class="form-row"><div class="form-group"><label for="tr-history-range">History range</label><select id="tr-history-range"><option value="1d">1 day</option><option value="5d">5 days</option><option value="1m" selected>1 month</option><option value="1y">1 year</option><option value="max">Maximum</option></select></div></div><div class="btn-group"><button class="btn btn-secondary" data-ro="portfolio">Portfolio</button><button class="btn btn-secondary" data-ro="orders">Orders</button><button class="btn btn-secondary" data-ro="transactions">Transactions</button><button class="btn btn-secondary" data-ro="reconciliation-candidates">Pending Journal imports</button><button class="btn btn-secondary" data-ro="accounts-history">Account history</button><button class="btn btn-secondary" data-ro="instrument">Instrument</button><button class="btn btn-secondary" data-ro="tr-instrument">TR listing</button><button class="btn btn-secondary" data-ro="instrument-history">Instrument history</button><button class="btn btn-secondary" data-ro="schedule">Exchange schedule</button><button class="btn btn-secondary" data-ro="price-alarms">Price alarms</button><button class="btn btn-secondary" data-ro="interests">Interests</button><button class="btn btn-secondary" data-ro="tickets">Tickets</button><button class="btn btn-secondary" data-ro="activity">Activity</button></div><pre id="tr-readonly" class="readonly-output"></pre><p class="journal-help">Personal/card endpoints are intentionally not exposed. Broker alarm changes and cancellation remain disabled.</p></section>`;
 
     const form = el.querySelector('#trading-form');
+    const previewButton = el.querySelector('#tr-preview');
+    const submitButton = el.querySelector('#tr-submit');
     const selectedStock = () => stocks.find(stock => String(stock.id) === el.querySelector('#tr-stock').value);
     const formatUnits = value => Number.isFinite(Number(value)) ? Number(value).toLocaleString(undefined, { maximumFractionDigits: 6 }) : '0';
 
@@ -52,13 +55,15 @@ export function createTrading(context) {
       intentSignature = '';
     });
     update();
+    setBusy(false);
 
     Promise.all([af('/broker/trade-republic/accounts'), af('/broker/trade-republic/portfolio')]).then(([accountRows, portfolioRows]) => {
       accounts = accountRows || [];
       portfolio = portfolioRows || [];
+      brokerStateReady = Array.isArray(accountRows) && accountRows.length > 0;
       const select = el.querySelector('#tr-account');
       if (select) select.innerHTML = accounts.map(account => `<option value="${escapeHtml(account.account_ref_masked)}">${escapeHtml(account.account_ref_masked)} · ${escapeHtml(account.currency)}</option>`).join('') || '<option value="">No Trade Republic account available</option>';
-      update();
+      setBusy(false); update();
     });
 
     el.querySelector('#tr-preview').addEventListener('click', () => submit(false));
@@ -90,8 +95,8 @@ export function createTrading(context) {
 
     function setBusy(value) {
       busy = value;
-      el.querySelector('#tr-preview').disabled = value;
-      el.querySelector('#tr-submit').disabled = value;
+      previewButton.disabled = value || !brokerStateReady;
+      submitButton.disabled = value || !brokerStateReady;
     }
 
     function formIsValid(place) {
@@ -108,7 +113,9 @@ export function createTrading(context) {
       setBusy(true);
       try {
         const result = await af(place ? '/broker/trade-republic/orders' : '/broker/trade-republic/order-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(orderBody()) }, (message, details) => {
-          el.querySelector('#tr-result').textContent = message;
+          const labels = { account_selected: 'select a Trade Republic account', confirmed: 'type PLACE ORDER exactly', mapped: 'use a stock with a verified EUR mapping', valid_sizing_input: 'enter one valid whole-unit quantity or euro value', valid_quantity: 'use a quantity of at least one whole unit', sufficient_position: 'broker position is insufficient', notional_cap_ok: 'order exceeds the €1,000 cap', fresh_quote: 'refresh the executable broker quote', executable_quote: 'broker quote is unavailable', account_authoritative: 'broker account balance is unavailable', account_resolvable: 'selected broker account is unavailable', live_enabled: 'live execution is disabled', dry_run_disabled: 'dry-run is enabled', kill_switch_clear: 'kill switch is active', acknowledged: 'live-execution acknowledgement is missing' };
+          const failures = (details?.failed_gates || []).map(gate => labels[gate] || gate.replaceAll('_', ' '));
+          el.querySelector('#tr-result').textContent = failures.length ? `Cannot submit: ${failures.join('; ')}. No order was sent.` : message;
           // A preflight rejection never reached the broker, so let the user correct
           // the form and make a fresh attempt. Ambiguous broker outcomes stay frozen.
           if (place && details?.code === 'ORDER_SAFETY_GATE') { intentKey = ''; intentSignature = ''; }

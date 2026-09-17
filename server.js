@@ -670,6 +670,8 @@ function hasValidOrderSizingInput(body) {
     return hasQuantity ? Number.isInteger(Number(body.quantity)) && Number(body.quantity) > 0 : Number.isFinite(Number(body.amount_eur)) && Number(body.amount_eur) > 0;
 }
 
+function failedGateNames(gates) { return Object.entries(gates).filter(([, passed]) => !passed).map(([name]) => name); }
+
 async function fetchLiveOrderAuthority(client, { accountRef, isin, exchange }) {
     const [accounts, portfolio, quote] = await Promise.all([
         client.getAccounts(),
@@ -749,7 +751,7 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
     };
     if(Object.values(preliminaryGates).some(x=>!x)) {
         if(preliminaryGates.idempotency) db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isInteger(Number(b.quantity))?Number(b.quantity):null,sizing_mode:b.amount_eur ? 'amount' : 'quantity',requested_amount_eur:Number.isFinite(Number(b.amount_eur))?Number(b.amount_eur):null}),quote_id:null});
-        return res.status(409).json({error:'Live order rejected: safety gate not satisfied',code:'ORDER_SAFETY_GATE',gates:preliminaryGates});
+        return res.status(409).json({error:'Live order rejected: safety gate not satisfied',code:'ORDER_SAFETY_GATE',failed_gates:failedGateNames(preliminaryGates)});
     }
     let authority;
     try { authority=await fetchLiveOrderAuthority(client,{accountRef,isin:mapping.isin,exchange:mapping.exchange}); }
@@ -776,7 +778,7 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
     };
     if(Object.values(gates).some(x=>!x)) {
         db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isInteger(quantity)?quantity:null,sizing_mode:sizing.sizing_mode||null,requested_amount_eur:sizing.requested_amount_eur||null}),quote_id:q.id});
-        return res.status(409).json({error:sizing.valid?'Live order rejected: safety gate not satisfied':sizing.error,code:'ORDER_SAFETY_GATE',gates});
+        return res.status(409).json({error:sizing.valid?'Live order rejected: safety gate not satisfied':sizing.error,code:'ORDER_SAFETY_GATE',failed_gates:failedGateNames(gates)});
     }
     const order={account_ref_masked:accountRef,exchange:mapping.exchange,instrument:mapping.isin,mode,quantity,type:side,validity};
     if (mode==='limit') order.limit=limit;
