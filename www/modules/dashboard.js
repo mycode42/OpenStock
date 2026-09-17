@@ -3,7 +3,7 @@ import { escapeHtml } from './escape.js';
 import { money, formatLocalDateTime } from './formatting.js';
 
 export function createDashboard(context) {
-    const { getStocks, request: af, replaceStocks, showA, renderCurrentPage, getStockRevision, incrementStockRevision, nav, charts, actions } = context;
+    const { getStocks, request: af, charts, actions } = context;
     const attachChartHovers = charts.attachChartHovers;
     const stockList = () => getStocks();
     let liveTimer = null;
@@ -67,38 +67,10 @@ function renderDashboard() {
             <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div><div class="history-popover" role="status" aria-live="polite"></div>
         </div>`;
     }).join('');
-    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} held</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} triggered/retired level(s)</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Held</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggered levels</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Open a stock chart with mouse, keyboard focus, or a tap.</div>${monitoredStocks.length ? `<div class="stock-grid">${cards}</div>` : '<div class="card empty-state">No stocks are enabled. Enable a stock in Configure to monitor it here.</div>'}<div style="margin-top:2rem"><button class="btn btn-primary" data-dashboard-action="config">+ Add Stock</button> <button class="btn btn-secondary" data-dashboard-action="refresh">Refresh Prices</button></div>`;
+    container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} held</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} triggered/retired level(s)</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Held</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggered levels</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Open a stock chart with mouse, keyboard focus, or a tap.</div>${monitoredStocks.length ? `<div class="stock-grid">${cards}</div>` : '<div class="card empty-state">No stocks are enabled. Enable a stock in Configure to monitor it here.</div>'}`;
     container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => actions[button.dataset.stockAction]?.(button.dataset.stockSymbol)));
-    container.querySelector('[data-dashboard-action="config"]')?.addEventListener('click', () => nav('#/config'));
-    container.querySelector('[data-dashboard-action="refresh"]')?.addEventListener('click', refreshPrices);
     attachChartHovers(container);
     startLivePolling();
 }
-
-async function refreshPrices() {
-    const button = document.querySelector('[data-dashboard-action="refresh"]');
-    if (button) {
-        button.disabled = true;
-        button.textContent = 'Refreshing...';
-    }
-    const refreshRevision = incrementStockRevision();
-    const result = await af('/refresh-prices', { method: 'POST' });
-    if (!result) {
-        if (button) {
-            button.disabled = false;
-            button.textContent = 'Refresh Prices';
-        }
-        showA('Failed to refresh prices', 'error');
-        return;
-    }
-
-    if (getStockRevision() === refreshRevision && Array.isArray(result.stocks)) {
-        replaceStocks(result.stocks);
-    }
-    renderCurrentPage();
-    showA(`Refreshed ${result.updated} stock prices`, 'success');
-}
-
-
-    return { renderDashboard, refreshPrices };
+    return { renderDashboard };
 }

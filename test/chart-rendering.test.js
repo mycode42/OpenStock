@@ -66,7 +66,7 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
     assert.match(index, /styles\.css\?v=42/);
     assert.match(index, /app\.js\?v=42/);
-    assert.match(worker, /openstock-v43/);
+    assert.match(worker, /openstock-v44/);
     assert.match(worker, /styles\.css\?v=42/);
     assert.match(worker, /app\.js\?v=42/);
     assert.match(worker, /modules\/charts\.js/);
