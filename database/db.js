@@ -189,7 +189,7 @@ class OpenStockDB {
     }
 
     persistQuote(stock, quote, { recordedAt = null } = {}) {
-        const isBrokerQuote = String(quote.source || '').startsWith('trade_republic');
+        const isBrokerQuote = /^(trade_republic|pytr_)/.test(String(quote.source || ''));
         return this.db.transaction(() => {
             if (isBrokerQuote) this.updateStockQuote(stock.id, { bidEur: quote.bidEur ?? null, askEur: quote.askEur ?? null, midpointEur: quote.priceEur, quoteTime: quote.quoteTime });
             else this.updateStockPrice(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate);

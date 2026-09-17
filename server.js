@@ -9,6 +9,7 @@ const { HistoryBackfillQueue } = require('./lib/history-backfill');
 const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount, sanitizeCollection, BrokerError } = require('./lib/brokers/trade-republic');
 const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
 const { QuoteService } = require('./lib/quote-service');
+const { PytrRatesClient } = require('./lib/pytr-rates');
 const { normalizedBrokerRows } = require('./lib/broker-sync-service');
 const APP_VERSION = require('./package.json').version;
 
@@ -73,13 +74,35 @@ function serializeBrokerStock(stock, db) {
     const mapping = db.getBrokerMapping(stock.id);
     const quote = mapping ? db.getLatestBrokerQuote(mapping.isin, mapping.exchange) : null;
     const observation = db.getLatestPriceObservation(stock.id);
-    const brokerPriceIsCurrent = Boolean(quote && observation?.source?.startsWith('trade_republic'));
+    const isTradeRepublicPrice = source => String(source || '').startsWith('trade_republic') || String(source || '').startsWith('pytr_');
+    const brokerPriceIsCurrent = Boolean(quote && isTradeRepublicPrice(observation?.source));
     const safeQuote = brokerPriceIsCurrent ? { bid_eur: quote.bid_eur, ask_eur: quote.ask_eur, spread_eur: quote.bid_eur !== null && quote.ask_eur !== null ? quote.ask_eur - quote.bid_eur : null, quote_time: quote.quote_time, observed_at: quote.observed_at, source: quote.source } : null;
-    const fallback = stock.price_source === 'trade_republic' && Boolean(observation && !observation.source.startsWith('trade_republic'));
-    const marketLabel = !observation ? 'No quote' : fallback ? 'Yahoo Finance fallback' : observation.source.startsWith('trade_republic') ? 'Trade Republic' : 'Yahoo Finance';
+    const fallback = stock.price_source === 'trade_republic' && Boolean(observation && !isTradeRepublicPrice(observation.source));
+    const marketLabel = !observation ? 'No quote' : observation.source === 'pytr_rates' ? 'Trade Republic (pytr)' : fallback ? 'Yahoo Finance fallback' : isTradeRepublicPrice(observation.source) ? 'Trade Republic' : 'Yahoo Finance';
     return { ...serializeStock(stock), broker_mapping: mapping ? { broker: mapping.broker, ticker: mapping.ticker, isin: mapping.isin, exchange: mapping.exchange, currency: mapping.currency, verified_at: mapping.verified_at, source: mapping.source } : null, broker_quote: safeQuote,
         market_data: { source: observation?.source || null, label: marketLabel, fallback, quote_time: toISODateTime(observation?.quote_time) },
         position: db.getPositionSummary(stock.id), alert_levels: db.getAlertLevels(stock.id).map(serializeAlertLevel) };
+}
+
+function quoteServiceFor(app, now) {
+    return new QuoteService({ db: app.locals.db, brokerClient: app.locals.brokerClient, pytrClient: app.locals.pytrClient, fetchImpl: app.locals.fetchImpl, now, log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
+}
+
+function createLiveQuoteFeed({ app, now = () => new Date(), refreshMs = Number(process.env.LIVE_PRICE_REFRESH_MS || 1000) } = {}) {
+    const ttlMs = Math.min(Math.max(Number(refreshMs) || 1000, 1000), 10000);
+    let cached = null, inflight = null;
+    async function refresh() {
+        const stocks = app.locals.db.getActiveStocks();
+        const rows = await quoteServiceFor(app, now).fetchMany(stocks.map(stock => ({ ...stock, mapping: app.locals.db.getBrokerMapping(stock.id) })), { preferPytr: true });
+        return { observed_at: now().toISOString(), refresh_ms: ttlMs, prices: rows.filter(row => row.quote).map(({ stock, quote }) => ({ stock_id: stock.id, price_eur: quote.priceEur, bid_eur: quote.bidEur ?? null, ask_eur: quote.askEur ?? null, quote_time: quote.quoteTime || null, observed_at: quote.observedAt || null, source: quote.source, fallback: !String(quote.source || '').startsWith('pytr_') })) };
+    }
+    return { async get() {
+        const age = cached ? now().getTime() - Date.parse(cached.observed_at) : Infinity;
+        if (cached && age < ttlMs) return { ...cached, cached: true, refreshing: false };
+        if (!inflight) inflight = refresh().then(value => { cached = value; return value; }).finally(() => { inflight = null; });
+        if (cached) return { ...cached, cached: true, refreshing: true };
+        return { ...(await inflight), cached: false, refreshing: false };
+    } };
 }
 
 function serializeAlertLevel(level) {
@@ -194,7 +217,7 @@ function queueStockHistory(historyBackfill, stock) {
     }
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, now = () => new Date() } = {}) {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, now = () => new Date() } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -210,6 +233,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
         fetchImpl,
         timeoutMs: Number(process.env.TRADE_REPUBLIC_TIMEOUT_MS || 30000)
     });
+    app.locals.pytrClient = pytrClient || new PytrRatesClient();
     historyBackfill.brokerClient = app.locals.brokerClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
     app.use(express.json());
@@ -228,6 +252,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     next();
     });
     app.use(express.static(path.join(__dirname, 'www')));
+    app.locals.liveQuoteFeed = createLiveQuoteFeed({ app, now });
 
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
@@ -270,7 +295,7 @@ app.get('/api/stocks/:id/history', (req, res) => {
         if (!stock) return res.status(404).json({ error: 'Stock not found' });
         const mapping = req.app.locals.db.getBrokerMapping(stock.id);
         const nativeTradeRepublicEur = Boolean(mapping?.verified_at && mapping.currency === 'EUR');
-        const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'manual_refresh_trade_republic_order_price'];
+        const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'manual_refresh_trade_republic_order_price', 'pytr_rates'];
         const tradingDayStart = range === '1d' ? berlinTradingDayStart(now()) : null;
         const eligiblePoints = req.app.locals.db.getPriceHistory(stock.id, window.since, window.queryBucketSeconds || window.bucketSeconds, {
             sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
@@ -566,6 +591,12 @@ app.get('/api/dashboard', (req, res) => {
     }
 });
 
+// Display-only fast prices: no stock, history, alert, or equity writes occur here.
+app.get('/api/live-prices', async (req, res) => {
+    try { res.json(await req.app.locals.liveQuoteFeed.get()); }
+    catch (error) { console.warn(`Live prices unavailable: ${error.message}`); res.status(503).json({ error: 'Live prices are unavailable' }); }
+});
+
 // ===== API: Refresh Prices =====
 app.post('/api/refresh-prices', async (req, res) => {
     try {
@@ -579,11 +610,11 @@ app.post('/api/refresh-prices', async (req, res) => {
         }
         
         let updatedCount = 0;
-        
-        for (const stock of stocks) {
+        const service = quoteServiceFor(req.app, () => now());
+        const quotes = await service.fetchMany(stocks.map(stock => ({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) })), { preferPytr: true });
+        for (const { stock, quote, error: stockError } of quotes) {
             try {
-                const service = new QuoteService({ db: req.app.locals.db, brokerClient: req.app.locals.brokerClient, fetchImpl: req.app.locals.fetchImpl, now: () => now(), log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
-                const quote = await service.fetch({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) });
+                if (stockError) throw stockError;
                 service.persist(stock, quote);
                 updatedCount++;
             } catch (stockError) {
@@ -867,4 +898,4 @@ if (require.main === module) {
     process.on('SIGINT', shutdown);
 }
 
-module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart };
+module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart, createLiveQuoteFeed };

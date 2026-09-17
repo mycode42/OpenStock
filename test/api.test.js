@@ -20,7 +20,7 @@ async function fixture({ now } = {}) {
         if (symbol === 'BAD') return { ok: false, status: 503, json: async () => ({}) };
         return { ok: true, json: async () => ({ chart: { result: [{ meta: { shortName: symbol }, timestamp: [1767225600], indicators: { quote: [{ close: [100] }] } }] } }) };
     };
-    const app = createApp({ db, backfill, fetchImpl, now });
+    const app = createApp({ db, backfill, fetchImpl, now, pytrClient: { getQuotes: async () => new Map() } });
     app.locals.brokerClient = {
         getInstrument: async isin => { const decoded = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, ''); const symbol = /^[A-Z0-9.-]+$/.test(decoded) && decoded ? decoded : `M${isin.slice(-5)}`; return { isin, name: `Mock ${symbol}`, shortName: `Mock ${symbol}`, intlSymbol: symbol, tradable: true, listings: [{ exchange: 'XNAS', symbolAtExchange: symbol }] }; },
         getTradeRepublicInstrument: async isin => ({ isin, exchange: 'TIB', currency: 'EUR', tradable: true }),
@@ -43,6 +43,27 @@ test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T05:30:00.000Z');
     assert.equal(berlinTradingDayStart(new Date('2026-12-16T12:00:00Z')).toISOString(), '2026-12-16T06:30:00.000Z');
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T04:00:00Z')).toISOString(), '2026-09-15T05:30:00.000Z');
+});
+
+test('live prices use pytr in memory only and coalesce concurrent requests', async t => {
+    const f = await fixture({ now: () => new Date('2026-09-17T12:00:00Z') });
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'LIVE', name: 'Live', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const stock = (await created.json()).stock;
+    f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'LIVE', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-17T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
+    let calls = 0;
+    f.server.close();
+    const app = createApp({ db: f.db, backfill: { enqueue() {}, enqueueMissing() { return 0; } }, fetchImpl: async () => { throw new Error('fallback must not be used'); }, now: () => new Date('2026-09-17T12:00:00Z'), pytrClient: { getQuotes: async isins => { calls += 1; return new Map([[isins[0], { isin: isins[0], lastEur: 12.34, askEur: 12.35, quoteTime: '2026-09-17T12:00:00Z', observedAt: '2026-09-17T12:00:00Z', source: 'pytr_rates' }]]); } } });
+    const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
+    t.after(() => server.close());
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const [a, b] = await Promise.all([fetch(`${base}/api/live-prices`), fetch(`${base}/api/live-prices`)]);
+    const payload = await a.json();
+    assert.equal(b.status, 200);
+    assert.equal(calls, 1);
+    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 12.34, bid_eur: null, ask_eur: 12.35, quote_time: '2026-09-17T12:00:00Z', observed_at: '2026-09-17T12:00:00Z', source: 'pytr_rates', fallback: false });
+    assert.equal(f.db.getStockById(stock.id).current_price_eur, null);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);
 });
 
 test('one-day history starts at 07:30 Berlin time and uses fifteen-minute buckets', async t => {

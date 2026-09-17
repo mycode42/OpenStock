@@ -1,6 +1,6 @@
 # OpenStock - Stock Monitoring, Trading Journal & Performance Dashboard
 
-A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. Trade Republic EUR quotes are preferred for verified instruments; Yahoo USD quotes are converted to EUR only as a fallback.
+A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. For verified instruments, pytr supplies the primary dashboard/manual-refresh EUR price; the authenticated loopback UAPI sidecar remains the executable-quote source and first fallback; Yahoo USD quotes are converted to EUR only as a second fallback.
 
 > **Note:** Verified EUR instruments use Trade Republic quotes; **Yahoo Finance** remains the free fallback. No stock-price API key is required.
 
@@ -75,6 +75,9 @@ cp .env.example .env
 | `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
 | `TRADE_REPUBLIC_API_KEY_FILE` | Server-only file containing the sidecar API key |
 | `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
+| `PYTR_COMMAND` | pytr executable used for primary display prices (default `/opt/pytr-venv/bin/pytr`) |
+| `PYTR_TIMEOUT_MS` | Bounded pytr batch timeout (default 8000) |
+| `LIVE_PRICE_REFRESH_MS` | Display-only dashboard refresh cadence; minimum/default 1000 ms |
 | `TRADE_REPUBLIC_LIVE_ENABLED` | Environment-only live-order gate; default `false` |
 | `TRADE_REPUBLIC_DRY_RUN` | Environment-only dry-run gate; default `true` |
 | `TRADE_REPUBLIC_LIVE_ACK` | Environment-only acknowledgement gate; default `false` |
@@ -83,7 +86,9 @@ cp .env.example .env
 
 ### Trade Republic integration
 
-OpenStock connects only to the authenticated loopback UAPI. The API key remains server-side. The Configure view supports verified ticker-to-ISIN mappings, broker health, read-only account/portfolio/order/transaction synchronization, Trade Republic price selection with Yahoo fallback, and quote/fee previews.
+OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. The loopback UAPI API key remains server-side in OpenStock's `.env`.
+
+The dashboard polls `/api/live-prices` once per second. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
 
 Manual order submission is fail-closed. It additionally requires a verified mapping, fresh executable quote, synchronized cash or position data, selected account, typed confirmation, idempotency key, and all environment gates above. A submitted broker order never creates a Journal execution unless a later broker reconciliation proves it filled.
 
