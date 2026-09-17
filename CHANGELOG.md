@@ -1,5 +1,13 @@
 # OpenStock changelog
 
+## 1.0.2 — 2026-09-17
+
+### Journal usability
+
+- Added server-side Journal pagination with 20 trades per page and Previous/Next navigation.
+- Prevented duplicate Initial Capital entries in the Journal and returned clear `409 INITIAL_CAPITAL_EXISTS` API feedback.
+- Made Deposit the default reconciliation option after initial capital has been recorded, with guidance that deposits and withdrawals do not change trading P/L.
+
 ## 1.0.1 — 2026-09-16
 
 ### Monitoring reliability
