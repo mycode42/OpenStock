@@ -20,12 +20,13 @@ async function fixture() {
   return {app,db,stockId,server,request:(url,options)=>fetch('http://127.0.0.1:'+server.address().port+url,options),dir};
 }
 function env(values){const old={}; for(const [k,v] of Object.entries(values)){old[k]=process.env[k];process.env[k]=v;} return ()=>{for(const [k,v] of Object.entries(old)){if(v===undefined)delete process.env[k];else process.env[k]=v;}};}
+function liveBroker(overrides={}) { return { getAccounts:async()=>[{account_ref_masked:'DE••••56',currency:'EUR',available_cash_eur:1000}],getPortfolio:async()=>[{account_ref_masked:'DE••••56',instrument:'JE00BS44BN30',quantity:5,currency:'EUR'}],getQuote:async()=>({bid_eur:10,ask_eur:11,currency:'EUR',quote_time:new Date().toISOString(),observed_at:new Date().toISOString(),source:'test'}),resolveAccount:ref=>ref==='DE••••56'?'private-account':null,...overrides}; }
 
 test('confirmed execution reconciles Journal with actual fill and is idempotent', async t => {
   const f=await fixture(); t.after(()=>{f.server.close();f.db.db.close();fs.rmSync(f.dir,{recursive:true,force:true});});
   const restore=env({TRADE_REPUBLIC_LIVE_ENABLED:'true',TRADE_REPUBLIC_DRY_RUN:'false',TRADE_REPUBLIC_LIVE_ACK:'true',TRADE_REPUBLIC_KILL_SWITCH:'false',TRADE_REPUBLIC_MAX_ORDER_EUR:'1000'}); t.after(restore);
   let calls=0;
-  f.app.locals.brokerClient={previewFees:async()=>({fee_eur:1.25,currency:'EUR'}),placeOrder:async()=>{calls++; return {external_ref_masked:'or••••01',status:'FILLED',execution:{identity:'exec-1',price_eur:12.34,quantity:2,fees_eur:1.25,executed_at:'2026-09-15T10:00:00.000Z'}}}};
+  f.app.locals.brokerClient=liveBroker({previewFees:async()=>({fee_eur:1.25,currency:'EUR'}),placeOrder:async()=>{calls++; return {external_ref_masked:'or••••01',status:'FILLED',execution:{identity:'exec-1',price_eur:12.34,quantity:2,fees_eur:1.25,executed_at:'2026-09-15T10:00:00.000Z'}}}});
   const response=await f.request('/api/broker/trade-republic/orders',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stock_id:f.stockId,account_ref:'DE••••56',type:'buy',quantity:2,idempotency_key:'reconcile-1',confirmation:'PLACE reconcile-1'})});
   assert.equal(response.status,201); assert.equal(calls,1); const responseBody=await response.json(); assert.equal(JSON.stringify(responseBody).includes('exec-1'),false);
   assert.equal(f.db.getBrokerExecution('exec-1').execution_price_eur,12.34); assert.notEqual(f.db.getBrokerExecution('exec-1').execution_identity,'exec-1'); assert.equal(f.db.getAllTrades()[0].entry_price_eur,12.34); assert.equal(f.db.getAllTrades()[0].notes.includes('exec-1'),false);

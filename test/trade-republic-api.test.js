@@ -30,6 +30,16 @@ function env(values) {
   return () => { for (const [key, value] of Object.entries(old)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } };
 }
 
+function liveBroker(overrides = {}) {
+  return {
+    getAccounts: async () => [{ account_ref_masked: 'DE••••56', currency: 'EUR', cash_eur: 1000, available_cash_eur: 1000 }],
+    getPortfolio: async () => [{ account_ref_masked: 'DE••••56', instrument: 'JE00BS44BN30', quantity: 5, currency: 'EUR' }],
+    getQuote: async () => ({ bid_eur: 10, ask_eur: 11, last_eur: null, currency: 'EUR', quote_time: new Date().toISOString(), observed_at: new Date().toISOString(), source: 'test' }),
+    resolveAccount: accountRef => accountRef === 'DE••••56' ? 'private-account' : null,
+    ...overrides
+  };
+}
+
 test('missing live gates make zero broker calls', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let calls = 0; f.app.locals.brokerClient = { placeOrder: async () => { calls++; } };
@@ -41,7 +51,7 @@ test('missing live gates make zero broker calls', async t => {
 
 test('all live gates submit once and duplicate idempotency does not resubmit', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let calls = 0; let feeCalls = 0; f.app.locals.brokerClient = { previewFees: async order => { feeCalls++; assert.equal(order.validity, 'GFD'); return { fee_eur: 1, currency: 'EUR' }; }, placeOrder: async order => { calls++; assert.equal(order.account_ref_masked, 'DE••••56'); assert.equal(order.validity, 'GFD'); return { external_ref_masked: 'ab••••yz', status: 'SUBMITTED', execution: 'none' }; } };
+  let calls = 0; let feeCalls = 0; f.app.locals.brokerClient = liveBroker({ previewFees: async order => { feeCalls++; assert.equal(order.validity, 'GFD'); return { fee_eur: 1, currency: 'EUR' }; }, placeOrder: async order => { calls++; assert.equal(order.account_ref_masked, 'DE••••56'); assert.equal(order.validity, 'GFD'); return { external_ref_masked: 'ab••••yz', status: 'SUBMITTED', execution: 'none' }; } });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const body = { stock_id: f.stockId, type: 'buy', quantity: 2, account_ref: 'DE••••56', idempotency_key: 'all-gates-1', confirmation: 'PLACE all-gates-1' };
   let response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -54,10 +64,10 @@ test('all live gates submit once and duplicate idempotency does not resubmit', a
 test('euro-value preview floors to whole units and includes fees', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let feeOrder;
-  f.app.locals.brokerClient = {
+  f.app.locals.brokerClient = liveBroker({
     getQuote: async () => ({ bid_eur: 10, ask_eur: 11, last_eur: null, currency: 'EUR', quote_time: new Date().toISOString(), observed_at: new Date().toISOString(), source: 'test' }),
     previewFees: async order => { feeOrder = order; return { fee_eur: 1, currency: 'EUR' }; }
-  };
+  });
   const response = await f.request('/api/broker/trade-republic/order-preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', amount_eur: 25, account_ref: 'DE••••56' }) });
   assert.equal(response.status, 200);
   const body = await response.json();
@@ -72,10 +82,10 @@ test('euro-value preview floors to whole units and includes fees', async t => {
 test('euro-value live order uses a hidden key contract and generic confirmation', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let submitted;
-  f.app.locals.brokerClient = {
+  f.app.locals.brokerClient = liveBroker({
     previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }),
     placeOrder: async order => { submitted = order; return { external_ref_masked: 'ab••••yz', status: 'SUBMITTED', execution: 'none' }; }
-  };
+  });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const key = 'ui-amount-order-1';
   const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', amount_eur: 25, account_ref: 'DE••••56', idempotency_key: key, confirmation: 'PLACE ORDER' }) });
@@ -91,7 +101,7 @@ test('euro-value live order uses a hidden key contract and generic confirmation'
 test('ambiguous or undersized sizing never reaches the broker', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let calls = 0;
-  f.app.locals.brokerClient = { previewFees: async () => { calls++; }, placeOrder: async () => { calls++; } };
+  f.app.locals.brokerClient = liveBroker({ previewFees: async () => { calls++; }, placeOrder: async () => { calls++; } });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   for (const [index, sizing] of [{ quantity: 1, amount_eur: 25 }, { amount_eur: 5 }].entries()) {
     const key = `invalid-sizing-${index}`;
@@ -103,11 +113,25 @@ test('ambiguous or undersized sizing never reaches the broker', async t => {
 
 test('ambiguous submission is frozen after reconciliation check', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let orderCalls = 0; let reconcileCalls = 0; f.app.locals.brokerClient = { previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('timeout', 'TIMEOUT', 503); }, getOrders: async () => { reconcileCalls++; return []; } };
+  let orderCalls = 0; let reconcileCalls = 0; f.app.locals.brokerClient = liveBroker({ previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('timeout', 'TIMEOUT', 503); }, getOrders: async () => { reconcileCalls++; return []; } });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const key = 'ambiguous-1'; const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
   assert.equal(response.status, 503); assert.equal(orderCalls, 1); assert.equal(reconcileCalls, 1);
   assert.equal(f.db.db.prepare('SELECT status FROM broker_order_intents WHERE idempotency_key=?').get(key).status, 'UNKNOWN');
+});
+
+test('live order gates use fresh Trade Republic authority instead of stale local snapshots', async t => {
+  const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+  let accountsCalls = 0; let portfolioCalls = 0; let orderCalls = 0;
+  f.app.locals.brokerClient = liveBroker({
+    getAccounts: async () => { accountsCalls++; return [{ account_ref_masked: 'DE••••56', currency: 'EUR', available_cash_eur: 1000 }]; },
+    getPortfolio: async () => { portfolioCalls++; return [{ account_ref_masked: 'DE••••56', instrument: 'JE00BS44BN30', quantity: 2, currency: 'EUR' }]; },
+    previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }),
+    placeOrder: async () => { orderCalls++; return { external_ref_masked: 'or••••01', status: 'SUBMITTED', execution: 'none' }; }
+  });
+  const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
+  const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'sell', quantity: 1, account_ref: 'DE••••56', idempotency_key: 'fresh-authority-1', confirmation: 'PLACE fresh-authority-1' }) });
+  assert.equal(response.status, 201); assert.equal(accountsCalls, 1); assert.equal(portfolioCalls, 1); assert.equal(orderCalls, 1);
 });
 
 test('stock-derived read-only routes use the verified mapping and validated ranges', async t => {
@@ -149,18 +173,17 @@ test('invalid mode, validity, and limit are rejected before place-order', async 
 
 test('buy cap uses the more conservative limit price', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let calls = 0; f.app.locals.brokerClient = { placeOrder: async () => { calls++; } };
+  let calls = 0; f.app.locals.brokerClient = liveBroker({ placeOrder: async () => { calls++; } });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '50' }); t.after(restore);
   const key = 'limit-cap-1';
   const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, mode: 'limit', limit: 100, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
   assert.equal(response.status, 409); assert.equal(calls, 0);
 });
 
-test('missing cash or position authority rejects buys and sells without broker calls', async t => {
+test('fresh Trade Republic account and position authority rejects buys and sells without broker calls', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let calls = 0; f.app.locals.brokerClient = { placeOrder: async () => { calls++; } };
+  let calls = 0; f.app.locals.brokerClient = liveBroker({ getAccounts: async () => [{ account_ref_masked: 'DE••••56', currency: 'EUR', available_cash_eur: 5 }], getPortfolio: async () => [], placeOrder: async () => { calls++; } });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
-  f.db.db.prepare('UPDATE broker_accounts SET available_cash_eur=?').run(5);
   for (const [type, key] of [['buy', 'cash-gate-1'], ['sell', 'oversell-gate-1']]) {
     const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type, quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
     assert.equal(response.status, 409);
@@ -171,7 +194,7 @@ test('missing cash or position authority rejects buys and sells without broker c
 test('deterministic broker rejection is terminal and does not reconcile', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
   let orderCalls = 0; let reconcileCalls = 0;
-  f.app.locals.brokerClient = { previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('rejected', 'REJECTED', 422); }, getOrders: async () => { reconcileCalls++; return []; } };
+  f.app.locals.brokerClient = liveBroker({ previewFees: async () => ({ fee_eur: 1, currency: 'EUR' }), placeOrder: async () => { orderCalls++; throw new BrokerError('rejected', 'REJECTED', 422); }, getOrders: async () => { reconcileCalls++; return []; } });
   const restore = env({ TRADE_REPUBLIC_LIVE_ENABLED: 'true', TRADE_REPUBLIC_DRY_RUN: 'false', TRADE_REPUBLIC_LIVE_ACK: 'true', TRADE_REPUBLIC_KILL_SWITCH: 'false', TRADE_REPUBLIC_MAX_ORDER_EUR: '1000' }); t.after(restore);
   const key = 'deterministic-reject-1';
   const response = await f.request('/api/broker/trade-republic/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stock_id: f.stockId, type: 'buy', quantity: 1, account_ref: 'DE••••56', idempotency_key: key, confirmation: `PLACE ${key}` }) });
@@ -182,8 +205,8 @@ test('deterministic broker rejection is terminal and does not reconcile', async 
 
 test('authoritative fees are required and included in cash safety', async t => {
   const f = await fixture(); t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-  let orderCalls=0; f.db.db.prepare('UPDATE broker_accounts SET available_cash_eur=?').run(22);
-  f.app.locals.brokerClient={previewFees:async()=>({fee_eur:1,currency:'EUR'}),placeOrder:async()=>{orderCalls++;}};
+  let orderCalls=0;
+  f.app.locals.brokerClient=liveBroker({getAccounts:async()=>[{account_ref_masked:'DE••••56',currency:'EUR',available_cash_eur:22}],previewFees:async()=>({fee_eur:1,currency:'EUR'}),placeOrder:async()=>{orderCalls++;}});
   const restore=env({TRADE_REPUBLIC_LIVE_ENABLED:'true',TRADE_REPUBLIC_DRY_RUN:'false',TRADE_REPUBLIC_LIVE_ACK:'true',TRADE_REPUBLIC_KILL_SWITCH:'false',TRADE_REPUBLIC_MAX_ORDER_EUR:'1000'}); t.after(restore);
   const key='fee-cash-1'; const response=await f.request('/api/broker/trade-republic/orders',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stock_id:f.stockId,type:'buy',quantity:2,account_ref:'DE••••56',idempotency_key:key,confirmation:`PLACE ${key}`,fee_eur:0})});
   assert.equal(response.status,409); assert.equal(orderCalls,0);
@@ -191,7 +214,7 @@ test('authoritative fees are required and included in cash safety', async t => {
 
 test('stopMarket and GTD use the documented sidecar fields', async t => {
   const f=await fixture(); t.after(()=>{f.server.close();f.db.db.close();fs.rmSync(f.dir,{recursive:true,force:true});});
-  let submitted; f.app.locals.brokerClient={previewFees:async()=>({fee_eur:1,currency:'EUR'}),placeOrder:async order=>{submitted=order;return {external_ref_masked:'or••••01',status:'SUBMITTED',execution:'none'};}};
+  let submitted; f.app.locals.brokerClient=liveBroker({previewFees:async()=>({fee_eur:1,currency:'EUR'}),placeOrder:async order=>{submitted=order;return {external_ref_masked:'or••••01',status:'SUBMITTED',execution:'none'};}});
   const restore=env({TRADE_REPUBLIC_LIVE_ENABLED:'true',TRADE_REPUBLIC_DRY_RUN:'false',TRADE_REPUBLIC_LIVE_ACK:'true',TRADE_REPUBLIC_KILL_SWITCH:'false',TRADE_REPUBLIC_MAX_ORDER_EUR:'1000'}); t.after(restore);
   const key='stop-gtd-1'; const response=await f.request('/api/broker/trade-republic/orders',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({stock_id:f.stockId,type:'buy',quantity:1,mode:'stopMarket',stop:12,validity:'GTD',account_ref:'DE••••56',idempotency_key:key,confirmation:`PLACE ${key}`})});
   assert.equal(response.status,201); assert.equal(submitted.mode,'stopMarket'); assert.equal(submitted.stop,12); assert.equal(submitted.validity,'GTD'); assert.equal('expiry' in submitted,false);

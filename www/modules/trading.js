@@ -13,11 +13,11 @@ export function createTrading(context) {
     let intentSignature = '';
     let busy = false;
 
-    el.innerHTML = `<header><h1>Trading</h1><p class="subtitle">Broker-derived instrument identity and fail-closed execution controls</p></header><div id="trading-alert"></div>
-      <section class="card"><form id="trading-form"><div class="form-row"><div class="form-group"><label for="tr-stock">Stock</label><select id="tr-stock" required>${stocks.map(stock => `<option value="${escapeHtml(stock.id)}">${escapeHtml(stock.symbol)} · ${escapeHtml(stock.isin)}</option>`).join('')}</select></div><div class="form-group"><label for="tr-account">Account</label><select id="tr-account" required><option value="">Loading synchronized accounts…</option></select></div></div>
+    el.innerHTML = `<header><h1>Trading</h1><p class="subtitle">Broker-derived instrument identity with fail-closed, live account and holding checks</p></header><div id="trading-alert"></div>
+      <section class="card"><form id="trading-form"><div class="form-row"><div class="form-group"><label for="tr-stock">Stock</label><select id="tr-stock" required>${stocks.map(stock => `<option value="${escapeHtml(stock.id)}">${escapeHtml(stock.symbol)} · ${escapeHtml(stock.isin)}</option>`).join('')}</select></div><div class="form-group"><label for="tr-account">Account</label><select id="tr-account" required><option value="">Loading Trade Republic accounts…</option></select></div></div>
       <div class="trading-derived" id="tr-derived"></div><div class="trading-account-summary" id="tr-account-summary"></div><div class="form-row"><div class="form-group"><label for="tr-side">Side</label><select id="tr-side"><option value="buy">BUY</option><option value="sell">SELL</option></select></div><div class="form-group"><label for="tr-mode">Mode</label><select id="tr-mode"><option value="market">Market</option><option value="limit">Limit</option><option value="stopMarket">Stop market</option></select></div><div class="form-group"><label for="tr-validity">Validity</label><select id="tr-validity"><option value="GFD">GFD</option><option value="GTD">GTD</option><option value="GTC">GTC</option></select></div></div>
       <div class="form-row"><div class="form-group conditional hidden" data-mode="limit"><label for="tr-limit">Limit price €</label><input id="tr-limit" type="number" min="0.01" step="0.01"></div><div class="form-group conditional hidden" data-mode="stopMarket"><label for="tr-stop">Stop price €</label><input id="tr-stop" type="number" min="0.01" step="0.01"></div><div class="form-group"><label for="tr-size-mode">Order size</label><select id="tr-size-mode"><option value="quantity">Shares / units</option><option value="amount">Euro value</option></select></div><div class="form-group sizing-input" data-sizing="quantity"><label for="tr-qty">Quantity</label><input id="tr-qty" type="number" min="1" step="1" required></div><div class="form-group sizing-input hidden" data-sizing="amount"><label for="tr-amount">Euro value</label><input id="tr-amount" type="number" min="0.01" step="0.01"></div></div><p class="journal-help">Euro sizing is converted to whole units using the current executable EUR price and excludes broker fees. GTD sends the documented validity value; the sidecar API does not accept a separate GTD date.</p>
-      <div class="form-row"><div class="form-group"><label for="tr-confirm">Typed confirmation</label><input id="tr-confirm" placeholder="PLACE ORDER" required></div></div><div class="btn-group"><button type="button" class="btn btn-secondary" id="tr-preview">Quote + fee preview</button><button type="submit" class="btn btn-danger" id="tr-submit">Submit only if every gate passes</button></div></form><div id="tr-result" class="journal-help"></div></section>
+      <div class="form-row"><div class="form-group"><label for="tr-confirm">Typed confirmation</label><input id="tr-confirm" placeholder="PLACE ORDER" required></div></div><p class="journal-help">OpenStock rechecks the selected Trade Republic account, position, and executable quote immediately before submitting an order. Journal entries do not authorize broker sells.</p><div class="btn-group"><button type="button" class="btn btn-secondary" id="tr-preview">Quote + fee preview</button><button type="submit" class="btn btn-danger" id="tr-submit">Submit only if every gate passes</button></div></form><div id="tr-result" class="journal-help"></div></section>
       <section class="card"><div class="section-title">Read-only Trade Republic data</div><div class="form-row"><div class="form-group"><label for="tr-history-range">History range</label><select id="tr-history-range"><option value="1d">1 day</option><option value="5d">5 days</option><option value="1m" selected>1 month</option><option value="1y">1 year</option><option value="max">Maximum</option></select></div></div><div class="btn-group"><button class="btn btn-secondary" data-ro="portfolio">Portfolio</button><button class="btn btn-secondary" data-ro="orders">Orders</button><button class="btn btn-secondary" data-ro="transactions">Transactions</button><button class="btn btn-secondary" data-ro="reconciliation-candidates">Pending Journal imports</button><button class="btn btn-secondary" data-ro="accounts-history">Account history</button><button class="btn btn-secondary" data-ro="instrument">Instrument</button><button class="btn btn-secondary" data-ro="tr-instrument">TR listing</button><button class="btn btn-secondary" data-ro="instrument-history">Instrument history</button><button class="btn btn-secondary" data-ro="schedule">Exchange schedule</button><button class="btn btn-secondary" data-ro="price-alarms">Price alarms</button><button class="btn btn-secondary" data-ro="interests">Interests</button><button class="btn btn-secondary" data-ro="tickets">Tickets</button><button class="btn btn-secondary" data-ro="activity">Activity</button></div><pre id="tr-readonly" class="readonly-output"></pre><p class="journal-help">Personal/card endpoints are intentionally not exposed. Broker alarm changes and cancellation remain disabled.</p></section>`;
 
     const form = el.querySelector('#trading-form');
@@ -42,7 +42,7 @@ export function createTrading(context) {
       const position = stock && portfolio.find(row => row.account_ref_masked === accountRef && row.instrument === stock.isin);
       el.querySelector('#tr-account-summary').innerHTML = account
         ? `<span><strong>Available cash</strong> €${money(account.available_cash_eur)}</span><span><strong>${escapeHtml(stock?.symbol || 'Selected security')} held</strong> ${escapeHtml(formatUnits(position?.quantity))} units</span>`
-        : '<span>Select a synchronized account to view cash and holdings.</span>';
+        : '<span>Select a Trade Republic account to view cash and holdings.</span>';
     }
 
     el.querySelectorAll('select').forEach(input => input.addEventListener('change', update));
@@ -57,7 +57,7 @@ export function createTrading(context) {
       accounts = accountRows || [];
       portfolio = portfolioRows || [];
       const select = el.querySelector('#tr-account');
-      if (select) select.innerHTML = accounts.map(account => `<option value="${escapeHtml(account.account_ref_masked)}">${escapeHtml(account.account_ref_masked)} · ${escapeHtml(account.currency)}</option>`).join('') || '<option value="">No synchronized account</option>';
+      if (select) select.innerHTML = accounts.map(account => `<option value="${escapeHtml(account.account_ref_masked)}">${escapeHtml(account.account_ref_masked)} · ${escapeHtml(account.currency)}</option>`).join('') || '<option value="">No Trade Republic account available</option>';
       update();
     });
 
@@ -107,7 +107,12 @@ export function createTrading(context) {
       if (busy || !formIsValid(place)) return;
       setBusy(true);
       try {
-        const result = await af(place ? '/broker/trade-republic/orders' : '/broker/trade-republic/order-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(orderBody()) });
+        const result = await af(place ? '/broker/trade-republic/orders' : '/broker/trade-republic/order-preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(orderBody()) }, (message, details) => {
+          el.querySelector('#tr-result').textContent = message;
+          // A preflight rejection never reached the broker, so let the user correct
+          // the form and make a fresh attempt. Ambiguous broker outcomes stay frozen.
+          if (place && details?.code === 'ORDER_SAFETY_GATE') { intentKey = ''; intentSignature = ''; }
+        });
         if (!result) return;
         const reconciled = result.order?.reconciled === true;
         el.querySelector('#tr-result').textContent = place

@@ -8,7 +8,7 @@ export async function apiRequest(path, options = {}, onError = () => {}) {
             headers: { Accept: 'application/json', ...(options.headers || {}) }
         });
         const data = await response.json();
-        if (!response.ok) { onError(data.error || 'Error'); return null; }
+        if (!response.ok) { onError(data.error || 'Error', data); return null; }
         return data;
     } catch (error) { onError(`Network: ${error.message}`); return null; }
 }

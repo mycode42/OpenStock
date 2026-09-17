@@ -663,6 +663,24 @@ function normalizeOrderSizing(body, sizingPrice) {
         : { valid: false, error: 'Euro value is below the price of one security' };
 }
 
+function hasValidOrderSizingInput(body) {
+    const hasQuantity = body.quantity !== undefined && body.quantity !== null && body.quantity !== '';
+    const hasAmount = body.amount_eur !== undefined && body.amount_eur !== null && body.amount_eur !== '';
+    if (hasQuantity === hasAmount) return false;
+    return hasQuantity ? Number.isInteger(Number(body.quantity)) && Number(body.quantity) > 0 : Number.isFinite(Number(body.amount_eur)) && Number(body.amount_eur) > 0;
+}
+
+async function fetchLiveOrderAuthority(client, { accountRef, isin, exchange }) {
+    const [accounts, portfolio, quote] = await Promise.all([
+        client.getAccounts(),
+        client.getPortfolio(),
+        client.getQuote({ isin, exchange })
+    ]);
+    const account = Array.isArray(accounts) ? accounts.find(row => row?.account_ref_masked === accountRef) : null;
+    const position = Array.isArray(portfolio) ? portfolio.find(row => row?.account_ref_masked === accountRef && String(row?.instrument || row?.isin || '').toUpperCase() === isin) : null;
+    return { account, position, quote };
+}
+
 app.post('/api/broker/trade-republic/order-preview', async (req, res) => {
     try {
         const b = req.body || {};
@@ -705,50 +723,60 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
     const existing=key ? db.getBrokerOrderIntent(key) : null;
     if(existing) return res.status(existing.status==='REJECTED'?409:200).json({order:{idempotency_key:key,status:existing.status,external_ref_masked:existing.external_ref_masked||null},duplicate:true});
     const mapping=db.getBrokerMapping(Number(b.stock_id));
-    const q=mapping&&db.getLatestBrokerQuote(mapping.isin,mapping.exchange);
     const side=String(b.type||'').toLowerCase();
     const rawMode=String(b.mode||'market');
     const mode=({market:'market',limit:'limit',stopmarket:'stopMarket'})[rawMode.toLowerCase()] || rawMode;
     const validity=String(b.validity||'GFD').toUpperCase();
     const limit=b.limit === undefined || b.limit === null || b.limit === '' ? null : Number(b.limit);
     const stop=b.stop === undefined || b.stop === null || b.stop === '' ? null : Number(b.stop);
-    const executable=q && side === 'buy' ? q.ask_eur : q && side === 'sell' ? q.bid_eur : null;
-    const conservativePrice=mode==='limit' ? Math.max(Number(executable)||0, Number.isFinite(limit) ? limit : 0) : Number(executable);
-    const sizing=normalizeOrderSizing(b,conservativePrice);
-    const quantity=sizing.valid?sizing.quantity:null;
     const maxCap=Number(process.env.TRADE_REPUBLIC_MAX_ORDER_EUR||0);
     const accountRef=String(b.account_ref||'');
-    const account=db.getLatestBrokerAccount(accountRef);
-    const position=mapping&&account&&db.getLatestBrokerPosition(accountRef,mapping.isin);
-    const availableCash=account&&Number(account.available_cash_eur);
-    const fresh=Boolean(q && q.observed_at && Date.now()-Date.parse(q.observed_at) >= 0 && Date.now()-Date.parse(q.observed_at) <= 15000);
-    const gates={
+    const preliminaryGates={
         live_enabled:process.env.TRADE_REPUBLIC_LIVE_ENABLED==='true',
         dry_run_disabled:process.env.TRADE_REPUBLIC_DRY_RUN==='false',
         kill_switch_clear:process.env.TRADE_REPUBLIC_KILL_SWITCH!=='true',
         acknowledged:process.env.TRADE_REPUBLIC_LIVE_ACK==='true',
-        notional_cap_ok:Number.isFinite(quantity)&&quantity>0&&Number.isFinite(conservativePrice)&&conservativePrice>0&&maxCap>0&&quantity*conservativePrice<=maxCap,
-        fresh_quote:fresh,
-        executable_quote:Boolean(executable),
-        quote_eur:q?.currency==='EUR',
         mapped:Boolean(mapping&&mapping.verified_at&&mapping.currency==='EUR'),
-        account_synchronized:Boolean(account&&Number.isFinite(availableCash)),
         account_selected:Boolean(accountRef),
-        account_resolvable:typeof client.resolveAccount !== 'function' || Boolean(client.resolveAccount(accountRef)),
         confirmed:[`PLACE ${key}`,'PLACE ORDER'].includes(String(b.confirmation||'').trim()),
         idempotency:/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(key),
         valid_side:['buy','sell'].includes(side),
-        valid_quantity:Boolean(sizing.valid&&Number.isInteger(quantity)&&quantity>0),
+        valid_sizing_input:hasValidOrderSizingInput(b),
         valid_mode:['market','limit','stopMarket'].includes(mode),
         valid_validity:['GFD','GTD','GTC'].includes(validity),
         valid_limit:mode==='limit' ? Number.isFinite(limit)&&limit>0 : limit===null,
-        valid_stop:mode==='stopMarket' ? Number.isFinite(stop)&&stop>0 : stop===null,
-        notional_cash_ok:side!=='buy' || (Boolean(account)&&Number.isFinite(availableCash)&&availableCash >= quantity*conservativePrice),
-        sufficient_position:side!=='sell' || (Boolean(position)&&Number(position.quantity)>=quantity)
+        valid_stop:mode==='stopMarket' ? Number.isFinite(stop)&&stop>0 : stop===null
+    };
+    if(Object.values(preliminaryGates).some(x=>!x)) {
+        if(preliminaryGates.idempotency) db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isInteger(Number(b.quantity))?Number(b.quantity):null,sizing_mode:b.amount_eur ? 'amount' : 'quantity',requested_amount_eur:Number.isFinite(Number(b.amount_eur))?Number(b.amount_eur):null}),quote_id:null});
+        return res.status(409).json({error:'Live order rejected: safety gate not satisfied',code:'ORDER_SAFETY_GATE',gates:preliminaryGates});
+    }
+    let authority;
+    try { authority=await fetchLiveOrderAuthority(client,{accountRef,isin:mapping.isin,exchange:mapping.exchange}); }
+    catch(e) { return res.status(503).json({error:'Fresh Trade Republic account, position, or quote data is unavailable; no order was submitted',code:'LIVE_AUTHORITY_UNAVAILABLE'}); }
+    const account=authority.account;
+    const position=authority.position;
+    const availableCash=Number(account?.available_cash_eur);
+    const quote=authority.quote;
+    const executable=side === 'buy' ? quote?.ask_eur : quote?.bid_eur;
+    const conservativePrice=mode==='limit' ? Math.max(Number(executable)||0, Number.isFinite(limit) ? limit : 0) : Number(executable);
+    const sizing=normalizeOrderSizing(b,conservativePrice);
+    const quantity=sizing.valid?sizing.quantity:null;
+    const quoteReady=Boolean(quote?.currency&&quote?.observed_at&&quote?.source);
+    const q={...quote,id:quoteReady?Number(db.addBrokerQuote({broker:'trade_republic',isin:mapping.isin,exchange:mapping.exchange,bid_eur:quote.bid_eur,ask_eur:quote.ask_eur,last_eur:quote.last_eur||null,currency:quote.currency,quote_time:quote.quote_time,observed_at:quote.observed_at,source:quote.source}).lastInsertRowid):null};
+    const gates={...preliminaryGates,
+        notional_cap_ok:Number.isFinite(quantity)&&quantity>0&&Number.isFinite(conservativePrice)&&conservativePrice>0&&maxCap>0&&quantity*conservativePrice<=maxCap,
+        fresh_quote:Boolean(q.observed_at && Date.now()-Date.parse(q.observed_at) >= 0 && Date.now()-Date.parse(q.observed_at) <= 15000),
+        executable_quote:Boolean(executable), quote_eur:q.currency==='EUR',
+        account_authoritative:Boolean(account&&Number.isFinite(availableCash)),
+        account_resolvable:typeof client.resolveAccount !== 'function' || Boolean(client.resolveAccount(accountRef)),
+        valid_quantity:Boolean(sizing.valid&&Number.isInteger(quantity)&&quantity>0),
+        notional_cash_ok:side!=='buy'||availableCash>=quantity*conservativePrice,
+        sufficient_position:side!=='sell'||(Boolean(position)&&Number(position.quantity)>=quantity)
     };
     if(Object.values(gates).some(x=>!x)) {
-        if(gates.idempotency) db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isInteger(quantity)?quantity:null,sizing_mode:sizing.sizing_mode||null,requested_amount_eur:sizing.requested_amount_eur||null}),quote_id:q?.id||null});
-        return res.status(409).json({error:sizing.valid?'Live order rejected: safety gate not satisfied':sizing.error,gates});
+        db.createBrokerOrderIntent({broker:'trade_republic',idempotency_key:key,status:'REJECTED',request_json:JSON.stringify({stock_id:Number(b.stock_id)||null,type:side,quantity:Number.isInteger(quantity)?quantity:null,sizing_mode:sizing.sizing_mode||null,requested_amount_eur:sizing.requested_amount_eur||null}),quote_id:q.id});
+        return res.status(409).json({error:sizing.valid?'Live order rejected: safety gate not satisfied':sizing.error,code:'ORDER_SAFETY_GATE',gates});
     }
     const order={account_ref_masked:accountRef,exchange:mapping.exchange,instrument:mapping.isin,mode,quantity,type:side,validity};
     if (mode==='limit') order.limit=limit;
