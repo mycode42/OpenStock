@@ -219,7 +219,10 @@ test('history range, restore capacity, and capital duplicate validation are expl
     assert.equal((await f.request(`/api/stocks/${stock.id}/history?range=bad`)).status, 400);
     await bodyRequest(f, '/api/capital-events', { event_type: 'INITIAL', amount_eur: 100, occurred_at: '2026-01-01T00:00:00Z' });
     response = await bodyRequest(f, '/api/capital-events', { event_type: 'INITIAL', amount_eur: 200, occurred_at: '2026-01-02T00:00:00Z' });
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 409);
+    const duplicateCapital = await response.json();
+    assert.equal(duplicateCapital.code, 'INITIAL_CAPITAL_EXISTS');
+    assert.match(duplicateCapital.error, /Use a deposit/i);
     await bodyRequest(f, '/api/trades', { stock_id: stock.id, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 1, entry_fx_rate: 1 });
     const archived = (await (await f.request(`/api/stocks/${stock.id}`, { method: 'DELETE' })).json()).archived;
     assert.equal(archived, true);
@@ -231,6 +234,35 @@ test('history range, restore capacity, and capital duplicate validation are expl
     assert.equal(full.some(item => item.id === stock.id), true);
     response = await bodyRequest(f, `/api/stocks/${stock.id}/restore`, {});
     assert.equal(response.status, 400);
+});
+
+test('paginated trade endpoint returns twenty entries with stable totals', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'PAGE', name: 'Pagination', buy_threshold_eur: 1, sell_threshold_eur: 2 })).json()).stock;
+    const insert = f.db.db.prepare(`INSERT INTO trades (
+        trade_id, stock_id, opened_at, closed_at, quantity, currency,
+        entry_price, entry_fx_rate, entry_price_eur, entry_fee_eur,
+        exit_price, exit_fx_rate, exit_price_eur, exit_fee_eur, dividend_eur, strategy, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (let day = 1; day <= 25; day += 1) {
+        insert.run(`PAGE-${day}`, stock.id, `2026-01-${String(day).padStart(2, '0')} 10:00:00`, '2026-02-01 10:00:00', 1, 'EUR', 10, 1, 10, 0, 11, 1, 11, 0, 0, '', '');
+    }
+    let response = await f.request('/api/trades?page=1&page_size=20');
+    assert.equal(response.status, 200);
+    let page = await response.json();
+    assert.equal(page.total, 25);
+    assert.equal(page.total_pages, 2);
+    assert.equal(page.page, 1);
+    assert.equal(page.page_size, 20);
+    assert.equal(page.items.length, 20);
+    assert.equal(page.items[0].trade_id, 'PAGE-25');
+
+    response = await f.request('/api/trades?page=2&page_size=20');
+    page = await response.json();
+    assert.equal(page.items.length, 5);
+    assert.equal(page.items[0].trade_id, 'PAGE-5');
+    assert.equal((await f.request('/api/trades?page=0')).status, 400);
 });
 
 test('trade GET and PUT return authoritative records and reject invalid stock references', async t => {

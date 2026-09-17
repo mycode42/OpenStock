@@ -459,7 +459,15 @@ app.get('/api/trades', (req, res) => {
     try {
         const status = ['open', 'closed'].includes(req.query.status) ? req.query.status : undefined;
         const symbol = req.query.symbol ? String(req.query.symbol).toUpperCase() : undefined;
-        res.json(req.app.locals.db.getAllTrades({ status, symbol }).map(serializeTrade));
+        const requestedPagination = req.query.page !== undefined || req.query.page_size !== undefined;
+        if (!requestedPagination) return res.json(req.app.locals.db.getAllTrades({ status, symbol }).map(serializeTrade));
+        const page = Number(req.query.page ?? 1);
+        const pageSize = Number(req.query.page_size ?? 20);
+        if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+            return res.status(400).json({ error: 'page must be a positive integer and page_size must be between 1 and 100' });
+        }
+        const result = req.app.locals.db.getTradesPage({ status, symbol }, { page, pageSize });
+        res.json({ ...result, items: result.items.map(serializeTrade) });
     } catch (e) {
         console.error('Error fetching trades:', e.message);
         res.status(500).json({ error: 'Failed to fetch trades' });
@@ -520,13 +528,17 @@ app.post('/api/capital-events', (req, res) => {
         const event_type = String(req.body.event_type || '').toUpperCase();
         if (!['INITIAL', 'DEPOSIT', 'WITHDRAWAL', 'FINANCING'].includes(event_type)) throw new Error('Event type must be INITIAL, DEPOSIT, WITHDRAWAL, or FINANCING');
         const event = { event_type, amount_eur: numberField(req.body.amount_eur, 'Amount', { minimum: Number.EPSILON }), occurred_at: toDatabaseDate(req.body.occurred_at || new Date().toISOString(), 'Event date/time'), notes: String(req.body.notes || '').trim() };
-        if (event_type === 'INITIAL' && req.app.locals.db.getCapitalEvents().some(item => item.event_type === 'INITIAL')) throw new Error('An initial capital event already exists; add a deposit instead');
+        if (event_type === 'INITIAL' && req.app.locals.db.getCapitalEvents().some(item => item.event_type === 'INITIAL')) {
+            const error = new Error('Initial capital is already recorded. Use a deposit to add funds or a withdrawal to reduce funds; neither changes trading P/L.');
+            error.code = 'INITIAL_CAPITAL_EXISTS';
+            throw error;
+        }
         const result = req.app.locals.db.addCapitalEvent(event);
         captureEquitySnapshot(req.app.locals.db, 'capital_event');
         const saved = req.app.locals.db.getCapitalEvents().find(item => item.id === Number(result.lastInsertRowid));
         res.status(201).json({ message: 'Capital event recorded', event: { ...saved, occurred_at: toISODateTime(saved.occurred_at), created_at: toISODateTime(saved.created_at) } });
     } catch (e) {
-        res.status(400).json({ error: e.message || 'Invalid capital event' });
+        res.status(e.code === 'INITIAL_CAPITAL_EXISTS' ? 409 : 400).json({ error: e.message || 'Invalid capital event', code: e.code });
     }
 });
 

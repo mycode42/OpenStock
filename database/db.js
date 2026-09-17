@@ -276,19 +276,41 @@ class OpenStockDB {
     }
 
     // ===== TRADES =====
-    getAllTrades(filters = {}) {
+    tradeQueryParts(filters = {}) {
         const clauses = [];
         const values = [];
         if (filters.status === 'open') clauses.push('t.closed_at IS NULL');
         if (filters.status === 'closed') clauses.push('t.closed_at IS NOT NULL');
         if (filters.symbol) { clauses.push('s.symbol = ?'); values.push(filters.symbol); }
         const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+        return { where, values };
+    }
+
+    getAllTrades(filters = {}) {
+        const { where, values } = this.tradeQueryParts(filters);
         return this.db.prepare(`
             SELECT t.*, s.symbol, s.name, s.current_price_eur
             FROM trades t JOIN stocks s ON s.id = t.stock_id
             ${where}
             ORDER BY COALESCE(t.closed_at, t.opened_at) DESC, t.id DESC
         `).all(...values);
+    }
+
+    getTradesPage(filters = {}, { page = 1, pageSize = 20 } = {}) {
+        const { where, values } = this.tradeQueryParts(filters);
+        const safePageSize = Math.min(100, Math.max(1, Math.floor(Number(pageSize) || 20)));
+        const requestedPage = Math.max(1, Math.floor(Number(page) || 1));
+        const total = this.db.prepare(`SELECT COUNT(*) AS total FROM trades t JOIN stocks s ON s.id = t.stock_id ${where}`).get(...values).total;
+        const totalPages = Math.max(1, Math.ceil(total / safePageSize));
+        const safePage = Math.min(requestedPage, totalPages);
+        const items = this.db.prepare(`
+            SELECT t.*, s.symbol, s.name, s.current_price_eur
+            FROM trades t JOIN stocks s ON s.id = t.stock_id
+            ${where}
+            ORDER BY COALESCE(t.closed_at, t.opened_at) DESC, t.id DESC
+            LIMIT ? OFFSET ?
+        `).all(...values, safePageSize, (safePage - 1) * safePageSize);
+        return { items, page: safePage, page_size: safePageSize, total, total_pages: totalPages };
     }
 
     getTradeById(id) {
