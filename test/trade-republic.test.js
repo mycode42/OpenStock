@@ -27,6 +27,16 @@ test('client timeout fails closed without exposing request details', async () =>
   await assert.rejects(() => client.getAccounts(), error => error.code === 'TIMEOUT' && !String(error).includes('secret'));
 });
 
+test('account-scoped order retrieval sends the private account number only to the sidecar', async () => {
+  let seen;
+  const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, fetchImpl: async (url, options) => { seen={url,body:JSON.parse(options.body)}; return {ok:true,json:async()=>({DE1234567890123456:{items:[]}})}; } });
+  client.accountNumbers.set('DE••••56', 'DE1234567890123456');
+  const orders=await client.getOrders({account_ref_masked:'DE••••56'});
+  assert.equal(seen.url.endsWith('/api/orders'),true);
+  assert.equal(seen.body.account_nb,'DE1234567890123456');
+  assert.deepEqual(orders,[]);
+});
+
 test('nested order-price maps sell price to executable bid and buy price to executable ask', () => {
   const quote = sanitizeQuote({ sell: { time: '2026-09-15T10:00:00Z', price: 101, bidPrice: 100, unit: 'EUR', size: 2 }, buy: { time: '2026-09-15T10:00:01Z', price: 103, askPrice: 104, unit: 'EUR', size: 3 } }, { isin: 'US0000000001', exchange: 'TIB' });
   assert.equal(quote.bid_eur, 101);
@@ -55,6 +65,16 @@ test('portfolio keyed accounts and category positions are flattened and masked',
 test('portfolio normalization falls back to virtualSize when netSize is absent', () => {
   const rows = sanitizeCollection({ DE1234567890123456: { categories: [{ positions: [{ isin: 'US2533931026', virtualSize: 2 }] }] } }, 'portfolio');
   assert.equal(rows[0].quantity, 2);
+});
+
+test('account-keyed orders pages are flattened without exposing the account number', () => {
+  const rows = sanitizeCollection({ DE1234567890123456: { items: [{ orderId: 'order-secret', isin: 'US0378331005', side: 'sell', quantity: 2, status: 'OPEN', createdAt: '2026-09-17T10:00:00Z' }] } }, 'orders');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].instrument, 'US0378331005');
+  assert.equal(rows[0].side, 'sell');
+  assert.equal(rows[0].quantity, 2);
+  assert.equal(rows[0].account_ref_masked, 'DE••••56');
+  assert.equal(JSON.stringify(rows).includes('1234567890123456'), false);
 });
 
 test('transaction normalization reads nested amount values without exposing account data', () => {

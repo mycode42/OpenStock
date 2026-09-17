@@ -608,7 +608,7 @@ function brokerError(res, error) { return res.status(error instanceof BrokerErro
 app.get('/api/broker/trade-republic/health', async (req, res) => { try { res.json({ broker: 'trade_republic', ...(await req.app.locals.brokerClient.health()), live_submission_enabled: process.env.TRADE_REPUBLIC_LIVE_ENABLED === 'true' && process.env.TRADE_REPUBLIC_DRY_RUN === 'false' }); } catch (e) { brokerError(res, e); } });
 app.get('/api/broker/trade-republic/accounts', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getAccounts()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/portfolio', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getPortfolio()); } catch(e) { brokerError(res,e); } });
-app.get('/api/broker/trade-republic/orders', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getOrders()); } catch(e) { brokerError(res,e); } });
+app.get('/api/broker/trade-republic/orders', async (req, res) => { try { const account_ref_masked=String(req.query.account_ref||'').trim()||undefined; res.json(await req.app.locals.brokerClient.getOrders({account_ref_masked})); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/transactions', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getTransactions()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/interests', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getInterests()); } catch(e) { brokerError(res,e); } });
 app.get('/api/broker/trade-republic/tickets', async (req, res) => { try { res.json(await req.app.locals.brokerClient.getTickets()); } catch(e) { brokerError(res,e); } });
