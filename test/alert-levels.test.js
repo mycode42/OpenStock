@@ -58,3 +58,19 @@ test('alert levels are independently rearmable and state transitions are normali
     assert.throws(() => db.updateAlertLevel(level.id, { enabled: 'yes' }), /boolean/);
     db.db.close();
 });
+
+test('rearming a delivered level clears its prior outbox occurrence but preserves alert history', t => {
+    const { dir, file } = fixture(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const db = new OpenStockDB(file);
+    db.addStock('REARM', 'Rearm', 'USD', 10, 20);
+    const level = db.getAlertLevels(1).find(item => item.side === 'SELL');
+    db.db.prepare("INSERT INTO alerts_log(stock_id,alert_level_id,alert_type,price_eur,threshold_eur,telegram_message_id) VALUES (1,?,'SELL',20,20,99)").run(level.id);
+    db.db.prepare("INSERT INTO alert_outbox(alert_level_id,delivery_key,stock_id,message_html,price_eur,status,telegram_message_id) VALUES (?, 'level:test', 1, 'old delivery', 20, 'SENT', '99')").run(level.id);
+    db.retireAlertLevel(level.id);
+
+    const rearmed = db.rearmAlertLevel(level.id);
+    assert.deepEqual({ enabled: rearmed.enabled, active: rearmed.active, triggered: rearmed.triggered, retired: rearmed.retired }, { enabled: 1, active: 1, triggered: 0, retired: 0 });
+    assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM alert_outbox WHERE alert_level_id=?').get(level.id).count, 0);
+    assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM alerts_log WHERE alert_level_id=?').get(level.id).count, 1);
+    db.db.close();
+});

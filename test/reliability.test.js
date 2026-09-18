@@ -55,3 +55,28 @@ test('failed alert delivery remains in outbox and is retried before retiring the
   assert.equal(raw.prepare('SELECT triggered FROM alert_levels').get().triggered, 1);
   raw.close(); fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('a rearmed delivered level creates a new outbox occurrence and sends Telegram once', async t => {
+  const { dir, file, db } = fixture();
+  const stock = db.addStock('REARMOUT', 'Rearm Outbox', 'EUR', 100, 200);
+  const level = db.getActiveAlertLevels(Number(stock.lastInsertRowid)).find(item => item.side === 'BUY');
+  db.db.prepare("INSERT INTO alerts_log(stock_id,alert_level_id,alert_type,price_eur,threshold_eur,telegram_message_id) VALUES (?,?,'BUY',90,100,55)").run(stock.lastInsertRowid, level.id);
+  db.db.prepare("INSERT INTO alert_outbox(alert_level_id,delivery_key,stock_id,message_html,price_eur,status,telegram_message_id) VALUES (?, 'level:old', ?, 'old delivery', 90, 'SENT', '55')").run(level.id, stock.lastInsertRowid);
+  db.retireAlertLevel(level.id);
+  db.rearmAlertLevel(level.id);
+  db.db.close();
+
+  const raw = new Database(file);
+  const config = { lockPath: path.join(dir, 'lock'), timeoutMs: 100, concurrency: 1, cycleDeadlineMs: 1000, yahooUrl: 'mock', fx: { cachePath: path.join(dir, 'fx.json'), ttlMs: 999999, url: 'fx' }, telegram: { token: 'token', chatId: '42' } };
+  const quote = { chart: { result: [{ timestamp: [10], indicators: { quote: [{ close: [90] }] }, meta: {} }] } };
+  let telegramRequests = 0;
+  const result = await runMonitor({ db: raw, now: new Date('2026-01-01T12:00:00Z'), config, fetchImpl: async url => {
+    if (url === 'fx') return { ok: true, json: async () => ({ rates: { EUR: 1 } }) };
+    if (url.includes('telegram')) { telegramRequests += 1; return { ok: true, json: async () => ({ ok: true, result: { message_id: 56 } }) }; }
+    return { ok: true, json: async () => quote };
+  }, error: assert.fail, log() {} });
+  assert.equal(result, EXIT.OK);
+  assert.equal(telegramRequests, 1);
+  assert.deepEqual(raw.prepare('SELECT status,telegram_message_id FROM alert_outbox WHERE alert_level_id=?').get(level.id), { status: 'SENT', telegram_message_id: '56' });
+  raw.close(); fs.rmSync(dir, { recursive: true, force: true });
+});

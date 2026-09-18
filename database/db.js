@@ -108,7 +108,16 @@ class OpenStockDB {
         return this.getAlertLevelById(id);
     }
     deleteAlertLevel(id) { return this.db.prepare('DELETE FROM alert_levels WHERE id = ?').run(id); }
-    rearmAlertLevel(id) { this.db.prepare("UPDATE alert_levels SET enabled=1, active=1, triggered=0, retired=0, triggered_at=NULL, retired_at=NULL WHERE id=?").run(id); return this.getAlertLevelById(id); }
+    rearmAlertLevel(id) {
+        this.db.transaction(() => {
+            // A level's outbox row represents one notification occurrence. Retaining
+            // a prior SENT row would let the monitor retire a rearmed level without
+            // issuing a fresh Telegram request.
+            this.db.prepare('DELETE FROM alert_outbox WHERE alert_level_id=?').run(id);
+            this.db.prepare("UPDATE alert_levels SET enabled=1, active=1, triggered=0, retired=0, triggered_at=NULL, retired_at=NULL WHERE id=?").run(id);
+        })();
+        return this.getAlertLevelById(id);
+    }
     retireAlertLevel(id) { return this.db.prepare("UPDATE alert_levels SET enabled=0, active=0, triggered=1, retired=1, triggered_at=datetime('now'), retired_at=datetime('now') WHERE id=?").run(id); }
 
     addStock(symbol, name, currency, buyThreshold, sellThreshold, isin = null) {
