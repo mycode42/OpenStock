@@ -14,17 +14,24 @@ test('responsive charts stretch their SVG interaction plane to the full visible 
 
 test('dashboard history charts are native EUR, smoothed, and compress closed-market time', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
+    const formatting = fs.readFileSync(path.join(root, 'www/modules/formatting.js'), 'utf8');
     assert.match(source, /Number\(point\.price_eur\)/);
     assert.match(source, /primary: `€\$\{money\(point\.price_eur\)\}`/);
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
+    assert.match(formatting, /'1w': '1-week'/);
     assert.match(source, /function smoothCoordinatePath/);
     assert.match(source, /x: index \/ \(clean\.length - 1\) \* width/);
     assert.match(source, /smooth: true/);
     assert.match(source, /\.sort\(\(left, right\) => parseOpenStockDate\(left\.recorded_at\)\.getTime\(\) - parseOpenStockDate\(right\.recorded_at\)\.getTime\(\)\)/);
     assert.doesNotMatch(source, /history-gap-line|maxGapMs|coordinateSegments|gapSegments/);
     assert.doesNotMatch(source, /point\.price_usd|USD price chart|· USD/);
+});
+
+test('trade entry prices use two-decimal input precision', () => {
+    const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
+    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.01" step="\.01" required value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 2\)\)\}"/);
 });
 
 test('market closures are removed from chart spacing and render as one smooth path', async () => {

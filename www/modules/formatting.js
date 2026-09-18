@@ -57,6 +57,5 @@ export function formatChartDate(value) {
 }
 
 export function chartRangeLabel(range) {
-    return { '1d': '1-day', '1mo': '1-month', '1y': '1-year', '5y': '5-year' }[range] || range;
+    return { '1d': '1-day', '1w': '1-week', '1mo': '1-month', '1y': '1-year', '5y': '5-year' }[range] || range;
 }
-
