@@ -277,6 +277,7 @@ app.get('/api/stocks/archived', (req, res) => {
 app.get('/api/stocks/:id/history', (req, res) => {
     const windows = {
         '1d': { since: '-2 days', queryBucketSeconds: 60, bucketSeconds: 900, maxPoints: 48, maxLiveGapSeconds: 1800 },
+        '1w': { since: '-7 days', bucketSeconds: 3600, maxPoints: 80, maxLiveGapSeconds: 21600 },
         '1mo': { since: '-1 month', bucketSeconds: 28800, maxPoints: 72, maxLiveGapSeconds: 43200 },
         '1y': { since: '-1 year', bucketSeconds: 345600, maxPoints: 96, maxLiveGapSeconds: 172800 },
         '5y': { since: '-5 years', bucketSeconds: 1814400, maxPoints: 96, maxLiveGapSeconds: 1209600 },
@@ -287,7 +288,7 @@ app.get('/api/stocks/:id/history', (req, res) => {
     const window = windows[range];
 
     if (!window) {
-        return res.status(400).json({ error: 'Range must be one of: 1d, 1mo, 1y, 5y' });
+        return res.status(400).json({ error: 'Range must be one of: 1d, 1w, 1mo, 1y, 5y' });
     }
 
     try {

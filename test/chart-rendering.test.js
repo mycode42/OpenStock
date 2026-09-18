@@ -18,6 +18,7 @@ test('dashboard history charts are native EUR, smoothed, and compress closed-mar
     assert.match(source, /primary: `€\$\{money\(point\.price_eur\)\}`/);
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
+    assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
     assert.match(source, /function smoothCoordinatePath/);
     assert.match(source, /x: index \/ \(clean\.length - 1\) \* width/);
     assert.match(source, /smooth: true/);
@@ -66,7 +67,7 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
     assert.match(index, /styles\.css\?v=42/);
     assert.match(index, /app\.js\?v=42/);
-    assert.match(worker, /openstock-v44/);
+    assert.match(worker, /openstock-v45/);
     assert.match(worker, /styles\.css\?v=42/);
     assert.match(worker, /app\.js\?v=42/);
     assert.match(worker, /modules\/charts\.js/);

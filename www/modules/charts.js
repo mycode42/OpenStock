@@ -3,7 +3,7 @@ import { money, parseOpenStockDate, formatLocalDateTime, formatChartDate, chartR
 
 export function createCharts({ request, historyCache }) {
 function chartRangeControls(activeRange) {
-    return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
+    return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1w', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
 }
 
 function smoothCoordinatePath(points) {

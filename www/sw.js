@@ -1,4 +1,4 @@
-const CACHE_NAME = 'openstock-v44';
+const CACHE_NAME = 'openstock-v45';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
