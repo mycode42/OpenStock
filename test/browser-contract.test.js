@@ -50,3 +50,8 @@ test('broker Trading screen is not exposed while it is disabled', () => {
     assert.match(app, /const ENABLE_TRADING = false/);
     assert.doesNotMatch(serviceWorker, /\.\/modules\/trading\.js/);
 });
+
+test('Journal requests fifteen trades per page', () => {
+    const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
+    assert.match(app, /trades\?page=\$\{requestedPage\}&page_size=15/);
+});

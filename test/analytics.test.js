@@ -89,3 +89,32 @@ test('capital deposits do not create a false equity drawdown', () => {
     assert.ok(Math.abs(result.risk.max_drawdown_pct) < 0.001);
     assert.ok(Math.abs(result.risk.current_drawdown_pct) < 0.001);
 });
+
+test('daily performance aggregates completed trades by close date', () => {
+    const result = calculateDashboard({ trades: [
+        { stock_id: 1, symbol: 'ONE', quantity: 1, entry_price_eur: 10, entry_fee_eur: 0, exit_price_eur: 12, exit_fee_eur: 0, opened_at: '2026-01-01 09:00:00', closed_at: '2026-01-02 09:00:00' },
+        { stock_id: 1, symbol: 'ONE', quantity: 1, entry_price_eur: 10, entry_fee_eur: 0, exit_price_eur: 9, exit_fee_eur: 0, opened_at: '2026-01-01 10:00:00', closed_at: '2026-01-02 12:00:00' },
+        { stock_id: 1, symbol: 'ONE', quantity: 1, entry_price_eur: 10, entry_fee_eur: 0, exit_price_eur: 15, exit_fee_eur: 0, opened_at: '2026-01-02 10:00:00', closed_at: '2026-01-03 09:00:00' }
+    ] });
+    assert.deepEqual(result.daily_performance, [
+        { day: '2026-01-02', pnl_eur: 1, trades: 2, wins: 1 },
+        { day: '2026-01-03', pnl_eur: 5, trades: 1, wins: 1 }
+    ]);
+    assert.equal(result.performance.average_daily_pnl_eur, 3);
+    assert.equal(result.performance.average_monthly_pnl_eur, 6);
+    assert.equal(result.performance.average_daily_return_pct, null);
+});
+
+test('compounding metrics are derived from current capital and the observed return', () => {
+    const result = calculateDashboard({
+        capitalEvents: [{ event_type: 'INITIAL', amount_eur: 1000, occurred_at: '2026-01-01 00:00:00' }],
+        stocks: [{ id: 1, current_price_eur: 110 }],
+        trades: [{ stock_id: 1, quantity: 10, entry_price_eur: 100, entry_fee_eur: 0, opened_at: '2026-01-02 00:00:00' }],
+        now: '2026-02-01T00:00:00Z'
+    });
+    assert.equal(result.performance.investment_profit_eur, 100);
+    assert.equal(result.performance.growth_multiple, 1.1);
+    assert.ok(Number.isFinite(result.performance.annualized_return_pct));
+    assert.ok(Number.isFinite(result.performance.monthly_compounding_rate_pct));
+    assert.ok(result.performance.projected_one_year_capital_eur > result.capital.current_eur);
+});
