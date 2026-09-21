@@ -100,11 +100,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=55/);
-    assert.match(index, /app\.js\?v=55/);
-    assert.match(worker, /openstock-v60/);
-    assert.match(worker, /styles\.css\?v=55/);
-    assert.match(worker, /app\.js\?v=55/);
+    assert.match(index, /styles\.css\?v=56/);
+    assert.match(index, /app\.js\?v=56/);
+    assert.match(worker, /openstock-v61/);
+    assert.match(worker, /styles\.css\?v=56/);
+    assert.match(worker, /app\.js\?v=56/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.doesNotMatch(styles, /history-gap-line/);
@@ -117,4 +117,7 @@ test('journal chart modes use concise labels with no explanatory subtitle', () =
     assert.doesNotMatch(journal, /Trades, performance and risk/);
     assert.doesNotMatch(journal, /Current capital and peak equity over time/);
     assert.doesNotMatch(journal, /Realized P\/L in euros, with percentage return on contributed capital/);
+    assert.match(journal, /journalKpi\('Est\. Yearly Profit'/);
+    assert.match(journal, /journalKpi\('Annualized Return'/);
+    assert.doesNotMatch(journal, /<div class="journal-small">Estimated yearly profit/);
 });
