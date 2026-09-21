@@ -100,12 +100,21 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=54/);
-    assert.match(index, /app\.js\?v=54/);
-    assert.match(worker, /openstock-v59/);
-    assert.match(worker, /styles\.css\?v=54/);
-    assert.match(worker, /app\.js\?v=54/);
+    assert.match(index, /styles\.css\?v=55/);
+    assert.match(index, /app\.js\?v=55/);
+    assert.match(worker, /openstock-v60/);
+    assert.match(worker, /styles\.css\?v=55/);
+    assert.match(worker, /app\.js\?v=55/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.doesNotMatch(styles, /history-gap-line/);
+});
+
+test('journal chart modes use concise labels with no explanatory subtitle', () => {
+    const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
+    assert.match(journal, /\['equity', 'Equity'\], \['daily', 'Daily'\], \['monthly', 'Monthly'\]/);
+    assert.match(journal, /<header><h1>📓 Trading Journal<\/h1><\/header>/);
+    assert.doesNotMatch(journal, /Trades, performance and risk/);
+    assert.doesNotMatch(journal, /Current capital and peak equity over time/);
+    assert.doesNotMatch(journal, /Realized P\/L in euros, with percentage return on contributed capital/);
 });
