@@ -8,6 +8,7 @@ const Database = require('better-sqlite3');
 const { initDatabase } = require('../database/init');
 const { EXIT, runMonitor, safeError } = require('../lib/monitor');
 const { TradeRepublicClient } = require('../lib/brokers/trade-republic');
+const { PytrRatesClient } = require('../lib/pytr-rates');
 
 if (process.argv.includes('--help')) {
     process.stdout.write('Usage: node scripts/monitor.js\nRuns one live OpenStock monitoring cycle using .env configuration.\n');
@@ -45,6 +46,7 @@ async function main() {
         const timeoutMs = positiveSetting('MONITOR_TIMEOUT_MS', 10000);
         const fxTtlMs = positiveSetting('EXCHANGE_RATE_CACHE_SECONDS', 3600) * 1000;
         const tradeRepublic = new TradeRepublicClient({ timeoutMs });
+        const pytr = new PytrRatesClient();
         log('=== Monitoring cycle started ===');
         return await runMonitor({ db, log, error, config: {
             timeoutMs,
@@ -54,7 +56,8 @@ async function main() {
             lockPath: process.env.MONITOR_LOCK_PATH || path.join(memoryDir, 'monitor.lock'),
             fx: { cachePath: process.env.FX_CACHE_FILE || path.join(memoryDir, 'exchange_rate_cache.json'), ttlMs: fxTtlMs, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' },
             telegram: { token: process.env.TELEGRAM_BOT_TOKEN, chatId },
-            tradeRepublic
+            tradeRepublic,
+            pytr
         }});
     } catch (monitorError) { error(safeError(monitorError)); return EXIT.CONFIG; }
     finally { db.close(); }
