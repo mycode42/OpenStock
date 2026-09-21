@@ -2,6 +2,11 @@ import { monitoredStocks as monitoredStockList } from './dashboard-utils.js';
 import { escapeHtml } from './escape.js';
 import { money, formatLocalDateTime } from './formatting.js';
 
+function quoteMoney(value) {
+    if (value === null || value === undefined || value === '') return '—';
+    return Number.isFinite(Number(value)) ? `€${money(value)}` : '—';
+}
+
 export function createDashboard(context) {
     const { getStocks, request: af, charts, actions } = context;
     const attachChartHovers = charts.attachChartHovers;
@@ -15,8 +20,12 @@ export function createDashboard(context) {
             if (!card) continue;
             const price = card.querySelector('[data-live-price]');
             if (price) price.textContent = `€${money(quote.price_eur)}`;
+            const bid = card.querySelector('[data-live-bid]');
+            if (bid) bid.textContent = quoteMoney(quote.bid_eur);
+            const ask = card.querySelector('[data-live-ask]');
+            if (ask) ask.textContent = quoteMoney(quote.ask_eur);
             const status = card.querySelector('[data-live-status]');
-            if (status) status.textContent = `${quote.source === 'pytr_rates' ? 'Trade Republic (pytr)' : quote.source === 'trade_republic_order_price' ? 'Trade Republic sidecar fallback' : 'Yahoo Finance fallback'} · live`;
+            if (status) status.textContent = `${quote.source === 'pytr_rates' ? 'Trade Republic pytr fallback' : quote.source === 'trade_republic_order_price' ? 'Trade Republic sidecar' : 'Yahoo Finance fallback'} · live`;
         }
     }
     async function pollLivePrices() {
@@ -55,6 +64,8 @@ function renderDashboard() {
         const retired = levels.filter(level => level.triggered || level.retired);
         const quantity = Number(position.quantity || 0);
         const positionValue = quantity * Number(stock.current_price_eur || 0);
+        const bid = stock.broker_quote?.bid_eur ?? stock.current_bid_eur;
+        const ask = stock.broker_quote?.ask_eur ?? stock.current_ask_eur;
         const heldValue = position.owned
             ? `<div class="position-summary">Position value: ${money(quantity)} × €${money(stock.current_price_eur)} = <strong>€${money(positionValue)}</strong></div>`
             : '';
@@ -62,6 +73,7 @@ function renderDashboard() {
             <div class="stock-symbol">${escapeHtml(stock.symbol)} <span class="badge ${position.owned ? 'owned' : 'sold'}">${position.owned ? 'HELD' : 'NOT HELD'}</span> <span class="badge enabled">${escapeHtml(position.source)}</span></div>
             <div class="stock-name">${escapeHtml(stock.name || '')}</div>
             <div class="stock-price eu" data-live-price>€${money(stock.current_price_eur)}</div>
+            <div class="quote-sides" aria-label="Live bid and ask prices"><span>Bid <strong data-live-bid>${quoteMoney(bid)}</strong></span><span>Ask <strong data-live-ask>${quoteMoney(ask)}</strong></span></div>
             ${heldValue}
             <div class="level-summary"><strong>Active levels</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(level.side)} €${money(level.price_eur)}</span>`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(level.side)} €${money(level.price_eur)} · ${level.retired ? 'retired' : 'triggered'}</span>`).join('') : 'None'}</div></div>
             <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div><div class="history-popover" role="status" aria-live="polite"></div>

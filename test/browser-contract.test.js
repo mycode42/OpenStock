@@ -29,3 +29,24 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 });
+
+test('dashboard cards retain live bid and ask placeholders for broker quotes', () => {
+    const dashboard = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'dashboard.js'), 'utf8');
+    assert.match(dashboard, /data-live-bid/);
+    assert.match(dashboard, /data-live-ask/);
+    assert.match(dashboard, /value === null \|\| value === undefined \|\| value === ''/);
+    assert.match(dashboard, /quoteMoney\(quote\.bid_eur\)/);
+    assert.match(dashboard, /quoteMoney\(quote\.ask_eur\)/);
+});
+
+test('broker Trading screen is not exposed while it is disabled', () => {
+    const root = path.join(__dirname, '..', 'www');
+    const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+    const serviceWorker = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+
+    assert.doesNotMatch(index, /href="#\/trading"/);
+    assert.doesNotMatch(index, /id="page-trading"/);
+    assert.match(app, /const ENABLE_TRADING = false/);
+    assert.doesNotMatch(serviceWorker, /\.\/modules\/trading\.js/);
+});

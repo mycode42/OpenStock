@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="OpenStock">
-<title>OpenStock - Trading Dashboard</title>
+<title>OpenStock - Stock Monitoring Dashboard</title>
 <link rel="icon" type="image/png" sizes="32x32" href="/stock-monitor/favicon-32.png">
 <link rel="icon" type="image/png" sizes="16x16" href="/stock-monitor/favicon-16.png">
 <link rel="icon" type="image/png" sizes="48x48" href="/stock-monitor/favicon-48.png">
@@ -15,23 +15,21 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/stock-monitor/favicon-192.png">
 <link rel="icon" type="image/png" sizes="256x256" href="/stock-monitor/favicon-256.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/stock-monitor/apple-touch-icon.png">
-<link rel="stylesheet" href="/stock-monitor/styles.css?v=42">
+<link rel="stylesheet" href="/stock-monitor/styles.css?v=47">
 <meta name="theme-color" content="#000000">
 </head>
 <body>
 <nav>
 <a href="#/dashboard" class="active" data-page="dashboard">Dashboard</a>
 <a href="#/journal" data-page="journal">Journal</a>
-<a href="#/trading" data-page="trading">Trading</a>
 <a href="#/config" data-page="config">Configure</a>
 </nav>
 <div class="container">
 <div id="page-dashboard"></div>
 <div id="page-journal" class="hidden"></div>
-<div id="page-trading" class="hidden"></div>
 <div id="page-config" class="hidden"></div>
 </div>
-<script type="module" src="./app.js?v=42"></script>
+<script type="module" src="./app.js?v=47"></script>
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

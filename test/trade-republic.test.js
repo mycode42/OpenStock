@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeInstrumentHistory, sanitizeAccount, sanitizeCollection, parseOrderResponse, brokerHistoryRange } = require('../lib/brokers/trade-republic');
 const { chooseTicker } = require('../lib/instrument-resolution');
 
@@ -10,6 +13,22 @@ test('Trade Republic client sends X-API-Key server-side and never returns it', a
   assert.equal(seen.headers['X-API-Key'], 'secret-test-key');
   assert.equal(quote.ask_eur, 11);
   assert.equal(JSON.stringify(quote).includes('secret-test-key'), false);
+});
+
+test('Trade Republic client reloads the rotating sidecar key from its configured file for each request', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-tr-key-'));
+  const keyFile = path.join(dir, '.env');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(keyFile, 'TRADE_REPUBLIC_API_KEY=first-key\n', { mode: 0o600 });
+  const seen = [];
+  const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY_FILE: keyFile }, fetchImpl: async (_url, options) => {
+    seen.push(options.headers['X-API-Key']);
+    return { ok: true, json: async () => ({}) };
+  } });
+  await client.getAccounts();
+  fs.writeFileSync(keyFile, 'TRADE_REPUBLIC_API_KEY=rotated-key\n', { mode: 0o600 });
+  await client.getAccounts();
+  assert.deepEqual(seen, ['first-key', 'rotated-key']);
 });
 test('sanitizers mask account references and preserve EUR bid/ask semantics', () => {
   const account = sanitizeAccount({ securitiesAccountNumber: 'DE1234567890123456', cashAmount: 42, availableCashAmount: 17 });

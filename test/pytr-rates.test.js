@@ -13,8 +13,18 @@ test('pytr CSV parser keeps EUR last and ask values by ISIN', () => {
 
 test('pytr client uses one bounded CSV batch and never supplies credentials as arguments', async () => {
     let call;
-    const client = new PytrRatesClient({ now: () => new Date('2026-09-17T12:00:00Z'), exec: async (...args) => { call = args; return { stdout: 'Name;ISIN;price;ask\nTesla;US88160R1014;321.25;321.30\n' }; } });
+    const operations = [];
+    const client = new PytrRatesClient({
+        now: () => new Date('2026-09-17T12:00:00Z'), tempDir: '/private/tmp',
+        fsImpl: {
+            mkdtemp: async prefix => { operations.push(['mkdtemp', prefix]); return '/private/tmp/openstock-pytr-123'; },
+            readFile: async file => { operations.push(['readFile', file]); return 'Name;ISIN;price;ask\nTesla;US88160R1014;321.25;321.30\n'; },
+            rm: async directory => { operations.push(['rm', directory]); }
+        },
+        exec: async (...args) => { call = args; return {}; }
+    });
     const quotes = await client.getQuotes(['US88160R1014', 'invalid', 'US88160R1014']);
     assert.equal(quotes.size, 1);
-    assert.deepEqual(call[1], ['rates', '--no-waf-token', '--no-decimal-localization', '--sort-by-column', 'ISIN', '-o', '/dev/stdout', 'US88160R1014']);
+    assert.deepEqual(call[1], ['rates', '--no-waf-token', '--no-decimal-localization', '--sort-by-column', 'ISIN', '-o', '/private/tmp/openstock-pytr-123/rates.csv', 'US88160R1014']);
+    assert.deepEqual(operations, [['mkdtemp', '/private/tmp/openstock-pytr-'], ['readFile', '/private/tmp/openstock-pytr-123/rates.csv'], ['rm', '/private/tmp/openstock-pytr-123']]);
 });

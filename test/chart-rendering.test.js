@@ -31,7 +31,15 @@ test('dashboard history charts are native EUR, smoothed, and compress closed-mar
 
 test('trade entry prices use two-decimal input precision', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
-    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.01" step="\.01" required value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 2\)\)\}"/);
+    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.01" step="\.01" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 2\)\)\}"/);
+});
+
+test('journal close workflow accepts a sale quantity and preserves the open balance', () => {
+    const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
+    assert.match(journal, /for="trade-close-quantity">Quantity to sell/);
+    assert.match(journal, /name="close_quantity" type="number"/);
+    assert.match(journal, /Open Quantity/);
+    assert.match(journal, /unsold balance remains open/);
 });
 
 test('market closures are removed from chart spacing and render as one smooth path', async () => {
@@ -65,18 +73,19 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(source, /const compensateStretch =/);
     assert.match(source, /text\.setAttribute\('transform', compensateStretch/);
     assert.match(source, /class="chart-hover-tertiary"/);
-    assert.match(journal, /tertiary: `Cash \$\{journalMoney\(point\.cash_eur\)\} · Positions/);
+    assert.match(journal, /tertiary: `Contributed \$\{journalMoney\(contributions\)\} · P\/L/);
+    assert.match(journal, /class="equity-contributions"/);
 });
 
 test('PWA asset versions are consistent and include the chart interaction fix', () => {
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=42/);
-    assert.match(index, /app\.js\?v=42/);
-    assert.match(worker, /openstock-v45/);
-    assert.match(worker, /styles\.css\?v=42/);
-    assert.match(worker, /app\.js\?v=42/);
+    assert.match(index, /styles\.css\?v=47/);
+    assert.match(index, /app\.js\?v=47/);
+    assert.match(worker, /openstock-v52/);
+    assert.match(worker, /styles\.css\?v=47/);
+    assert.match(worker, /app\.js\?v=47/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.doesNotMatch(styles, /history-gap-line/);

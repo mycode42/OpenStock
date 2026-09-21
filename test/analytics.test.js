@@ -79,3 +79,13 @@ test('drawdown is calculated from snapshots and volatility needs sufficient data
     assert.equal(result.risk.volatility_pct, null);
     assert.equal(result.risk.sharpe_ratio, null);
 });
+
+test('capital deposits do not create a false equity drawdown', () => {
+    const result = calculateDashboard({ snapshots: [
+        { snapshot_at: '2026-01-01 00:00:00', equity_eur: 100, cash_eur: 100, position_value_eur: 0, net_contributions_eur: 100 },
+        { snapshot_at: '2026-01-02 00:00:00', equity_eur: 100, cash_eur: 100, position_value_eur: 0, net_contributions_eur: 100 },
+        { snapshot_at: '2026-01-03 00:00:00', equity_eur: 200, cash_eur: 200, position_value_eur: 0, net_contributions_eur: 200 }
+    ] });
+    assert.ok(Math.abs(result.risk.max_drawdown_pct) < 0.001);
+    assert.ok(Math.abs(result.risk.current_drawdown_pct) < 0.001);
+});

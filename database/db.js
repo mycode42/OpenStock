@@ -409,6 +409,44 @@ class OpenStockDB {
         `).run({ ...trade, id });
     }
 
+    closeTradeQuantity(id, trade, closeQuantity) {
+        const quantity = Number(closeQuantity);
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error('Sale quantity must be greater than zero');
+        return this.db.transaction(() => {
+            const existing = this.db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
+            if (!existing) throw new Error('Trade not found');
+            if (existing.closed_at) throw new Error('Trade is already closed; use explicit edit to correct it');
+            const openQuantity = Number(existing.quantity);
+            if (quantity > openQuantity) throw new Error(`Sale quantity cannot exceed the open quantity (${openQuantity})`);
+            if (quantity === openQuantity) {
+                this.updateTrade(id, { ...trade, quantity: openQuantity });
+                return { id, partial: false };
+            }
+
+            const closedEntryFee = Number(existing.entry_fee_eur || 0) * quantity / openQuantity;
+            const remainingQuantity = openQuantity - quantity;
+            const remainingEntryFee = Number(existing.entry_fee_eur || 0) - closedEntryFee;
+            const suffix = `-SELL-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+            const closedTradeId = `${existing.trade_id}${suffix}`;
+            const sourceNote = `Partial sale of ${quantity} from open trade ${existing.trade_id}.`;
+            const notes = [String(trade.notes || '').trim(), sourceNote].filter(Boolean).join(' | ');
+            this.db.prepare(`
+                INSERT INTO trades (
+                    trade_id, stock_id, opened_at, closed_at, quantity, currency,
+                    entry_price, entry_fx_rate, entry_price_eur, entry_fee_eur,
+                    exit_price, exit_fx_rate, exit_price_eur, exit_fee_eur, dividend_eur, strategy, notes
+                ) VALUES (
+                    @trade_id, @stock_id, @opened_at, @closed_at, @quantity, @currency,
+                    @entry_price, @entry_fx_rate, @entry_price_eur, @entry_fee_eur,
+                    @exit_price, @exit_fx_rate, @exit_price_eur, @exit_fee_eur, @dividend_eur, @strategy, @notes
+                )
+            `).run({ ...trade, trade_id: closedTradeId, quantity, entry_fee_eur: closedEntryFee, notes });
+            this.db.prepare(`UPDATE trades SET quantity=?, entry_fee_eur=?, updated_at=datetime('now') WHERE id=?`)
+                .run(remainingQuantity, remainingEntryFee, id);
+            return { id, partial: true, closedTradeId };
+        })();
+    }
+
     // ===== CAPITAL & EQUITY =====
     getCapitalEvents() {
         return this.db.prepare('SELECT * FROM capital_events ORDER BY occurred_at ASC, id ASC').all();

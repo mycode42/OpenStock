@@ -93,7 +93,7 @@ function createLiveQuoteFeed({ app, now = () => new Date(), refreshMs = Number(p
     let cached = null, inflight = null;
     async function refresh() {
         const stocks = app.locals.db.getActiveStocks();
-        const rows = await quoteServiceFor(app, now).fetchMany(stocks.map(stock => ({ ...stock, mapping: app.locals.db.getBrokerMapping(stock.id) })), { preferPytr: true });
+        const rows = await quoteServiceFor(app, now).fetchMany(stocks.map(stock => ({ ...stock, mapping: app.locals.db.getBrokerMapping(stock.id) })), { pytrFallback: true });
         return { observed_at: now().toISOString(), refresh_ms: ttlMs, prices: rows.filter(row => row.quote).map(({ stock, quote }) => ({ stock_id: stock.id, price_eur: quote.priceEur, bid_eur: quote.bidEur ?? null, ask_eur: quote.askEur ?? null, quote_time: quote.quoteTime || null, observed_at: quote.observedAt || null, source: quote.source, fallback: !String(quote.source || '').startsWith('pytr_') })) };
     }
     return { async get() {
@@ -173,7 +173,7 @@ function normaliseTrade(body, existing = null) {
         entry_price: entryPrice,
         entry_fx_rate: entryFxRate,
         entry_price_eur: entryPrice * entryFxRate,
-        entry_fee_eur: numberField(body.entry_fee_eur ?? existing?.entry_fee_eur ?? 0, 'Entry fee'),
+        entry_fee_eur: numberField(body.entry_fee_eur ?? existing?.entry_fee_eur ?? 1, 'Entry fee'),
         exit_price: exitPrice,
         exit_fx_rate: exitFxRate,
         exit_price_eur: closedAt ? exitPrice * exitFxRate : null,
@@ -532,10 +532,14 @@ app.post('/api/trades/:id/close', (req, res) => {
         const existing = req.app.locals.db.getTradeById(req.params.id);
         if (!existing) return res.status(404).json({ error: 'Trade not found' });
         if (existing.closed_at) return res.status(409).json({ error: 'Trade is already closed; use explicit edit to correct it' });
-        const trade = normaliseTrade({ ...req.body, closed_at: req.body.closed_at || new Date().toISOString() }, existing);
-        req.app.locals.db.updateTrade(existing.id, trade);
+        const closeQuantity = numberField(req.body.close_quantity ?? existing.quantity, 'Sale quantity', { minimum: Number.EPSILON });
+        const trade = normaliseTrade({ ...req.body, quantity: existing.quantity, closed_at: req.body.closed_at || new Date().toISOString() }, existing);
+        const result = req.app.locals.db.closeTradeQuantity(existing.id, trade, closeQuantity);
         captureEquitySnapshot(req.app.locals.db, 'trade_close');
-        res.json({ message: 'Trade closed', trade: serializeTrade(req.app.locals.db.getTradeById(existing.id)) });
+        const closedTrade = result.partial
+            ? req.app.locals.db.getAllTrades({ status: 'closed' }).find(row => row.trade_id === result.closedTradeId)
+            : req.app.locals.db.getTradeById(existing.id);
+        res.json({ message: result.partial ? 'Partial sale recorded' : 'Trade closed', partial: result.partial, trade: serializeTrade(closedTrade), open_trade: result.partial ? serializeTrade(req.app.locals.db.getTradeById(existing.id)) : null });
     } catch (e) {
         res.status(400).json({ error: e.message || 'Invalid close details' });
     }
@@ -612,7 +616,7 @@ app.post('/api/refresh-prices', async (req, res) => {
         
         let updatedCount = 0;
         const service = quoteServiceFor(req.app, () => now());
-        const quotes = await service.fetchMany(stocks.map(stock => ({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) })), { preferPytr: true });
+        const quotes = await service.fetchMany(stocks.map(stock => ({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) })), { pytrFallback: true });
         for (const { stock, quote, error: stockError } of quotes) {
             try {
                 if (stockError) throw stockError;

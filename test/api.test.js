@@ -130,6 +130,9 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     const trade = (await response.json()).trade;
     response = await f.request(`/api/trades/${trade.id}/close`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ closed_at: '2026-01-03T00:00:00Z', exit_price: 100, exit_fx_rate: 1, exit_fee_eur: 1, dividend_eur: 2 }) });
     assert.equal(response.status, 200);
+    response = await f.request('/api/trades', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ trade_id: 'T-default-fee', stock_id: good.id, opened_at: '2026-01-04T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 90, entry_fx_rate: 1 }) });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).trade.entry_fee_eur, 1);
     assert.equal((await f.request('/api/analytics/dashboard')).status, 200);
 
     const bad = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'BAD', name: 'Bad', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
@@ -307,4 +310,38 @@ test('trade GET and PUT return authoritative records and reject invalid stock re
     response = await bodyRequest(f, `/api/trades/${trade.id}`, { notes: 'changed', stock_id: stock.id, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 1, entry_fx_rate: 1 }, 'PUT');
     assert.equal(response.status, 200);
     assert.equal((await response.json()).trade.notes, 'changed');
+});
+
+test('journal records a partial sale while preserving the remaining open position and proportional entry fees', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const created = await bodyRequest(f, '/api/stocks', { symbol: 'PART', name: 'Partial', buy_threshold_eur: 10, sell_threshold_eur: 20 });
+    const stock = (await created.json()).stock;
+    const opened = await bodyRequest(f, '/api/trades', {
+        trade_id: 'PART-OPEN', stock_id: stock.id, opened_at: '2026-09-20T10:00:00Z', quantity: 10,
+        currency: 'EUR', entry_price: 50, entry_fx_rate: 1, entry_fee_eur: 5
+    });
+    const openTrade = (await opened.json()).trade;
+    const response = await bodyRequest(f, `/api/trades/${openTrade.id}/close`, {
+        close_quantity: 4, closed_at: '2026-09-21T10:00:00Z', exit_price: 60, exit_fx_rate: 1,
+        exit_fee_eur: 2, dividend_eur: 1, notes: 'Trim position'
+    });
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.partial, true);
+    assert.equal(result.trade.quantity, 4);
+    assert.equal(result.trade.entry_fee_eur, 2);
+    assert.equal(result.trade.exit_fee_eur, 2);
+    assert.equal(result.open_trade.quantity, 6);
+    assert.equal(result.open_trade.entry_fee_eur, 3);
+    assert.equal(result.open_trade.is_closed, false);
+    assert.match(result.trade.notes, /Partial sale of 4 from open trade PART-OPEN/);
+    assert.equal(f.db.getPositionSummary(stock.id).quantity, 6);
+    assert.equal(f.db.getAllTrades({ status: 'closed' }).length, 1);
+
+    const oversell = await bodyRequest(f, `/api/trades/${openTrade.id}/close`, {
+        close_quantity: 7, closed_at: '2026-09-22T10:00:00Z', exit_price: 61, exit_fx_rate: 1, exit_fee_eur: 0
+    });
+    assert.equal(oversell.status, 400);
+    assert.equal(f.db.getPositionSummary(stock.id).quantity, 6);
 });
