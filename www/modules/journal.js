@@ -79,7 +79,7 @@ function renderEquityCurve(points, resolution = 'snapshot') {
     if (clean.length < 2) return '<div class="journal-empty">Insufficient data — equity snapshots begin after initial capital is recorded.</div>';
     const values = clean.map(point => Number(point.equity_eur));
     const min = Math.min(...values), max = Math.max(...values), padding = Math.max((max - min) * 0.08, 1);
-    const width = 800, height = 260, left = 68, right = 12, top = 10, bottom = 32, plotWidth = width - left - right, plotHeight = height - top - bottom;
+    const width = 800, height = 260, left = 40, right = 12, top = 10, bottom = 32, plotWidth = width - left - right, plotHeight = height - top - bottom;
     const { low, high, values: axisValues } = equityAxisBounds(min - padding, max + padding);
     const times = clean.map(point => parseOpenStockDate(point.at).getTime());
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
@@ -102,7 +102,7 @@ function renderPerformanceCurve(rows, period, capitalBase) {
     if (clean.length < 2) return '<div class="journal-empty">At least two completed periods are needed for this chart.</div>';
     const values = clean.map(point => point.value);
     const min = Math.min(0, ...values), max = Math.max(0, ...values), padding = Math.max((max - min) * .1, 1);
-    const width = 800, height = 260, left = 68, right = 12, top = 10, bottom = 32, plotWidth = width - left - right, plotHeight = height - top - bottom;
+    const width = 800, height = 260, left = 40, right = 12, top = 10, bottom = 32, plotWidth = width - left - right, plotHeight = height - top - bottom;
     const { low, high, values: axisValues } = equityAxisBounds(min - padding, max + padding);
     const times = clean.map(point => parseOpenStockDate(point.at).getTime());
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
