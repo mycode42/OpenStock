@@ -100,11 +100,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=59/);
-    assert.match(index, /app\.js\?v=59/);
-    assert.match(worker, /openstock-v64/);
-    assert.match(worker, /styles\.css\?v=59/);
-    assert.match(worker, /app\.js\?v=59/);
+    assert.match(index, /styles\.css\?v=60/);
+    assert.match(index, /app\.js\?v=60/);
+    assert.match(worker, /openstock-v65/);
+    assert.match(worker, /styles\.css\?v=60/);
+    assert.match(worker, /app\.js\?v=60/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.doesNotMatch(styles, /history-gap-line/);
@@ -126,5 +126,6 @@ test('journal chart modes use concise labels with no explanatory subtitle', () =
     assert.match(journal, /€\$\{Math\.round\(amount \/ 1000\)\}k/);
     assert.match(journal, /left = 40, right = 12/);
     assert.match(styles, /\.journal-equity-y-labels span\{position:absolute;right:95\.5%;/);
-    assert.match(styles, /\.journal-equity-curve\{height:180px\}/);
+    assert.match(styles, /\.journal-equity-curve\{height:140px\}/);
+    assert.doesNotMatch(journal, /journal-chart-scale|Hover or focus for/);
 });

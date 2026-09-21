@@ -94,7 +94,7 @@ function renderEquityCurve(points, resolution = 'snapshot') {
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight}" y2="${top + plotHeight}"/></g>`, lineClass: 'equity-line', linePoints: line, hoverPoints, ariaLabel });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${journalAxisMoney(value)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
-    return `<div class="journal-chart-scale"><span>${clean.length} ${resolution} samples</span><span>Hover or focus for exact values</span></div><div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
+    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
 }
 
 function renderPerformanceCurve(rows, period, capitalBase) {
@@ -117,7 +117,7 @@ function renderPerformanceCurve(rows, period, capitalBase) {
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)}" y2="${top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)}"/></g>`, lineClass: `performance-line ${period}`, linePoints: line, hoverPoints, ariaLabel: `${periodName} realized P/L chart in EUR` });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}${journalAxisMoney(value)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
-    return `<div class="journal-chart-scale"><span>${clean.length} completed ${period} periods</span><span>Hover or focus for € and % of capital</span></div><div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
+    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
 }
 
 function journalChartControls(active) {
