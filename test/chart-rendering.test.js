@@ -100,11 +100,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=57/);
-    assert.match(index, /app\.js\?v=57/);
-    assert.match(worker, /openstock-v62/);
-    assert.match(worker, /styles\.css\?v=57/);
-    assert.match(worker, /app\.js\?v=57/);
+    assert.match(index, /styles\.css\?v=58/);
+    assert.match(index, /app\.js\?v=58/);
+    assert.match(worker, /openstock-v63/);
+    assert.match(worker, /styles\.css\?v=58/);
+    assert.match(worker, /app\.js\?v=58/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.doesNotMatch(styles, /history-gap-line/);
@@ -122,4 +122,8 @@ test('journal chart modes use concise labels with no explanatory subtitle', () =
     assert.match(journal, /journalKpi\('Annualized Return'/);
     assert.doesNotMatch(journal, /<div class="journal-small">Estimated yearly profit/);
     assert.match(styles, /\.journal-chart-controls \.history-range\{min-width:0;min-height:0;padding:\.33rem \.38rem;font-size:\.65rem\}/);
+    assert.match(journal, /function journalAxisMoney/);
+    assert.match(journal, /€\$\{Math\.round\(amount \/ 1000\)\}k/);
+    assert.match(styles, /\.journal-equity-y-labels span\{position:absolute;right:92\.5%;/);
+    assert.match(styles, /\.journal-equity-curve\{height:220px\}/);
 });

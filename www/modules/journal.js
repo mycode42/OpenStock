@@ -67,6 +67,13 @@ function equityTimeLabel(value, range) {
     return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', timeZone: 'Europe/Berlin' }).format(date);
 }
 
+function journalAxisMoney(value) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return '—';
+    if (Math.abs(amount) >= 1000) return `€${Math.round(amount / 1000)}k`;
+    return `€${Math.round(amount).toLocaleString('en-GB')}`;
+}
+
 function renderEquityCurve(points, resolution = 'snapshot') {
     const clean = (points || []).filter(point => Number.isFinite(Number(point.equity_eur)) && parseOpenStockDate(point.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
     if (clean.length < 2) return '<div class="journal-empty">Insufficient data — equity snapshots begin after initial capital is recorded.</div>';
@@ -85,7 +92,7 @@ function renderEquityCurve(points, resolution = 'snapshot') {
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
     const xAxis = xTicks.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight}" y2="${top + plotHeight}"/></g>`, lineClass: 'equity-line', linePoints: line, hoverPoints, ariaLabel });
-    const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">€${Math.round(value).toLocaleString('en-GB')}</span>`).join('');
+    const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${journalAxisMoney(value)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
     return `<div class="journal-chart-scale"><span>${clean.length} ${resolution} samples</span><span>Hover or focus for exact values</span></div><div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
 }
@@ -108,7 +115,7 @@ function renderPerformanceCurve(rows, period, capitalBase) {
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
     const xAxis = xTicks.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)}" y2="${top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)}"/></g>`, lineClass: `performance-line ${period}`, linePoints: line, hoverPoints, ariaLabel: `${periodName} realized P/L chart in EUR` });
-    const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}€${Math.round(value).toLocaleString('en-GB')}</span>`).join('');
+    const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}${journalAxisMoney(value)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
     return `<div class="journal-chart-scale"><span>${clean.length} completed ${period} periods</span><span>Hover or focus for € and % of capital</span></div><div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
 }
