@@ -164,14 +164,29 @@ async function loadCardHistory(card, range = '1d') {
 
 function attachChartHovers(container) {
     container.querySelectorAll('.stock-card[data-stock-id]').forEach(card => {
+        const panel = card.querySelector('.history-popover');
+        let closeTimer;
+        const cancelPopoverClose = () => {
+            clearTimeout(closeTimer);
+            closeTimer = undefined;
+        };
+        const delayPopoverClose = () => {
+            cancelPopoverClose();
+            panel.classList.add('is-open');
+            closeTimer = setTimeout(() => panel.classList.remove('is-open'), 300);
+        };
+
         card.addEventListener('mouseenter', () => loadCardHistory(card, '1d'), { once: true });
+        card.addEventListener('pointerenter', cancelPopoverClose);
+        card.addEventListener('pointerleave', delayPopoverClose);
+        panel.addEventListener('pointerenter', cancelPopoverClose);
+        panel.addEventListener('pointerleave', delayPopoverClose);
         card.addEventListener('focusin', () => loadCardHistory(card, '1d'), { once: true });
         card.addEventListener('touchstart', () => {
-            const panel = card.querySelector('.history-popover');
             panel.classList.add('is-open');
             loadCardHistory(card, panel.dataset.requestedRange || '1d');
         }, { passive: true, once: true });
-        card.querySelector('.history-popover').addEventListener('click', event => {
+        panel.addEventListener('click', event => {
             const button = event.target.closest('[data-history-range]');
             if (!button) return;
             event.preventDefault();
