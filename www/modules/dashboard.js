@@ -13,6 +13,7 @@ export function createDashboard(context) {
     const stockList = () => getStocks();
     let liveTimer = null;
     let liveRequestInFlight = false;
+    let liveAbortController = null;
     const livePollMs = 1000;
     function applyLivePrices(payload) {
         for (const quote of payload?.prices || []) {
@@ -29,15 +30,25 @@ export function createDashboard(context) {
         }
     }
     async function pollLivePrices() {
-        if (liveRequestInFlight || window.location.hash && window.location.hash !== '#/dashboard') return;
+        if (liveRequestInFlight || document.hidden || (window.location.hash && window.location.hash !== '#/dashboard')) return;
         liveRequestInFlight = true;
-        try { applyLivePrices(await af('/live-prices')); } finally { liveRequestInFlight = false; }
+        liveAbortController = new AbortController();
+        try { applyLivePrices(await af('/live-prices', { signal: liveAbortController.signal })); }
+        finally { liveAbortController = null; liveRequestInFlight = false; }
     }
     function startLivePolling() {
         if (liveTimer) return;
         pollLivePrices();
         liveTimer = window.setInterval(pollLivePrices, livePollMs);
     }
+    function stopLivePolling() {
+        if (liveTimer) window.clearInterval(liveTimer);
+        liveTimer = null;
+        liveAbortController?.abort();
+    }
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && liveTimer) pollLivePrices();
+    });
 function renderDashboard() {
     const container = document.getElementById('page-dashboard');
     // The Dashboard is the active monitoring view. Disabled stocks remain in
@@ -84,5 +95,5 @@ function renderDashboard() {
     attachChartHovers(container);
     startLivePolling();
 }
-    return { renderDashboard };
+    return { renderDashboard, stopLivePolling };
 }

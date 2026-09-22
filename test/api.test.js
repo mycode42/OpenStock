@@ -45,6 +45,16 @@ test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T04:00:00Z')).toISOString(), '2026-09-15T05:30:00.000Z');
 });
 
+test('analytics reads do not create equity snapshots', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const before = f.db.db.prepare('SELECT COUNT(*) AS count FROM equity_snapshots').get().count;
+    const response = await f.request('/api/analytics/dashboard');
+    assert.equal(response.status, 200);
+    const after = f.db.db.prepare('SELECT COUNT(*) AS count FROM equity_snapshots').get().count;
+    assert.equal(after, before);
+});
+
 test('live prices use pytr in memory only and coalesce concurrent requests', async t => {
     const f = await fixture({ now: () => new Date('2026-09-17T12:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });

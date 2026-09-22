@@ -26,3 +26,11 @@ test('pytr is queried only after a sidecar quote failure and before Yahoo', asyn
     assert.equal(result.quote.bidEur, null);
     assert.equal(result.quote.askEur, 11.2);
 });
+
+test('a Yahoo-only quote failure is returned once and is not retried through the pytr fallback phase', async () => {
+    let yahooCalls = 0;
+    const service = new QuoteService({ db: {}, fetchImpl: async () => { yahooCalls += 1; throw new Error('Yahoo offline'); }, config: { yahooUrl: 'mock', fx: { cachePath: '/tmp/no-cache', ttlMs: 1, url: 'fx' } } });
+    const [result] = await service.fetchMany([{ id: 2, symbol: 'YFAIL', price_source: 'yahoo' }], { pytrFallback: true });
+    assert.equal(yahooCalls, 1);
+    assert.match(result.error.message, /Yahoo offline/);
+});

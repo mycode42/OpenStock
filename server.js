@@ -11,6 +11,7 @@ const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
 const { QuoteService } = require('./lib/quote-service');
 const { PytrRatesClient } = require('./lib/pytr-rates');
 const { normalizedBrokerRows } = require('./lib/broker-sync-service');
+const { normalizeOrderSizing, hasValidOrderSizingInput, failedGateNames, fetchLiveOrderAuthority } = require('./lib/order-safety');
 const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
@@ -574,7 +575,6 @@ app.post('/api/capital-events', (req, res) => {
 
 app.get('/api/analytics/dashboard', (req, res) => {
     try {
-        captureEquitySnapshot(req.app.locals.db, 'dashboard');
         res.json(dashboardData(req.app.locals.db));
     } catch (e) {
         console.error('Error calculating dashboard:', e.message);
@@ -679,46 +679,6 @@ app.post('/api/broker/trade-republic/sync', async (req, res) => {
     res.json({broker:'trade_republic',observed_at,counts,new_reconciliation_candidates:newCandidates,pending_reconciliation:req.app.locals.db.getBrokerReconciliationCandidates().length});
   } catch(e) { brokerError(res,e); }
 });
-function normalizeOrderSizing(body, sizingPrice) {
-    const hasQuantity = body.quantity !== undefined && body.quantity !== null && body.quantity !== '';
-    const hasAmount = body.amount_eur !== undefined && body.amount_eur !== null && body.amount_eur !== '';
-    if (hasQuantity === hasAmount) return { valid: false, error: 'Enter either a quantity or a euro value' };
-    if (hasQuantity) {
-        const quantity = Number(body.quantity);
-        return Number.isInteger(quantity) && quantity > 0
-            ? { valid: true, quantity, sizing_mode: 'quantity', requested_amount_eur: null, sizing_price_eur: Number(sizingPrice) || null }
-            : { valid: false, error: 'Quantity must be a positive whole number' };
-    }
-    const requestedAmount = Number(body.amount_eur);
-    const price = Number(sizingPrice);
-    if (!(Number.isFinite(requestedAmount) && requestedAmount > 0)) return { valid: false, error: 'Euro value must be positive' };
-    if (!(Number.isFinite(price) && price > 0)) return { valid: false, error: 'A current EUR price is required for euro-value sizing' };
-    const quantity = Math.floor(requestedAmount / price);
-    return quantity > 0
-        ? { valid: true, quantity, sizing_mode: 'amount', requested_amount_eur: requestedAmount, sizing_price_eur: price }
-        : { valid: false, error: 'Euro value is below the price of one security' };
-}
-
-function hasValidOrderSizingInput(body) {
-    const hasQuantity = body.quantity !== undefined && body.quantity !== null && body.quantity !== '';
-    const hasAmount = body.amount_eur !== undefined && body.amount_eur !== null && body.amount_eur !== '';
-    if (hasQuantity === hasAmount) return false;
-    return hasQuantity ? Number.isInteger(Number(body.quantity)) && Number(body.quantity) > 0 : Number.isFinite(Number(body.amount_eur)) && Number(body.amount_eur) > 0;
-}
-
-function failedGateNames(gates) { return Object.entries(gates).filter(([, passed]) => !passed).map(([name]) => name); }
-
-async function fetchLiveOrderAuthority(client, { accountRef, isin, exchange }) {
-    const [accounts, portfolio, quote] = await Promise.all([
-        client.getAccounts(),
-        client.getPortfolio(),
-        client.getQuote({ isin, exchange })
-    ]);
-    const account = Array.isArray(accounts) ? accounts.find(row => row?.account_ref_masked === accountRef) : null;
-    const position = Array.isArray(portfolio) ? portfolio.find(row => row?.account_ref_masked === accountRef && String(row?.instrument || row?.isin || '').toUpperCase() === isin) : null;
-    return { account, position, quote };
-}
-
 app.post('/api/broker/trade-republic/order-preview', async (req, res) => {
     try {
         const b = req.body || {};

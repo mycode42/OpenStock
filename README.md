@@ -1,6 +1,6 @@
 # OpenStock - Stock Monitoring, Trading Journal & Performance Dashboard
 
-A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. For verified instruments, pytr supplies the primary dashboard/manual-refresh EUR price; the authenticated loopback UAPI sidecar remains the executable-quote source and first fallback; Yahoo USD quotes are converted to EUR only as a second fallback.
+A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. For verified instruments, the authenticated loopback Trade Republic UAPI sidecar is the primary EUR quote source; pytr is the display-only fallback, followed by Yahoo USD quotes converted to EUR.
 
 > **Note:** Verified EUR instruments use Trade Republic quotes; **Yahoo Finance** remains the free fallback. No stock-price API key is required.
 
@@ -88,7 +88,7 @@ cp .env.example .env
 
 OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. The loopback UAPI API key remains server-side in OpenStock's `.env`.
 
-The dashboard polls `/api/live-prices` once per second. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
+The dashboard polls `/api/live-prices` once per second only while the Dashboard is visible. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
 
 Manual order submission is fail-closed. It additionally requires a verified mapping, fresh executable quote, synchronized cash or position data, selected account, typed confirmation, idempotency key, and all environment gates above. A submitted broker order never creates a Journal execution unless a later broker reconciliation proves it filled.
 
@@ -225,7 +225,7 @@ Access the web app:
 
 ### Performance data model
 
-`trades` records one position lot. An open trade has no close date; a completed trade retains entry/exit prices, fees, currency and EUR conversion rates. `capital_events` never count as P/L. `equity_snapshots` are captured with the monitor so equity curves and drawdown do not have to be reconstructed from today's prices.
+`trades` records one position lot. An open trade has no close date; a completed trade retains entry/exit prices, fees, currency and EUR conversion rates. `capital_events` never count as P/L. `equity_snapshots` are captured by the monitor and state-changing Journal operations so equity curves and drawdown do not have to be reconstructed from today's prices. Analytics GET requests are read-only.
 
 The dashboard deliberately shows `N/A` or `Insufficient data` until the relevant history exists. Annualized return and estimated yearly profit require at least 30 calendar days since initial capital; volatility and Sharpe require 30 equity observations.
 

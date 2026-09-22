@@ -1,10 +1,21 @@
 # OpenStock changelog
 
+## 1.1.0 — 2026-09-22
+
+### Stability and maintainability
+
+- Fixed failed Yahoo-only quote requests being retried unnecessarily during the Trade Republic/pytr fallback phase.
+- Extracted shared Yahoo, FX, quote parsing, timeout, and cache primitives from the scheduled monitor so manual refreshes and monitoring use one market-data boundary without a module cycle.
+- Made analytics reads side-effect-free; snapshot creation remains confined to monitoring and Journal mutations.
+- Paused dashboard live-price polling when the Dashboard is not visible and abort in-flight requests during navigation.
+- Added release-version validation for PWA assets and a GitHub Actions verification workflow covering syntax, PWA asset consistency, tests, and production dependency audit.
+- Aligned documented quote-source order and Journal pagination behavior with the application.
+
 ## 1.0.2 — 2026-09-17
 
 ### Journal usability
 
-- Added server-side Journal pagination with 20 trades per page and Previous/Next navigation.
+- Added server-side Journal pagination with 15 trades per page and Previous/Next navigation.
 - Prevented duplicate Initial Capital entries in the Journal and returned clear `409 INITIAL_CAPITAL_EXISTS` API feedback.
 - Made Deposit the default reconciliation option after initial capital has been recorded, with guidance that deposits and withdrawals do not change trading P/L.
 

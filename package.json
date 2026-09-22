@@ -1,6 +1,6 @@
 {
   "name": "openstock",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Reliable TR-first stock monitoring with Yahoo Finance EUR fallback",
   "main": "server.js",
   "scripts": {
@@ -8,7 +8,9 @@
     "test:verbose": "node --test --test-reporter=spec",
     "start": "node server.js",
     "monitor": "node scripts/monitor.js",
-    "backfill-history": "node scripts/backfill-history.js"
+    "backfill-history": "node scripts/backfill-history.js",
+    "check": "node scripts/check-pwa-assets.js && find . -path './node_modules' -prune -o -name '*.js' -type f -print0 | xargs -0 -n1 node --check",
+    "audit:prod": "npm audit --omit=dev"
   },
   "keywords": [],
   "author": "",
