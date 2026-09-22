@@ -27,6 +27,21 @@ test('pytr is queried only after a sidecar quote failure and before Yahoo', asyn
     assert.equal(result.quote.askEur, 11.2);
 });
 
+test('a failed pytr fallback requests an app-confirmed login while Yahoo continues', async () => {
+    let requests = 0;
+    const service = new QuoteService({
+        db: {},
+        brokerClient: { getQuote: async () => { throw new Error('offline'); } },
+        pytrClient: { getQuotes: async () => { throw new Error('session unavailable'); } },
+        pytrLoginRecovery: { request: async () => { requests += 1; return { requested: true }; } },
+        now: () => new Date('2026-01-01T12:00:00Z')
+    });
+    service.yahooFallback = async () => ({ priceEur: 9, source: 'yahoo', quoteTime: '2026-01-01T12:00:00Z', observedAt: '2026-01-01T12:00:00Z' });
+    const [result] = await service.fetchMany([stock], { pytrFallback: true });
+    assert.equal(requests, 1);
+    assert.equal(result.quote.source, 'yahoo');
+});
+
 test('a Yahoo-only quote failure is returned once and is not retried through the pytr fallback phase', async () => {
     let yahooCalls = 0;
     const service = new QuoteService({ db: {}, fetchImpl: async () => { yahooCalls += 1; throw new Error('Yahoo offline'); }, config: { yahooUrl: 'mock', fx: { cachePath: '/tmp/no-cache', ttlMs: 1, url: 'fx' } } });

@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenStock PyTR v2 login recovery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/openstock
+EnvironmentFile=/opt/openstock/.env
+Environment=HOME=/home/openclaw
+ExecStart=/usr/bin/node /opt/openstock/scripts/pytr-login-recovery.js
+TimeoutStartSec=180s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=tmpfs
+BindPaths=/home/openclaw/.pytr
+ProtectSystem=strict
+ReadWritePaths=/opt/openstock/memory

@@ -165,7 +165,7 @@ sqlite3 /opt/openstock/database/openstock.db ".tables"
 
 ## Monitoring Behavior
 
-The `scripts/monitor.js` process runs every minute via a systemd timer. It uses Trade Republic EUR order quotes for stocks with verified EUR mappings and falls back to Yahoo Finance plus cached USD→EUR conversion when direct pricing is unavailable. The monitor:
+The `scripts/monitor.js` process runs every minute via a systemd timer. It uses Trade Republic EUR order quotes for stocks with verified EUR mappings, then pytr, and finally Yahoo Finance plus cached USD→EUR conversion when direct pricing is unavailable. If both the sidecar and pytr fail, it creates a rate-limited pytr v2-login recovery request; the separate recovery service starts `pytr login --v2` and waits for confirmation in the Trade Republic app while the monitor continues on Yahoo for that cycle. The monitor:
 
 1. Reads enabled stocks from database
 2. Fetches a verified Trade Republic EUR quote when configured, otherwise Yahoo Finance
@@ -179,6 +179,19 @@ The `scripts/monitor.js` process runs every minute via a systemd timer. It uses 
 10. Uses bounded concurrency, a per-cycle deadline, prepared SQLite statements, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
 
 Run one monitoring cycle manually as the `openclaw` user with `npm run monitor` (`npm run monitor -- --help` only prints usage). Use the tracked systemd override in `ops/systemd/` when deploying monitor configuration changes.
+
+### PyTR v2-login recovery
+
+Install the tracked recovery unit files after deploying the application code:
+
+```bash
+sudo install -m 0644 ops/systemd/openstock-pytr-login-recovery.service /etc/systemd/system/
+sudo install -m 0644 ops/systemd/openstock-pytr-login-recovery.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now openstock-pytr-login-recovery.timer
+```
+
+The monitor writes only a private request marker under `/opt/openstock/memory/`; it never supplies or logs a phone number, PIN, cookies, or confirmation token. A failed or unconfirmed login leaves the Yahoo fallback in place. `PYTR_LOGIN_RECOVERY_COOLDOWN_SECONDS` defaults to 900 seconds to avoid repeated app prompts during an outage.
 
 ### Trigger Debouncing
 

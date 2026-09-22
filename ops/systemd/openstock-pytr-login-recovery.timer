@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for pending OpenStock PyTR login recovery
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+Unit=openstock-pytr-login-recovery.service
+
+[Install]
+WantedBy=timers.target
