@@ -33,6 +33,15 @@ test('dashboard history charts are native EUR, smoothed, and compress closed-mar
     assert.doesNotMatch(source, /point\.price_usd|USD price chart|· USD/);
 });
 
+test('dashboard history percentage follows the inspected point and resets to the range return', () => {
+    const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
+    assert.match(source, /data-history-change/);
+    assert.match(source, /data-default-change/);
+    assert.match(source, /change: \(Number\(point\.price_eur\) \/ Number\(clean\[0\]\.price_eur\) - 1\) \* 100/);
+    assert.match(source, /updateChange\(point\)/);
+    assert.match(source, /resetChange\(\)/);
+});
+
 test('trade entry prices use two-decimal input precision', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
     assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.01" step="\.01" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 2\)\)\}"/);
@@ -104,11 +113,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=64/);
-    assert.match(index, /app\.js\?v=64/);
-    assert.match(worker, /openstock-v69/);
-    assert.match(worker, /styles\.css\?v=64/);
-    assert.match(worker, /app\.js\?v=64/);
+    assert.match(index, /styles\.css\?v=65/);
+    assert.match(index, /app\.js\?v=65/);
+    assert.match(worker, /openstock-v70/);
+    assert.match(worker, /styles\.css\?v=65/);
+    assert.match(worker, /app\.js\?v=65/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.match(styles, /\.journal-performance-card \.journal-collapsible-content\{padding:1rem 1\.25rem 1\.25rem\}/);

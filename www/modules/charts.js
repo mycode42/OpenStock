@@ -42,8 +42,23 @@ function attachInteractiveLineCharts(root) {
         const secondary = chart.querySelector('.chart-hover-secondary');
         const tertiary = chart.querySelector('.chart-hover-tertiary');
         const hitArea = chart.querySelector('.chart-hit-area');
+        const changeTarget = chart.closest('.history-popover')?.querySelector('[data-history-change]');
         let activeIndex = points.length - 1;
         let pinned = false;
+
+        const updateChange = point => {
+            if (!changeTarget || !Number.isFinite(Number(point?.change))) return;
+            const change = Number(point.change);
+            changeTarget.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+            changeTarget.classList.toggle('up', change >= 0);
+            changeTarget.classList.toggle('down', change < 0);
+        };
+        const resetChange = () => {
+            if (!changeTarget) return;
+            changeTarget.textContent = changeTarget.dataset.defaultChange || '';
+            changeTarget.classList.toggle('up', changeTarget.dataset.defaultChangeClass === 'up');
+            changeTarget.classList.toggle('down', changeTarget.dataset.defaultChangeClass === 'down');
+        };
 
         const show = index => {
             activeIndex = Math.max(0, Math.min(points.length - 1, index));
@@ -71,10 +86,11 @@ function attachInteractiveLineCharts(root) {
             secondary.textContent = point.secondary;
             tertiary.textContent = point.tertiary || '';
             tertiary.toggleAttribute('hidden', !point.tertiary);
+            updateChange(point);
             hover.removeAttribute('hidden');
             chart.setAttribute('aria-label', `${chart.dataset.chartLabel}. ${point.primary}. ${point.secondary}${point.tertiary ? `. ${point.tertiary}` : ''}`);
         };
-        const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
+        const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); resetChange(); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
         const nearest = clientX => {
             const bounds = chart.getBoundingClientRect();
             const x = (clientX - bounds.left) / bounds.width * chart.viewBox.baseVal.width;
@@ -111,13 +127,14 @@ function renderHistoryChart(points, range) {
     const low = min - padding, high = max + padding, width = 264, height = 82;
     const coordinates = clean.map((point, index) => ({ point, x: index / (clean.length - 1) * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
     const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at) }));
+    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at), change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
     const first = clean[0], last = clean[clean.length - 1];
     const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
     const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
     const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints, smooth: true, hoverPoints, ariaLabel });
-    return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
+    const changeText = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
+    return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}" data-history-change data-default-change="${changeText}" data-default-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {
