@@ -75,7 +75,7 @@ cp .env.example .env
 | `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
 | `PYTR_COMMAND` | pytr executable used as a display-only fallback price source (default `/opt/pytr-venv/bin/pytr`) |
 | `PYTR_TIMEOUT_MS` | Bounded pytr batch timeout (default 8000) |
-| `LIVE_PRICE_REFRESH_MS` | Display-only dashboard refresh cadence; minimum/default 1000 ms |
+| `LIVE_PRICE_REFRESH_MS` | Display-only Dashboard/Configure refresh cadence; minimum/default 1000 ms |
 | `TRADE_REPUBLIC_LIVE_ENABLED` | Environment-only live-order gate; default `false` |
 | `TRADE_REPUBLIC_DRY_RUN` | Environment-only dry-run gate; default `true` |
 | `TRADE_REPUBLIC_LIVE_ACK` | Environment-only acknowledgement gate; default `false` |
@@ -86,7 +86,7 @@ cp .env.example .env
 
 OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. Trade Republic sidecar authentication is provisioned server-side and is not a dashboard or user-facing configuration setting.
 
-The dashboard polls `/api/live-prices` once per second only while the Dashboard is visible. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
+The Dashboard and Configure page each poll `/api/live-prices` once per second only while that page is visible. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
 
 Manual order submission is fail-closed. It additionally requires a verified mapping, fresh executable quote, synchronized cash or position data, selected account, typed confirmation, idempotency key, and all environment gates above. A submitted broker order never creates a Journal execution unless a later broker reconciliation proves it filled.
 

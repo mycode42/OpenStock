@@ -39,6 +39,18 @@ test('dashboard cards retain live bid and ask placeholders for broker quotes', (
     assert.match(dashboard, /quoteMoney\(quote\.ask_eur\)/);
 });
 
+test('Configure polls display-only live prices only while its page is active', () => {
+    const config = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'config.js'), 'utf8');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
+
+    assert.match(config, /const livePollMs = 1000/);
+    assert.match(config, /window\.location\.hash !== '#\/config'/);
+    assert.match(config, /af\('\/live-prices'/);
+    assert.match(config, /data-live-price/);
+    assert.match(config, /stopLivePolling/);
+    assert.match(app, /if\(page!=='config'\)config\.stopLivePolling\(\)/);
+});
+
 test('broker Trading screen is not exposed while it is disabled', () => {
     const root = path.join(__dirname, '..', 'www');
     const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');

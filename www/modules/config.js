@@ -6,6 +6,42 @@ export function createConfig(context) {
     let stockFormOpen = false;
     let expandedStockId = null;
     const { getStocks, getStockMap, request: af, replaceStocks, upsertStock, removeStockFromState, beginStockMutation, isCurrentStockMutation, incrementStockRevision, showA, renderCurrentPage, pageFromHash, nav } = context;
+    let liveTimer = null;
+    let liveRequestInFlight = false;
+    let liveAbortController = null;
+    const livePollMs = 1000;
+
+    function applyLivePrices(payload) {
+        const container = document.getElementById('page-config');
+        for (const quote of payload?.prices || []) {
+            const price = container?.querySelector(`.config-stock-card[data-stock-id="${quote.stock_id}"] [data-live-price]`);
+            if (price) price.textContent = `€${money(quote.price_eur)}`;
+        }
+    }
+
+    async function pollLivePrices() {
+        if (liveRequestInFlight || document.hidden || window.location.hash !== '#/config') return;
+        liveRequestInFlight = true;
+        liveAbortController = new AbortController();
+        try { applyLivePrices(await af('/live-prices', { signal: liveAbortController.signal })); }
+        finally { liveAbortController = null; liveRequestInFlight = false; }
+    }
+
+    function startLivePolling() {
+        if (liveTimer) return;
+        pollLivePrices();
+        liveTimer = window.setInterval(pollLivePrices, livePollMs);
+    }
+
+    function stopLivePolling() {
+        if (liveTimer) window.clearInterval(liveTimer);
+        liveTimer = null;
+        liveAbortController?.abort();
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && liveTimer) pollLivePrices();
+    });
 
     function levelSummary(stock) {
         const active = (stock.alert_levels || []).filter(level => level.enabled && level.active && !level.retired);
@@ -50,9 +86,9 @@ export function createConfig(context) {
         return `<div class="config-stock-list">${getStocks().map(stock => {
             const expanded = String(expandedStockId) === String(stock.id);
             const retiredCount = (stock.alert_levels || []).filter(level => level.retired).length;
-            return `<article class="config-stock-card ${expanded ? 'is-expanded' : ''}">
+            return `<article class="config-stock-card ${expanded ? 'is-expanded' : ''}" data-stock-id="${escapeHtml(stock.id)}">
                 <div class="config-stock-main">
-                    <div class="config-stock-identity"><strong>${escapeHtml(stock.symbol)}</strong><span>${escapeHtml(stock.name || '—')}</span><small>€${money(stock.current_price_eur)}</small></div>
+                    <div class="config-stock-identity"><strong>${escapeHtml(stock.symbol)}</strong><span>${escapeHtml(stock.name || '—')}</span><small data-live-price>€${money(stock.current_price_eur)}</small></div>
                     <div class="config-level-summary">${levelSummary(stock)}${retiredCount ? `<span class="config-retired-count">${retiredCount} triggered</span>` : ''}</div>
                     <div class="config-stock-status">${positionSummary(stock)}<span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'Monitoring' : 'Disabled'}</span></div>
                     <div class="config-stock-actions"><button type="button" class="btn btn-sm ${expanded ? 'btn-primary' : 'btn-secondary'}" data-stock-action="levels" data-stock-symbol="${escapeHtml(stock.symbol)}" aria-expanded="${expanded}">${expanded ? 'Hide alerts' : 'Manage alerts'}</button><button type="button" class="btn btn-sm btn-secondary" data-stock-action="edit" data-stock-symbol="${escapeHtml(stock.symbol)}">Edit</button><button type="button" class="btn btn-sm btn-secondary" data-stock-action="toggle" data-stock-symbol="${escapeHtml(stock.symbol)}">${stock.enabled ? 'Disable' : 'Enable'}</button><button type="button" class="btn btn-sm btn-danger" data-stock-action="remove" data-stock-symbol="${escapeHtml(stock.symbol)}">Remove</button></div>
@@ -72,6 +108,7 @@ export function createConfig(context) {
         container.querySelectorAll('[data-alert-action="add"], [data-alert-action="save"]').forEach(button => button.closest('form')?.addEventListener('submit', event => { event.preventDefault(); manageAlertLevel(button); }));
         container.querySelectorAll('[data-alert-action="rearm"], [data-alert-action="delete"]').forEach(button => button.addEventListener('click', () => manageAlertLevel(button)));
         loadArchivedStocks();
+        startLivePolling();
     }
 
     async function resolveIsin() { const isin=document.getElementById('as-isin')?.value.trim().toUpperCase(); const preview=document.getElementById('isin-preview'); if(!/^[A-Z0-9]{12}$/.test(isin)) return showA('A valid 12-character ISIN is required','error'); const result=await af('/instruments/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({isin})}); if(result?.verified&&preview) preview.innerHTML=`<strong>${escapeHtml(result.instrument.name)}</strong> · ${escapeHtml(result.instrument.ticker)} · ${escapeHtml(result.instrument.isin)} · ${escapeHtml(result.home.exchange)} · ${escapeHtml(result.home.currency)} · ${result.instrument.tradable === false ? 'not tradable' : 'tradable'}`; }
@@ -202,5 +239,5 @@ export function createConfig(context) {
         }
     }
 
-    return { renderConfig, loadArchivedStocks, restoreStock, asm, cancelStockEdit, es, esu, ts, rs };
+    return { renderConfig, stopLivePolling, loadArchivedStocks, restoreStock, asm, cancelStockEdit, es, esu, ts, rs };
 }
