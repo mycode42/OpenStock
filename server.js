@@ -178,7 +178,7 @@ function normaliseTrade(body, existing = null) {
         exit_price: exitPrice,
         exit_fx_rate: exitFxRate,
         exit_price_eur: closedAt ? exitPrice * exitFxRate : null,
-        exit_fee_eur: closedAt ? numberField(body.exit_fee_eur ?? existing?.exit_fee_eur ?? 0, 'Exit fee') : 0,
+        exit_fee_eur: closedAt ? numberField(body.exit_fee_eur ?? (existing?.closed_at ? existing.exit_fee_eur : undefined) ?? 1, 'Exit fee') : 0,
         dividend_eur: closedAt ? numberField(body.dividend_eur ?? existing?.dividend_eur ?? 0, 'Dividends received') : 0,
         strategy: String(body.strategy ?? existing?.strategy ?? '').trim(),
         notes: String(body.notes ?? existing?.notes ?? '').trim()
