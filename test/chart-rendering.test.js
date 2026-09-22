@@ -20,6 +20,10 @@ test('dashboard history charts are native EUR, smoothed, and compress closed-mar
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
+    assert.match(source, /async function loadCardHistory\(card, range = '1d'\)/);
+    assert.match(source, /mouseenter', \(\) => loadCardHistory\(card, '1d'\)/);
+    assert.match(source, /focusin', \(\) => loadCardHistory\(card, '1d'\)/);
+    assert.match(source, /panel\.dataset\.requestedRange \|\| '1d'/);
     assert.match(formatting, /'1w': '1-week'/);
     assert.match(source, /function smoothCoordinatePath/);
     assert.match(source, /x: index \/ \(clean\.length - 1\) \* width/);
@@ -100,11 +104,11 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=61/);
-    assert.match(index, /app\.js\?v=61/);
-    assert.match(worker, /openstock-v66/);
-    assert.match(worker, /styles\.css\?v=61/);
-    assert.match(worker, /app\.js\?v=61/);
+    assert.match(index, /styles\.css\?v=62/);
+    assert.match(index, /app\.js\?v=62/);
+    assert.match(worker, /openstock-v67/);
+    assert.match(worker, /styles\.css\?v=62/);
+    assert.match(worker, /app\.js\?v=62/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
     assert.doesNotMatch(styles, /history-gap-line/);

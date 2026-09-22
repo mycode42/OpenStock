@@ -125,7 +125,7 @@ function renderHistoryPanel(panel, history, range) {
     attachInteractiveLineCharts(panel);
 }
 
-async function loadCardHistory(card, range = '1mo') {
+async function loadCardHistory(card, range = '1d') {
     const stockId = Number(card.dataset.stockId);
     const panel = card.querySelector('.history-popover');
     if (!Number.isInteger(stockId) || !panel) return;
@@ -147,12 +147,12 @@ async function loadCardHistory(card, range = '1mo') {
 
 function attachChartHovers(container) {
     container.querySelectorAll('.stock-card[data-stock-id]').forEach(card => {
-        card.addEventListener('mouseenter', () => loadCardHistory(card, '1mo'), { once: true });
-        card.addEventListener('focusin', () => loadCardHistory(card, '1mo'), { once: true });
+        card.addEventListener('mouseenter', () => loadCardHistory(card, '1d'), { once: true });
+        card.addEventListener('focusin', () => loadCardHistory(card, '1d'), { once: true });
         card.addEventListener('touchstart', () => {
             const panel = card.querySelector('.history-popover');
             panel.classList.add('is-open');
-            loadCardHistory(card, panel.dataset.requestedRange || '1mo');
+            loadCardHistory(card, panel.dataset.requestedRange || '1d');
         }, { passive: true, once: true });
         card.querySelector('.history-popover').addEventListener('click', event => {
             const button = event.target.closest('[data-history-range]');
