@@ -64,7 +64,6 @@ cp .env.example .env
 
 | Variable | Description |
 |----------|-------------|
-| `TWELVE_DATA_API_KEY` | **Optional** — unused legacy compatibility setting |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `DATABASE_PATH` | Path to SQLite database |
 | `PORT` | Server port (default: 3000) |
@@ -73,9 +72,8 @@ cp .env.example .env
 | `MONITOR_CYCLE_DEADLINE_MS` | Stop starting new stock work after this cycle budget (default: 45000) |
 | `TELEGRAM_BOT_USERNAME` | Your bot's username (e.g., `OpenStock_TelegramBot`) |
 | `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
-| `TRADE_REPUBLIC_API_KEY_FILE` | Server-only file containing the sidecar API key |
 | `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
-| `PYTR_COMMAND` | pytr executable used for primary display prices (default `/opt/pytr-venv/bin/pytr`) |
+| `PYTR_COMMAND` | pytr executable used as a display-only fallback price source (default `/opt/pytr-venv/bin/pytr`) |
 | `PYTR_TIMEOUT_MS` | Bounded pytr batch timeout (default 8000) |
 | `LIVE_PRICE_REFRESH_MS` | Display-only dashboard refresh cadence; minimum/default 1000 ms |
 | `TRADE_REPUBLIC_LIVE_ENABLED` | Environment-only live-order gate; default `false` |
@@ -86,7 +84,7 @@ cp .env.example .env
 
 ### Trade Republic integration
 
-OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. The loopback UAPI API key remains server-side in OpenStock's `.env`.
+OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. Trade Republic sidecar authentication is provisioned server-side and is not a dashboard or user-facing configuration setting.
 
 The dashboard polls `/api/live-prices` once per second only while the Dashboard is visible. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
 
