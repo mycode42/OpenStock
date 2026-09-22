@@ -104,14 +104,15 @@ test('PWA asset versions are consistent and include the chart interaction fix', 
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(index, /styles\.css\?v=63/);
-    assert.match(index, /app\.js\?v=63/);
-    assert.match(worker, /openstock-v68/);
-    assert.match(worker, /styles\.css\?v=63/);
-    assert.match(worker, /app\.js\?v=63/);
+    assert.match(index, /styles\.css\?v=64/);
+    assert.match(index, /app\.js\?v=64/);
+    assert.match(worker, /openstock-v69/);
+    assert.match(worker, /styles\.css\?v=64/);
+    assert.match(worker, /app\.js\?v=64/);
     assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
-    assert.match(styles, /\.journal-performance-table\{border-top:1px solid #202126;padding:\.9rem 1\.25rem 0\}/);
+    assert.match(styles, /\.journal-performance-card \.journal-collapsible-content\{padding:1rem 1\.25rem 1\.25rem\}/);
+    assert.match(styles, /\.journal-performance-card \.journal-performance-table\{padding:\.9rem 0 0\}/);
     assert.doesNotMatch(styles, /history-gap-line/);
 });
 
