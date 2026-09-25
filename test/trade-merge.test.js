@@ -85,5 +85,7 @@ test('closed historical trades remain separate', t => {
     db.addTrade(trade());
     const result = db.addTrade(trade({ trade_id: 'CLOSED', closed_at: '2026-09-15 10:00:00', exit_price: 12, exit_fx_rate: 1, exit_price_eur: 12 }));
     assert.equal(result.merged, false);
-    assert.equal(db.getAllTrades().length, 2);
+    const rows = db.getAllTrades();
+    assert.equal(rows.length, 2);
+    assert.deepEqual(rows.map(row => row.trade_number), [2, 1], 'display numbers increment by trade creation order even when the newest trade is listed first');
 });

@@ -7,20 +7,45 @@ function quoteMoney(value) {
     return Number.isFinite(Number(value)) ? `€${money(value)}` : '—';
 }
 
+function priceChangePercent(currentPrice, buyInPrice) {
+    const current = Number(currentPrice);
+    const buyIn = Number(buyInPrice);
+    return Number.isFinite(current) && Number.isFinite(buyIn) && buyIn > 0
+        ? (current / buyIn - 1) * 100
+        : null;
+}
+
+function formatPriceChange(currentPrice, buyInPrice) {
+    const change = priceChangePercent(currentPrice, buyInPrice);
+    if (change === null) return { text: '—', className: '' };
+    return { text: `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`, className: change >= 0 ? 'up' : 'down' };
+}
+
 export function createDashboard(context) {
     const { getStocks, request: af, charts, actions } = context;
     const attachChartHovers = charts.attachChartHovers;
+    const refreshOpenHistoryPanels = charts.refreshOpenHistoryPanels;
     const stockList = () => getStocks();
     let liveTimer = null;
     let liveRequestInFlight = false;
     let liveAbortController = null;
     const livePollMs = 1000;
+    const chartRefreshMs = 60000;
+    let chartRefreshTimer = null;
+    let chartRefreshInFlight = false;
     function applyLivePrices(payload) {
         for (const quote of payload?.prices || []) {
             const card = document.querySelector(`.stock-card[data-stock-id="${quote.stock_id}"]`);
             if (!card) continue;
             const price = card.querySelector('[data-live-price]');
             if (price) price.textContent = `€${money(quote.price_eur)}`;
+            const buyInPrice = card.dataset.buyInPrice;
+            const change = card.querySelector('[data-live-price-change]');
+            if (change) {
+                const formatted = formatPriceChange(quote.price_eur, buyInPrice);
+                change.textContent = formatted.text;
+                change.className = `history-change ${formatted.className}`.trim();
+            }
             const bid = card.querySelector('[data-live-bid]');
             if (bid) bid.textContent = quoteMoney(quote.bid_eur);
             const ask = card.querySelector('[data-live-ask]');
@@ -36,18 +61,30 @@ export function createDashboard(context) {
         try { applyLivePrices(await af('/live-prices', { signal: liveAbortController.signal })); }
         finally { liveAbortController = null; liveRequestInFlight = false; }
     }
+    async function refreshOpenCharts() {
+        if (chartRefreshInFlight || document.hidden || (window.location.hash && window.location.hash !== '#/dashboard')) return;
+        chartRefreshInFlight = true;
+        try { await refreshOpenHistoryPanels(document.getElementById('page-dashboard')); }
+        finally { chartRefreshInFlight = false; }
+    }
     function startLivePolling() {
         if (liveTimer) return;
         pollLivePrices();
         liveTimer = window.setInterval(pollLivePrices, livePollMs);
+        chartRefreshTimer = window.setInterval(refreshOpenCharts, chartRefreshMs);
     }
     function stopLivePolling() {
         if (liveTimer) window.clearInterval(liveTimer);
+        if (chartRefreshTimer) window.clearInterval(chartRefreshTimer);
         liveTimer = null;
+        chartRefreshTimer = null;
         liveAbortController?.abort();
     }
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && liveTimer) pollLivePrices();
+        if (!document.hidden && liveTimer) {
+            pollLivePrices();
+            refreshOpenCharts();
+        }
     });
 function renderDashboard() {
     const container = document.getElementById('page-dashboard');
@@ -74,13 +111,14 @@ function renderDashboard() {
         const active = levels.filter(level => level.enabled && level.active && !level.retired);
         const retired = levels.filter(level => level.triggered || level.retired);
         const quantity = Number(position.quantity || 0);
-        const positionValue = quantity * Number(stock.current_price_eur || 0);
         const bid = stock.broker_quote?.bid_eur ?? stock.current_bid_eur;
         const ask = stock.broker_quote?.ask_eur ?? stock.current_ask_eur;
+        const buyInPrice = Number(position.buy_in_price_eur);
+        const priceChange = formatPriceChange(stock.current_price_eur, buyInPrice);
         const heldValue = position.owned
-            ? `<div class="position-summary">Position value: ${money(quantity)} × €${money(stock.current_price_eur)} = <strong>€${money(positionValue)}</strong></div>`
+            ? `<div class="position-summary">Buy-in: <strong>€${money(buyInPrice)}</strong> <span class="history-change ${priceChange.className}" data-live-price-change>${priceChange.text}</span></div>`
             : '';
-        return `<div class="stock-card ${position.owned ? '' : 'sold'}" data-stock-id="${escapeHtml(stock.id)}" tabindex="0">
+        return `<div class="stock-card ${position.owned ? '' : 'sold'}" data-stock-id="${escapeHtml(stock.id)}" data-buy-in-price="${position.owned && Number.isFinite(buyInPrice) ? escapeHtml(buyInPrice) : ''}" tabindex="0">
             <div class="stock-symbol">${escapeHtml(stock.symbol)} <span class="badge ${position.owned ? 'owned' : 'sold'}">${position.owned ? 'HELD' : 'NOT HELD'}</span> <span class="badge enabled">${escapeHtml(position.source)}</span></div>
             <div class="stock-name">${escapeHtml(stock.name || '')}</div>
             <div class="stock-price eu" data-live-price>€${money(stock.current_price_eur)}</div>

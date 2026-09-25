@@ -20,9 +20,11 @@ test('dashboard history charts are native EUR, smoothed, and compress closed-mar
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
-    assert.match(source, /async function loadCardHistory\(card, range = '1d'\)/);
-    assert.match(source, /mouseenter', \(\) => loadCardHistory\(card, '1d'\)/);
-    assert.match(source, /focusin', \(\) => loadCardHistory\(card, '1d'\)/);
+    assert.match(source, /async function loadCardHistory\(card, range = '1d', \{ force = false, showLoading = true \} = \{\}\)/);
+    assert.match(source, /async function refreshOpenHistoryPanels\(container = document\)/);
+    assert.match(source, /loadCardHistory\(card, panel\.dataset\.requestedRange \|\| '1d', \{ force: true, showLoading: false \}\)/);
+    assert.match(source, /mouseenter', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) loadCardHistory\(card, '1d'\); \}/);
+    assert.match(source, /focusin', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) loadCardHistory\(card, '1d'\); \}/);
     assert.match(source, /panel\.dataset\.requestedRange \|\| '1d'/);
     assert.match(formatting, /'1w': '1-week'/);
     assert.match(source, /function smoothCoordinatePath/);
@@ -45,9 +47,21 @@ test('dashboard history percentage follows the inspected point and resets to the
 test('dashboard chart popovers remain available briefly while crossing their placement gap', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     assert.match(source, /setTimeout\(\(\) => panel\.classList\.remove\('is-open'\), 300\)/);
-    assert.match(source, /card\.addEventListener\('pointerleave', delayPopoverClose\)/);
-    assert.match(source, /panel\.addEventListener\('pointerenter', cancelPopoverClose\)/);
-    assert.match(source, /panel\.addEventListener\('pointerleave', delayPopoverClose\)/);
+    assert.match(source, /card\.addEventListener\('pointerleave', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) delayPopoverClose\(\); \}\)/);
+    assert.match(source, /panel\.addEventListener\('pointerenter', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) cancelPopoverClose\(\); \}\)/);
+    assert.match(source, /panel\.addEventListener\('pointerleave', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) delayPopoverClose\(\); \}\)/);
+});
+
+test('mobile dashboard charts open on a card click and close when another surface is clicked', () => {
+    const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
+    const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
+    assert.match(source, /window\.matchMedia\?\.\('\(hover: none\), \(pointer: coarse\)'\)/);
+    assert.match(source, /card\.addEventListener\('click', event =>/);
+    assert.match(source, /closeMobilePopovers\(panel\)/);
+    assert.match(source, /document\.addEventListener\('click', event =>/);
+    assert.doesNotMatch(source, /touchstart/);
+    assert.match(styles, /@media\(max-width:640px\).*\.history-popover\.is-open\{display:block\}/);
+    assert.doesNotMatch(styles, /@media\(max-width:640px\).*\.stock-card:focus-within \.history-popover/);
 });
 
 test('trade entry prices use two-decimal input precision', () => {

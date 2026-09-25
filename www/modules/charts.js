@@ -142,14 +142,14 @@ function renderHistoryPanel(panel, history, range) {
     attachInteractiveLineCharts(panel);
 }
 
-async function loadCardHistory(card, range = '1d') {
+async function loadCardHistory(card, range = '1d', { force = false, showLoading = true } = {}) {
     const stockId = Number(card.dataset.stockId);
     const panel = card.querySelector('.history-popover');
     if (!Number.isInteger(stockId) || !panel) return;
     const key = `${stockId}:${range}`;
     panel.dataset.requestedRange = range;
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">Loading native EUR history…</div>`;
-    let history = historyCache.get(key);
+    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">Loading native EUR history…</div>`;
+    let history = force ? null : historyCache.get(key);
     if (!history) {
         history = await request(`/stocks/${stockId}/history?range=${range}`);
         if (history) historyCache.set(key, history);
@@ -162,7 +162,26 @@ async function loadCardHistory(card, range = '1d') {
     renderHistoryPanel(panel, history, range);
 }
 
+async function refreshOpenHistoryPanels(container = document) {
+    const openPanels = [...container.querySelectorAll('.stock-card[data-stock-id] .history-popover.is-open')];
+    await Promise.all(openPanels.map(panel => {
+        const card = panel.closest('.stock-card[data-stock-id]');
+        return card ? loadCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false }) : null;
+    }));
+}
+
 function attachChartHovers(container) {
+    const usesMobileChartInteraction = () => window.matchMedia?.('(hover: none), (pointer: coarse)').matches ?? false;
+    const closeMobilePopovers = except => container.querySelectorAll('.history-popover.is-open').forEach(panel => {
+        if (panel !== except) panel.classList.remove('is-open');
+    });
+    if (container.dataset.mobileChartDismissBound !== '1') {
+        container.dataset.mobileChartDismissBound = '1';
+        document.addEventListener('click', event => {
+            if (!usesMobileChartInteraction() || event.target.closest?.('.stock-card[data-stock-id]')) return;
+            closeMobilePopovers();
+        });
+    }
     container.querySelectorAll('.stock-card[data-stock-id]').forEach(card => {
         const panel = card.querySelector('.history-popover');
         let closeTimer;
@@ -176,16 +195,18 @@ function attachChartHovers(container) {
             closeTimer = setTimeout(() => panel.classList.remove('is-open'), 300);
         };
 
-        card.addEventListener('mouseenter', () => loadCardHistory(card, '1d'), { once: true });
-        card.addEventListener('pointerenter', cancelPopoverClose);
-        card.addEventListener('pointerleave', delayPopoverClose);
-        panel.addEventListener('pointerenter', cancelPopoverClose);
-        panel.addEventListener('pointerleave', delayPopoverClose);
-        card.addEventListener('focusin', () => loadCardHistory(card, '1d'), { once: true });
-        card.addEventListener('touchstart', () => {
+        card.addEventListener('mouseenter', () => { if (!usesMobileChartInteraction()) loadCardHistory(card, '1d'); }, { once: true });
+        card.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
+        card.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
+        panel.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
+        panel.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
+        card.addEventListener('focusin', () => { if (!usesMobileChartInteraction()) loadCardHistory(card, '1d'); }, { once: true });
+        card.addEventListener('click', event => {
+            if (!usesMobileChartInteraction() || event.target.closest('.history-popover')) return;
+            closeMobilePopovers(panel);
             panel.classList.add('is-open');
             loadCardHistory(card, panel.dataset.requestedRange || '1d');
-        }, { passive: true, once: true });
+        });
         panel.addEventListener('click', event => {
             const button = event.target.closest('[data-history-range]');
             if (!button) return;
@@ -196,5 +217,5 @@ function attachChartHovers(container) {
     });
 }
 
-    return { attachInteractiveLineCharts, interactiveChartSvg, renderHistoryChart, renderHistoryPanel, loadCardHistory, attachChartHovers };
+    return { attachInteractiveLineCharts, interactiveChartSvg, renderHistoryChart, renderHistoryPanel, loadCardHistory, refreshOpenHistoryPanels, attachChartHovers };
 }

@@ -64,12 +64,22 @@ class OpenStockDB {
     }
 
     getPositionSummary(stockId) {
-        const open = this.db.prepare('SELECT COALESCE(SUM(quantity), 0) AS quantity FROM trades WHERE stock_id = ? AND closed_at IS NULL').get(stockId);
+        const open = this.db.prepare(`
+            SELECT
+                COALESCE(SUM(quantity), 0) AS quantity,
+                CASE WHEN SUM(quantity) > 0
+                    THEN SUM(quantity * entry_price_eur) / SUM(quantity)
+                    ELSE NULL
+                END AS buy_in_price_eur
+            FROM trades
+            WHERE stock_id = ? AND closed_at IS NULL
+        `).get(stockId);
         const quantity = Number(open.quantity || 0);
         return {
             quantity,
             owned: quantity > 0,
             source: 'journal',
+            buy_in_price_eur: quantity > 0 ? Number(open.buy_in_price_eur) : null,
             warning: quantity > 0 ? null : 'No open Journal position; SELL alerts are suppressed.'
         };
     }
@@ -298,7 +308,8 @@ class OpenStockDB {
     getAllTrades(filters = {}) {
         const { where, values } = this.tradeQueryParts(filters);
         return this.db.prepare(`
-            SELECT t.*, s.symbol, s.name, s.current_price_eur
+            SELECT t.*, s.symbol, s.name, s.current_price_eur,
+                   (SELECT COUNT(*) FROM trades numbered WHERE numbered.id <= t.id) AS trade_number
             FROM trades t JOIN stocks s ON s.id = t.stock_id
             ${where}
             ORDER BY COALESCE(t.closed_at, t.opened_at) DESC, t.id DESC
@@ -313,7 +324,8 @@ class OpenStockDB {
         const totalPages = Math.max(1, Math.ceil(total / safePageSize));
         const safePage = Math.min(requestedPage, totalPages);
         const items = this.db.prepare(`
-            SELECT t.*, s.symbol, s.name, s.current_price_eur
+            SELECT t.*, s.symbol, s.name, s.current_price_eur,
+                   (SELECT COUNT(*) FROM trades numbered WHERE numbered.id <= t.id) AS trade_number
             FROM trades t JOIN stocks s ON s.id = t.stock_id
             ${where}
             ORDER BY COALESCE(t.closed_at, t.opened_at) DESC, t.id DESC
@@ -324,7 +336,8 @@ class OpenStockDB {
 
     getTradeById(id) {
         return this.db.prepare(`
-            SELECT t.*, s.symbol, s.name, s.current_price_eur
+            SELECT t.*, s.symbol, s.name, s.current_price_eur,
+                   (SELECT COUNT(*) FROM trades numbered WHERE numbered.id <= t.id) AS trade_number
             FROM trades t JOIN stocks s ON s.id = t.stock_id
             WHERE t.id = ?
         `).get(id);

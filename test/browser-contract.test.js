@@ -39,6 +39,15 @@ test('dashboard cards retain live bid and ask placeholders for broker quotes', (
     assert.match(dashboard, /quoteMoney\(quote\.ask_eur\)/);
 });
 
+test('dashboard cards show the Journal buy-in and a live current-price percentage', () => {
+    const dashboard = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'dashboard.js'), 'utf8');
+    assert.match(dashboard, /Buy-in:/);
+    assert.match(dashboard, /data-buy-in-price/);
+    assert.match(dashboard, /data-live-price-change/);
+    assert.match(dashboard, /current \/ buyIn - 1/);
+    assert.match(dashboard, /history-change \$\{formatted\.className\}/);
+});
+
 test('Configure polls display-only live prices only while its page is active', () => {
     const config = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'config.js'), 'utf8');
     const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
@@ -49,6 +58,15 @@ test('Configure polls display-only live prices only while its page is active', (
     assert.match(config, /data-live-price/);
     assert.match(config, /stopLivePolling/);
     assert.match(app, /if\(page!=='config'\)config\.stopLivePolling\(\)/);
+});
+
+test('Dashboard refreshes only open history panels once per minute while visible', () => {
+    const dashboard = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'dashboard.js'), 'utf8');
+    assert.match(dashboard, /const chartRefreshMs = 60000/);
+    assert.match(dashboard, /window\.setInterval\(refreshOpenCharts, chartRefreshMs\)/);
+    assert.match(dashboard, /refreshOpenHistoryPanels\(document\.getElementById\('page-dashboard'\)\)/);
+    assert.match(dashboard, /document\.hidden/);
+    assert.match(dashboard, /window\.clearInterval\(chartRefreshTimer\)/);
 });
 
 test('broker Trading screen is not exposed while it is disabled', () => {
@@ -66,4 +84,15 @@ test('broker Trading screen is not exposed while it is disabled', () => {
 test('Journal requests fifteen trades per page', () => {
     const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
     assert.match(app, /trades\?page=\$\{requestedPage\}&page_size=15/);
+});
+
+test('Journal displays sequential trade numbers and native buy/sell prices without exposing trade IDs', () => {
+    const journal = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'journal.js'), 'utf8');
+    assert.match(journal, /<th>Trade No\.<\/th>/);
+    assert.match(journal, /<th>Buy-in Price<\/th><th>Sell Price<\/th>/);
+    assert.doesNotMatch(journal, /<th>Trade ID<\/th>/);
+    assert.match(journal, /trade\.trade_number/);
+    assert.match(journal, /journalTradeOpenedDate\(trade\.opened_at\)/);
+    assert.match(journal, /journalTradePrice\(trade\.entry_price, trade\.currency\)/);
+    assert.match(journal, /journalTradePrice\(trade\.exit_price, trade\.currency\)/);
 });

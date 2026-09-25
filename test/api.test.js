@@ -138,12 +138,15 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     response = await f.request('/api/trades', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ trade_id: 'T-1', stock_id: good.id, opened_at: '2026-01-02T00:00:00Z', quantity: 2, currency: 'EUR', entry_price: 90, entry_fx_rate: 1, entry_fee_eur: 1 }) });
     assert.equal(response.status, 201);
     const trade = (await response.json()).trade;
+    assert.equal(trade.trade_number, 1);
     response = await f.request(`/api/trades/${trade.id}/close`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ closed_at: '2026-01-03T00:00:00Z', exit_price: 100, exit_fx_rate: 1, dividend_eur: 2 }) });
     assert.equal(response.status, 200);
     assert.equal((await response.json()).trade.exit_fee_eur, 1);
     response = await f.request('/api/trades', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ trade_id: 'T-default-fee', stock_id: good.id, opened_at: '2026-01-04T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 90, entry_fx_rate: 1 }) });
     assert.equal(response.status, 201);
-    assert.equal((await response.json()).trade.entry_fee_eur, 1);
+    const secondTrade = (await response.json()).trade;
+    assert.equal(secondTrade.entry_fee_eur, 1);
+    assert.equal(secondTrade.trade_number, 2);
     assert.equal((await f.request('/api/analytics/dashboard')).status, 200);
 
     const bad = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'BAD', name: 'Bad', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
