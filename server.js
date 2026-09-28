@@ -10,8 +10,10 @@ const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount,
 const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
 const { QuoteService } = require('./lib/quote-service');
 const { PytrRatesClient } = require('./lib/pytr-rates');
+const { AlpacaMarketDataClient } = require('./lib/alpaca-market-data');
 const { normalizedBrokerRows } = require('./lib/broker-sync-service');
 const { normalizeOrderSizing, hasValidOrderSizingInput, failedGateNames, fetchLiveOrderAuthority } = require('./lib/order-safety');
+const { createOwnerAuth, sameOrigin } = require('./lib/owner-auth');
 const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
@@ -78,15 +80,16 @@ function serializeBrokerStock(stock, db) {
     const isTradeRepublicPrice = source => String(source || '').startsWith('trade_republic') || String(source || '').startsWith('pytr_');
     const brokerPriceIsCurrent = Boolean(quote && isTradeRepublicPrice(observation?.source));
     const safeQuote = brokerPriceIsCurrent ? { bid_eur: quote.bid_eur, ask_eur: quote.ask_eur, spread_eur: quote.bid_eur !== null && quote.ask_eur !== null ? quote.ask_eur - quote.bid_eur : null, quote_time: quote.quote_time, observed_at: quote.observed_at, source: quote.source } : null;
-    const fallback = stock.price_source === 'trade_republic' && Boolean(observation && !isTradeRepublicPrice(observation.source));
-    const marketLabel = !observation ? 'No quote' : observation.source === 'pytr_rates' ? 'Trade Republic (pytr)' : fallback ? 'Yahoo Finance fallback' : isTradeRepublicPrice(observation.source) ? 'Trade Republic' : 'Yahoo Finance';
+    const isAlpacaPrice = source => String(source || '').startsWith('alpaca_');
+    const fallback = ['trade_republic', 'alpaca'].includes(stock.price_source) && Boolean(observation && !(stock.price_source === 'trade_republic' ? isTradeRepublicPrice(observation.source) : isAlpacaPrice(observation.source)));
+    const marketLabel = !observation ? 'No quote' : observation.source === 'pytr_rates' ? 'Trade Republic (pytr)' : fallback ? 'Yahoo Finance fallback' : isTradeRepublicPrice(observation.source) ? 'Trade Republic' : isAlpacaPrice(observation.source) ? 'Alpaca Market Data' : 'Yahoo Finance';
     return { ...serializeStock(stock), broker_mapping: mapping ? { broker: mapping.broker, ticker: mapping.ticker, isin: mapping.isin, exchange: mapping.exchange, currency: mapping.currency, verified_at: mapping.verified_at, source: mapping.source } : null, broker_quote: safeQuote,
         market_data: { source: observation?.source || null, label: marketLabel, fallback, quote_time: toISODateTime(observation?.quote_time) },
         position: db.getPositionSummary(stock.id), alert_levels: db.getAlertLevels(stock.id).map(serializeAlertLevel) };
 }
 
 function quoteServiceFor(app, now) {
-    return new QuoteService({ db: app.locals.db, brokerClient: app.locals.brokerClient, pytrClient: app.locals.pytrClient, fetchImpl: app.locals.fetchImpl, now, log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
+    return new QuoteService({ db: app.locals.db, brokerClient: app.locals.brokerClient, alpacaClient: app.locals.alpacaClient, pytrClient: app.locals.pytrClient, fetchImpl: app.locals.fetchImpl, now, log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
 }
 
 function createLiveQuoteFeed({ app, now = () => new Date(), refreshMs = Number(process.env.LIVE_PRICE_REFRESH_MS || 1000) } = {}) {
@@ -218,7 +221,7 @@ function queueStockHistory(historyBackfill, stock) {
     }
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, now = () => new Date() } = {}) {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, now = () => new Date(), ownerToken = process.env.OPENSTOCK_OWNER_TOKEN, ownerAuthRequired = process.env.OPENSTOCK_OWNER_AUTH_REQUIRED === 'true' && process.env.NODE_ENV !== 'test' } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -234,26 +237,67 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
         fetchImpl,
         timeoutMs: Number(process.env.TRADE_REPUBLIC_TIMEOUT_MS || 30000)
     });
+    app.locals.alpacaClient = new AlpacaMarketDataClient({ fetchImpl });
     app.locals.pytrClient = pytrClient || new PytrRatesClient();
+    app.locals.ownerAuth = ownerAuthRequired ? createOwnerAuth({ ownerToken }) : null;
     historyBackfill.brokerClient = app.locals.brokerClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
     app.use('/api', (req, res, next) => {
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin) {
-        try { if (new URL(req.headers.origin).host !== req.headers.host) return res.status(403).json({ error: 'Same-origin mutation required' }); }
-        catch { return res.status(403).json({ error: 'Invalid mutation origin' }); }
-    }
     res.set({
         'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
         Pragma: 'no-cache',
         Expires: '0',
         'X-OpenStock-Version': APP_VERSION
     });
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) {
+        return res.status(403).json({ error: 'Same-origin mutation required' });
+    }
+    if (req.path === '/auth/login') return next();
+    if (!app.locals.ownerAuth) return next();
+    return app.locals.ownerAuth.requireOwner(req, res, next);
     next();
     });
+    app.post('/api/auth/login', (req, res) => {
+        if (!app.locals.ownerAuth) return res.status(503).json({ error: 'Owner authentication is not configured', code: 'OWNER_AUTH_UNCONFIGURED' });
+        return app.locals.ownerAuth.login(req, res);
+    });
+    // This is intentionally protected by the API middleware above: it lets a
+    // freshly loaded browser restore an existing owner session without ever
+    // exposing whether a session exists to an unauthenticated caller.
+    app.get('/api/auth/session', (req, res) => {
+        // The SPA needs an explicit, cache-safe signal when owner auth is
+        // intentionally disabled.  A 401 means authentication is required
+        // but missing; it must never be overloaded to mean "auth disabled".
+        if (!app.locals.ownerAuth) return res.json({ authenticated: false, authRequired: false });
+        if (!req.ownerSession) return res.status(401).json({ error: 'Owner authentication required', code: 'OWNER_AUTH_REQUIRED' });
+        return res.json({ authenticated: true, authRequired: true, csrfToken: req.ownerSession.csrfToken, expiresAt: new Date(req.ownerSession.expiresAt).toISOString() });
+    });
+    app.post('/api/auth/logout', (req, res) => app.locals.ownerAuth.logout(req, res));
     app.use(express.static(path.join(__dirname, 'www')));
     app.locals.liveQuoteFeed = createLiveQuoteFeed({ app, now });
+
+// Alpaca is an on-demand market-data workspace only. It does not alter the
+// Trade Republic monitor selection, persist prices, or expose account/order APIs.
+function alpacaMarketDataError(res, error) {
+    console.warn(`Alpaca market-data request failed: ${error?.message || 'unknown error'}`);
+    return res.status(502).json({ error: 'Alpaca market data is unavailable' });
+}
+
+app.get('/api/alpaca/dashboard', async (req, res) => {
+    const stocks = req.app.locals.db.getActiveStocks();
+    const rows = await Promise.all(stocks.map(async stock => {
+        try { return { stock_id: stock.id, symbol: stock.symbol, name: stock.name || stock.symbol, snapshot: await req.app.locals.alpacaClient.getSnapshot(stock.symbol) }; }
+        catch { return { stock_id: stock.id, symbol: stock.symbol, name: stock.name || stock.symbol, snapshot: null, unavailable: true }; }
+    }));
+    res.json({ provider: 'Alpaca Market Data', feed: req.app.locals.alpacaClient.feed, currency: 'USD', observed_at: now().toISOString(), rows });
+});
+
+app.get('/api/alpaca/snapshot/:symbol', async (req, res) => {
+    try { res.json({ provider: 'Alpaca Market Data', snapshot: await req.app.locals.alpacaClient.getSnapshot(req.params.symbol), observed_at: now().toISOString() }); }
+    catch (error) { return alpacaMarketDataError(res, error); }
+});
 
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
@@ -428,7 +472,7 @@ app.put('/api/stocks/:id', (req, res) => {
             updates.name = name.trim();
         }
         if (price_source !== undefined) {
-            if (!['yahoo', 'trade_republic'].includes(String(price_source))) return res.status(400).json({ error: 'Price source must be yahoo or trade_republic' });
+            if (!['yahoo', 'trade_republic', 'alpaca'].includes(String(price_source))) return res.status(400).json({ error: 'Price source must be yahoo, trade_republic, or alpaca' });
             updates.price_source = String(price_source);
         }
 
@@ -839,10 +883,6 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'index.html'));
 });
 
-app.get('/config', (req, res) => {
-    res.sendFile(path.join(__dirname, 'www', 'index.html'));
-});
-
 // Seed charts in the background. Queue failures are isolated from API startup.
 try {
     historyBackfill.enqueueMissing();
@@ -856,6 +896,9 @@ if (require.main === module) {
     const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
     const port = process.env.PORT || 3000;
     initDatabase({ dbPath });
+    if (process.env.OPENSTOCK_OWNER_AUTH_REQUIRED === 'true' && (!process.env.OPENSTOCK_OWNER_TOKEN || process.env.OPENSTOCK_OWNER_TOKEN.length < 32)) {
+        throw new Error('OPENSTOCK_OWNER_AUTH_REQUIRED=true and OPENSTOCK_OWNER_TOKEN (at least 32 characters) are required');
+    }
     const app = createApp({ dbPath });
     const server = app.listen(port, '127.0.0.1', () => console.log(`OpenStock server listening on 127.0.0.1:${port}`));
     const shutdown = () => { console.log('OpenStock shutting down...'); server.close(() => { app.locals.db.db.close(); process.exit(0); }); };

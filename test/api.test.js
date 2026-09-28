@@ -8,7 +8,7 @@ const OpenStockDB = require('../database/db');
 const { createApp, berlinTradingDayStart } = require('../server');
 const APP_VERSION = require('../package.json').version;
 
-async function fixture({ now } = {}) {
+async function fixture({ now, ownerAuthRequired = false, ownerToken } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-api-'));
     const file = path.join(dir, 'test.db');
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
@@ -20,7 +20,7 @@ async function fixture({ now } = {}) {
         if (symbol === 'BAD') return { ok: false, status: 503, json: async () => ({}) };
         return { ok: true, json: async () => ({ chart: { result: [{ meta: { shortName: symbol }, timestamp: [1767225600], indicators: { quote: [{ close: [100] }] } }] } }) };
     };
-    const app = createApp({ db, backfill, fetchImpl, now, pytrClient: { getQuotes: async () => new Map() } });
+    const app = createApp({ db, backfill, fetchImpl, now, pytrClient: { getQuotes: async () => new Map() }, ownerAuthRequired, ownerToken });
     app.locals.brokerClient = {
         getInstrument: async isin => { const decoded = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, ''); const symbol = /^[A-Z0-9.-]+$/.test(decoded) && decoded ? decoded : `M${isin.slice(-5)}`; return { isin, name: `Mock ${symbol}`, shortName: `Mock ${symbol}`, intlSymbol: symbol, tradable: true, listings: [{ exchange: 'XNAS', symbolAtExchange: symbol }] }; },
         getTradeRepublicInstrument: async isin => ({ isin, exchange: 'TIB', currency: 'EUR', tradable: true }),
@@ -38,6 +38,29 @@ async function fixture({ now } = {}) {
     };
     return { db, dir, server, request };
 }
+
+test('configured owner authentication protects OpenStock API reads and mutations', async t => {
+    const token = 't'.repeat(32);
+    const f = await fixture({ ownerAuthRequired: true, ownerToken: token });
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    assert.equal((await f.request('/api/stocks')).status, 401);
+    const login = await f.request('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) });
+    assert.equal(login.status, 200);
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const { csrfToken } = await login.json();
+    assert.equal((await f.request('/api/stocks', { headers: { cookie } })).status, 200);
+    assert.equal((await f.request('/api/stocks', { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'AUTH', name: 'Auth', buy_threshold_eur: 1, sell_threshold_eur: 2 }) })).status, 403);
+    assert.equal((await f.request('/api/stocks', { method: 'POST', headers: { cookie, origin: `http://127.0.0.1:${f.server.address().port}`, 'x-csrf-token': csrfToken, 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'AUTH', name: 'Auth', buy_threshold_eur: 1, sell_threshold_eur: 2 }) })).status, 201);
+});
+
+test('disabled owner authentication explicitly reports that the SPA may start without a session', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const session = await f.request('/api/auth/session');
+    assert.equal(session.status, 200);
+    assert.deepEqual(await session.json(), { authenticated: false, authRequired: false });
+    assert.equal((await f.request('/api/stocks')).status, 200);
+});
 
 test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T05:30:00.000Z');

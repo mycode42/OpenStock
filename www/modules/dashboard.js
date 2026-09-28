@@ -51,7 +51,7 @@ export function createDashboard(context) {
             const ask = card.querySelector('[data-live-ask]');
             if (ask) ask.textContent = quoteMoney(quote.ask_eur);
             const status = card.querySelector('[data-live-status]');
-            if (status) status.textContent = `${quote.source === 'pytr_rates' ? 'Trade Republic pytr fallback' : quote.source === 'trade_republic_order_price' ? 'Trade Republic sidecar' : 'Yahoo Finance fallback'} · live`;
+            if (status) status.textContent = `${quote.source === 'pytr_rates' ? 'Trade Republic pytr fallback' : quote.source === 'trade_republic_order_price' ? 'Trade Republic sidecar' : String(quote.source || '').startsWith('alpaca_') ? 'Alpaca Market Data' : 'Yahoo Finance fallback'} · live`;
         }
     }
     async function pollLivePrices() {
