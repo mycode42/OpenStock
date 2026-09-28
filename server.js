@@ -14,6 +14,7 @@ const { AlpacaMarketDataClient } = require('./lib/alpaca-market-data');
 const { normalizedBrokerRows } = require('./lib/broker-sync-service');
 const { normalizeOrderSizing, hasValidOrderSizingInput, failedGateNames, fetchLiveOrderAuthority } = require('./lib/order-safety');
 const { createOwnerAuth, sameOrigin } = require('./lib/owner-auth');
+const { TraderRunnerClient } = require('./lib/trader-runner');
 const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
@@ -221,7 +222,7 @@ function queueStockHistory(historyBackfill, stock) {
     }
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, now = () => new Date(), ownerToken = process.env.OPENSTOCK_OWNER_TOKEN, ownerAuthRequired = process.env.OPENSTOCK_OWNER_AUTH_REQUIRED === 'true' && process.env.NODE_ENV !== 'test' } = {}) {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, traderRunnerClient = null, now = () => new Date(), ownerToken = process.env.OPENSTOCK_OWNER_TOKEN, ownerAuthRequired = process.env.OPENSTOCK_OWNER_AUTH_REQUIRED === 'true' && process.env.NODE_ENV !== 'test' } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -239,6 +240,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     });
     app.locals.alpacaClient = new AlpacaMarketDataClient({ fetchImpl });
     app.locals.pytrClient = pytrClient || new PytrRatesClient();
+    app.locals.traderRunnerClient = traderRunnerClient || new TraderRunnerClient();
     app.locals.ownerAuth = ownerAuthRequired ? createOwnerAuth({ ownerToken }) : null;
     historyBackfill.brokerClient = app.locals.brokerClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
@@ -297,6 +299,24 @@ app.get('/api/alpaca/dashboard', async (req, res) => {
 app.get('/api/alpaca/snapshot/:symbol', async (req, res) => {
     try { res.json({ provider: 'Alpaca Market Data', snapshot: await req.app.locals.alpacaClient.getSnapshot(req.params.symbol), observed_at: now().toISOString() }); }
     catch (error) { return alpacaMarketDataError(res, error); }
+});
+
+function traderError(res, error) {
+    const unavailable = error?.code === 'RUNNER_UNAVAILABLE' || /unavailable|timed out/i.test(String(error?.message || ''));
+    return res.status(unavailable ? 503 : 409).json({ error: unavailable ? 'Trader runner is unavailable or not configured' : String(error?.message || 'Trader request was rejected').slice(0, 240) });
+}
+
+app.get('/api/trader/status', async (req, res) => {
+    try { return res.json(await req.app.locals.traderRunnerClient.status()); }
+    catch (error) { return traderError(res, error); }
+});
+app.put('/api/trader/config', async (req, res) => {
+    try { return res.json(await req.app.locals.traderRunnerClient.configure(req.body)); }
+    catch (error) { return traderError(res, error); }
+});
+app.post('/api/trader/test-buy', async (req, res) => {
+    try { return res.status(202).json(await req.app.locals.traderRunnerClient.testBuy(req.body?.symbol)); }
+    catch (error) { return traderError(res, error); }
 });
 
 // ===== API: Stocks =====

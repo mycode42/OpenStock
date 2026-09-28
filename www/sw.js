@@ -10,7 +10,7 @@ const REQUIRED_ASSETS = [
   './modules/formatting.js',
   './modules/charts.js',
   './modules/dashboard.js',
-  './modules/alpaca.js',
+  './modules/trader.js',
   './modules/config.js',
   './modules/journal.js',
   './modules/dashboard-utils.js',

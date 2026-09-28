@@ -2,7 +2,7 @@
 // `/stock-monitor/dashboard/`.  A relative `./api` would then incorrectly
 // resolve to `/stock-monitor/dashboard/api`.  Resolve all API calls from the
 // document base, which is explicitly `/stock-monitor/` in index.html.
-export const API_BASE = new URL('api', document.baseURI).pathname.replace(/\/$/, '');
+export const API_BASE = new URL('api', typeof document === 'undefined' ? 'http://localhost/openstock/' : document.baseURI).pathname.replace(/\/$/, '');
 let csrfToken = null;
 
 export function setCsrfToken(token) { csrfToken = token || null; }
