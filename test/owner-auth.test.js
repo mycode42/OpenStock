@@ -27,7 +27,27 @@ test('owner login requires the configured credential and issues an HttpOnly stri
     assert.match(accepted.headers.get('set-cookie'), /HttpOnly/);
     assert.match(accepted.headers.get('set-cookie'), /Secure/);
     assert.match(accepted.headers.get('set-cookie'), /SameSite=Strict/);
+    assert.match(accepted.headers.get('set-cookie'), /Max-Age=86400/);
     assert.equal((await accepted.json()).csrfToken.length > 30, true);
+});
+
+test('owner session expires after the configured one-day default lifetime', async t => {
+    let time = Date.parse('2026-09-29T08:00:00Z');
+    const auth = createOwnerAuth({ ownerToken: 'x'.repeat(32), now: () => time });
+    const app = express();
+    app.use(express.json());
+    app.post('/login', (req, res) => auth.login(req, res));
+    app.use('/protected', auth.requireOwner);
+    app.get('/protected/read', (req, res) => res.json({ ok: true }));
+    const server = await new Promise(resolve => { const value = app.listen(0, '127.0.0.1', () => resolve(value)); });
+    t.after(() => server.close());
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const login = await fetch(`${base}/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: 'x'.repeat(32) }) });
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    time += 24 * 60 * 60 * 1000 - 1;
+    assert.equal((await fetch(`${base}/protected/read`, { headers: { cookie } })).status, 200);
+    time += 1;
+    assert.equal((await fetch(`${base}/protected/read`, { headers: { cookie } })).status, 401);
 });
 
 test('protected reads require a session and writes require same origin plus the session CSRF token', async t => {
