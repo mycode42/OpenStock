@@ -15,7 +15,7 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
         const api = await import(pathToFileURL(path.join(tempDir, 'modules', 'api.js')).href);
         const hostile = '<img src=x onerror="alert(1)">';
         assert.equal(escape.escapeHtml(hostile).includes('<img'), false);
-        for (const module of ['charts', 'dashboard', 'config', 'trading', 'journal']) {
+        for (const module of ['charts', 'dashboard', 'config', 'trader', 'trading', 'journal']) {
             await import(pathToFileURL(path.join(tempDir, 'modules', `${module}.js`)).href);
         }
         const originalFetch = globalThis.fetch;
@@ -28,6 +28,16 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
+});
+
+test('Trader monitor polls runner status only while its page is visible', () => {
+    const trader = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'trader.js'), 'utf8');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
+    assert.match(trader, /const pollMs = 30000/);
+    assert.match(trader, /window\.location\.hash !== '#\/trader'/);
+    assert.match(trader, /Price and trigger distance are evaluated by the paper runner/);
+    assert.match(trader, /stopPolling/);
+    assert.match(app, /if\(page!=='trader'\)trader\.stopPolling\(\)/);
 });
 
 test('dashboard cards retain live bid and ask placeholders for broker quotes', () => {
