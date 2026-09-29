@@ -212,7 +212,17 @@ class OpenStockDB {
         return this.db.transaction(() => {
             if (isBrokerQuote) this.updateStockQuote(stock.id, { bidEur: quote.bidEur ?? null, askEur: quote.askEur ?? null, midpointEur: quote.priceEur, quoteTime: quote.quoteTime });
             else this.updateStockPrice(stock.id, quote.priceUsd, quote.priceEur, quote.exchangeRate);
-            this.addPriceSnapshot(stock.id, quote.priceUsd ?? null, quote.priceEur, isBrokerQuote ? null : (quote.exchangeRate ?? null), quote.source, quote.quoteTime, recordedAt);
+            // pytr's rates CSV has no exchange timestamp.  Its quote_time is the
+            // polling time, so persisting every unchanged result turns a closed
+            // market into thousands of fake chart observations.  Keep the latest
+            // quote state for monitoring, but add a chart observation only when
+            // the value actually changes.
+            const previous = quote.source === 'pytr_rates'
+                ? this.db.prepare('SELECT price_eur FROM price_history WHERE stock_id=? AND source=? ORDER BY id DESC LIMIT 1').get(stock.id, quote.source)
+                : null;
+            if (!previous || Number(previous.price_eur) !== Number(quote.priceEur)) {
+                this.addPriceSnapshot(stock.id, quote.priceUsd ?? null, quote.priceEur, isBrokerQuote ? null : (quote.exchangeRate ?? null), quote.source, quote.quoteTime, recordedAt);
+            }
             if (quote.name && (!stock.name || stock.name === '')) this.updateStock(stock.id, { name: quote.name });
             if (isBrokerQuote && stock.mapping) this.addBrokerQuote({ broker: 'trade_republic', isin: stock.mapping.isin, exchange: stock.mapping.exchange, bid_eur: quote.bidEur ?? null, ask_eur: quote.askEur ?? null, last_eur: quote.lastEur ?? null, currency: 'EUR', quote_time: quote.quoteTime, observed_at: quote.observedAt || new Date().toISOString(), source: quote.source });
         })();

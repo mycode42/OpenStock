@@ -86,7 +86,7 @@ test('live prices use pytr in memory only and coalesce concurrent requests', asy
     f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'LIVE', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-17T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
     let calls = 0;
     f.server.close();
-    const app = createApp({ db: f.db, backfill: { enqueue() {}, enqueueMissing() { return 0; } }, fetchImpl: async () => { throw new Error('fallback must not be used'); }, now: () => new Date('2026-09-17T12:00:00Z'), pytrClient: { getQuotes: async isins => { calls += 1; return new Map([[isins[0], { isin: isins[0], lastEur: 12.34, askEur: 12.35, quoteTime: '2026-09-17T12:00:00Z', observedAt: '2026-09-17T12:00:00Z', source: 'pytr_rates' }]]); } } });
+    const app = createApp({ db: f.db, backfill: { enqueue() {}, enqueueMissing() { return 0; } }, fetchImpl: async () => { throw new Error('fallback must not be used'); }, now: () => new Date('2026-09-17T12:00:00Z'), ownerAuthRequired: false, pytrClient: { getQuotes: async isins => { calls += 1; return new Map([[isins[0], { isin: isins[0], lastEur: 12.34, askEur: 12.35, quoteTime: '2026-09-17T12:00:00Z', observedAt: '2026-09-17T12:00:00Z', source: 'pytr_rates' }]]); } } });
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     t.after(() => server.close());
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -126,6 +126,23 @@ test('one-day history starts at 07:30 Berlin time and uses fifteen-minute bucket
     assert.equal(weekly.max_gap_seconds, 21600);
     assert.equal(weekly.points.length, 2);
     assert.equal(weekly.points.at(-1).price_eur, 159);
+});
+
+test('dashboard history removes legacy pytr polling flatlines across closed sessions', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GAP', name: 'Gap', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const stock = (await response.json()).stock;
+    f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'GAP', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-01T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
+    for (const timestamp of ['2026-09-25T20:00:00Z', '2026-09-26T08:00:00Z', '2026-09-27T08:00:00Z', '2026-09-28T07:00:00Z']) {
+        f.db.addPriceSnapshot(stock.id, null, 100, null, 'pytr_rates', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
+    }
+    f.db.addPriceSnapshot(stock.id, null, 101, null, 'pytr_rates', '2026-09-28T10:00:00Z', '2026-09-28 10:00:00');
+    const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1w`)).json();
+    assert.deepEqual(history.points.map(point => [point.recorded_at, point.price_eur]), [
+        ['2026-09-25T20:00:00.000Z', 100],
+        ['2026-09-28T10:00:00.000Z', 101]
+    ]);
 });
 
 test('API factory covers lifecycle, history, journal, analytics, refresh isolation, and archive restore', async t => {

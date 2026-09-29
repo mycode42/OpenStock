@@ -62,6 +62,23 @@ function evenlySample(points, maximum) {
     return sampled;
 }
 
+// pytr's rates export is a current-value feed without a provider quote time.
+// Older data recorded each polling time as though it were a quote time, which
+// made weekends and closed sessions look like long flat price runs.  Collapse
+// those synthetic repeat observations at read time too, so existing history is
+// corrected without altering the audit trail.  Other sources retain every
+// authoritative observation, including unchanged official closes.
+function collapseSyntheticQuoteRepeats(points) {
+    const collapsed = [];
+    for (const point of points) {
+        const previous = collapsed.at(-1);
+        if (point.source === 'pytr_rates' && previous?.source === 'pytr_rates'
+            && Number(point.price_eur) === Number(previous.price_eur)) continue;
+        collapsed.push(point);
+    }
+    return collapsed;
+}
+
 function serializeStock(stock) {
     if (!stock) return stock;
     const { owned: _legacyOwned, ...publicStock } = stock;
@@ -368,7 +385,7 @@ app.get('/api/stocks/:id/history', (req, res) => {
             eurOnly: true
         }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }))
             .filter(point => !tradingDayStart || Date.parse(point.recorded_at) >= tradingDayStart.getTime());
-        const points = evenlySample(eligiblePoints, window.maxPoints);
+        const points = evenlySample(collapseSyntheticQuoteRepeats(eligiblePoints), window.maxPoints);
         res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, start_at: tradingDayStart?.toISOString() || null, points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);

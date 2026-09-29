@@ -128,6 +128,21 @@ test('history sampling collapses repeated observations with one stale quote time
     assert.deepEqual(points.map(point => point.observed_at), ['2026-01-02 05:00:00', '2026-01-02 08:00:00']);
 });
 
+test('pytr persistence keeps unchanged fallback quotes out of chart history', t => {
+    const { db, dir } = makeDb();
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const stockId = Number(db.addStock('PYTR', 'Pytr', 'EUR', 1, 2).lastInsertRowid);
+    const stock = db.getStockById(stockId);
+    // The history fixture deliberately uses the base schema; quote-card columns
+    // are irrelevant to the snapshot retention rule exercised here.
+    db.updateStockQuote = () => {};
+    db.persistQuote(stock, { priceEur: 100, source: 'pytr_rates', quoteTime: '2026-01-02T20:00:00Z' }, { recordedAt: '2026-01-02 20:00:00' });
+    db.persistQuote(stock, { priceEur: 100, source: 'pytr_rates', quoteTime: '2026-01-03T12:00:00Z' }, { recordedAt: '2026-01-03 12:00:00' });
+    db.persistQuote(stock, { priceEur: 101, source: 'pytr_rates', quoteTime: '2026-01-05T08:00:00Z' }, { recordedAt: '2026-01-05 08:00:00' });
+    const rows = db.db.prepare('SELECT price_eur, recorded_at FROM price_history WHERE stock_id=? ORDER BY id').all(stockId);
+    assert.deepEqual(rows, [{ price_eur: 100, recorded_at: '2026-01-02 20:00:00' }, { price_eur: 101, recorded_at: '2026-01-05 08:00:00' }]);
+});
+
 test('history sampling sorts mixed SQLite and ISO quote timestamps chronologically', t => {
     const { db, dir } = makeDb();
     t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
