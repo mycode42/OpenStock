@@ -30,6 +30,19 @@ test('Trade Republic client reloads the rotating sidecar key from its configured
   await client.getAccounts();
   assert.deepEqual(seen, ['first-key', 'rotated-key']);
 });
+test('Trade Republic client uses the OpenStock service config file for rotating sidecar keys', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-tr-key-'));
+  const keyFile = path.join(dir, 'openstock.env');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(keyFile, 'TRADE_REPUBLIC_API_KEY=current-key\n', { mode: 0o600 });
+  let seen;
+  const client = new TradeRepublicClient({ env: { OPENSTOCK_CONFIG_FILE: keyFile }, fetchImpl: async (_url, options) => {
+    seen = options.headers['X-API-Key'];
+    return { ok: true, json: async () => ({}) };
+  } });
+  await client.getAccounts();
+  assert.equal(seen, 'current-key');
+});
 test('sanitizers mask account references and preserve EUR bid/ask semantics', () => {
   const account = sanitizeAccount({ securitiesAccountNumber: 'DE1234567890123456', cashAmount: 42, availableCashAmount: 17 });
   assert.equal(account.account_ref_masked, 'DE••••56');
