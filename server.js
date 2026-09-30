@@ -13,8 +13,6 @@ const { PytrRatesClient } = require('./lib/pytr-rates');
 const { AlpacaMarketDataClient } = require('./lib/alpaca-market-data');
 const { normalizedBrokerRows } = require('./lib/broker-sync-service');
 const { normalizeOrderSizing, hasValidOrderSizingInput, failedGateNames, fetchLiveOrderAuthority } = require('./lib/order-safety');
-const { createOwnerAuth, sameOrigin } = require('./lib/owner-auth');
-const { TraderRunnerClient } = require('./lib/trader-runner');
 const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
@@ -239,7 +237,7 @@ function queueStockHistory(historyBackfill, stock) {
     }
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, traderRunnerClient = null, now = () => new Date(), ownerToken = process.env.OPENSTOCK_OWNER_TOKEN, ownerAuthRequired = process.env.OPENSTOCK_OWNER_AUTH_REQUIRED === 'true' && process.env.NODE_ENV !== 'test' } = {}) {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, now = () => new Date() } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -257,8 +255,6 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     });
     app.locals.alpacaClient = new AlpacaMarketDataClient({ fetchImpl });
     app.locals.pytrClient = pytrClient || new PytrRatesClient();
-    app.locals.traderRunnerClient = traderRunnerClient || new TraderRunnerClient();
-    app.locals.ownerAuth = ownerAuthRequired ? createOwnerAuth({ ownerToken }) : null;
     historyBackfill.brokerClient = app.locals.brokerClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
     app.use(express.json());
@@ -270,30 +266,11 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
         Expires: '0',
         'X-OpenStock-Version': APP_VERSION
     });
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && !sameOrigin(req)) {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.get('origin') && req.get('origin') !== `${req.protocol}://${req.get('host')}`) {
         return res.status(403).json({ error: 'Same-origin mutation required' });
     }
-    if (req.path === '/auth/login') return next();
-    if (!app.locals.ownerAuth) return next();
-    return app.locals.ownerAuth.requireOwner(req, res, next);
     next();
     });
-    app.post('/api/auth/login', (req, res) => {
-        if (!app.locals.ownerAuth) return res.status(503).json({ error: 'Owner authentication is not configured', code: 'OWNER_AUTH_UNCONFIGURED' });
-        return app.locals.ownerAuth.login(req, res);
-    });
-    // This is intentionally protected by the API middleware above: it lets a
-    // freshly loaded browser restore an existing owner session without ever
-    // exposing whether a session exists to an unauthenticated caller.
-    app.get('/api/auth/session', (req, res) => {
-        // The SPA needs an explicit, cache-safe signal when owner auth is
-        // intentionally disabled.  A 401 means authentication is required
-        // but missing; it must never be overloaded to mean "auth disabled".
-        if (!app.locals.ownerAuth) return res.json({ authenticated: false, authRequired: false });
-        if (!req.ownerSession) return res.status(401).json({ error: 'Owner authentication required', code: 'OWNER_AUTH_REQUIRED' });
-        return res.json({ authenticated: true, authRequired: true, csrfToken: req.ownerSession.csrfToken, expiresAt: new Date(req.ownerSession.expiresAt).toISOString() });
-    });
-    app.post('/api/auth/logout', (req, res) => app.locals.ownerAuth.logout(req, res));
     app.use(express.static(path.join(__dirname, 'www')));
     app.locals.liveQuoteFeed = createLiveQuoteFeed({ app, now });
 
@@ -316,24 +293,6 @@ app.get('/api/alpaca/dashboard', async (req, res) => {
 app.get('/api/alpaca/snapshot/:symbol', async (req, res) => {
     try { res.json({ provider: 'Alpaca Market Data', snapshot: await req.app.locals.alpacaClient.getSnapshot(req.params.symbol), observed_at: now().toISOString() }); }
     catch (error) { return alpacaMarketDataError(res, error); }
-});
-
-function traderError(res, error) {
-    const unavailable = error?.code === 'RUNNER_UNAVAILABLE' || /unavailable|timed out/i.test(String(error?.message || ''));
-    return res.status(unavailable ? 503 : 409).json({ error: unavailable ? 'Trader runner is unavailable or not configured' : String(error?.message || 'Trader request was rejected').slice(0, 240) });
-}
-
-app.get('/api/trader/status', async (req, res) => {
-    try { return res.json(await req.app.locals.traderRunnerClient.status()); }
-    catch (error) { return traderError(res, error); }
-});
-app.put('/api/trader/config', async (req, res) => {
-    try { return res.json(await req.app.locals.traderRunnerClient.configure(req.body)); }
-    catch (error) { return traderError(res, error); }
-});
-app.post('/api/trader/test-buy', async (req, res) => {
-    try { return res.status(202).json(await req.app.locals.traderRunnerClient.testBuy(req.body?.symbol)); }
-    catch (error) { return traderError(res, error); }
 });
 
 // ===== API: Stocks =====
@@ -933,9 +892,6 @@ if (require.main === module) {
     const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
     const port = process.env.PORT || 3000;
     initDatabase({ dbPath });
-    if (process.env.OPENSTOCK_OWNER_AUTH_REQUIRED === 'true' && (!process.env.OPENSTOCK_OWNER_TOKEN || process.env.OPENSTOCK_OWNER_TOKEN.length < 32)) {
-        throw new Error('OPENSTOCK_OWNER_AUTH_REQUIRED=true and OPENSTOCK_OWNER_TOKEN (at least 32 characters) are required');
-    }
     const app = createApp({ dbPath });
     const server = app.listen(port, '127.0.0.1', () => console.log(`OpenStock server listening on 127.0.0.1:${port}`));
     const shutdown = () => { console.log('OpenStock shutting down...'); server.close(() => { app.locals.db.db.close(); process.exit(0); }); };

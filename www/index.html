@@ -16,41 +16,20 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/openstock/favicon-192.png">
 <link rel="icon" type="image/png" sizes="256x256" href="/openstock/favicon-256.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/openstock/apple-touch-icon.png">
-<link rel="stylesheet" href="/openstock/styles.css?v=1.2.2&owner-auth=12">
+<link rel="stylesheet" href="/openstock/styles.css?v=1.2.3">
 <meta name="theme-color" content="#000000">
 </head>
 <body>
-<main id="owner-login" class="owner-login"><form id="owner-login-form" class="owner-login-card"><h1>OpenStock</h1><p>Owner authentication required.</p><label for="owner-token">Owner access token</label><input id="owner-token" type="password" autocomplete="current-password" required><button type="submit">Unlock</button><p id="owner-login-error" role="alert"></p></form></main>
-<div id="owner-app" hidden>
 <nav>
 <a href="#/dashboard" class="active" data-page="dashboard">Dashboard</a>
-<a href="#/trader" data-page="trader">Trader</a>
 <a href="#/journal" data-page="journal">Journal</a>
 <a href="#/config" data-page="config">Configure</a>
 </nav>
 <div class="container">
 <div id="page-dashboard"></div>
-<div id="page-trader" class="hidden"></div>
 <div id="page-journal" class="hidden"></div>
 <div id="page-config" class="hidden"></div>
 </div>
-</div>
-<script>
-// Owner authentication must never be served from an offline cache.  Previous
-// versions of this PWA worker could cache a 401 session response below the
-// `/openstock` reverse-proxy prefix. Remove any existing worker, then
-// reload once from the network before booting the authenticated application.
-if ('serviceWorker' in navigator && !sessionStorage.getItem('openstock-sw-cleared-v2')) {
-  sessionStorage.setItem('openstock-sw-cleared-v2', '1');
-  navigator.serviceWorker.getRegistrations()
-    .then(registrations => Promise.all(registrations.map(registration => registration.unregister())))
-    .finally(() => window.location.reload());
-}
-</script>
-<script type="module" src="./app.js?v=1.2.2&owner-auth=12"></script>
-<script>
-// Service workers are intentionally not registered while owner authentication
-// is enabled. The dashboard is network-backed and does not offer offline use.
-</script>
+<script type="module" src="./app.js?v=1.2.3"></script>
 </body>
 </html>
