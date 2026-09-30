@@ -4,7 +4,7 @@ const { instrumentAssetClass, resolveVerifiedInstrument } = require('../lib/inst
 const { sanitizeCollection } = require('../lib/brokers/trade-republic');
 const { QuoteService } = require('../lib/quote-service');
 
-test('Trade Republic crypto instruments are verified as EUR TIB instruments', async () => {
+test('Trade Republic crypto instruments are verified with a typed EUR home venue', async () => {
   const isin = 'XF000ETH0019';
   const client = {
     getInstrument: async () => ({ isin, name: 'Ethereum', intlSymbol: 'ETH', tradable: true, type: 'CRYPTO' }),
@@ -17,16 +17,21 @@ test('Trade Republic crypto instruments are verified as EUR TIB instruments', as
   assert.equal(result.home.currency, 'EUR');
 });
 
-test('crypto uses the documented Trade Republic TIB/EUR quote contract when home metadata omits venue fields', async () => {
+test('crypto uses a verified active spot listing when UAPI omits the type', async () => {
   const isin = 'XF000ETH0019';
   const client = {
-    getInstrument: async () => ({ isin, name: 'Ethereum', intlSymbol: 'ETH', tradable: true, type: 'CRYPTO' }),
-    getTradeRepublicInstrument: async () => ({ isin, type: 'CRYPTO' })
+    getInstrument: async () => ({ isin, name: 'Ethereum', ticker: 'ETH', tradable: true, listings: [
+      { exchange: 'B2C', symbol: 'ETHEUR.SPOT', active: true },
+      { exchange: 'BHS', symbol: 'ETHEUR', active: true },
+      { exchange: 'TIB', symbol: 'ETHEUR', active: false }
+    ] }),
+    getTradeRepublicInstrument: async () => ({ isin, exchange: 'BHS', currency: 'EUR' })
   };
   const result = await resolveVerifiedInstrument(client, isin);
-  assert.equal(result.instrument.exchange, 'TIB');
+  assert.equal(instrumentAssetClass(result.instrument), 'crypto');
+  assert.equal(result.instrument.exchange, 'BHS');
   assert.equal(result.instrument.currency, 'EUR');
-  assert.equal(result.home.exchange, 'TIB');
+  assert.equal(result.home.exchange, 'BHS');
   assert.equal(result.home.currency, 'EUR');
 });
 
