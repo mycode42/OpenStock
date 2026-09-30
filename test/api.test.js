@@ -45,6 +45,24 @@ test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T04:00:00Z')).toISOString(), '2026-09-15T05:30:00.000Z');
 });
 
+test('mutation origin check accepts the public HTTPS origin forwarded by the reverse proxy', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const headers = {
+        'content-type': 'application/json',
+        origin: 'https://openstock.example.test',
+        host: 'openstock.example.test',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'openstock.example.test'
+    };
+    const accepted = await f.request('/api/stocks', { method: 'POST', headers, body: JSON.stringify({ symbol: 'PROXY', name: 'Proxy', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    assert.equal(accepted.status, 201);
+
+    const rejected = await f.request('/api/stocks', { method: 'POST', headers: { ...headers, origin: 'https://other.example.test' }, body: JSON.stringify({ symbol: 'CROSS', name: 'Cross', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    assert.equal(rejected.status, 403);
+    assert.equal((await rejected.json()).error, 'Same-origin mutation required');
+});
+
 test('analytics reads do not create equity snapshots', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });

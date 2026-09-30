@@ -246,6 +246,11 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
         fetchImpl
     });
     const app = express();
+    // OpenStock is published behind the OpenClaw reverse proxy.  Express sees
+    // the final hop as HTTP unless it trusts that proxy, while browsers send
+    // their HTTPS Origin header.  Trusting one proxy hop lets req.protocol use
+    // X-Forwarded-Proto for the same-origin mutation check below.
+    app.set('trust proxy', 1);
     app.locals.db = db;
     app.locals.historyBackfill = historyBackfill;
     app.locals.fetchImpl = fetchImpl;
@@ -266,7 +271,9 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
         Expires: '0',
         'X-OpenStock-Version': APP_VERSION
     });
-    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.get('origin') && req.get('origin') !== `${req.protocol}://${req.get('host')}`) {
+    const forwardedHost = req.get('x-forwarded-host')?.split(',')[0].trim();
+    const requestHost = forwardedHost || req.get('host');
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.get('origin') && req.get('origin') !== `${req.protocol}://${requestHost}`) {
         return res.status(403).json({ error: 'Same-origin mutation required' });
     }
     next();
