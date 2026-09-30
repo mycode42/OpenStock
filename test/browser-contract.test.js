@@ -86,11 +86,11 @@ test('Journal requests fifteen trades per page', () => {
     assert.match(app, /trades\?page=\$\{requestedPage\}&page_size=15/);
 });
 
-test('Journal displays sequential trade numbers and native buy/sell prices without exposing trade IDs', () => {
+test('Journal displays trades in the requested column order without exposing trade IDs or a dividends column', () => {
     const journal = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'journal.js'), 'utf8');
-    assert.match(journal, /<th>Trade No\.<\/th>/);
-    assert.match(journal, /<th>Buy-in Price<\/th><th>Sell Price<\/th>/);
+    assert.match(journal, /<th>Trade No\.<\/th><th>Opened<\/th><th>Status<\/th><th>Stock<\/th><th>Buy-in Price<\/th><th>Sell Price<\/th><th>Net P\/L<\/th><th>Return<\/th><th><\/th>/);
     assert.doesNotMatch(journal, /<th>Trade ID<\/th>/);
+    assert.doesNotMatch(journal, /dividendHeader|tradeHeaders|<th>Dividends<\/th>/);
     assert.match(journal, /trade\.trade_number/);
     assert.match(journal, /journalTradeOpenedDate\(trade\.opened_at\)/);
     assert.match(journal, /journalTradePrice\(trade\.entry_price, trade\.currency\)/);
