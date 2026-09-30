@@ -29,9 +29,11 @@ test('crypto uses a verified active spot listing when UAPI omits the type', asyn
   };
   const result = await resolveVerifiedInstrument(client, isin);
   assert.equal(instrumentAssetClass(result.instrument), 'crypto');
-  assert.equal(result.instrument.exchange, 'BHS');
+  assert.equal(result.instrument.exchange, 'TIB');
+  assert.equal(result.instrument.homeExchange, 'BHS');
   assert.equal(result.instrument.currency, 'EUR');
-  assert.equal(result.home.exchange, 'BHS');
+  assert.equal(result.home.exchange, 'TIB');
+  assert.equal(result.home.homeExchange, 'BHS');
   assert.equal(result.home.currency, 'EUR');
 });
 
