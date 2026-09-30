@@ -17,6 +17,19 @@ test('Trade Republic crypto instruments are verified as EUR TIB instruments', as
   assert.equal(result.home.currency, 'EUR');
 });
 
+test('crypto uses the documented Trade Republic TIB/EUR quote contract when home metadata omits venue fields', async () => {
+  const isin = 'XF000ETH0019';
+  const client = {
+    getInstrument: async () => ({ isin, name: 'Ethereum', intlSymbol: 'ETH', tradable: true, type: 'CRYPTO' }),
+    getTradeRepublicInstrument: async () => ({ isin, type: 'CRYPTO' })
+  };
+  const result = await resolveVerifiedInstrument(client, isin);
+  assert.equal(result.instrument.exchange, 'TIB');
+  assert.equal(result.instrument.currency, 'EUR');
+  assert.equal(result.home.exchange, 'TIB');
+  assert.equal(result.home.currency, 'EUR');
+});
+
 test('portfolio sanitization retains a fractional crypto quantity and type', () => {
   const [position] = sanitizeCollection({ DE1234567890123456: { categories: [{ positions: [{ isin: 'XF000ETH0019', netSize: 0.125, type: 'CRYPTO', currentValue: 250 }] }] } }, 'portfolio');
   assert.equal(position.instrument, 'XF000ETH0019');
