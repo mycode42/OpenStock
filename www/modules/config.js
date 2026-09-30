@@ -52,7 +52,7 @@ export function createConfig(context) {
     function positionSummary(stock) {
         const quantity = Number(stock.position?.quantity || 0);
         return quantity > 0
-            ? `<span class="config-position held">${money(quantity)} shares in Journal</span>`
+            ? `<span class="config-position held">${money(quantity)} ${stock.asset_class === 'crypto' ? 'units' : 'shares'} in Journal</span>`
             : '<span class="config-position">No open Journal position</span>';
     }
 
@@ -88,7 +88,7 @@ export function createConfig(context) {
             const retiredCount = (stock.alert_levels || []).filter(level => level.retired).length;
             return `<article class="config-stock-card ${expanded ? 'is-expanded' : ''}" data-stock-id="${escapeHtml(stock.id)}">
                 <div class="config-stock-main">
-                    <div class="config-stock-identity"><strong>${escapeHtml(stock.symbol)}</strong><span>${escapeHtml(stock.name || '—')}</span><small data-live-price>€${money(stock.current_price_eur)}</small></div>
+                    <div class="config-stock-identity"><strong>${escapeHtml(stock.symbol)}</strong><span>${escapeHtml(stock.name || '—')}${stock.asset_class === 'crypto' ? ' · Crypto' : ''}</span><small data-live-price>€${money(stock.current_price_eur)}</small></div>
                     <div class="config-level-summary">${levelSummary(stock)}${retiredCount ? `<span class="config-retired-count">${retiredCount} triggered</span>` : ''}</div>
                     <div class="config-stock-status">${positionSummary(stock)}<span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'Monitoring' : 'Disabled'}</span></div>
                     <div class="config-stock-actions"><button type="button" class="btn btn-sm ${expanded ? 'btn-primary' : 'btn-secondary'}" data-stock-action="levels" data-stock-symbol="${escapeHtml(stock.symbol)}" aria-expanded="${expanded}">${expanded ? 'Hide alerts' : 'Manage alerts'}</button><button type="button" class="btn btn-sm btn-secondary" data-stock-action="edit" data-stock-symbol="${escapeHtml(stock.symbol)}">Edit</button><button type="button" class="btn btn-sm btn-secondary" data-stock-action="toggle" data-stock-symbol="${escapeHtml(stock.symbol)}">${stock.enabled ? 'Disable' : 'Enable'}</button><button type="button" class="btn btn-sm btn-danger" data-stock-action="remove" data-stock-symbol="${escapeHtml(stock.symbol)}">Remove</button></div>
@@ -99,7 +99,7 @@ export function createConfig(context) {
 
     function renderConfig() {
         const container = document.getElementById('page-config');
-        container.innerHTML = `<header class="config-header"><div><h1>⚙️ Configure</h1><p class="subtitle">ISIN-first Trade Republic instruments, automatic ISIN resolution, and independent one-shot alert levels</p></div><button type="button" class="btn btn-primary" data-config-action="add-stock">+ Add stock</button></header><div id="ac"></div>${stockEditor()}<section class="card config-catalogue"><div class="section-header"><div><div class="section-title">Stocks</div><p class="journal-help">${getStocks().length}/25 configured · open one stock at a time to manage its alerts.</p></div></div>${stockCards()}</section><details class="card config-archive"><summary>Archived / historical stocks</summary><div id="archived-stocks"><p class="journal-empty">Loading…</p></div></details>`;
+        container.innerHTML = `<header class="config-header"><div><h1>⚙️ Configure</h1><p class="subtitle">ISIN-first Trade Republic instruments, including crypto, with automatic resolution and independent one-shot alert levels</p></div><button type="button" class="btn btn-primary" data-config-action="add-stock">+ Add instrument</button></header><div id="ac"></div>${stockEditor()}<section class="card config-catalogue"><div class="section-header"><div><div class="section-title">Instruments</div><p class="journal-help">${getStocks().length}/25 configured · open one instrument at a time to manage its alerts.</p></div></div>${stockCards()}</section><details class="card config-archive"><summary>Archived / historical instruments</summary><div id="archived-stocks"><p class="journal-empty">Loading…</p></div></details>`;
         container.querySelector('[data-config-action="add-stock"]')?.addEventListener('click', () => { editingStockSymbol = null; stockFormOpen = true; renderConfig(); focusEditor(); });
         container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => ({ edit: es, levels: toggleLevels, toggle: ts, remove: rs }[button.dataset.stockAction])?.(button.dataset.stockSymbol)));
         container.querySelector('[data-stock-editor-action="save"]')?.addEventListener('click', () => editingStockSymbol ? esu(editingStockSymbol) : asm());
@@ -111,7 +111,7 @@ export function createConfig(context) {
         startLivePolling();
     }
 
-    async function resolveIsin() { const isin=document.getElementById('as-isin')?.value.trim().toUpperCase(); const preview=document.getElementById('isin-preview'); if(!/^[A-Z0-9]{12}$/.test(isin)) return showA('A valid 12-character ISIN is required','error'); const result=await af('/instruments/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({isin})}); if(result?.verified&&preview) preview.innerHTML=`<strong>${escapeHtml(result.instrument.name)}</strong> · ${escapeHtml(result.instrument.ticker)} · ${escapeHtml(result.instrument.isin)} · ${escapeHtml(result.home.exchange)} · ${escapeHtml(result.home.currency)} · ${result.instrument.tradable === false ? 'not tradable' : 'tradable'}`; }
+    async function resolveIsin() { const isin=document.getElementById('as-isin')?.value.trim().toUpperCase(); const preview=document.getElementById('isin-preview'); if(!/^[A-Z0-9]{12}$/.test(isin)) return showA('A valid 12-character ISIN is required','error'); const result=await af('/instruments/resolve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({isin})}); if(result?.verified&&preview) { const assetClass = /(?:^|_)(?:CRYPTO|CRYPTOCURRENCY)(?:_|$)/.test(String(result.instrument.type || '').toUpperCase()) ? 'Crypto' : 'Security'; preview.innerHTML=`<strong>${escapeHtml(result.instrument.name)}</strong> · ${escapeHtml(result.instrument.ticker)} · ${escapeHtml(result.instrument.isin)} · ${escapeHtml(assetClass)} · ${escapeHtml(result.home.exchange)} · ${escapeHtml(result.home.currency)} · ${result.instrument.tradable === false ? 'not tradable' : 'tradable'}`; } }
 
     function focusEditor() {
         requestAnimationFrame(() => { const editor = document.getElementById('stock-editor'); editor?.scrollIntoView({ behavior: 'smooth', block: 'start' }); editor?.querySelector('input:not([disabled])')?.focus(); });

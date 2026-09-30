@@ -1,4 +1,4 @@
-const CACHE_NAME = 'openstock-v1.2.2-owner-auth-4';
+const CACHE_NAME = 'openstock-v1.2.2-owner-auth-5';
 const REQUIRED_ASSETS = [
   './',
   './index.html',

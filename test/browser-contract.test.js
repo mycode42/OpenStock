@@ -34,8 +34,9 @@ test('Trader monitor polls runner status only while its page is visible', () => 
     const trader = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'trader.js'), 'utf8');
     const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
     assert.match(trader, /const pollMs = 30000/);
-    assert.match(trader, /window\.location\.hash !== '#\/trader'/);
-    assert.match(trader, /Price and trigger distance are evaluated by the paper runner/);
+    assert.match(trader, /window\.location\.hash === '#\/trader'/);
+    assert.match(trader, /Dip rebuy adds one share only after the price falls/);
+    assert.match(trader, /Strategy budget \(USD\)/);
     assert.match(trader, /stopPolling/);
     assert.match(app, /if\(page!=='trader'\)trader\.stopPolling\(\)/);
 });
