@@ -64,9 +64,9 @@ test('mobile dashboard charts open on a card click and close when another surfac
     assert.doesNotMatch(styles, /@media\(max-width:640px\).*\.stock-card:focus-within \.history-popover/);
 });
 
-test('trade entry prices use two-decimal input precision', () => {
+test('trade entry prices use six-decimal input precision', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
-    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.01" step="\.01" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 2\)\)\}"/);
+    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.000001" step="\.000001" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 6\)\)\}"/);
 });
 
 test('journal close workflow accepts a sale quantity and preserves the open balance', () => {
