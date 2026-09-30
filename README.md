@@ -493,11 +493,11 @@ The system runs fully autonomous via [OpenClaw](https://github.com/openclaw/open
 ```bash
 # Morning health check (9:30 AM Mon-Fri)
 openclaw cron add --name swing-morning \
-  --cron "30 9 * * 1-5" --tz "America/Los_Angeles" --exact \
+  --cron "30 9 * * 1-5" --tz "America/New_York" --exact \
   --agent swing-agent \
-  --model "your-model" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram --to YOUR_CHAT_ID \
+  --announce --channel telegram --to 8545556566 \
   --best-effort-deliver \
   --message 'Morning health check.
     1. Run: poetry run python portfolio_monitor.py --mode swing
@@ -507,11 +507,11 @@ openclaw cron add --name swing-morning \
 
 # Midday analysis (12:00 PM Mon-Fri)
 openclaw cron add --name swing-midday \
-  --cron "0 12 * * 1-5" --tz "America/Los_Angeles" --exact \
+  --cron "0 12 * * 1-5" --tz "America/New_York" --exact \
   --agent swing-agent \
-  --model "your-model" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram --to YOUR_CHAT_ID \
+  --announce --channel telegram --to 8545556566 \
   --best-effort-deliver \
   --message 'Midday analysis.
     1. Gather data: poetry run python gather_data.py
@@ -521,11 +521,11 @@ openclaw cron add --name swing-midday \
 
 # Afternoon review (3:00 PM Mon-Fri)
 openclaw cron add --name swing-afternoon \
-  --cron "0 15 * * 1-5" --tz "America/Los_Angeles" --exact \
+  --cron "0 15 * * 1-5" --tz "America/New_York" --exact \
   --agent swing-agent \
-  --model "your-model" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram --to YOUR_CHAT_ID \
+  --announce --channel telegram --to 8545556566 \
   --best-effort-deliver \
   --message 'Afternoon review.
     1. Run: poetry run python portfolio_monitor.py --mode swing
@@ -538,11 +538,11 @@ openclaw cron add --name swing-afternoon \
 ```bash
 # Pre-market scan (6:30 AM Mon-Fri)
 openclaw cron add --name day-morning \
-  --cron "30 6 * * 1-5" --tz "America/Los_Angeles" --exact \
+  --cron "30 6 * * 1-5" --tz "America/New_York" --exact \
   --agent day-agent \
-  --model "your-model" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram --to YOUR_CHAT_ID \
+  --announce --channel telegram --to 8545556566 \
   --best-effort-deliver \
   --message 'Pre-market scan.
     1. Check VIX and economic calendar
@@ -552,11 +552,11 @@ openclaw cron add --name day-morning \
 
 # Midday position check (9:30 AM Mon-Fri)
 openclaw cron add --name day-midday \
-  --cron "30 9 * * 1-5" --tz "America/Los_Angeles" --exact \
+  --cron "30 9 * * 1-5" --tz "America/New_York" --exact \
   --agent day-agent \
-  --model "your-model" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram --to YOUR_CHAT_ID \
+  --announce --channel telegram --to 8545556566 \
   --best-effort-deliver \
   --message 'Midday check.
     1. Run: poetry run python portfolio_monitor.py --mode day
@@ -566,11 +566,11 @@ openclaw cron add --name day-midday \
 
 # Mandatory EOD flatten (12:45 PM Mon-Fri)
 openclaw cron add --name day-flatten \
-  --cron "45 12 * * 1-5" --tz "America/Los_Angeles" --exact \
+  --cron "45 12 * * 1-5" --tz "America/New_York" --exact \
   --agent day-agent \
-  --model "your-model" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram --to YOUR_CHAT_ID \
+  --announce --channel telegram --to 8545556566 \
   --best-effort-deliver \
   --message 'FLATTEN — 15 min to close.
     1. Run: poetry run python execute_trades.py --mode day --flatten
@@ -586,7 +586,7 @@ openclaw cron add --name day-flatten \
 openclaw cron add --name autoresearch-run \
   --cron "0 17 * * 1-5" \
   --agent my-agent \
-  --model "google/gemini-2.5-flash" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
   --timeout 10800 \
   --message "cd ~/swarm-trader && poetry run python autoresearch/evolve.py --iterations 50"
@@ -595,7 +595,7 @@ openclaw cron add --name autoresearch-run \
 openclaw cron add --name autoresearch-report \
   --cron "0 20 * * 1-5" \
   --agent my-agent \
-  --model "google/gemini-2.5-flash" \
+  --model openai/gpt-5.6-luna \
   --session isolated \
   --announce --channel telegram \
   --message "Read /tmp/autoresearch-latest.log. Summarize: experiments, best fitness, top findings."
