@@ -1,4 +1,4 @@
-require('dotenv').config({ path: process.env.OPENSTOCK_CONFIG_FILE || '/etc/stocky/config/openstock.env', quiet: true });
+require('dotenv').config({ path: process.env.OPENSTOCK_CONFIG_FILE || '/opt/openstock/.env', quiet: true });
 const express = require('express');
 const path = require('path');
 const crypto = require('node:crypto');
