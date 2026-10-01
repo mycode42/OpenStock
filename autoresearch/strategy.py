@@ -1,6 +1,6 @@
-# EXPERIMENT: further_smooth_intraday_rsi
-# HYPOTHESIS: Extending the RSI lookback modestly beyond the successful 14-period setting should further reduce noisy intraday oscillator swings while preserving the high-quality VWAP mean-reversion signals.
-# CHANGE: Increased RSI_PERIOD from 14 to 16
+# EXPERIMENT: lower_overbought_threshold
+# HYPOTHESIS: Lowering the overbought threshold modestly should identify short mean-reversion opportunities sooner, improving directional balance and capturing reversals that the current threshold misses.
+# CHANGE: Decreased RSI_OVERBOUGHT from 63 to 60
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,20 +13,20 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "further_smooth_intraday_rsi"
+EXPERIMENT_NAME = "lower_overbought_threshold"
 EXPERIMENT_HYPOTHESIS = (
-    "Extending the RSI lookback modestly beyond the successful 14-period setting "
-    "should further reduce noisy intraday oscillator swings while preserving the "
-    "high-quality VWAP mean-reversion signals."
+    "Lowering the overbought threshold modestly should identify short mean-reversion "
+    "opportunities sooner, improving directional balance and capturing reversals that "
+    "the current threshold misses."
 )
-EXPERIMENT_CHANGE = "Increased RSI_PERIOD from 14 to 16"
+EXPERIMENT_CHANGE = "Decreased RSI_OVERBOUGHT from 63 to 60"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
 RSI_VERY_OVERSOLD = 28
 RSI_STRONG_OVERSOLD = 31
 RSI_MODERATE_OVERSOLD = 38
-RSI_OVERBOUGHT = 63
+RSI_OVERBOUGHT = 60
 RSI_NEUTRAL_LOW = 48
 RSI_NEUTRAL_HIGH = 53
 
