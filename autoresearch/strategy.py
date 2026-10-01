@@ -1,6 +1,6 @@
-# EXPERIMENT: vwap_quality_filter
-# HYPOTHESIS: Requiring a slightly larger deviation from VWAP should filter marginal near-VWAP entries, improving trade quality and risk-adjusted returns while retaining enough opportunities above the ten-trade minimum.
-# CHANGE: Increase VWAP_NEAR_BAND_PCT from 0.85 to 1.00
+# EXPERIMENT: vwap_weight_rebalance
+# HYPOTHESIS: The successful wider VWAP deviation filter indicates that VWAP displacement is a stronger quality signal than the current weighting reflects; increasing its confidence contribution while reducing RSI's should prioritize higher-quality dislocations without changing trade frequency.
+# CHANGE: Rebalance confidence weights by increasing VWAP from 0.30 to 0.35 and reducing RSI from 0.35 to 0.30
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,17 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "vwap_quality_filter"
+EXPERIMENT_NAME = "vwap_weight_rebalance"
 EXPERIMENT_HYPOTHESIS = (
-    "Requiring a slightly larger deviation from VWAP should filter marginal "
-    "near-VWAP entries, improving trade quality and risk-adjusted returns while "
-    "retaining enough opportunities above the ten-trade minimum."
+    "The successful wider VWAP deviation filter indicates that VWAP displacement "
+    "is a stronger quality signal than the current weighting reflects; increasing "
+    "its confidence contribution while reducing RSI's should prioritize higher-"
+    "quality dislocations without changing trade frequency."
 )
-EXPERIMENT_CHANGE = "Increase VWAP_NEAR_BAND_PCT from 0.85 to 1.00"
+EXPERIMENT_CHANGE = (
+    "Rebalance confidence weights by increasing VWAP from 0.30 to 0.35 "
+    "and reducing RSI from 0.35 to 0.30"
+)
 
 RSI_PERIOD = 10
 RSI_OVERSOLD = 25
@@ -40,8 +44,8 @@ TARGET_MULTIPLIER = 3.3
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 62.0
 
-CONF_WEIGHT_RSI = 0.35
-CONF_WEIGHT_VWAP = 0.30
+CONF_WEIGHT_RSI = 0.30
+CONF_WEIGHT_VWAP = 0.35
 CONF_WEIGHT_VOLUME = 0.20
 CONF_WEIGHT_MACD = 0.15
 
