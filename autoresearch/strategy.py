@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_overbought_threshold
-# HYPOTHESIS: Lowering the overbought threshold modestly should identify short mean-reversion opportunities sooner, improving directional balance and capturing reversals that the current threshold misses.
-# CHANGE: Decreased RSI_OVERBOUGHT from 63 to 60
+# EXPERIMENT: lower_volume_confirmation
+# HYPOTHESIS: Lowering the volume confirmation threshold should give moderately elevated-volume reversals a stronger confidence contribution, allowing more valid high-quality VWAP/RSI signals to clear the entry threshold without materially increasing noise.
+# CHANGE: Decreased VOLUME_CONFIRM_RATIO from 1.40 to 1.30
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "lower_overbought_threshold"
+EXPERIMENT_NAME = "lower_volume_confirmation"
 EXPERIMENT_HYPOTHESIS = (
-    "Lowering the overbought threshold modestly should identify short mean-reversion "
-    "opportunities sooner, improving directional balance and capturing reversals that "
-    "the current threshold misses."
+    "Lowering the volume confirmation threshold should give moderately elevated-volume "
+    "reversals a stronger confidence contribution, allowing more valid high-quality "
+    "VWAP/RSI signals to clear the entry threshold without materially increasing noise."
 )
-EXPERIMENT_CHANGE = "Decreased RSI_OVERBOUGHT from 63 to 60"
+EXPERIMENT_CHANGE = "Decreased VOLUME_CONFIRM_RATIO from 1.40 to 1.30"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -32,7 +32,7 @@ RSI_NEUTRAL_HIGH = 53
 
 VWAP_NEAR_BAND_PCT = 1.00
 VWAP_EXTENDED_PCT = 1.50
-VOLUME_CONFIRM_RATIO = 1.40
+VOLUME_CONFIRM_RATIO = 1.30
 VOLUME_STRONG_RATIO = 2.50
 
 STOP_PCT = 0.009
