@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_volume_confirmation
-# HYPOTHESIS: Lowering the volume confirmation threshold should give moderately elevated-volume reversals a stronger confidence contribution, allowing more valid high-quality VWAP/RSI signals to clear the entry threshold without materially increasing noise.
-# CHANGE: Decreased VOLUME_CONFIRM_RATIO from 1.40 to 1.30
+# EXPERIMENT: modest_wider_stop
+# HYPOTHESIS: The failed tighter-stop experiment suggests intraday noise is triggering avoidable losses; modestly widening the default stop should reduce premature stop-outs while preserving the strategy's favorable risk-reward profile.
+# CHANGE: Increased STOP_PCT from 0.009 to 0.010
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "lower_volume_confirmation"
+EXPERIMENT_NAME = "modest_wider_stop"
 EXPERIMENT_HYPOTHESIS = (
-    "Lowering the volume confirmation threshold should give moderately elevated-volume "
-    "reversals a stronger confidence contribution, allowing more valid high-quality "
-    "VWAP/RSI signals to clear the entry threshold without materially increasing noise."
+    "The failed tighter-stop experiment suggests intraday noise is triggering "
+    "avoidable losses; modestly widening the default stop should reduce premature "
+    "stop-outs while preserving the strategy's favorable risk-reward profile."
 )
-EXPERIMENT_CHANGE = "Decreased VOLUME_CONFIRM_RATIO from 1.40 to 1.30"
+EXPERIMENT_CHANGE = "Increased STOP_PCT from 0.009 to 0.010"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -35,7 +35,7 @@ VWAP_EXTENDED_PCT = 1.50
 VOLUME_CONFIRM_RATIO = 1.30
 VOLUME_STRONG_RATIO = 2.50
 
-STOP_PCT = 0.009
+STOP_PCT = 0.010
 TARGET_MULTIPLIER = 3.8
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 62.0
