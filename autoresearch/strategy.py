@@ -1,6 +1,6 @@
-# EXPERIMENT: smooth_intraday_rsi
-# HYPOTHESIS: A longer RSI lookback should reduce noisy short-term oscillator swings and improve the quality of VWAP mean-reversion signals during the short intraday window.
-# CHANGE: Increased RSI_PERIOD from 10 to 14
+# EXPERIMENT: further_smooth_intraday_rsi
+# HYPOTHESIS: Extending the RSI lookback modestly beyond the successful 14-period setting should further reduce noisy intraday oscillator swings while preserving the high-quality VWAP mean-reversion signals.
+# CHANGE: Increased RSI_PERIOD from 14 to 16
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,15 +13,15 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "smooth_intraday_rsi"
+EXPERIMENT_NAME = "further_smooth_intraday_rsi"
 EXPERIMENT_HYPOTHESIS = (
-    "A longer RSI lookback should reduce noisy short-term oscillator swings "
-    "and improve the quality of VWAP mean-reversion signals during the short "
-    "intraday window."
+    "Extending the RSI lookback modestly beyond the successful 14-period setting "
+    "should further reduce noisy intraday oscillator swings while preserving the "
+    "high-quality VWAP mean-reversion signals."
 )
-EXPERIMENT_CHANGE = "Increased RSI_PERIOD from 10 to 14"
+EXPERIMENT_CHANGE = "Increased RSI_PERIOD from 14 to 16"
 
-RSI_PERIOD = 14
+RSI_PERIOD = 16
 RSI_OVERSOLD = 25
 RSI_VERY_OVERSOLD = 28
 RSI_STRONG_OVERSOLD = 31
