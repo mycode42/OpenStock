@@ -1,6 +1,6 @@
-# EXPERIMENT: refine_target
-# HYPOTHESIS: The 3.7R target produced the best observed fitness while 3.9R overshot the useful continuation range; a midpoint 3.8R target may capture additional upside without sacrificing as many realized exits.
-# CHANGE: Increased TARGET_MULTIPLIER from 3.7 to 3.8
+# EXPERIMENT: smooth_intraday_rsi
+# HYPOTHESIS: A longer RSI lookback should reduce noisy short-term oscillator swings and improve the quality of VWAP mean-reversion signals during the short intraday window.
+# CHANGE: Increased RSI_PERIOD from 10 to 14
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,15 +13,15 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "refine_target"
+EXPERIMENT_NAME = "smooth_intraday_rsi"
 EXPERIMENT_HYPOTHESIS = (
-    "The 3.7R target produced the best observed fitness while 3.9R overshot "
-    "the useful continuation range; a midpoint 3.8R target may capture "
-    "additional upside without sacrificing as many realized exits."
+    "A longer RSI lookback should reduce noisy short-term oscillator swings "
+    "and improve the quality of VWAP mean-reversion signals during the short "
+    "intraday window."
 )
-EXPERIMENT_CHANGE = "Increased TARGET_MULTIPLIER from 3.7 to 3.8"
+EXPERIMENT_CHANGE = "Increased RSI_PERIOD from 10 to 14"
 
-RSI_PERIOD = 10
+RSI_PERIOD = 14
 RSI_OVERSOLD = 25
 RSI_VERY_OVERSOLD = 28
 RSI_STRONG_OVERSOLD = 31
