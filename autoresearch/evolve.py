@@ -249,25 +249,35 @@ def _run_agent_claude(prompt: str, quiet: bool = False) -> tuple[bool, str]:
 
 def _run_agent_api(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     """
-    Invoke Claude via Anthropic Python SDK to modify strategy.py.
-    Avoids nested Claude session errors (no subprocess call to claude CLI).
+    Invoke the configured OpenAI model via the OpenAI Python SDK.
+    Uses LLM_MODEL and OPENAI_API_KEY from the environment.
     Returns (success, output_or_error).
     """
     try:
-        import anthropic
+        from openai import OpenAI
     except ImportError:
-        return False, "anthropic package not installed. Run: pip install anthropic"
+        return False, "openai package not installed. Run: poetry add openai"
 
     if not quiet:
-        print("  [agent] Invoking Claude API (no nested session)...", file=sys.stderr)
+        model = os.environ.get("LLM_MODEL", "gpt-5.6-luna")
+        print(
+            f"  [agent] Invoking OpenAI API with {model}...",
+            file=sys.stderr,
+        )
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        return False, "ANTHROPIC_API_KEY not set in environment"
+        return False, "OPENAI_API_KEY not set in environment"
+
+    model = os.environ.get("LLM_MODEL", "gpt-5.6-luna")
 
     try:
         strategy_content = STRATEGY_PATH.read_text()
-        program_md_content = PROGRAM_MD_PATH.read_text() if PROGRAM_MD_PATH.exists() else ""
+        program_md_content = (
+            PROGRAM_MD_PATH.read_text()
+            if PROGRAM_MD_PATH.exists()
+            else ""
+        )
     except Exception as e:
         return False, f"Failed to read input files: {e}"
 
@@ -276,26 +286,28 @@ def _run_agent_api(prompt: str, quiet: bool = False) -> tuple[bool, str]:
         + f"\n\n## program.md (your full instructions)\n{program_md_content}"
         + f"\n\n## Current autoresearch/strategy.py\n```python\n{strategy_content}\n```"
         + "\n\n## Response format"
-        + "\nOutput ONLY the complete modified strategy.py. No explanation, no markdown fences — raw Python only."
+        + "\nOutput ONLY the complete modified strategy.py. "
+          "No explanation, no markdown fences — raw Python only."
     )
 
-    client = anthropic.Anthropic(api_key=api_key)
     try:
-        message = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=8192,
-            messages=[{"role": "user", "content": full_prompt}],
+        client = OpenAI(api_key=api_key)
+        response = client.responses.create(
+            model=model,
+            input=full_prompt,
+            max_output_tokens=8192,
         )
     except Exception as e:
-        return False, f"Anthropic API error: {e}"
+        return False, f"OpenAI API error: {e}"
 
-    new_content = message.content[0].text.strip()
+    new_content = response.output_text.strip()
 
     # Strip markdown code fences if the model added them
     if new_content.startswith("```python"):
         new_content = new_content[len("```python"):].lstrip("\n")
     elif new_content.startswith("```"):
         new_content = new_content[3:].lstrip("\n")
+
     if new_content.endswith("```"):
         new_content = new_content[:-3].rstrip()
 
@@ -304,9 +316,16 @@ def _run_agent_api(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     except Exception as e:
         return False, f"Failed to write strategy.py: {e}"
 
-    tokens_used = getattr(message.usage, "input_tokens", "?"), getattr(message.usage, "output_tokens", "?")
-    return True, f"API agent ok (tokens: {tokens_used[0]}in + {tokens_used[1]}out)"
+    usage = getattr(response, "usage", None)
+    if usage:
+        input_tokens = getattr(usage, "input_tokens", "?")
+        output_tokens = getattr(usage, "output_tokens", "?")
+        return True, (
+            f"API agent ok ({model}; "
+            f"tokens: {input_tokens}in + {output_tokens}out)"
+        )
 
+    return True, f"API agent ok ({model})"
 
 def _run_agent_dry_run(prompt: str, quiet: bool = False) -> tuple[bool, str]:
     """Dry-run agent: makes a minimal parameter tweak to test the harness."""
@@ -502,9 +521,9 @@ def main() -> int:
         help="Number of evolution iterations (default: 50)",
     )
     parser.add_argument(
-        "--agent", type=str, default="claude",
+        "--agent", type=str, default="api",
         choices=["claude", "api", "dry-run"],
-        help="Coding agent to use: 'claude' (CLI), 'api' (Anthropic SDK, no nested session), 'dry-run'",
+        help="Coding agent to use: 'claude' (CLI), 'api' (OpenAI API), 'dry-run'",
     )
     parser.add_argument(
         "--backtest-days", type=int, default=None,

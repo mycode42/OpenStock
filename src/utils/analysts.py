@@ -22,6 +22,7 @@ from src.agents.growth_agent import growth_analyst_agent
 from src.agents.apex import apex_agent
 from src.agents.autoresearch_agent import autoresearch_agent
 from src.agents.market_regime import market_regime_agent
+from src.agents.andreas_x42 import andreas_x42_agent
 
 # Define analyst configuration - single source of truth
 ANALYST_CONFIG = {

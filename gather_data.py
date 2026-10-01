@@ -39,12 +39,12 @@ DATA_BASE = "https://data.alpaca.markets/v2"
 
 def _alpaca_headers(mode: str = None) -> dict:
     """Return Alpaca API headers for the given mode (swing/day)."""
-    if mode == "swing":
+    if mode == "day":
         return {
-            "APCA-API-KEY-ID": os.environ.get("ALPACA_SWING_API_KEY", ""),
-            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SWING_API_SECRET", ""),
+            "APCA-API-KEY-ID": os.environ.get("ALPACA_DAY_API_KEY", ""),
+            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_DAY_API_SECRET", ""),
         }
-    # Default / day mode uses the original keys
+    # Default / swing mode uses the original keys
     return {
         "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
         "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
