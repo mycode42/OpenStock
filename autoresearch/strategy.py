@@ -1,6 +1,6 @@
-# EXPERIMENT: stronger_vwap_weight
-# HYPOTHESIS: The prior VWAP-weight increase produced the best fitness, indicating that larger price displacement from VWAP is a stronger quality signal than RSI in this window; increasing that weighting further should prioritize the most decisive dislocations while preserving the existing trade filter.
-# CHANGE: Rebalanced confidence weights by increasing VWAP from 0.35 to 0.40 and reducing RSI from 0.30 to 0.25
+# EXPERIMENT: slightly_wider_target
+# HYPOTHESIS: The current 3.3R target produced the strongest fitness, while reducing the target weakened risk-adjusted performance; modestly increasing it should preserve the favorable payoff profile and improve returns from trades that continue beyond the current target.
+# CHANGE: Increased TARGET_MULTIPLIER from 3.3 to 3.5
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,16 +13,15 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "stronger_vwap_weight"
+EXPERIMENT_NAME = "slightly_wider_target"
 EXPERIMENT_HYPOTHESIS = (
-    "The prior VWAP-weight increase produced the best fitness, indicating that "
-    "larger price displacement from VWAP is a stronger quality signal than RSI "
-    "in this window; increasing that weighting further should prioritize the "
-    "most decisive dislocations while preserving the existing trade filter."
+    "The current 3.3R target produced the strongest fitness, while reducing "
+    "the target weakened risk-adjusted performance; modestly increasing it "
+    "should preserve the favorable payoff profile and improve returns from "
+    "trades that continue beyond the current target."
 )
 EXPERIMENT_CHANGE = (
-    "Rebalanced confidence weights by increasing VWAP from 0.35 to 0.40 "
-    "and reducing RSI from 0.30 to 0.25"
+    "Increased TARGET_MULTIPLIER from 3.3 to 3.5"
 )
 
 RSI_PERIOD = 10
@@ -40,7 +39,7 @@ VOLUME_CONFIRM_RATIO = 1.40
 VOLUME_STRONG_RATIO = 2.50
 
 STOP_PCT = 0.009
-TARGET_MULTIPLIER = 3.3
+TARGET_MULTIPLIER = 3.5
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 62.0
 
