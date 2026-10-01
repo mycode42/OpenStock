@@ -1,6 +1,6 @@
-# EXPERIMENT: extend_target_again
-# HYPOTHESIS: The increase from 3.3R to 3.5R produced the best fitness, suggesting profitable intraday moves can continue beyond the prior target; extending the target modestly to 3.7R may improve payoff while preserving the favorable trade selection.
-# CHANGE: Increased TARGET_MULTIPLIER from 3.5 to 3.7
+# EXPERIMENT: refine_target
+# HYPOTHESIS: The 3.7R target produced the best observed fitness while 3.9R overshot the useful continuation range; a midpoint 3.8R target may capture additional upside without sacrificing as many realized exits.
+# CHANGE: Increased TARGET_MULTIPLIER from 3.7 to 3.8
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,14 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "extend_target_again"
+EXPERIMENT_NAME = "refine_target"
 EXPERIMENT_HYPOTHESIS = (
-    "The increase from 3.3R to 3.5R produced the best fitness, suggesting "
-    "profitable intraday moves can continue beyond the prior target; extending "
-    "the target modestly to 3.7R may improve payoff while preserving the "
-    "favorable trade selection."
+    "The 3.7R target produced the best observed fitness while 3.9R overshot "
+    "the useful continuation range; a midpoint 3.8R target may capture "
+    "additional upside without sacrificing as many realized exits."
 )
-EXPERIMENT_CHANGE = "Increased TARGET_MULTIPLIER from 3.5 to 3.7"
+EXPERIMENT_CHANGE = "Increased TARGET_MULTIPLIER from 3.7 to 3.8"
 
 RSI_PERIOD = 10
 RSI_OVERSOLD = 25
@@ -37,7 +36,7 @@ VOLUME_CONFIRM_RATIO = 1.40
 VOLUME_STRONG_RATIO = 2.50
 
 STOP_PCT = 0.009
-TARGET_MULTIPLIER = 3.7
+TARGET_MULTIPLIER = 3.8
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 62.0
 
