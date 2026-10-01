@@ -1,6 +1,6 @@
-# EXPERIMENT: vwap_weight_rebalance
-# HYPOTHESIS: The successful wider VWAP deviation filter indicates that VWAP displacement is a stronger quality signal than the current weighting reflects; increasing its confidence contribution while reducing RSI's should prioritize higher-quality dislocations without changing trade frequency.
-# CHANGE: Rebalance confidence weights by increasing VWAP from 0.30 to 0.35 and reducing RSI from 0.35 to 0.30
+# EXPERIMENT: stronger_vwap_weight
+# HYPOTHESIS: The prior VWAP-weight increase produced the best fitness, indicating that larger price displacement from VWAP is a stronger quality signal than RSI in this window; increasing that weighting further should prioritize the most decisive dislocations while preserving the existing trade filter.
+# CHANGE: Rebalanced confidence weights by increasing VWAP from 0.35 to 0.40 and reducing RSI from 0.30 to 0.25
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,16 +13,16 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "vwap_weight_rebalance"
+EXPERIMENT_NAME = "stronger_vwap_weight"
 EXPERIMENT_HYPOTHESIS = (
-    "The successful wider VWAP deviation filter indicates that VWAP displacement "
-    "is a stronger quality signal than the current weighting reflects; increasing "
-    "its confidence contribution while reducing RSI's should prioritize higher-"
-    "quality dislocations without changing trade frequency."
+    "The prior VWAP-weight increase produced the best fitness, indicating that "
+    "larger price displacement from VWAP is a stronger quality signal than RSI "
+    "in this window; increasing that weighting further should prioritize the "
+    "most decisive dislocations while preserving the existing trade filter."
 )
 EXPERIMENT_CHANGE = (
-    "Rebalance confidence weights by increasing VWAP from 0.30 to 0.35 "
-    "and reducing RSI from 0.35 to 0.30"
+    "Rebalanced confidence weights by increasing VWAP from 0.35 to 0.40 "
+    "and reducing RSI from 0.30 to 0.25"
 )
 
 RSI_PERIOD = 10
@@ -44,8 +44,8 @@ TARGET_MULTIPLIER = 3.3
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 62.0
 
-CONF_WEIGHT_RSI = 0.30
-CONF_WEIGHT_VWAP = 0.35
+CONF_WEIGHT_RSI = 0.25
+CONF_WEIGHT_VWAP = 0.40
 CONF_WEIGHT_VOLUME = 0.20
 CONF_WEIGHT_MACD = 0.15
 
