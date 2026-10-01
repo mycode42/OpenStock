@@ -1,6 +1,6 @@
-# EXPERIMENT: incremental_wider_stop
-# HYPOTHESIS: The previous modest stop widening improved fitness substantially, suggesting that intraday noise is causing premature exits; a further small widening should reduce additional stop-outs while preserving the existing target structure.
-# CHANGE: Increased STOP_PCT from 0.010 to 0.011
+# EXPERIMENT: midpoint_stop_width
+# HYPOTHESIS: Stop widening from 0.010 to 0.011 improved fitness, while a further widening to 0.012 regressed; an intermediate 0.0105 stop may retain the noise resistance while reducing the adverse exposure of the wider stop.
+# CHANGE: Reduced STOP_PCT from 0.011 to 0.0105
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "incremental_wider_stop"
+EXPERIMENT_NAME = "midpoint_stop_width"
 EXPERIMENT_HYPOTHESIS = (
-    "The previous modest stop widening improved fitness substantially, suggesting "
-    "that intraday noise is causing premature exits; a further small widening should "
-    "reduce additional stop-outs while preserving the existing target structure."
+    "Stop widening from 0.010 to 0.011 improved fitness, while a further widening "
+    "to 0.012 regressed; an intermediate 0.0105 stop may retain the noise resistance "
+    "while reducing the adverse exposure of the wider stop."
 )
-EXPERIMENT_CHANGE = "Increased STOP_PCT from 0.010 to 0.011"
+EXPERIMENT_CHANGE = "Reduced STOP_PCT from 0.011 to 0.0105"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -35,7 +35,7 @@ VWAP_EXTENDED_PCT = 1.50
 VOLUME_CONFIRM_RATIO = 1.30
 VOLUME_STRONG_RATIO = 2.50
 
-STOP_PCT = 0.011
+STOP_PCT = 0.0105
 TARGET_MULTIPLIER = 3.8
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 62.0
