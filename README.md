@@ -585,20 +585,20 @@ openclaw cron add --name day-flatten \
 # Evolution run (5:00 PM Mon-Fri)
 openclaw cron add --name autoresearch-run \
   --cron "0 17 * * 1-5" \
-  --agent main \
+  --agent swing-agent \
   --model openai/gpt-5.6-luna \
   --session isolated \
   --timeout 10800 \
-  --message "cd ~/swarm-trader && poetry run python autoresearch/evolve.py --iterations 50"
+  --message "poetry run python autoresearch/evolve.py --iterations 50"
 
 # Results report (8:00 PM Mon-Fri)
 openclaw cron add --name autoresearch-report \
   --cron "0 20 * * 1-5" \
-  --agent main \
+  --agent swing-agent \
   --model openai/gpt-5.6-luna \
   --session isolated \
-  --announce --channel telegram \
-  --message "Read /tmp/autoresearch-latest.log. Summarize: experiments, best fitness, top findings."
+  --announce --channel telegram --to 8545556566 \
+  --message "Read autoresearch/experiments/log.jsonl Summarize: experiments, best fitness, top findings."
 ```
 
 ### Managing Crons
