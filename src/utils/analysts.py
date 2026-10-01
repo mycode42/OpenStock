@@ -24,7 +24,7 @@ from src.agents.autoresearch_agent import autoresearch_agent
 from src.agents.market_regime import market_regime_agent
 from src.agents.andreas_x42 import andreas_x42_agent
 
-# Define analyst configuration - single source of truth
+# Define analyst configuration - single source of truth!
 ANALYST_CONFIG = {
     "aswath_damodaran": {
         "display_name": "Aswath Damodaran",
