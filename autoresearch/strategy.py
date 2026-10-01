@@ -1,6 +1,6 @@
-# EXPERIMENT: confidence_filter
-# HYPOTHESIS: The current signal set has a low win rate, so filtering out marginal-confidence entries should improve trade quality and risk-adjusted returns while retaining more than ten trades in the backtest window.
-# CHANGE: Increase MIN_CONFIDENCE from 59.0 to 62.0
+# EXPERIMENT: vwap_quality_filter
+# HYPOTHESIS: Requiring a slightly larger deviation from VWAP should filter marginal near-VWAP entries, improving trade quality and risk-adjusted returns while retaining enough opportunities above the ten-trade minimum.
+# CHANGE: Increase VWAP_NEAR_BAND_PCT from 0.85 to 1.00
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "confidence_filter"
+EXPERIMENT_NAME = "vwap_quality_filter"
 EXPERIMENT_HYPOTHESIS = (
-    "The current signal set has a low win rate, so filtering out marginal-confidence "
-    "entries should improve trade quality and risk-adjusted returns while retaining "
-    "more than ten trades in the backtest window."
+    "Requiring a slightly larger deviation from VWAP should filter marginal "
+    "near-VWAP entries, improving trade quality and risk-adjusted returns while "
+    "retaining enough opportunities above the ten-trade minimum."
 )
-EXPERIMENT_CHANGE = "Increase MIN_CONFIDENCE from 59.0 to 62.0"
+EXPERIMENT_CHANGE = "Increase VWAP_NEAR_BAND_PCT from 0.85 to 1.00"
 
 RSI_PERIOD = 10
 RSI_OVERSOLD = 25
@@ -30,7 +30,7 @@ RSI_OVERBOUGHT = 63
 RSI_NEUTRAL_LOW = 48
 RSI_NEUTRAL_HIGH = 53
 
-VWAP_NEAR_BAND_PCT = 0.85
+VWAP_NEAR_BAND_PCT = 1.00
 VWAP_EXTENDED_PCT = 1.50
 VOLUME_CONFIRM_RATIO = 1.40
 VOLUME_STRONG_RATIO = 2.50
@@ -382,9 +382,7 @@ def _swing_ticker_signal(
 
     recent_volume = sum(volumes[-5:]) / 5
     average_volume = sum(volumes[-20:]) / 20
-    volume_ratio = (
-        recent_volume / average_volume if average_volume > 0 else None
-    )
+    volume_ratio = recent_volume / average_volume if average_volume > 0 else None
 
     spread = (fast - slow) / slow * 100.0
     price_fast = (price - fast) / fast * 100.0
