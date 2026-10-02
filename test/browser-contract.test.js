@@ -37,6 +37,7 @@ test('dashboard cards retain live bid and ask placeholders for broker quotes', (
     assert.match(dashboard, /value === null \|\| value === undefined \|\| value === ''/);
     assert.match(dashboard, /quoteMoney\(quote\.bid_eur\)/);
     assert.match(dashboard, /quoteMoney\(quote\.ask_eur\)/);
+    assert.match(dashboard, /Trade Republic SDK/);
 });
 
 test('dashboard cards show the Journal buy-in and a live current-price percentage', () => {

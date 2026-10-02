@@ -73,6 +73,9 @@ cp .env.example .env
 | `TELEGRAM_BOT_USERNAME` | Your bot's username (e.g., `OpenStock_TelegramBot`) |
 | `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
 | `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
+| `TRADE_REPUBLIC_SDK_ENABLED` | Enables the read-only Handelsrepublik SDK as the primary executable quote source; default `false` |
+| `TRADE_REPUBLIC_SDK_SESSION_FILE` | Private, server-side SDK session path; required when the SDK source is enabled |
+| `TRADE_REPUBLIC_SDK_MODULE_PATH` | Local compiled SDK module path (default `/opt/handelsrepublik/dist/index.js`) |
 | `PYTR_COMMAND` | pytr executable used as a display-only fallback price source (default `/opt/pytr-venv/bin/pytr`) |
 | `PYTR_TIMEOUT_MS` | Bounded pytr batch timeout (default 8000) |
 | `LIVE_PRICE_REFRESH_MS` | Display-only Dashboard/Configure refresh cadence; minimum/default 1000 ms |
@@ -85,6 +88,8 @@ cp .env.example .env
 ### Trade Republic integration
 
 OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. Trade Republic sidecar authentication is provisioned server-side and is not a dashboard or user-facing configuration setting.
+
+The optional Handelsrepublik SDK is a read-only primary quote feed. When explicitly enabled with a private session file, it requests executable buy/sell order prices before the loopback sidecar. The fallback order is **SDK → sidecar → pytr → Yahoo Finance**. The adapter exposes no account, portfolio, order, or mutation methods.
 
 The Dashboard and Configure page each poll `/api/live-prices` once per second only while that page is visible. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
 
@@ -165,7 +170,7 @@ sqlite3 /opt/openstock/database/openstock.db ".tables"
 
 ## Monitoring Behavior
 
-The `scripts/monitor.js` process runs every minute via a systemd timer. It uses Trade Republic EUR order quotes for stocks with verified EUR mappings, then pytr, and finally Yahoo Finance plus cached USD→EUR conversion when direct pricing is unavailable. If both the sidecar and pytr fail, it creates a rate-limited pytr v2-login recovery request; the separate recovery service starts `pytr login --v2` and waits for confirmation in the Trade Republic app while the monitor continues on Yahoo for that cycle. The monitor:
+The `scripts/monitor.js` process runs every minute via a systemd timer. It uses Handelsrepublik SDK EUR order quotes for stocks with verified EUR mappings, then the loopback Trade Republic sidecar, pytr, and finally Yahoo Finance plus cached USD→EUR conversion when direct pricing is unavailable. If both the primary sources and pytr fail, it creates a rate-limited pytr v2-login recovery request; the separate recovery service starts `pytr login --v2` and waits for confirmation in the Trade Republic app while the monitor continues on Yahoo for that cycle. The monitor:
 
 1. Reads enabled stocks from database
 2. Fetches a verified Trade Republic EUR quote when configured, otherwise Yahoo Finance

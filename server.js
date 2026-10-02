@@ -10,6 +10,7 @@ const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeAccount,
 const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
 const { QuoteService } = require('./lib/quote-service');
 const { PytrRatesClient } = require('./lib/pytr-rates');
+const { HandelsrepublikQuoteClient } = require('./lib/brokers/handelsrepublik');
 const { AlpacaMarketDataClient } = require('./lib/alpaca-market-data');
 const { normalizedBrokerRows } = require('./lib/broker-sync-service');
 const { normalizeOrderSizing, hasValidOrderSizingInput, failedGateNames, fetchLiveOrderAuthority } = require('./lib/order-safety');
@@ -105,7 +106,7 @@ function serializeBrokerStock(stock, db) {
 }
 
 function quoteServiceFor(app, now) {
-    return new QuoteService({ db: app.locals.db, brokerClient: app.locals.brokerClient, alpacaClient: app.locals.alpacaClient, pytrClient: app.locals.pytrClient, fetchImpl: app.locals.fetchImpl, now, log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
+    return new QuoteService({ db: app.locals.db, brokerClient: app.locals.brokerClient, sdkClient: app.locals.sdkClient, alpacaClient: app.locals.alpacaClient, pytrClient: app.locals.pytrClient, fetchImpl: app.locals.fetchImpl, now, log: message => console.warn(message), config: { yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart', fx: { cachePath: process.env.FX_CACHE_FILE || path.join(__dirname, 'memory/exchange_rate_cache.json'), ttlMs: Number(process.env.EXCHANGE_RATE_CACHE_SECONDS || 3600) * 1000, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' }, timeoutMs: Number(process.env.PRICE_FETCH_TIMEOUT_MS || 10000) } });
 }
 
 function createLiveQuoteFeed({ app, now = () => new Date(), refreshMs = Number(process.env.LIVE_PRICE_REFRESH_MS || 1000) } = {}) {
@@ -237,7 +238,7 @@ function queueStockHistory(historyBackfill, stock) {
     }
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, now = () => new Date() } = {}) {
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, pytrClient = null, sdkClient = null, now = () => new Date() } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -260,6 +261,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     });
     app.locals.alpacaClient = new AlpacaMarketDataClient({ fetchImpl });
     app.locals.pytrClient = pytrClient || new PytrRatesClient();
+    app.locals.sdkClient = sdkClient || new HandelsrepublikQuoteClient();
     historyBackfill.brokerClient = app.locals.brokerClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
     app.use(express.json());

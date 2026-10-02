@@ -1,4 +1,5 @@
 .env
+/private/
 node_modules/
 /AGENTS.md
 /IDENTITY.md

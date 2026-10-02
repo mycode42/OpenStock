@@ -8,6 +8,7 @@ const Database = require('better-sqlite3');
 const { initDatabase } = require('../database/init');
 const { EXIT, runMonitor, safeError } = require('../lib/monitor');
 const { TradeRepublicClient } = require('../lib/brokers/trade-republic');
+const { HandelsrepublikQuoteClient } = require('../lib/brokers/handelsrepublik');
 const { PytrRatesClient } = require('../lib/pytr-rates');
 const { PytrLoginRecovery } = require('../lib/pytr-login-recovery');
 const { AlpacaMarketDataClient } = require('../lib/alpaca-market-data');
@@ -48,6 +49,7 @@ async function main() {
         const timeoutMs = positiveSetting('MONITOR_TIMEOUT_MS', 10000);
         const fxTtlMs = positiveSetting('EXCHANGE_RATE_CACHE_SECONDS', 3600) * 1000;
         const tradeRepublic = new TradeRepublicClient({ timeoutMs });
+        const tradeRepublicSdk = new HandelsrepublikQuoteClient({ timeoutMs });
         const alpaca = new AlpacaMarketDataClient({ timeoutMs });
         const pytr = new PytrRatesClient();
         const pytrLoginRecovery = new PytrLoginRecovery({
@@ -65,6 +67,7 @@ async function main() {
             fx: { cachePath: process.env.FX_CACHE_FILE || path.join(memoryDir, 'exchange_rate_cache.json'), ttlMs: fxTtlMs, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' },
             telegram: { token: process.env.TELEGRAM_BOT_TOKEN, chatId },
             tradeRepublic,
+            tradeRepublicSdk,
             alpaca,
             pytr,
             pytrLoginRecovery
