@@ -128,9 +128,10 @@ test('dashboard charts provide five position-matched x-axis labels on desktop', 
     }
 });
 
-test('trade entry prices use six-decimal input precision', () => {
+test('trade buy and sell prices use six-decimal input precision', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
     assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.000001" step="\.000001" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 6\)\)\}"/);
+    assert.match(journal, /id="trade-exit-price" name="exit_price" type="number" min="\.000001" step="\.000001" \$\{isClosing \? 'required' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.exit_price, 6\)\)\}"/);
 });
 
 test('journal close workflow accepts a sale quantity and preserves the open balance', () => {
