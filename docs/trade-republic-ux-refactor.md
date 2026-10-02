@@ -3,7 +3,7 @@
 ## Architecture
 
 - TradeRepublicClient is the broker-independent read/order adapter. It normalizes the local UAPI contract and never returns raw broker payloads or credentials.
-- Verified ISIN + exchange + EUR mappings remain authoritative. Dashboard refresh uses the verified Trade Republic order-price quote first and only falls back to Yahoo after a tested TR failure. Direct bid, ask, midpoint, timestamp, and source are persisted in stocks, broker_quotes, and price_history.
+- Verified ISIN + exchange + EUR mappings remain authoritative. Dashboard refresh uses the verified Trade Republic order-price quote first and only falls back to Yahoo after a tested TR failure. Direct bid, ask, midpoint, timestamp, and source are persisted in stocks, broker_quotes, and price_history. Test.
 - Trading is a top-level SPA route. Its identity fields are derived from the selected stock mapping; account, side, mode, validity, conditional prices, quantity, preview, confirmation, idempotency, and execution gates remain server authoritative. GTD is sent through the documented `validity` field; the sidecar does not define a separate GTD date field, so none is invented.
 - Confirmed FILLED/EXECUTED responses are reconciled only from the submitted order response and only when authoritative execution identity, quantity, EUR price, fees, and timestamp are present. Buys merge open Journal lots; sells consume FIFO lots and close or split them. SUBMITTED, order-ID-only, rejected, and UNKNOWN outcomes remain pending/manual and never create Journal trades.
 
