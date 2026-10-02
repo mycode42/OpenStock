@@ -117,7 +117,7 @@ Position trading over days to weeks. Diversified universe with conservative risk
 
 | Parameter | Value |
 |---|---|
-| Universe | Core Tech, Growth, Value/Dividend, Tactical, Hedge (28 tickers) |
+| Universe | Core Tech, Growth, Value/Dividend, Tactical, Hedge (29 tickers) |
 | Max position | 8% of equity |
 | Max sector | 30% |
 | Stop loss | -7% hard stop |
@@ -137,7 +137,7 @@ Position trading over days to weeks. Diversified universe with conservative risk
 | Growth | PLTR, AMD, CRM, SNOW, NET, PANW | 25% |
 | Value & Dividend | JPM, V, UNH, JNJ, PG, KO | 25% |
 | Tactical | COIN, MSTR, RKLB, SMCI | 15% |
-| Hedge | SPY, QQQ, GLD, TLT | 15% |
+| Hedge | SPY, QQQ, GLD, TLT, SPCX | 15% |
 
 ### Day Trading Mode
 
@@ -145,7 +145,7 @@ Intraday trading with tighter stops, larger positions, and mandatory end-of-day 
 
 | Parameter | Value |
 |---|---|
-| Universe | Mega-Cap, Momentum, ETF Direction (18 tickers) |
+| Universe | Mega-Cap, Momentum, ETF Direction (19 tickers) |
 | Max position | 15% of equity |
 | Max sector | 50% |
 | Stop loss | -1.2% tight stop |
@@ -163,7 +163,7 @@ Intraday trading with tighter stops, larger positions, and mandatory end-of-day 
 |---|---|---|
 | Mega-Cap Liquid | NVDA, AVGO, TSM, AMD, MSFT, AAPL, META, GOOGL, AMZN | 50% |
 | Momentum | PLTR, COIN, MSTR, RKLB, SMCI | 35% |
-| ETF Direction | SPY, QQQ, TQQQ, SOXL | 30% |
+| ETF Direction | SPY, QQQ, TQQQ, SOXL, SPCX | 30% |
 
 **Day trading features:**
 - **5-min intraday bars** from Alpaca market data API

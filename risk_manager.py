@@ -47,7 +47,7 @@ LEVERAGED_ETFS = {
 }
 
 # Moonshots — hard-blocked in ALL modes (not in any V2 universe)
-MOONSHOTS = {"IONQ", "RGTI", "SOUN", "LUNR"}
+MOONSHOTS = {"RGTI", "SOUN", "LUNR"}
 
 # Per-mode universe maps: cached after first build to avoid repeated recomputation
 _universe_cache: dict[str, tuple] = {}

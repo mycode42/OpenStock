@@ -831,15 +831,18 @@ The system supports two operating modes that run side-by-side. Swing mode is the
 
 ### Universe
 
-| Mode | Universe | Why |
-|---|---|---|
-| Swing | NVDA, AVGO, SMCI, TSM, TQQQ, SOXL, UPRO, PLTR, MSTR, COIN, RKLB, IONQ, RGTI, SOUN, LUNR | Long-term AI infra thesis |
-| Day | NVDA, AVGO, TSM, AMD, MSFT, AAPL, META, GOOGL, AMZN, PLTR, COIN, MSTR, RKLB, SPY, QQQ | Liquid names only — tight spreads, deep books |
+The canonical mode universes are defined in `src/config.py`. The lists below mirror that configuration; SPCX is included in the ETF/hedge category in both modes.
 
-**What was removed from the day trade universe and why:**
-- `IONQ, RGTI, SOUN, LUNR` — too illiquid for day trading (wide spreads, shallow books, slippage kills edge)
-- `TQQQ, SOXL, UPRO` — 3x leverage amplifies overnight gap risk. Fine for swing, not for intraday.
-- `SMCI` — too volatile and news-driven for reliable technical setups
+| Mode | Category | Tickers |
+|---|---|---|
+| Swing | Core Technology | NVDA, AVGO, TSM, MSFT, AAPL, GOOGL, META, AMZN |
+| Swing | Growth | PLTR, AMD, CRM, SNOW, NET, PANW |
+| Swing | Value & Dividend | JPM, V, UNH, JNJ, PG, KO |
+| Swing | Tactical | COIN, MSTR, RKLB, SMCI |
+| Swing | Hedge / Direction | SPY, QQQ, GLD, TLT, SPCX |
+| Day | Mega-Cap Liquid | NVDA, AVGO, TSM, AMD, MSFT, AAPL, META, GOOGL, AMZN |
+| Day | Momentum | PLTR, COIN, MSTR, RKLB, SMCI |
+| Day | ETF Direction / Hedge | SPY, QQQ, TQQQ, SOXL, SPCX |
 
 ### Risk Parameters (Day Mode)
 

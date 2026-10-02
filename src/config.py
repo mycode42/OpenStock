@@ -12,7 +12,7 @@ MODES = {
         "universe": {
             "core_tech": {
                 "label": "Core Technology",
-                "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN"],
+                "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "SPCX"],
                 "max_sector_pct": 0.30,
                 "max_per_stock_pct": 0.08,
             },
@@ -36,7 +36,7 @@ MODES = {
             },
             "hedge": {
                 "label": "Hedge / Direction",
-                "tickers": ["SPY", "QQQ", "GLD", "TLT"],
+                "tickers": ["SPY", "QQQ", "GLD", "TLT", "SPCX"],
                 "max_sector_pct": 0.15,
                 "max_per_stock_pct": 0.10,
             },
@@ -62,19 +62,19 @@ MODES = {
         "universe": {
             "mega_cap": {
                 "label": "Mega-Cap Liquid",
-                "tickers": ["NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN"],
+                "tickers": ["NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN", "SPCX"],
                 "max_sector_pct": 0.50,
                 "max_per_stock_pct": 0.15,
             },
             "momentum": {
                 "label": "Momentum",
-                "tickers": ["PLTR", "COIN", "MSTR", "RKLB", "SMCI"],
+                "tickers": ["PLTR", "COIN", "MSTR", "RKLB", "SMCI", "IONQ", "TEM"],
                 "max_sector_pct": 0.35,
                 "max_per_stock_pct": 0.12,
             },
             "etf_direction": {
                 "label": "ETF Direction / Hedge",
-                "tickers": ["SPY", "QQQ", "TQQQ", "SOXL"],
+                "tickers": ["SPY", "QQQ", "TQQQ", "SOXL", "SPCX"],
                 "max_sector_pct": 0.30,
                 "max_per_stock_pct": 0.15,
             },
