@@ -4,10 +4,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { HandelsrepublikQuoteClient } = require('../lib/brokers/handelsrepublik');
 
-test('SDK adapter is disabled by default and does not import the SDK', async () => {
+test('SDK adapter is enabled by default but does not import without a private session path', async () => {
   let imported = 0;
   const client = new HandelsrepublikQuoteClient({ env: {}, importer: async () => { imported += 1; } });
-  await assert.rejects(client.getQuote({ isin: 'US0000000001', exchange: 'TIB' }), /disabled/);
+  assert.equal(client.isEnabled(), true);
+  await assert.rejects(client.getQuote({ isin: 'US0000000001', exchange: 'TIB' }), /session file is not configured/);
   assert.equal(imported, 0);
 });
 

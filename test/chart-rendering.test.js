@@ -53,8 +53,8 @@ test('one-day charts reserve future session time on a 07:30–22:00 wall-clock s
             { recorded_at: '2026-09-16T12:45:00Z', price_eur: 101 }
         ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
         assert.match(html, /&quot;x&quot;:132/);
-        assert.match(html, /&quot;primary&quot;:&quot;16\. Sept – 07:30&quot;,&quot;secondary&quot;:&quot;&quot;,&quot;price&quot;:&quot;€100\.00&quot;/);
-        assert.match(html, /class="history-price" data-history-price data-default-price-range="€100\.00 – €101\.00"/);
+        assert.match(html, /&quot;primary&quot;:&quot;16\. Sept – 07:30&quot;,&quot;secondary&quot;:&quot;&quot;,&quot;price&quot;:&quot;€100,00&quot;/);
+        assert.match(html, /class="history-price" data-history-price data-default-price-range="€100,00 – €101,00"/);
         assert.match(html, /<span style="left:0%">07:30<\/span><span style="left:25%">11:07<\/span><span style="left:50%">14:45<\/span><span style="left:75%">18:22<\/span><span style="left:100%">22:00<\/span>/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });

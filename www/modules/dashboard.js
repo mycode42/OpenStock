@@ -22,11 +22,9 @@ function formatPriceChange(currentPrice, buyInPrice) {
 }
 
 function liveQuoteSourceLabel(source) {
-    if (source === 'trade_republic_sdk_order_price') return 'Trade Republic SDK';
-    if (source === 'trade_republic_order_price') return 'Trade Republic sidecar';
-    if (source === 'pytr_rates') return 'Trade Republic pytr fallback';
-    if (String(source || '').startsWith('alpaca_')) return 'Alpaca Market Data';
-    return 'Yahoo Finance fallback';
+    if (source === 'trade_republic_sdk_order_price') return 'Handelsrepublik SDK';
+    if (source === 'trade_republic_order_price') return 'Trade Republic UAPI sidecar';
+    return 'Trade Republic history';
 }
 
 export function createDashboard(context) {

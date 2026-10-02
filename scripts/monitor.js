@@ -9,9 +9,6 @@ const { initDatabase } = require('../database/init');
 const { EXIT, runMonitor, safeError } = require('../lib/monitor');
 const { TradeRepublicClient } = require('../lib/brokers/trade-republic');
 const { HandelsrepublikQuoteClient } = require('../lib/brokers/handelsrepublik');
-const { PytrRatesClient } = require('../lib/pytr-rates');
-const { PytrLoginRecovery } = require('../lib/pytr-login-recovery');
-const { AlpacaMarketDataClient } = require('../lib/alpaca-market-data');
 
 if (process.argv.includes('--help')) {
     process.stdout.write('Usage: node scripts/monitor.js\nRuns one live OpenStock monitoring cycle using .env configuration.\n');
@@ -47,30 +44,17 @@ async function main() {
     if (!chatId) error('No Telegram recipient configured; trigger notifications will fail safely');
     try {
         const timeoutMs = positiveSetting('MONITOR_TIMEOUT_MS', 10000);
-        const fxTtlMs = positiveSetting('EXCHANGE_RATE_CACHE_SECONDS', 3600) * 1000;
         const tradeRepublic = new TradeRepublicClient({ timeoutMs });
         const tradeRepublicSdk = new HandelsrepublikQuoteClient({ timeoutMs });
-        const alpaca = new AlpacaMarketDataClient({ timeoutMs });
-        const pytr = new PytrRatesClient();
-        const pytrLoginRecovery = new PytrLoginRecovery({
-            statePath: process.env.PYTR_LOGIN_RECOVERY_STATE || path.join(memoryDir, 'pytr-login-recovery.json'),
-            cooldownMs: positiveSetting('PYTR_LOGIN_RECOVERY_COOLDOWN_SECONDS', 900) * 1000,
-            log
-        });
         log('=== Monitoring cycle started ===');
         return await runMonitor({ db, log, error, config: {
             timeoutMs,
             concurrency: positiveSetting('MONITOR_CONCURRENCY', 3),
             cycleDeadlineMs: positiveSetting('MONITOR_CYCLE_DEADLINE_MS', 45000),
-            yahooUrl: process.env.YAHOO_CHART_URL || 'https://query1.finance.yahoo.com/v8/finance/chart',
             lockPath: process.env.MONITOR_LOCK_PATH || path.join(memoryDir, 'monitor.lock'),
-            fx: { cachePath: process.env.FX_CACHE_FILE || path.join(memoryDir, 'exchange_rate_cache.json'), ttlMs: fxTtlMs, url: process.env.FX_URL || 'https://api.exchangerate-api.com/v4/latest/USD' },
             telegram: { token: process.env.TELEGRAM_BOT_TOKEN, chatId },
             tradeRepublic,
-            tradeRepublicSdk,
-            alpaca,
-            pytr,
-            pytrLoginRecovery
+            tradeRepublicSdk
         }});
     } catch (monitorError) { error(safeError(monitorError)); return EXIT.CONFIG; }
     finally { db.close(); }

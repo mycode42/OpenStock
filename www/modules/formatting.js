@@ -1,6 +1,8 @@
+const eurNumber = new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 export function money(value) {
     const number = Number(value);
-    return Number.isFinite(number) ? number.toFixed(2) : '—';
+    return Number.isFinite(number) ? eurNumber.format(number) : '—';
 }
 export function parseOpenStockDate(value) {
     if (!value) return null;

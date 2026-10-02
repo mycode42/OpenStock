@@ -34,7 +34,7 @@ test('migration 017 upgrades an already-applied broker health table', t => {
     assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'last_notified_status'), true);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=17').get()['1'], 1);
     assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'failure_streak'), true);
-    assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=19').get()['1'], 1);
+    assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=20').get()['1'], 1);
     upgraded.close();
 });
 
@@ -44,6 +44,7 @@ test('fresh seeded initialization creates one BUY and SELL level per stock', t =
     initDatabase({ dbPath: file, seedDefaults: true, silent: true });
     const db = new Database(file);
     assert.equal(db.prepare('SELECT COUNT(*) count FROM stocks').get().count, 5);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM stocks WHERE price_source='trade_republic'").get().count, 5);
     assert.equal(db.prepare('SELECT COUNT(*) count FROM alert_levels').get().count, 10);
     assert.equal(db.prepare(`SELECT COUNT(*) count FROM stocks s
       WHERE (SELECT COUNT(*) FROM alert_levels al WHERE al.stock_id=s.id AND al.side='BUY')=1
@@ -64,6 +65,7 @@ test('representative legacy stocks, trades, and journal tables are adopted witho
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     const migrated = new Database(file);
     assert.equal(migrated.prepare('SELECT archived FROM stocks WHERE id=7').get().archived, 0);
+    assert.equal(migrated.prepare('SELECT price_source FROM stocks WHERE id=7').get().price_source, 'trade_republic');
     assert.equal(migrated.prepare('SELECT dividend_eur FROM trades WHERE trade_id=?').get('LEGACY-BUY-1').dividend_eur, 0);
     assert.equal(migrated.prepare('SELECT notes FROM trades WHERE trade_id=?').get('LEGACY-BUY-1').notes, 'legacy note');
     migrated.close();

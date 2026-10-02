@@ -4,68 +4,92 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { QuoteService } = require('../lib/quote-service');
 
-const stock = { id: 1, symbol: 'TEST', price_source: 'trade_republic', mapping: { isin: 'US0000000001', exchange: 'TIB', currency: 'EUR', verified_at: '2026-01-01T00:00:00Z' } };
+const stock = { id: 1, symbol: 'TEST', mapping: { isin: 'US0000000001', exchange: 'TIB', currency: 'EUR', verified_at: '2026-01-01T00:00:00Z' } };
+const quote = { bid_eur: 1.234567, ask_eur: 1.234568, bid_unit: 'EUR', ask_unit: 'EUR', currency: 'EUR', observed_at: '2026-01-01T12:00:00Z' };
 
-test('sidecar is used when the SDK is disabled and preserves executable bid and ask without starting pytr', async () => {
-    let pytrCalls = 0;
-    const service = new QuoteService({ db: {}, brokerClient: { getQuote: async () => ({ bid_eur: 10, ask_eur: 12, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', bid_time: '2026-01-01T12:00:00Z', ask_time: '2026-01-01T12:00:00Z', observed_at: '2026-01-01T12:00:00Z' }) }, pytrClient: { getQuotes: async () => { pytrCalls += 1; return new Map(); } }, now: () => new Date('2026-01-01T12:00:00Z') });
-    const [result] = await service.fetchMany([stock], { pytrFallback: true });
-    assert.equal(pytrCalls, 0);
-    assert.equal(result.quote.source, 'trade_republic_order_price');
-    assert.equal(result.quote.bidEur, 10);
-    assert.equal(result.quote.askEur, 12);
-    assert.equal(result.quote.priceEur, 11);
-});
+test('SDK is primary and retains six-decimal executable prices', async () => {
+    let sidecarCalls = 0;
+    const service = new QuoteService({
+        db: {},
+        sdkClient: { isEnabled: () => true, getQuote: async () => quote },
+        brokerClient: { getQuote: async () => { sidecarCalls += 1; throw new Error('must not be called'); } },
+        now: () => new Date('2026-01-01T12:00:00Z')
+    });
 
-test('enabled SDK is selected before the sidecar and retains executable bid and ask', async () => {
-    let sdkCalls = 0, sidecarCalls = 0;
-    const sdkClient = { isEnabled: () => true, getQuote: async () => { sdkCalls += 1; return { bid_eur: 10.5, ask_eur: 11.5, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', observed_at: '2026-01-01T12:00:00Z' }; } };
-    const service = new QuoteService({ db: {}, brokerClient: { getQuote: async () => { sidecarCalls += 1; return {}; } }, sdkClient, now: () => new Date('2026-01-01T12:00:00Z') });
-    const [result] = await service.fetchMany([stock], { pytrFallback: true });
-    assert.equal(result.quote.source, 'trade_republic_sdk_order_price');
-    assert.equal(result.quote.priceEur, 11);
-    assert.equal(sdkCalls, 1);
+    const [row] = await service.fetchMany([stock]);
+    assert.equal(row.quote.source, 'trade_republic_sdk_order_price');
+    assert.equal(row.quote.bidEur, 1.234567);
+    assert.equal(row.quote.askEur, 1.234568);
+    assert.equal(row.quote.priceEur, 1.2345675);
     assert.equal(sidecarCalls, 0);
 });
 
-test('a failed SDK falls back to the sidecar before pytr', async () => {
-    let pytrCalls = 0;
-    const sdkClient = { isEnabled: () => true, getQuote: async () => { throw new Error('SDK unavailable'); } };
-    const service = new QuoteService({ db: {}, sdkClient, brokerClient: { getQuote: async () => ({ bid_eur: 10, ask_eur: 12, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', observed_at: '2026-01-01T12:00:00Z' }) }, pytrClient: { getQuotes: async () => { pytrCalls += 1; return new Map(); } }, now: () => new Date('2026-01-01T12:00:00Z') });
-    const [result] = await service.fetchMany([stock], { pytrFallback: true });
-    assert.equal(result.quote.source, 'trade_republic_order_price');
-    assert.equal(pytrCalls, 0);
-});
-
-test('pytr is queried only after a sidecar quote failure and before Yahoo', async () => {
-    let pytrCalls = 0;
-    const service = new QuoteService({ db: {}, brokerClient: { getQuote: async () => { throw new Error('offline'); } }, pytrClient: { getQuotes: async isins => { pytrCalls += 1; assert.deepEqual(isins, [stock.mapping.isin]); return new Map([[stock.mapping.isin, { lastEur: 11, askEur: 11.2, quoteTime: '2026-01-01T12:00:00Z', observedAt: '2026-01-01T12:00:00Z', source: 'pytr_rates' }]]); } }, fetchImpl: async () => { throw new Error('Yahoo must not be called'); }, config: { fx: {} }, now: () => new Date('2026-01-01T12:00:00Z') });
-    const [result] = await service.fetchMany([stock], { pytrFallback: true });
-    assert.equal(pytrCalls, 1);
-    assert.equal(result.quote.source, 'pytr_rates');
-    assert.equal(result.quote.bidEur, null);
-    assert.equal(result.quote.askEur, 11.2);
-});
-
-test('a failed pytr fallback requests an app-confirmed login while Yahoo continues', async () => {
-    let requests = 0;
+test('UAPI sidecar is used when SDK is disabled or fails', async t => {
+    const events = [];
     const service = new QuoteService({
         db: {},
-        brokerClient: { getQuote: async () => { throw new Error('offline'); } },
-        pytrClient: { getQuotes: async () => { throw new Error('session unavailable'); } },
-        pytrLoginRecovery: { request: async () => { requests += 1; return { requested: true }; } },
-        now: () => new Date('2026-01-01T12:00:00Z')
+        sdkClient: { isEnabled: () => true, getQuote: async () => { events.push('sdk'); throw new Error('SDK unavailable'); } },
+        brokerClient: { getQuote: async request => { events.push('uapi'); assert.ok(request.timeoutMs > 0); return { ...quote, observed_at: '2026-01-01T12:00:01Z' }; } },
+        now: () => new Date('2026-01-01T12:00:00Z'),
+        log() {}
     });
-    service.yahooFallback = async () => ({ priceEur: 9, source: 'yahoo', quoteTime: '2026-01-01T12:00:00Z', observedAt: '2026-01-01T12:00:00Z' });
-    const [result] = await service.fetchMany([stock], { pytrFallback: true });
-    assert.equal(requests, 1);
-    assert.equal(result.quote.source, 'yahoo');
+
+    const [row] = await service.fetchMany([stock], { deadlineAt: Date.now() + 1000 });
+    assert.deepEqual(events, ['sdk', 'uapi']);
+    assert.equal(row.quote.source, 'trade_republic_order_price');
+    assert.equal(row.quote.bidEur, 1.234567);
+    assert.equal(row.quote.askEur, 1.234568);
 });
 
-test('a Yahoo-only quote failure is returned once and is not retried through the pytr fallback phase', async () => {
-    let yahooCalls = 0;
-    const service = new QuoteService({ db: {}, fetchImpl: async () => { yahooCalls += 1; throw new Error('Yahoo offline'); }, config: { yahooUrl: 'mock', fx: { cachePath: '/tmp/no-cache', ttlMs: 1, url: 'fx' } } });
-    const [result] = await service.fetchMany([{ id: 2, symbol: 'YFAIL', price_source: 'yahoo' }], { pytrFallback: true });
-    assert.equal(yahooCalls, 1);
-    assert.match(result.error.message, /Yahoo offline/);
+test('a stale sidecar health failure does not suppress the SDK fallback path', async () => {
+    const events = [];
+    const service = new QuoteService({
+        db: {},
+        sdkClient: { isEnabled: () => true, getQuote: async () => { events.push('sdk'); throw new Error('SDK unavailable'); } },
+        brokerClient: { getQuote: async () => { events.push('uapi'); return quote; } },
+        log() {}
+    });
+    const [row] = await service.fetchMany([stock], { brokerOnline: false });
+    assert.deepEqual(events, ['sdk', 'uapi']);
+    assert.equal(row.quote.source, 'trade_republic_order_price');
+});
+
+test('provider failures stay isolated per stock and missing mappings fail closed', async () => {
+    let calls = 0;
+    const service = new QuoteService({
+        db: {},
+        sdkClient: { isEnabled: () => false },
+        brokerClient: { getQuote: async request => {
+            calls += 1;
+            if (request.isin === 'US0000000002') throw new Error('sidecar offline');
+            return quote;
+        } },
+        log() {}
+    });
+    const rows = await service.fetchMany([stock, { ...stock, id: 2, mapping: { ...stock.mapping, isin: 'US0000000002' } }, { id: 3, symbol: 'UNMAPPED' }]);
+    assert.equal(rows[0].quote.bidEur, 1.234567);
+    assert.match(rows[1].error.message, /sidecar offline/);
+    assert.match(rows[2].error.message, /verified EUR Trade Republic mapping unavailable/);
+    assert.equal(calls, 2);
+});
+
+test('quote workers honor the configured concurrency and cycle deadline', async () => {
+    const service = new QuoteService({ db: {} });
+    let active = 0, maximum = 0;
+    service.fetch = async item => {
+        active += 1;
+        maximum = Math.max(maximum, active);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        active -= 1;
+        return { priceEur: item.id };
+    };
+    const rows = await service.fetchMany(Array.from({ length: 6 }, (_, id) => ({ id })), { concurrency: 2 });
+    assert.equal(maximum, 2);
+    assert.deepEqual(rows.map(row => row.quote.priceEur), [0, 1, 2, 3, 4, 5]);
+
+    let calls = 0;
+    service.fetch = async () => { calls += 1; };
+    const [expired] = await service.fetchMany([{ id: 7 }], { deadlineAt: Date.now() - 1 });
+    assert.equal(calls, 0);
+    assert.match(expired.error.message, /deadline/);
 });

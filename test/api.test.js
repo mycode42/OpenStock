@@ -14,14 +14,14 @@ async function fixture({ now } = {}) {
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     const db = new OpenStockDB(file);
     const backfill = { enqueue() {}, enqueueMissing() { return 0; } };
-    const fetchImpl = async url => {
-        if (url.includes('exchangerate')) return { ok: true, json: async () => ({ rates: { EUR: 0.9 } }) };
-        const symbol = decodeURIComponent(url.split('/chart/')[1].split('?')[0]);
-        if (symbol === 'BAD') return { ok: false, status: 503, json: async () => ({}) };
-        return { ok: true, json: async () => ({ chart: { result: [{ meta: { shortName: symbol }, timestamp: [1767225600], indicators: { quote: [{ close: [100] }] } }] } }) };
-    };
-    const app = createApp({ db, backfill, fetchImpl, now, pytrClient: { getQuotes: async () => new Map() } });
+    const fetchImpl = async () => { throw new Error('unexpected external fetch'); };
+    const app = createApp({ db, backfill, fetchImpl, now, sdkClient: { isEnabled: () => false } });
     app.locals.brokerClient = {
+        getQuote: async ({ isin }) => {
+            const symbol = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, '');
+            if (symbol === 'BAD') throw new Error('mock quote failure');
+            return { bid_eur: 89.999999, ask_eur: 90.000001, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', observed_at: '2026-09-17T12:00:00Z' };
+        },
         getInstrument: async isin => { const decoded = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, ''); const symbol = /^[A-Z0-9.-]+$/.test(decoded) && decoded ? decoded : `M${isin.slice(-5)}`; return { isin, name: `Mock ${symbol}`, shortName: `Mock ${symbol}`, intlSymbol: symbol, tradable: true, listings: [{ exchange: 'XNAS', symbolAtExchange: symbol }] }; },
         getTradeRepublicInstrument: async isin => ({ isin, exchange: 'TIB', currency: 'EUR', tradable: true }),
         getInstrumentHistory: async () => ({ points: [] })
@@ -78,15 +78,15 @@ test('analytics reads do not create equity snapshots', async t => {
     assert.equal(after, before);
 });
 
-test('live prices use pytr in memory only and coalesce concurrent requests', async t => {
+test('live prices use the UAPI backup in memory only and coalesce concurrent requests', async t => {
     const f = await fixture({ now: () => new Date('2026-09-17T12:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'LIVE', name: 'Live', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await created.json()).stock;
-    f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'LIVE', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-17T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
     let calls = 0;
     f.server.close();
-    const app = createApp({ db: f.db, backfill: { enqueue() {}, enqueueMissing() { return 0; } }, fetchImpl: async () => { throw new Error('fallback must not be used'); }, now: () => new Date('2026-09-17T12:00:00Z'), ownerAuthRequired: false, pytrClient: { getQuotes: async isins => { calls += 1; return new Map([[isins[0], { isin: isins[0], lastEur: 12.34, askEur: 12.35, quoteTime: '2026-09-17T12:00:00Z', observedAt: '2026-09-17T12:00:00Z', source: 'pytr_rates' }]]); } } });
+    const app = createApp({ db: f.db, backfill: { enqueue() {}, enqueueMissing() { return 0; } }, fetchImpl: async () => { throw new Error('unexpected external fetch'); }, now: () => new Date('2026-09-17T12:00:00Z'), sdkClient: { isEnabled: () => false } });
+    app.locals.brokerClient = { getQuote: async () => { calls += 1; return { bid_eur: 12.345678, ask_eur: 12.345679, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', bid_time: '2026-09-17T12:00:00Z', ask_time: '2026-09-17T12:00:00Z', observed_at: '2026-09-17T12:00:00Z' }; } };
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     t.after(() => server.close());
     const base = `http://127.0.0.1:${server.address().port}`;
@@ -94,35 +94,32 @@ test('live prices use pytr in memory only and coalesce concurrent requests', asy
     const payload = await a.json();
     assert.equal(b.status, 200);
     assert.equal(calls, 1);
-    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 12.34, bid_eur: null, ask_eur: 12.35, quote_time: '2026-09-17T12:00:00Z', observed_at: '2026-09-17T12:00:00Z', source: 'pytr_rates', fallback: false });
+    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 12.3456785, bid_eur: 12.345678, ask_eur: 12.345679, quote_time: '2026-09-17T12:00:00.000Z', observed_at: '2026-09-17T12:00:00Z', source: 'trade_republic_order_price', fallback: true });
     assert.equal(f.db.getStockById(stock.id).current_price_eur, null);
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);
 });
 
-test('live prices select the enabled Handelsrepublik SDK before sidecar and pytr', async t => {
+test('live prices select the enabled Handelsrepublik SDK before the UAPI sidecar', async t => {
     const f = await fixture({ now: () => new Date('2026-10-02T11:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'SDK', name: 'SDK', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await created.json()).stock;
     f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'SDK', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-10-02T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
     let sidecarCalls = 0;
-    let pytrCalls = 0;
     f.server.close();
     const app = createApp({
         db: f.db,
         backfill: { enqueue() {}, enqueueMissing() { return 0; } },
-        fetchImpl: async () => { throw new Error('Yahoo fallback must not be used'); },
+        fetchImpl: async () => { throw new Error('unexpected external fetch'); },
         now: () => new Date('2026-10-02T11:00:00Z'),
-        sdkClient: { isEnabled: () => true, getQuote: async () => ({ bid_eur: 10, ask_eur: 10.2, bid_unit: 'EUR', ask_unit: 'EUR', currency: 'EUR', observed_at: '2026-10-02T11:00:00Z' }) },
-        pytrClient: { getQuotes: async () => { pytrCalls += 1; return new Map(); } }
+        sdkClient: { isEnabled: () => true, getQuote: async () => ({ bid_eur: 10.123456, ask_eur: 10.123457, bid_unit: 'EUR', ask_unit: 'EUR', currency: 'EUR', observed_at: '2026-10-02T11:00:00Z' }) },
     });
     app.locals.brokerClient = { getQuote: async () => { sidecarCalls += 1; throw new Error('sidecar must not be used'); } };
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     t.after(() => server.close());
     const payload = await (await fetch(`http://127.0.0.1:${server.address().port}/api/live-prices`)).json();
     assert.equal(sidecarCalls, 0);
-    assert.equal(pytrCalls, 0);
-    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 10.1, bid_eur: 10, ask_eur: 10.2, quote_time: '2026-10-02T11:00:00.000Z', observed_at: '2026-10-02T11:00:00Z', source: 'trade_republic_sdk_order_price', fallback: true });
+    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 10.1234565, bid_eur: 10.123456, ask_eur: 10.123457, quote_time: '2026-10-02T11:00:00.000Z', observed_at: '2026-10-02T11:00:00Z', source: 'trade_republic_sdk_order_price', fallback: false });
     assert.equal(f.db.getStockById(stock.id).current_price_eur, null);
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);
 });
@@ -160,21 +157,19 @@ test('one-day history starts at 07:30 Berlin time and uses fifteen-minute bucket
     assert.equal(weekly.points.at(-1).price_eur, 160);
 });
 
-test('dashboard history removes legacy pytr polling flatlines across closed sessions', async t => {
+test('verified-instrument charts exclude observations from legacy providers', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GAP', name: 'Gap', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await response.json()).stock;
     f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'GAP', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-01T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
     for (const timestamp of ['2026-09-25T20:00:00Z', '2026-09-26T08:00:00Z', '2026-09-27T08:00:00Z', '2026-09-28T07:00:00Z']) {
-        f.db.addPriceSnapshot(stock.id, null, 100, null, 'pytr_rates', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
+        f.db.addPriceSnapshot(stock.id, null, 100, null, 'legacy_import', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
     }
-    f.db.addPriceSnapshot(stock.id, null, 101, null, 'pytr_rates', '2026-09-28T10:00:00Z', '2026-09-28 10:00:00');
+    f.db.addPriceSnapshot(stock.id, null, 101, null, 'legacy_import', '2026-09-28T10:00:00Z', '2026-09-28 10:00:00');
+    f.db.addPriceSnapshot(stock.id, null, 102, null, 'trade_republic_order_price', '2026-09-28T11:00:00Z', '2026-09-28 11:00:00');
     const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1w`)).json();
-    assert.deepEqual(history.points.map(point => [point.recorded_at, point.price_eur]), [
-        ['2026-09-25T20:00:00.000Z', 100],
-        ['2026-09-28T10:00:00.000Z', 101]
-    ]);
+    assert.deepEqual(history.points.map(point => [point.recorded_at, point.price_eur]), [['2026-09-28T11:00:00.000Z', 102]]);
 });
 
 test('API factory covers lifecycle, history, journal, analytics, refresh isolation, and archive restore', async t => {
@@ -189,7 +184,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
     assert.equal(response.status, 201);
     const good = (await response.json()).stock;
-    f.db.addPriceSnapshot(good.id, 100, 90, 0.9, 'yahoo_regular_close', null, '2026-01-01 12:00:00');
+    f.db.addPriceSnapshot(good.id, 100, 90, 0.9, 'legacy_import', null, '2026-01-01 12:00:00');
     f.db.addPriceSnapshot(good.id, null, 91, null, 'trade_republic_history', '2026-01-01T00:00:00.000Z', '2026-01-01 00:00:00');
     response = await f.request(`/api/stocks/${good.id}/history?range=1y`);
     const history = await response.json();
@@ -228,11 +223,11 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal(response.status, 200);
     assert.equal(refreshed.updated, 1);
     const fallbackStock = refreshed.stocks.find(stock => stock.id === good.id);
-    assert.equal(fallbackStock.current_price_usd, 100);
+    assert.equal(fallbackStock.current_price_usd, null);
     assert.equal(fallbackStock.current_price_eur, 90);
-    assert.equal(fallbackStock.last_exchange_rate, 0.9);
-    assert.equal(fallbackStock.broker_quote, null);
-    assert.deepEqual({ label: fallbackStock.market_data.label, fallback: fallbackStock.market_data.fallback }, { label: 'Yahoo Finance fallback', fallback: true });
+    assert.equal(fallbackStock.last_exchange_rate, null);
+    assert.ok(fallbackStock.broker_quote);
+    assert.deepEqual({ label: fallbackStock.market_data.label, fallback: fallbackStock.market_data.fallback }, { label: 'Trade Republic UAPI sidecar', fallback: true });
 
     response = await f.request(`/api/stocks/${good.id}`, { method: 'DELETE' });
     assert.equal((await response.json()).archived, true);

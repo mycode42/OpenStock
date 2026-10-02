@@ -1,8 +1,8 @@
 # OpenStock - Stock Monitoring, Trading Journal & Performance Dashboard
 
-A private trading workspace for monitoring stock prices, recording position lots, and calculating auditable performance and risk KPIs. For verified instruments, the authenticated loopback Trade Republic UAPI sidecar is the primary EUR quote source; pytr is the display-only fallback, followed by Yahoo USD quotes converted to EUR.
+A private workspace for monitoring stock prices, recording position lots, and calculating performance and risk KPIs. Quotes use the read-only Handelsrepublik SDK first and the authenticated loopback Trade Republic UAPI sidecar as backup. Both return EUR executable bid/ask values.
 
-> **Note:** Verified EUR instruments use Trade Republic quotes; **Yahoo Finance** remains the free fallback. No stock-price API key is required.
+Every monitored instrument needs a verified Trade Republic EUR mapping. If both quote providers fail, OpenStock records a per-stock failure and continues the cycle.
 
 ## Architecture
 
@@ -39,8 +39,8 @@ A private trading workspace for monitoring stock prices, recording position lots
 │  - Fetches prices       │      │      └─────────────────────────┘
 │  - Uses bounded workers │      │
 │  - Evaluates triggers   │      │      ┌─────────────────────────┐
-│  - Sends Telegram       │──────┘      │  Yahoo Finance          │
-│  - Durable alert outbox │             │  (fallback prices/FX)   │
+│  - Sends Telegram       │──────┬──────│ Handelsrepublik SDK      │
+│  - Durable alert outbox │      └──────│ Trade Republic UAPI     │
 └─────────────────────────┘             └─────────────────────────┘
 ```
 
@@ -50,7 +50,7 @@ A private trading workspace for monitoring stock prices, recording position lots
 - SQLite 3.x (with CLI for debugging)
 - Telegram Bot token
 - Tailscale (pre-configured)
-- **No stock price API key needed** — Trade Republic uses the local sidecar; Yahoo Finance is free fallback
+- Trade Republic account access is provisioned outside the dashboard; no market-data API key is required
 
 ## Configuration
 
@@ -67,17 +67,14 @@ cp .env.example .env
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `DATABASE_PATH` | Path to SQLite database |
 | `PORT` | Server port (default: 3000) |
-| `EXCHANGE_RATE_CACHE_SECONDS` | How long to cache exchange rates (default: 3600) |
 | `MONITOR_CONCURRENCY` | Maximum parallel quote requests per monitor cycle (default: 3) |
 | `MONITOR_CYCLE_DEADLINE_MS` | Stop starting new stock work after this cycle budget (default: 45000) |
 | `TELEGRAM_BOT_USERNAME` | Your bot's username (e.g., `OpenStock_TelegramBot`) |
 | `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
 | `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
-| `TRADE_REPUBLIC_SDK_ENABLED` | Enables the read-only Handelsrepublik SDK as the primary executable quote source; default `false` |
+| `TRADE_REPUBLIC_SDK_ENABLED` | Uses the read-only Handelsrepublik SDK as the primary quote source; default `true` |
 | `TRADE_REPUBLIC_SDK_SESSION_FILE` | Private, server-side SDK session path; required when the SDK source is enabled |
 | `TRADE_REPUBLIC_SDK_MODULE_PATH` | Local compiled SDK module path (default `/opt/handelsrepublik/dist/index.js`) |
-| `PYTR_COMMAND` | pytr executable used as a display-only fallback price source (default `/opt/pytr-venv/bin/pytr`) |
-| `PYTR_TIMEOUT_MS` | Bounded pytr batch timeout (default 8000) |
 | `LIVE_PRICE_REFRESH_MS` | Display-only Dashboard/Configure refresh cadence; minimum/default 1000 ms |
 | `TRADE_REPUBLIC_LIVE_ENABLED` | Environment-only live-order gate; default `false` |
 | `TRADE_REPUBLIC_DRY_RUN` | Environment-only dry-run gate; default `true` |
@@ -87,11 +84,11 @@ cp .env.example .env
 
 ### Trade Republic integration
 
-OpenStock uses pytr only through its `rates` command for a batched, display-only current-price feed. pytr reads its own authentication material from the `openclaw` service account's `~/.pytr` directory; OpenStock does not store phone numbers, PINs, cookies, or pytr credentials. Trade Republic sidecar authentication is provisioned server-side and is not a dashboard or user-facing configuration setting.
+The read-only Handelsrepublik SDK provides the primary executable EUR bid/ask. If it is disabled, unconfigured, or unavailable, OpenStock tries the loopback Trade Republic UAPI sidecar. The SDK adapter only reads executable quotes; broker account and order endpoints remain separate from market-data selection.
 
-The optional Handelsrepublik SDK is a read-only primary quote feed. When explicitly enabled with a private session file, it requests executable buy/sell order prices before the loopback sidecar. The fallback order is **SDK → sidecar → pytr → Yahoo Finance**. The adapter exposes no account, portfolio, order, or mutation methods.
+Prices, amounts, fees, and performance values are displayed rounded to two decimal places. Journal trade entry, close, and edit fields retain entered precision up to six decimal places; calculations and stored values use that full precision.
 
-The Dashboard and Configure page each poll `/api/live-prices` once per second only while that page is visible. Requests are coalesced and cached for one second, and never write stock state, history, alert state, or equity snapshots. Persistent price observations and charts continue to use the minute monitor. pytr exposes last/ask but not an executable bid, so the monitor retains UAPI bid/ask quotes (with Yahoo fallback) for configured BUY/SELL alert semantics.
+The Dashboard and Configure page poll `/api/live-prices` once per second while visible. Requests share the same SDK → UAPI selection path as the monitor, coalesce, and cache briefly. Live display requests never write stock state, history, alert state, or equity snapshots. Monitor and explicit refresh observations are stored in SQLite; BUY/SELL alerts use the executable ask/bid respectively.
 
 Manual order submission is fail-closed. It additionally requires a verified mapping, fresh executable quote, synchronized cash or position data, selected account, typed confirmation, idempotency key, and all environment gates above. A submitted broker order never creates a Journal execution unless a later broker reconciliation proves it filled.
 
@@ -170,33 +167,18 @@ sqlite3 /opt/openstock/database/openstock.db ".tables"
 
 ## Monitoring Behavior
 
-The `scripts/monitor.js` process runs every minute via a systemd timer. It uses Handelsrepublik SDK EUR order quotes for stocks with verified EUR mappings, then the loopback Trade Republic sidecar, pytr, and finally Yahoo Finance plus cached USD→EUR conversion when direct pricing is unavailable. If both the primary sources and pytr fail, it creates a rate-limited pytr v2-login recovery request; the separate recovery service starts `pytr login --v2` and waits for confirmation in the Trade Republic app while the monitor continues on Yahoo for that cycle. The monitor:
+The `scripts/monitor.js` process runs every minute via a systemd timer. For each verified EUR mapping it tries the Handelsrepublik SDK first and the loopback UAPI sidecar second. If both fail, that stock fails for the cycle without stopping other symbols. The monitor:
 
 1. Reads enabled stocks from database
-2. Fetches a verified Trade Republic EUR quote when configured, otherwise Yahoo Finance
-3. Gets USD→EUR exchange rate for Yahoo quotes (cached for 1 hour)
-4. Calculates EUR price only for Yahoo fallback quotes
-5. Stores price data in database
-6. Evaluates buy/sell thresholds
-7. Sends Telegram alert on threshold crossing
-8. Creates a durable alert-outbox record, sends Telegram, then atomically records/retire the delivered alert level
-9. Stores a local price observation and, when capital is configured, an equity snapshot
-10. Uses bounded concurrency, a per-cycle deadline, prepared SQLite statements, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
+2. Fetches an executable EUR quote through SDK → UAPI
+3. Stores price and quote-side data in SQLite
+4. Evaluates buy/sell thresholds against ask/bid
+5. Sends Telegram alerts on threshold crossing
+6. Creates a durable alert-outbox record, then retires a level only after confirmed delivery
+7. Stores a local price observation and, when capital is configured, an equity snapshot
+8. Uses bounded concurrency, a cycle deadline, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
 
 Run one monitoring cycle manually as the `openclaw` user with `npm run monitor` (`npm run monitor -- --help` only prints usage). Use the tracked systemd override in `ops/systemd/` when deploying monitor configuration changes.
-
-### PyTR v2-login recovery
-
-Install the tracked recovery unit files after deploying the application code:
-
-```bash
-sudo install -m 0644 ops/systemd/openstock-pytr-login-recovery.service /etc/systemd/system/
-sudo install -m 0644 ops/systemd/openstock-pytr-login-recovery.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now openstock-pytr-login-recovery.timer
-```
-
-The monitor writes only a private request marker under `/opt/openstock/memory/`; it never supplies or logs a phone number, PIN, cookies, or confirmation token. A failed or unconfirmed login leaves the Yahoo fallback in place. `PYTR_LOGIN_RECOVERY_COOLDOWN_SECONDS` defaults to 900 seconds to avoid repeated app prompts during an outage.
 
 ### Trigger Debouncing
 
@@ -204,26 +186,34 @@ The monitor writes only a private request marker under `/opt/openstock/memory/`;
 - Rearm a retired level explicitly through the alert-level API/UI.
 - `trigger_state` and the stock-level threshold columns are legacy compatibility data; `alert_levels` and open Journal trades are authoritative.
 
+### Journal positions
+
+Position summaries and SELL eligibility use the total quantity in open Journal
+trades. Without an open position, SELL levels remain configured but do not fire.
+Adding another open purchase merges it into the oldest open trade using
+quantity-weighted entry prices while preserving the entered precision and a full
+source snapshot in `trade_merge_events`. Closed trades never merge. Archiving a
+stock preserves its history; restoring it re-enables non-retired alert levels,
+while retired levels need explicit rearming.
+
 ### Historical chart backfill
 
-The server queues missing history for active, non-archived stocks at startup and
-after a stock is added or restored. Verified Trade Republic mappings use tracked
-multi-range broker history; incomplete ranges remain eligible for retry. Other
-stocks use one free Yahoo Finance chart request per stock for up to five years of
-daily closes. Existing monitor/manual
-history is preserved; a stock with any `yahoo_backfill` row is not requested
-again. Backfill runs in the background, so Yahoo failures are logged without
-affecting API responses or server availability.
+The server queues missing history for active, non-archived stocks with verified
+Trade Republic EUR mappings. It uses the sidecar multi-range history endpoint;
+incomplete ranges remain eligible for retry. Stocks without a verified mapping
+remain visible but have no quote/history until mapped. Backfill runs in the
+background so provider failures do not affect API responses or server
+availability.
 
 The same prepared, idempotent queue can be run manually:
 
 ```bash
 npm run backfill-history
-# Optional: HISTORY_BACKFILL_DELAY_MS=2000 HISTORY_RANGE=5y npm run backfill-history
+# Optional: HISTORY_BACKFILL_DELAY_MS=2000 npm run backfill-history
 ```
 
-No Yahoo request is made by chart rendering. Tests use mocked HTTP and temporary
-SQLite databases.
+Charts use persisted quote and Trade Republic history rows. Tests use mocked
+provider calls and temporary SQLite databases.
 
 ## Web Interface
 
@@ -269,7 +259,6 @@ cp /opt/openstock/database/openstock.db /var/backups/openstock/openstock.db.$(da
 tar -czf openstock-backup-$(date +%F).tar.gz \
     database/openstock.db \
     memory/*.log \
-    memory/exchange_rate_cache.json
 ```
 
 ## Troubleshooting
@@ -284,9 +273,7 @@ journalctl -u openstock-monitor.service -n 50
 
 ### Prices not updating
 
-```bash
-curl -s -A "Mozilla/5.0" "https://query1.finance.yahoo.com/v8/finance/chart/AAPL?range=1d&interval=1m" | head -c 200
-```
+Check `/api/broker/trade-republic/health`, then verify the SDK session and UAPI sidecar are reachable from the OpenStock service.
 
 ### Telegram alerts not sending
 
@@ -353,20 +340,20 @@ journalctl -u openstock.service -n 50 --no-pager
 
 The browser uses native ES modules: `www/app.js` is the bootstrap, while
 `www/modules/` contains API access, state, chart, dashboard, journal, and
-configuration helpers. The app keeps the existing pointer, touch, focus, and
-keyboard chart interaction and exposes a small compatibility bridge for legacy
-inline markup.
+configuration behavior. The app supports pointer, touch, focus, and keyboard
+chart interaction.
 
 Server construction is separated from listening with `createApp()` exported by
-`server.js`. This allows route/integration tests to use temporary SQLite files
-and mocked quote/backfill fetches. Production startup remains `node server.js`
-and retains the systemd listener behavior.
+`server.js`; route handlers live in `server/routes/`. This allows
+route/integration tests to use temporary SQLite files and mocked providers.
+Production startup remains `node server.js`.
 
 Database startup applies ordered, transactional migrations from
 `database/migrations/` and records versions in `schema_migrations`. Existing
 databases are adopted in place: archived stock state, trade dividends, and
-legacy journal entries are preserved. Tests never use
-`database/openstock.db`.
+older journal entries are preserved. Database operations are grouped under
+`database/domains/`, with `database/db.js` composing the public database class.
+Tests use isolated temporary databases and do not open the live database.
 
 Run verification with:
 
@@ -379,12 +366,3 @@ git diff --check
 ## License
 
 MIT - Built for the OpenClaw ecosystem
-# Alert levels and Journal positions
-
-OpenStock stores independent one-shot BUY and SELL alert levels in migration 004. Existing stock thresholds are copied once into one BUY and one SELL level; the legacy threshold columns remain for compatibility, but monitoring uses `alert_levels`. Levels can be added, deleted, disabled, and rearmed through the API or Configure view. A level is marked triggered/retired only after Telegram confirms delivery. Alerts are notifications only and never execute trades.
-
-Position summaries and SELL eligibility are derived exclusively from open Journal lots (`position.source: journal`, with summed `position.quantity`). Manual ownership updates are rejected. Without an open Journal position, SELL levels stay configured but are suppressed until a position is recorded.
-
-Recording another open purchase for a stock that already has an open Journal trade consolidates it into the oldest open trade. Quantity and fees are summed, EUR and native entry prices use quantity-weighted averages, and the earliest opening time is retained. Every absorbed trade is preserved verbatim in `trade_merge_events` before its duplicate open row is removed. Closed historical trades never merge.
-
-Archiving disables alert levels while preserving their history. Explicit restore re-enables non-retired levels; retired levels require explicit rearm. Migration and verification must be run against a copied database, never the production file.

@@ -19,6 +19,7 @@ const migrations = [
   ,require('./migrations/017_broker_health_notification_status')
   ,require('./migrations/018_reliable_monitoring')
   ,require('./migrations/019_broker_health_debounce')
+  ,require('./migrations/020_trade_republic_only_quotes')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {
@@ -34,7 +35,7 @@ function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/
   }
   if (seedDefaults && db.prepare('SELECT COUNT(*) AS count FROM stocks').get().count === 0) {
     const seed = db.transaction(() => {
-      const insertStock = db.prepare('INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur) VALUES (?, ?, ?, ?, ?)');
+      const insertStock = db.prepare("INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur, price_source) VALUES (?, ?, ?, ?, ?, 'trade_republic')");
       const insertLevel = db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
       for (const stock of [['AAPL', 'Apple Inc.', 'USD', 150, 200], ['MSFT', 'Microsoft Corporation', 'USD', 250, 350], ['GOOGL', 'Alphabet Inc.', 'USD', 120, 180], ['TSLA', 'Tesla Inc.', 'USD', 200, 300], ['AMZN', 'Amazon.com Inc.', 'USD', 100, 150]]) {
         const result = insertStock.run(...stock);
