@@ -1,6 +1,6 @@
-# EXPERIMENT: midpoint_stop_width
-# HYPOTHESIS: Stop widening from 0.010 to 0.011 improved fitness, while a further widening to 0.012 regressed; an intermediate 0.0105 stop may retain the noise resistance while reducing the adverse exposure of the wider stop.
-# CHANGE: Reduced STOP_PCT from 0.011 to 0.0105
+# EXPERIMENT: earlier_close_cutoff
+# HYPOTHESIS: Avoiding new entries during the final five minutes should reduce low-quality late-session signals that have insufficient time to reach their targets before the mandatory intraday flatten.
+# CHANGE: Reduced MARKET_CLOSE_CUTOFF from 15:45 to 15:40
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "midpoint_stop_width"
+EXPERIMENT_NAME = "earlier_close_cutoff"
 EXPERIMENT_HYPOTHESIS = (
-    "Stop widening from 0.010 to 0.011 improved fitness, while a further widening "
-    "to 0.012 regressed; an intermediate 0.0105 stop may retain the noise resistance "
-    "while reducing the adverse exposure of the wider stop."
+    "Avoiding new entries during the final five minutes should reduce low-quality "
+    "late-session signals that have insufficient time to reach their targets before "
+    "the mandatory intraday flatten."
 )
-EXPERIMENT_CHANGE = "Reduced STOP_PCT from 0.011 to 0.0105"
+EXPERIMENT_CHANGE = "Reduced MARKET_CLOSE_CUTOFF from 15:45 to 15:40"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -58,7 +58,7 @@ REGIME_MULTIPLIER: dict[str, float] = {
 }
 
 NO_TRADE_OPEN_MINUTES = 5
-MARKET_CLOSE_CUTOFF = time(15, 45)
+MARKET_CLOSE_CUTOFF = time(15, 40)
 MODE = "day"
 
 SMA_FAST = 20
