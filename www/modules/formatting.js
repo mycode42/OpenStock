@@ -56,6 +56,14 @@ export function formatChartDate(value) {
     });
 }
 
+export function formatChartTime(value) {
+    const date = parseOpenStockDate(value);
+    if (!date) return '—';
+    return date.toLocaleTimeString('en-GB', {
+        timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+}
+
 export function chartRangeLabel(range) {
     return { '1d': '1-day', '1w': '1-week', '1mo': '1-month', '1y': '1-year', '5y': '5-year' }[range] || range;
 }

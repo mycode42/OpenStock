@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { initDatabase } = require('../database/init');
 const OpenStockDB = require('../database/db');
-const { createApp, berlinTradingDayStart } = require('../server');
+const { createApp, berlinTradingDayStart, berlinTradingDayEnd } = require('../server');
 const APP_VERSION = require('../package.json').version;
 
 async function fixture({ now } = {}) {
@@ -43,6 +43,11 @@ test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T05:30:00.000Z');
     assert.equal(berlinTradingDayStart(new Date('2026-12-16T12:00:00Z')).toISOString(), '2026-12-16T06:30:00.000Z');
     assert.equal(berlinTradingDayStart(new Date('2026-09-16T04:00:00Z')).toISOString(), '2026-09-15T05:30:00.000Z');
+});
+
+test('Berlin one-day chart ends at 22:00 local time', () => {
+    assert.equal(berlinTradingDayEnd(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T20:00:00.000Z');
+    assert.equal(berlinTradingDayEnd(new Date('2026-12-16T12:00:00Z')).toISOString(), '2026-12-16T21:00:00.000Z');
 });
 
 test('mutation origin check accepts the public HTTPS origin forwarded by the reverse proxy', async t => {
@@ -134,21 +139,25 @@ test('one-day history starts at 07:30 Berlin time and uses fifteen-minute bucket
         const timestamp = new Date(tradingStart.getTime() + minute * 60000).toISOString();
         f.db.addPriceSnapshot(stock.id, null, 100 + minute, null, 'trade_republic_history', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
     }
+    const sdkTimestamp = new Date(tradingStart.getTime() + 60 * 60000).toISOString();
+    f.db.addPriceSnapshot(stock.id, null, 160, null, 'trade_republic_sdk_order_price', sdkTimestamp, sdkTimestamp.replace('T', ' ').replace('.000Z', ''));
     const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1d`)).json();
     assert.equal(history.start_at, tradingStart.toISOString());
+    assert.equal(history.end_at, new Date(tradingStart.getTime() + (14 * 60 + 30) * 60000).toISOString());
     assert.equal(history.bucket_seconds, 900);
     assert.equal(history.points.length, 48);
     assert.equal(history.points[0].recorded_at, tradingStart.toISOString());
-    assert.equal(history.points.at(-1).recorded_at, new Date(tradingStart.getTime() + 59 * 60000).toISOString());
+    assert.equal(history.points.at(-1).recorded_at, sdkTimestamp);
     assert.equal(history.points[0].price_eur, 100);
-    assert.equal(history.points.at(-1).price_eur, 159);
+    assert.equal(history.points.at(-1).price_eur, 160);
+    assert.equal(history.points.at(-1).source, 'trade_republic_sdk_order_price');
 
     const weekly = await (await f.request(`/api/stocks/${stock.id}/history?range=1w`)).json();
     assert.equal(weekly.range, '1w');
     assert.equal(weekly.bucket_seconds, 3600);
     assert.equal(weekly.max_gap_seconds, 21600);
     assert.equal(weekly.points.length, 2);
-    assert.equal(weekly.points.at(-1).price_eur, 159);
+    assert.equal(weekly.points.at(-1).price_eur, 160);
 });
 
 test('dashboard history removes legacy pytr polling flatlines across closed sessions', async t => {

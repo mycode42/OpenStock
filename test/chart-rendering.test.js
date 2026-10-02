@@ -12,7 +12,7 @@ test('responsive charts stretch their SVG interaction plane to the full visible 
     assert.match(source, /viewBox="0 0 \$\{width\} \$\{height\}" preserveAspectRatio="none"/);
 });
 
-test('dashboard history charts are native EUR, smoothed, and compress closed-market time', () => {
+test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day session scale', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     const formatting = fs.readFileSync(path.join(root, 'www/modules/formatting.js'), 'utf8');
     assert.match(source, /Number\(point\.price_eur\)/);
@@ -28,11 +28,31 @@ test('dashboard history charts are native EUR, smoothed, and compress closed-mar
     assert.match(source, /panel\.dataset\.requestedRange \|\| '1d'/);
     assert.match(formatting, /'1w': '1-week'/);
     assert.match(source, /function smoothCoordinatePath/);
-    assert.match(source, /x: index \/ \(clean\.length - 1\) \* width/);
+    assert.match(source, /const hasFixedDayScale/);
+    assert.match(source, /formatChartTime\(startAt\)/);
     assert.match(source, /smooth: true/);
     assert.match(source, /\.sort\(\(left, right\) => parseOpenStockDate\(left\.recorded_at\)\.getTime\(\) - parseOpenStockDate\(right\.recorded_at\)\.getTime\(\)\)/);
     assert.doesNotMatch(source, /history-gap-line|maxGapMs|coordinateSegments|gapSegments/);
     assert.doesNotMatch(source, /point\.price_usd|USD price chart|· USD/);
+});
+
+test('one-day charts reserve future session time on a 07:30–22:00 wall-clock scale', async () => {
+    const sourceDir = path.join(root, 'www/modules');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-day-chart-'));
+    fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"module"}\n');
+    fs.cpSync(sourceDir, path.join(tempDir, 'modules'), { recursive: true });
+    try {
+        const { createCharts } = await import(pathToFileURL(path.join(tempDir, 'modules/charts.js')).href);
+        const { renderHistoryChart } = createCharts({ request: async () => null, historyCache: new Map() });
+        const html = renderHistoryChart([
+            { recorded_at: '2026-09-16T05:30:00Z', price_eur: 100 },
+            { recorded_at: '2026-09-16T12:45:00Z', price_eur: 101 }
+        ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
+        assert.match(html, /&quot;x&quot;:132/);
+        assert.match(html, /<span>07:30<\/span><span>22:00<\/span>/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test('dashboard history percentage follows the inspected point and resets to the range return', () => {

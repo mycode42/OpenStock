@@ -52,6 +52,13 @@ function berlinTradingDayStart(now = new Date()) {
     return new Date(timestamp);
 }
 
+function berlinTradingDayEnd(now = new Date()) {
+    // The 1-day chart uses a fixed Berlin wall-clock session: 07:30–22:00.
+    // DST changes occur outside this interval, so the endpoint is exactly
+    // fourteen and a half hours after the matching session start.
+    return new Date(berlinTradingDayStart(now).getTime() + (14 * 60 + 30) * 60000);
+}
+
 function evenlySample(points, maximum) {
     if (!Number.isInteger(maximum) || maximum < 2 || points.length <= maximum) return points;
     const sampled = [points[0]];
@@ -346,15 +353,16 @@ app.get('/api/stocks/:id/history', (req, res) => {
         if (!stock) return res.status(404).json({ error: 'Stock not found' });
         const mapping = req.app.locals.db.getBrokerMapping(stock.id);
         const nativeTradeRepublicEur = Boolean(mapping?.verified_at && mapping.currency === 'EUR');
-        const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'manual_refresh_trade_republic_order_price', 'pytr_rates'];
+        const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'trade_republic_sdk_order_price', 'manual_refresh_trade_republic_order_price', 'pytr_rates'];
         const tradingDayStart = range === '1d' ? berlinTradingDayStart(now()) : null;
+        const tradingDayEnd = range === '1d' ? berlinTradingDayEnd(now()) : null;
         const eligiblePoints = req.app.locals.db.getPriceHistory(stock.id, window.since, window.queryBucketSeconds || window.bucketSeconds, {
             sources: nativeTradeRepublicEur ? tradeRepublicSources : null,
             eurOnly: true
         }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }))
-            .filter(point => !tradingDayStart || Date.parse(point.recorded_at) >= tradingDayStart.getTime());
+            .filter(point => !tradingDayStart || (Date.parse(point.recorded_at) >= tradingDayStart.getTime() && Date.parse(point.recorded_at) <= tradingDayEnd.getTime()));
         const points = evenlySample(collapseSyntheticQuoteRepeats(eligiblePoints), window.maxPoints);
-        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, start_at: tradingDayStart?.toISOString() || null, points });
+        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: nativeTradeRepublicEur ? 'trade_republic' : 'local_eur', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, start_at: tradingDayStart?.toISOString() || null, end_at: tradingDayEnd?.toISOString() || null, points });
     } catch (e) {
         console.error('Error fetching price history:', e.message);
         res.status(500).json({ error: 'Failed to fetch price history' });
@@ -908,4 +916,4 @@ if (require.main === module) {
     process.on('SIGINT', shutdown);
 }
 
-module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart, createLiveQuoteFeed };
+module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart, berlinTradingDayEnd, createLiveQuoteFeed };

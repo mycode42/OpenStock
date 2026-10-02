@@ -1,5 +1,5 @@
 import { escapeHtml } from './escape.js';
-import { money, parseOpenStockDate, formatLocalDateTime, formatChartDate, chartRangeLabel } from './formatting.js';
+import { money, parseOpenStockDate, formatLocalDateTime, formatChartDate, formatChartTime, chartRangeLabel } from './formatting.js';
 
 export function createCharts({ request, historyCache }) {
 function chartRangeControls(activeRange) {
@@ -116,7 +116,7 @@ function attachInteractiveLineCharts(root) {
     });
 }
 
-function renderHistoryChart(points, range) {
+function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt } = {}) {
     const clean = points
         .filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at))
         .sort((left, right) => parseOpenStockDate(left.recorded_at).getTime() - parseOpenStockDate(right.recorded_at).getTime());
@@ -125,7 +125,17 @@ function renderHistoryChart(points, range) {
     const min = Math.min(...values), max = Math.max(...values);
     const padding = Math.max((max - min) * 0.08, max * 0.002, 0.01);
     const low = min - padding, high = max + padding, width = 264, height = 82;
-    const coordinates = clean.map((point, index) => ({ point, x: index / (clean.length - 1) * width, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) }));
+    const sessionStart = range === '1d' ? parseOpenStockDate(startAt) : null;
+    const sessionEnd = range === '1d' ? parseOpenStockDate(endAt) : null;
+    const sessionDuration = sessionEnd?.getTime() - sessionStart?.getTime();
+    const hasFixedDayScale = Number.isFinite(sessionDuration) && sessionDuration > 0;
+    const coordinates = clean.map((point, index) => {
+        const timestamp = parseOpenStockDate(point.recorded_at)?.getTime();
+        const sessionX = hasFixedDayScale && Number.isFinite(timestamp)
+            ? Math.max(0, Math.min(width, (timestamp - sessionStart.getTime()) / sessionDuration * width))
+            : index / (clean.length - 1) * width;
+        return { point, x: sessionX, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) };
+    });
     const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
     const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at), change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
     const first = clean[0], last = clean[clean.length - 1];
@@ -134,11 +144,13 @@ function renderHistoryChart(points, range) {
     const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
     const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints, smooth: true, hoverPoints, ariaLabel });
     const changeText = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
-    return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}" data-history-change data-default-change="${changeText}" data-default-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates"><span>${formatChartDate(first.recorded_at)}</span><span>${formatChartDate(last.recorded_at)}</span></div>`;
+    const axisStart = hasFixedDayScale ? formatChartTime(startAt) : formatChartDate(first.recorded_at);
+    const axisEnd = hasFixedDayScale ? formatChartTime(endAt) : formatChartDate(last.recorded_at);
+    return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}" data-history-change data-default-change="${changeText}" data-default-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates"><span>${axisStart}</span><span>${axisEnd}</span></div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range)}`;
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, history)}`;
     attachInteractiveLineCharts(panel);
 }
 
