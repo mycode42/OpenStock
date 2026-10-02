@@ -16,7 +16,7 @@ test('fresh initialization is versioned and idempotent', t => {
     const db = new Database(file);
     assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), migrations.map(migration => migration.version));
     assert.equal(db.prepare('PRAGMA table_info(stocks)').all().some(row => row.name === 'archived'), true);
-    assert.deepEqual(db.prepare('PRAGMA table_info(broker_health_state)').all().map(row => row.name), ['broker', 'status', 'checked_at', 'changed_at', 'last_notified_at', 'last_error', 'last_notified_status']);
+    assert.deepEqual(db.prepare('PRAGMA table_info(broker_health_state)').all().map(row => row.name), ['broker', 'status', 'checked_at', 'changed_at', 'last_notified_at', 'last_error', 'last_notified_status', 'failure_streak', 'success_streak']);
     db.close();
 });
 
@@ -33,6 +33,8 @@ test('migration 017 upgrades an already-applied broker health table', t => {
     const upgraded = new Database(file);
     assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'last_notified_status'), true);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=17').get()['1'], 1);
+    assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'failure_streak'), true);
+    assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=19').get()['1'], 1);
     upgraded.close();
 });
 
