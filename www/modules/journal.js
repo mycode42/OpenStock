@@ -5,6 +5,7 @@ export function createJournal(context) {
     let editingTradeId = null;
     let editingIntent = 'create';
     let journalChartMode = 'equity';
+    let journalPerformanceChartType = 'line';
     const { getStocks, getTrades, getTradePagination, getCapitalEvents, getAnalytics, request: af, showA, setJournalPage, reloadJournal, charts } = context;
     const stocks = getStocks;
     const trades = getTrades;
@@ -103,45 +104,102 @@ function renderEquityCurve(points, resolution = 'snapshot') {
     const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `Equity ${journalMoney(value)}`, secondary: formatLocalDateTime(point.at), tertiary: `Cash ${journalMoney(point.cash_eur)} · Positions ${journalMoney(point.position_value_eur)}`, lineGap: 13 }));
     const ariaLabel = `Equity curve using ${resolution} closing samples from ${formatLocalDate(clean[0].at)} to ${formatLocalDate(clean[clean.length - 1].at)}`;
     const yTicks = axisValues.map(value => ({ value, y: top + plotHeight - ((value - low) / (high - low || 1) * plotHeight) }));
-    const xTicks = [0, .25, .5, .75, 1].map(ratio => ({ ratio, x: left + plotWidth * ratio, label: equityTimeLabel(new Date(firstTime + timeRange * ratio).toISOString(), timeRange) }));
+    const xTicks = Array.from({ length: 12 }, (_, index) => {
+        const ratio = index / 11;
+        return { ratio, x: left + plotWidth * ratio, label: equityTimeLabel(new Date(firstTime + timeRange * ratio).toISOString(), timeRange) };
+    });
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
     const xAxis = xTicks.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight}" y2="${top + plotHeight}"/></g>`, lineClass: 'equity-line', linePoints: line, hoverPoints, ariaLabel });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${journalAxisMoney(value)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
-    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
+    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
 }
 
-function renderPerformanceCurve(rows, period, capitalBase) {
+function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
     const clean = (rows || []).filter(row => Number.isFinite(Number(row.pnl_eur)) && row.day).map(row => ({ ...row, at: `${row.day}T12:00:00Z`, value: Number(row.pnl_eur) })).filter(row => parseOpenStockDate(row.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
-    if (clean.length < 2) return '<div class="journal-empty">At least two completed periods are needed for this chart.</div>';
-    const values = clean.map(point => point.value);
+    const daily = period === 'daily';
+    const periodName = daily ? 'Daily' : 'Monthly';
+    const periodCount = daily ? 14 : 12;
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(12, 0, 0, 0);
+    const monthKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    const firstVisibleMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 11, 1, 12);
+    const visibleRows = daily
+        ? clean.slice(-periodCount)
+        : clean.filter(row => row.day.slice(0, 7) >= monthKey(firstVisibleMonth) && row.day.slice(0, 7) <= monthKey(currentMonth));
+    const values = visibleRows.map(point => point.value);
     const min = Math.min(0, ...values), max = Math.max(0, ...values), padding = Math.max((max - min) * .1, 1);
     const width = 800, height = 260, left = 40, right = 12, top = 10, bottom = 32, plotWidth = width - left - right, plotHeight = height - top - bottom;
     const { low, high, values: axisValues } = equityAxisBounds(min - padding, max + padding);
-    const times = clean.map(point => parseOpenStockDate(point.at).getTime());
-    const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
-    const coordinates = clean.map((point, index) => ({ point, value: point.value, x: left + (times[index] - firstTime) / timeRange * plotWidth, y: top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight) }));
-    const line = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const periodName = period === 'daily' ? 'Daily' : 'Monthly';
-    const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `${periodName} P/L ${journalSigned(value)}`, secondary: formatLocalDate(point.at), tertiary: `${journalPercent(capitalBase > 0 ? value / capitalBase * 100 : null)} of capital · ${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`, lineGap: 13 }));
+    const periodSlotWidth = plotWidth / periodCount;
+    const fixedSlots = daily
+        ? Array.from({ length: periodCount }, (_, index) => {
+            const point = visibleRows[index] || null;
+            const label = point ? parseOpenStockDate(point.at).toLocaleDateString('en-GB', { timeZone: 'Europe/Berlin', day: '2-digit', month: 'short' }) : '';
+            return { point, label, x: left + periodSlotWidth * (index + .5), left: left + periodSlotWidth * index, width: periodSlotWidth };
+        })
+        : Array.from({ length: periodCount }, (_, index) => {
+            const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 11 + index, 1, 12);
+            const point = visibleRows.find(row => row.day.slice(0, 7) === monthKey(date)) || null;
+            const label = date.toLocaleDateString('en-GB', { month: 'short' });
+            return { point, label, x: left + periodSlotWidth * (index + .5), left: left + periodSlotWidth * index, width: periodSlotWidth };
+        });
+    const coordinates = fixedSlots.flatMap(slot => slot.point ? [{
+        point: slot.point,
+        value: slot.point.value,
+        x: slot.x,
+        y: top + plotHeight - ((slot.point.value - low) / (high - low || 1) * plotHeight)
+    }] : []);
+    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `${periodName} P/L ${journalSigned(value)}`, secondary: formatLocalDate(point.at), tertiary: `${journalPercent(capitalBase > 0 ? value / capitalBase * 100 : null)} of capital · ${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`, lineGap: 13 });
+    const hoverPoints = fixedSlots.map(({ point, label, x }) => point
+        ? performanceHoverPoint(point, point.value, x, top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight))
+        : { x: Number(x.toFixed(1)), y: Number((top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)).toFixed(1)), primary: label ? `${label} · No data` : 'No data', secondary: '', tertiary: '' });
     const yTicks = axisValues.map(value => ({ value, y: top + plotHeight - ((value - low) / (high - low || 1) * plotHeight) }));
-    const xTicks = [0, .25, .5, .75, 1].map(ratio => ({ ratio, x: left + plotWidth * ratio, label: equityTimeLabel(new Date(firstTime + timeRange * ratio).toISOString(), timeRange) }));
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
-    const xAxis = xTicks.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
-    const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)}" y2="${top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)}"/></g>`, lineClass: `performance-line ${period}`, linePoints: line, hoverPoints, ariaLabel: `${periodName} realized P/L chart in EUR` });
+    const xAxis = fixedSlots.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
+    const zeroY = top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight);
+    const bars = chartType === 'bar' ? fixedSlots.map(({ point, left: barLeft, width: barWidth }) => {
+        if (!point) return '';
+        const valueY = top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight);
+        const barY = Math.min(valueY, zeroY);
+        const barHeight = Math.max(1, Math.abs(valueY - zeroY));
+        const color = point.value < 0 ? 'negative' : 'positive';
+        return `<rect class="performance-bar ${color}" x="${barLeft}" y="${barY.toFixed(1)}" width="${barWidth}" height="${barHeight.toFixed(1)}"/>`;
+    }).join('') : '';
+    const lineRuns = [];
+    let lineRun = [];
+    for (const { point, x } of fixedSlots) {
+        if (!point) {
+            if (lineRun.length) lineRuns.push(lineRun);
+            lineRun = [];
+            continue;
+        }
+        const y = top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight);
+        lineRun.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    if (lineRun.length) lineRuns.push(lineRun);
+    const lineSegments = chartType === 'line' ? lineRuns.filter(run => run.length > 1).map(run => run.join(' ')) : [];
+    const linePoints = chartType === 'line' ? lineRuns.flatMap(run => run).join(' ') : '';
+    const markers = chartType === 'line' ? coordinates.map(({ x, y, value }) => `<span class="performance-point ${value < 0 ? 'negative' : 'positive'}" style="left:${(x / width * 100).toFixed(3)}%;top:${(y / height * 100).toFixed(3)}%"></span>`).join('') : '';
+    const zeroLine = `<line class="equity-axis-baseline performance-zero-line" x1="${left}" x2="${width - right}" y1="${zeroY}" y2="${zeroY}"/>`;
+    const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}${zeroLine}</g>${bars}`, lineClass: `performance-line ${period}`, linePoints, lineSegments, hoverPoints, ariaLabel: `${periodName} realized P/L ${chartType} chart in EUR` });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}${journalAxisMoney(value)}</span>`).join('');
-    const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
-    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
+    const xLabels = fixedSlots.map(({ x, label }) => `<span style="left:${(x / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
+    const xLabelClass = daily ? 'journal-equity-x-labels daily-performance-labels' : 'journal-equity-x-labels';
+    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div>`;
 }
 
-function journalChartControls(active) {
-    return `<div class="history-ranges journal-chart-controls" role="group" aria-label="Journal chart metric">${[['equity', 'Equity'], ['daily', 'Daily'], ['monthly', 'Monthly']].map(([mode, label]) => `<button type="button" class="history-range ${mode === active ? 'active' : ''}" data-journal-chart-mode="${mode}">${label}</button>`).join('')}</div>`;
+function journalChartControls(active, chartType) {
+    const metrics = `<div class="history-ranges journal-chart-controls" role="group" aria-label="Journal chart metric">${[['equity', 'Equity'], ['daily', 'Daily'], ['monthly', 'Monthly']].map(([mode, label]) => `<button type="button" class="history-range ${mode === active ? 'active' : ''}" data-journal-chart-mode="${mode}">${label}</button>`).join('')}</div>`;
+    const styles = active === 'equity' ? '' : `<div class="history-ranges journal-chart-controls" role="group" aria-label="Performance chart style">${[['line', 'Line'], ['bar', 'Bar']].map(([type, label]) => `<button type="button" class="history-range ${type === chartType ? 'active' : ''}" data-journal-chart-type="${type}">${label}</button>`).join('')}</div>`;
+    return `<div class="journal-chart-control-groups">${metrics}${styles}</div>`;
 }
 
-function renderJournalChart(analytics, mode) {
-    if (mode === 'daily') return renderPerformanceCurve(analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_eur));
-    if (mode === 'monthly') return renderPerformanceCurve(analytics?.monthly_performance?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_eur));
+function renderJournalChart(analytics, mode, chartType) {
+    if (mode === 'daily') return renderPerformanceCurve(analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_eur), chartType);
+    if (mode === 'monthly') return renderPerformanceCurve(analytics?.monthly_performance?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_eur), chartType);
     return renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution);
 }
 
@@ -235,9 +293,9 @@ function renderJournal() {
     if (chartCard && chartHeader) {
         chartHeader.classList.add('journal-chart-header');
         chartHeader.querySelector('.section-title').textContent = journalChartMode === 'equity' ? 'Equity Curve' : journalChartMode === 'daily' ? 'Daily Performance' : 'Monthly Performance';
-        chartHeader.insertAdjacentHTML('beforeend', journalChartControls(journalChartMode));
+        chartHeader.insertAdjacentHTML('beforeend', journalChartControls(journalChartMode, journalPerformanceChartType));
         [...chartCard.children].filter(child => child !== chartHeader).forEach(child => child.remove());
-        chartHeader.insertAdjacentHTML('afterend', renderJournalChart(analytics, journalChartMode));
+        chartHeader.insertAdjacentHTML('afterend', renderJournalChart(analytics, journalChartMode, journalPerformanceChartType));
     }
     const performanceCard = container.querySelector('.journal-performance-card');
     if (performanceCard && chartCard) {
@@ -254,6 +312,10 @@ function renderJournal() {
     }));
     container.querySelectorAll('[data-journal-chart-mode]').forEach(button => button.addEventListener('click', () => {
         journalChartMode = button.dataset.journalChartMode;
+        renderJournal();
+    }));
+    container.querySelectorAll('[data-journal-chart-type]').forEach(button => button.addEventListener('click', () => {
+        journalPerformanceChartType = button.dataset.journalChartType;
         renderJournal();
     }));
     container.querySelector('#trade-form')?.addEventListener('submit', saveTrade);
