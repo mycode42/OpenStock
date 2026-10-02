@@ -1,5 +1,5 @@
 import { escapeHtml } from './escape.js';
-import { money, parseOpenStockDate, formatLocalDateTime, formatChartDate, formatChartTime, chartRangeLabel } from './formatting.js';
+import { money, parseOpenStockDate, formatChartHoverTime, formatChartDate, formatChartTime, chartRangeLabel } from './formatting.js';
 
 export function createCharts({ request, historyCache }) {
 function chartRangeControls(activeRange) {
@@ -43,6 +43,7 @@ function attachInteractiveLineCharts(root) {
         const tertiary = chart.querySelector('.chart-hover-tertiary');
         const hitArea = chart.querySelector('.chart-hit-area');
         const changeTarget = chart.closest('.history-popover')?.querySelector('[data-history-change]');
+        const priceTarget = chart.closest('.history-popover')?.querySelector('[data-history-price]');
         let activeIndex = points.length - 1;
         let pinned = false;
 
@@ -59,6 +60,12 @@ function attachInteractiveLineCharts(root) {
             changeTarget.classList.toggle('up', changeTarget.dataset.defaultChangeClass === 'up');
             changeTarget.classList.toggle('down', changeTarget.dataset.defaultChangeClass === 'down');
         };
+        const updatePrice = point => {
+            if (priceTarget && point?.price) priceTarget.textContent = point.price;
+        };
+        const resetPrice = () => {
+            if (priceTarget) priceTarget.textContent = priceTarget.dataset.defaultPriceRange || '';
+        };
 
         const show = index => {
             activeIndex = Math.max(0, Math.min(points.length - 1, index));
@@ -74,7 +81,7 @@ function attachInteractiveLineCharts(root) {
             dot.setAttribute('transform', compensateStretch(point.x, point.y));
             const anchor = point.x < width * 0.22 ? 'start' : point.x > width * 0.78 ? 'end' : 'middle';
             const lineGap = point.lineGap || 9;
-            const lineCount = point.tertiary ? 3 : 2;
+            const lineCount = 1 + Number(Boolean(point.secondary)) + Number(Boolean(point.tertiary));
             const blockHeight = (lineCount - 1) * lineGap;
             const labelY = point.y > blockHeight + 18 ? point.y - blockHeight - 10 : point.y + 16;
             text.setAttribute('x', point.x); text.setAttribute('y', labelY); text.setAttribute('text-anchor', anchor);
@@ -84,13 +91,15 @@ function attachInteractiveLineCharts(root) {
             tertiary.setAttribute('x', point.x); tertiary.setAttribute('dy', lineGap);
             primary.textContent = point.primary;
             secondary.textContent = point.secondary;
+            secondary.toggleAttribute('hidden', !point.secondary);
             tertiary.textContent = point.tertiary || '';
             tertiary.toggleAttribute('hidden', !point.tertiary);
             updateChange(point);
+            updatePrice(point);
             hover.removeAttribute('hidden');
             chart.setAttribute('aria-label', `${chart.dataset.chartLabel}. ${point.primary}. ${point.secondary}${point.tertiary ? `. ${point.tertiary}` : ''}`);
         };
-        const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); resetChange(); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
+        const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); resetChange(); resetPrice(); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
         const nearest = clientX => {
             const bounds = chart.getBoundingClientRect();
             const x = (clientX - bounds.left) / bounds.width * chart.viewBox.baseVal.width;
@@ -137,7 +146,7 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt } 
         return { point, x: sessionX, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) };
     });
     const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `€${money(point.price_eur)}`, secondary: formatLocalDateTime(point.recorded_at), change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
+    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: formatChartHoverTime(point.recorded_at), secondary: '', price: `€${money(point.price_eur)}`, change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
     const first = clean[0], last = clean[clean.length - 1];
     const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
@@ -146,7 +155,16 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt } 
     const changeText = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
     const axisStart = hasFixedDayScale ? formatChartTime(startAt) : formatChartDate(first.recorded_at);
     const axisEnd = hasFixedDayScale ? formatChartTime(endAt) : formatChartDate(last.recorded_at);
-    return `<div class="history-meta"><span>€${money(min)} – €${money(max)}</span><span class="history-change ${changeClass}" data-history-change data-default-change="${changeText}" data-default-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates"><span>${axisStart}</span><span>${axisEnd}</span></div>`;
+    const axisTicks = [0, 0.25, 0.5, 0.75, 1].map(fraction => {
+        if (fraction === 0) return { fraction, label: axisStart };
+        if (fraction === 1) return { fraction, label: axisEnd };
+        if (hasFixedDayScale) return { fraction, label: formatChartTime(new Date(sessionStart.getTime() + sessionDuration * fraction).toISOString()) };
+        const point = clean[Math.round((clean.length - 1) * fraction)];
+        return { fraction, label: formatChartDate(point.recorded_at) };
+    });
+    const axisLabels = axisTicks.map(({ fraction, label }) => `<span style="left:${(fraction * 100).toFixed(0)}%">${label}</span>`).join('');
+    const priceRange = `€${money(min)} – €${money(max)}`;
+    return `<div class="history-meta"><span class="history-price" data-history-price data-default-price-range="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-history-change data-default-change="${changeText}" data-default-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates" aria-label="Chart time axis">${axisLabels}</div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {

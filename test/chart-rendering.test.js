@@ -16,7 +16,11 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     const formatting = fs.readFileSync(path.join(root, 'www/modules/formatting.js'), 'utf8');
     assert.match(source, /Number\(point\.price_eur\)/);
-    assert.match(source, /primary: `€\$\{money\(point\.price_eur\)\}`/);
+    assert.match(source, /primary: formatChartHoverTime\(point\.recorded_at\)/);
+    assert.match(source, /price: `€\$\{money\(point\.price_eur\)\}`/);
+    assert.match(source, /data-history-price/);
+    assert.match(source, /updatePrice\(point\)/);
+    assert.match(source, /resetPrice\(\)/);
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
@@ -49,7 +53,9 @@ test('one-day charts reserve future session time on a 07:30–22:00 wall-clock s
             { recorded_at: '2026-09-16T12:45:00Z', price_eur: 101 }
         ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
         assert.match(html, /&quot;x&quot;:132/);
-        assert.match(html, /<span>07:30<\/span><span>22:00<\/span>/);
+        assert.match(html, /&quot;primary&quot;:&quot;16\. Sept – 07:30&quot;,&quot;secondary&quot;:&quot;&quot;,&quot;price&quot;:&quot;€100\.00&quot;/);
+        assert.match(html, /class="history-price" data-history-price data-default-price-range="€100\.00 – €101\.00"/);
+        assert.match(html, /<span style="left:0%">07:30<\/span><span style="left:25%">11:07<\/span><span style="left:50%">14:45<\/span><span style="left:75%">18:22<\/span><span style="left:100%">22:00<\/span>/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -82,6 +88,44 @@ test('mobile dashboard charts open on a card click and close when another surfac
     assert.doesNotMatch(source, /touchstart/);
     assert.match(styles, /@media\(max-width:640px\).*\.history-popover\.is-open\{display:block\}/);
     assert.doesNotMatch(styles, /@media\(max-width:640px\).*\.stock-card:focus-within \.history-popover/);
+});
+
+test('desktop dashboard hover charts are double-sized without changing mobile dimensions', () => {
+    const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
+    assert.match(styles, /\.history-popover\{[^}]*width:576px/);
+    assert.match(styles, /\.history-chart\{display:block;width:100%;height:164px/);
+    assert.match(styles, /@media\(max-width:640px\)\{\.history-popover\{[^}]*width:100%[^}]*\}\.history-chart\{height:82px\}/);
+    assert.match(styles, /\.history-price\{color:inherit;font-size:inherit;font-weight:inherit\}/);
+    assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:10px\}/);
+    assert.match(styles, /@media\(max-width:640px\).*\.history-chart \.chart-hover-primary\{font-size:8px\}.*\.history-chart \.chart-hover-secondary\{font-size:6px\}/);
+    assert.match(styles, /\.history-dates span:not\(:first-child\):not\(:last-child\)\{display:none\}/);
+});
+
+test('active dashboard hover price keeps the original range typography', () => {
+    const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
+    assert.match(styles, /\.history-meta,\.history-dates\{color:#94a3b8;font-size:\.72rem\}/);
+    assert.match(styles, /\.history-price\{color:inherit;font-size:inherit;font-weight:inherit\}/);
+});
+
+test('dashboard charts provide five position-matched x-axis labels on desktop', async () => {
+    const sourceDir = path.join(root, 'www/modules');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-axis-ticks-'));
+    fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"module"}\n');
+    fs.cpSync(sourceDir, path.join(tempDir, 'modules'), { recursive: true });
+    try {
+        const { createCharts } = await import(pathToFileURL(path.join(tempDir, 'modules/charts.js')).href);
+        const { renderHistoryChart } = createCharts({ request: async () => null, historyCache: new Map() });
+        const html = renderHistoryChart([
+            { recorded_at: '2026-09-16T05:30:00Z', price_eur: 100 },
+            { recorded_at: '2026-09-16T09:07:30Z', price_eur: 101 }
+        ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
+        assert.match(html, /class="history-dates" aria-label="Chart time axis">(?:<span[^>]*>[^<]+<\/span>){5}<\/div>/);
+        assert.match(html, /left:25%/);
+        assert.match(html, /left:50%/);
+        assert.match(html, /left:75%/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
 });
 
 test('trade entry prices use six-decimal input precision', () => {
@@ -162,7 +206,7 @@ test('PWA asset versions derive from the release version and include chart inter
     assert.match(worker, new RegExp(`styles\\.css\\?v=${version}`));
     assert.match(worker, new RegExp(`app\\.js\\?v=${version}`));
     assert.match(worker, /modules\/charts\.js/);
-    assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:8px\}/);
+    assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:10px\}/);
     assert.match(styles, /\.journal-performance-card \.journal-collapsible-content\{padding:1rem 1\.25rem 1\.25rem\}/);
     assert.match(styles, /\.journal-performance-card \.journal-performance-table\{padding:\.9rem 0 0\}/);
     assert.doesNotMatch(styles, /history-gap-line/);

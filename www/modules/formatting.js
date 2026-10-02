@@ -64,6 +64,18 @@ export function formatChartTime(value) {
     });
 }
 
+export function formatChartHoverTime(value) {
+    const date = parseOpenStockDate(value);
+    if (!date) return '—';
+    const dateLabel = date.toLocaleDateString('en-GB', {
+        timeZone: 'Europe/Berlin', day: 'numeric', month: 'short'
+    }).replace(/^(\d+)\s+/, '$1. ');
+    const timeLabel = date.toLocaleTimeString('en-GB', {
+        timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+    return `${dateLabel} – ${timeLabel}`;
+}
+
 export function chartRangeLabel(range) {
     return { '1d': '1-day', '1w': '1-week', '1mo': '1-month', '1y': '1-year', '5y': '5-year' }[range] || range;
 }
