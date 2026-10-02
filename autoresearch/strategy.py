@@ -1,6 +1,6 @@
-# EXPERIMENT: earlier_close_cutoff
-# HYPOTHESIS: Avoiding new entries during the final five minutes should reduce low-quality late-session signals that have insufficient time to reach their targets before the mandatory intraday flatten.
-# CHANGE: Reduced MARKET_CLOSE_CUTOFF from 15:45 to 15:40
+# EXPERIMENT: tighter_vwap_entry_band
+# HYPOTHESIS: Allowing signals slightly closer to VWAP should admit moderately displaced mean-reversion setups while preserving the existing confidence and risk filters, increasing useful opportunities without broadly increasing noise.
+# CHANGE: Reduced VWAP_NEAR_BAND_PCT from 1.00% to 0.90%
 
 """
 Pure-Python deterministic trading strategy.
@@ -13,13 +13,13 @@ from datetime import time
 from typing import Literal
 
 
-EXPERIMENT_NAME = "earlier_close_cutoff"
+EXPERIMENT_NAME = "tighter_vwap_entry_band"
 EXPERIMENT_HYPOTHESIS = (
-    "Avoiding new entries during the final five minutes should reduce low-quality "
-    "late-session signals that have insufficient time to reach their targets before "
-    "the mandatory intraday flatten."
+    "Allowing signals slightly closer to VWAP should admit moderately displaced "
+    "mean-reversion setups while preserving the existing confidence and risk filters, "
+    "increasing useful opportunities without broadly increasing noise."
 )
-EXPERIMENT_CHANGE = "Reduced MARKET_CLOSE_CUTOFF from 15:45 to 15:40"
+EXPERIMENT_CHANGE = "Reduced VWAP_NEAR_BAND_PCT from 1.00% to 0.90%"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -30,7 +30,7 @@ RSI_OVERBOUGHT = 60
 RSI_NEUTRAL_LOW = 48
 RSI_NEUTRAL_HIGH = 53
 
-VWAP_NEAR_BAND_PCT = 1.00
+VWAP_NEAR_BAND_PCT = 0.90
 VWAP_EXTENDED_PCT = 1.50
 VOLUME_CONFIRM_RATIO = 1.30
 VOLUME_STRONG_RATIO = 2.50
