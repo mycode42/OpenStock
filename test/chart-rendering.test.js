@@ -177,7 +177,7 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(journal, /function equityAxisBounds/);
     assert.match(journal, /class="equity-grid-line"/);
     assert.match(journal, /class="journal-equity-y-labels"/);
-    assert.match(journal, /class="journal-equity-x-labels"/);
+    assert.match(journal, /class="journal-equity-x-labels(?:\s[^"]*)?"/);
     assert.match(journal, /function renderDailyPerformance/);
     assert.match(journal, /function renderMonthlyPerformance/);
     assert.match(journal, /<th>Return<\/th>/);
