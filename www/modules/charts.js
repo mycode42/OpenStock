@@ -42,13 +42,20 @@ function attachInteractiveLineCharts(root) {
         const secondary = chart.querySelector('.chart-hover-secondary');
         const tertiary = chart.querySelector('.chart-hover-tertiary');
         const hitArea = chart.querySelector('.chart-hit-area');
-        const changeTarget = chart.closest('.history-popover')?.querySelector('[data-history-change]');
-        const priceTarget = chart.closest('.history-popover')?.querySelector('[data-history-price]');
+        const readout = chart.closest('[data-chart-readout]');
+        const changeTarget = readout?.querySelector('[data-chart-change]');
+        const valueTarget = readout?.querySelector('[data-chart-value]');
+        const detailTarget = readout?.querySelector('[data-chart-detail]');
         let activeIndex = points.length - 1;
         let pinned = false;
 
         const updateChange = point => {
-            if (!changeTarget || !Number.isFinite(Number(point?.change))) return;
+            if (!changeTarget || !point || !Object.hasOwn(point, 'change')) return;
+            if (point.change === null || !Number.isFinite(Number(point.change))) {
+                changeTarget.textContent = 'N/A';
+                changeTarget.classList.remove('up', 'down');
+                return;
+            }
             const change = Number(point.change);
             changeTarget.textContent = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
             changeTarget.classList.toggle('up', change >= 0);
@@ -56,15 +63,22 @@ function attachInteractiveLineCharts(root) {
         };
         const resetChange = () => {
             if (!changeTarget) return;
-            changeTarget.textContent = changeTarget.dataset.defaultChange || '';
-            changeTarget.classList.toggle('up', changeTarget.dataset.defaultChangeClass === 'up');
-            changeTarget.classList.toggle('down', changeTarget.dataset.defaultChangeClass === 'down');
+            changeTarget.textContent = changeTarget.dataset.defaultChartChange || '';
+            const defaultClass = changeTarget.dataset.defaultChartChangeClass;
+            changeTarget.classList.toggle('up', defaultClass === 'up');
+            changeTarget.classList.toggle('down', defaultClass === 'down');
         };
-        const updatePrice = point => {
-            if (priceTarget && point?.price) priceTarget.textContent = point.price;
+        const updateValue = point => {
+            if (valueTarget && point?.price) valueTarget.textContent = point.price;
         };
-        const resetPrice = () => {
-            if (priceTarget) priceTarget.textContent = priceTarget.dataset.defaultPriceRange || '';
+        const resetValue = () => {
+            if (valueTarget) valueTarget.textContent = valueTarget.dataset.defaultChartValue || '';
+        };
+        const updateDetail = point => {
+            if (detailTarget && point && Object.hasOwn(point, 'detail')) detailTarget.textContent = point.detail;
+        };
+        const resetDetail = () => {
+            if (detailTarget) detailTarget.textContent = detailTarget.dataset.defaultChartDetail || '';
         };
 
         const show = index => {
@@ -95,11 +109,12 @@ function attachInteractiveLineCharts(root) {
             tertiary.textContent = point.tertiary || '';
             tertiary.toggleAttribute('hidden', !point.tertiary);
             updateChange(point);
-            updatePrice(point);
+            updateValue(point);
+            updateDetail(point);
             hover.removeAttribute('hidden');
             chart.setAttribute('aria-label', `${chart.dataset.chartLabel}. ${point.primary}. ${point.secondary}${point.tertiary ? `. ${point.tertiary}` : ''}`);
         };
-        const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); resetChange(); resetPrice(); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
+        const hide = () => { if (!pinned) { hover.setAttribute('hidden', ''); resetChange(); resetValue(); resetDetail(); chart.setAttribute('aria-label', chart.dataset.chartLabel); } };
         const nearest = clientX => {
             const bounds = chart.getBoundingClientRect();
             const x = (clientX - bounds.left) / bounds.width * chart.viewBox.baseVal.width;
@@ -146,7 +161,7 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt } 
         return { point, x: sessionX, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) };
     });
     const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: formatChartHoverTime(point.recorded_at), secondary: '', price: `€${money(point.price_eur)}`, change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
+    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: ['1y', '5y'].includes(range) ? formatChartDate(point.recorded_at) : formatChartHoverTime(point.recorded_at), secondary: '', price: `€${money(point.price_eur)}`, change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
     const first = clean[0], last = clean[clean.length - 1];
     const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
@@ -164,7 +179,7 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt } 
     });
     const axisLabels = axisTicks.map(({ fraction, label }) => `<span style="left:${(fraction * 100).toFixed(0)}%">${label}</span>`).join('');
     const priceRange = `€${money(min)} – €${money(max)}`;
-    return `<div class="history-meta"><span class="history-price" data-history-price data-default-price-range="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-history-change data-default-change="${changeText}" data-default-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates" aria-label="Chart time axis">${axisLabels}</div>`;
+    return `<div class="history-chart-readout" data-chart-readout><div class="history-meta"><span class="history-price" data-chart-value data-default-chart-value="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates" aria-label="Chart time axis">${axisLabels}</div></div>`;
 }
 
 function renderHistoryPanel(panel, history, range) {

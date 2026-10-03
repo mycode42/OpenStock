@@ -1,5 +1,5 @@
 import { escapeHtml } from './escape.js';
-import { money, parseOpenStockDate, formatLocalDate, formatLocalDateTime } from './formatting.js';
+import { money, parseOpenStockDate, formatLocalDate } from './formatting.js';
 
 export function createJournal(context) {
     let editingTradeId = null;
@@ -23,7 +23,9 @@ function journalPercent(value) {
 }
 
 function journalSigned(value) {
-    return value === null || value === undefined || !Number.isFinite(Number(value)) ? 'N/A' : `${Number(value) > 0 ? '+' : ''}${journalMoney(value)}`;
+    const number = Number(value);
+    if (value === null || value === undefined || !Number.isFinite(number)) return 'N/A';
+    return `${number > 0 ? '+' : number < 0 ? '-' : ''}${journalMoney(Math.abs(number))}`;
 }
 
 function journalClass(value) {
@@ -76,11 +78,22 @@ function equityAxisBounds(minimum, maximum, ticks = 5) {
     return { low, high, values };
 }
 
-function equityTimeLabel(value, range) {
+function journalDayMonthLabel(value) {
     const date = parseOpenStockDate(value);
     if (!date) return '';
-    if (range < 48 * 60 * 60 * 1000) return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' }).format(date);
-    return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', timeZone: 'Europe/Berlin' }).format(date);
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/Berlin' }).replace(/^(\d+)\s+/, '$1. ');
+}
+
+function journalMonthLabel(value) {
+    const date = parseOpenStockDate(value);
+    return date ? date.toLocaleDateString('en-GB', { month: 'short', timeZone: 'Europe/Berlin' }) : '';
+}
+
+function journalChartMeta(value, change, detail) {
+    const changeText = Number.isFinite(change) ? `${change > 0 ? '+' : ''}${change.toFixed(2)}%` : 'N/A';
+    const changeClass = Number.isFinite(change) && change < 0 ? 'down' : 'up';
+    const detailMarkup = detail ? `<span class="journal-chart-detail" data-chart-detail data-default-chart-detail="${escapeHtml(detail)}">${escapeHtml(detail)}</span>` : '';
+    return `<div class="journal-chart-meta"><div class="journal-chart-readout">${detailMarkup}<span class="journal-chart-value" data-chart-value data-default-chart-value="${escapeHtml(value)}">${escapeHtml(value)}</span></div><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div>`;
 }
 
 function journalAxisMoney(value) {
@@ -90,7 +103,7 @@ function journalAxisMoney(value) {
     return `€${Math.round(amount).toLocaleString('en-GB')}`;
 }
 
-function renderEquityCurve(points, resolution = 'snapshot') {
+function renderEquityCurve(points, resolution = 'snapshot', initialCapital) {
     const clean = (points || []).filter(point => Number.isFinite(Number(point.equity_eur)) && parseOpenStockDate(point.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
     if (clean.length < 2) return '<div class="journal-empty">Insufficient data — equity snapshots begin after initial capital is recorded.</div>';
     const values = clean.map(point => Number(point.equity_eur));
@@ -101,19 +114,22 @@ function renderEquityCurve(points, resolution = 'snapshot') {
     const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
     const coordinates = clean.map((point, index) => ({ point, value: Number(point.equity_eur), x: left + (times[index] - firstTime) / timeRange * plotWidth, y: top + plotHeight - ((Number(point.equity_eur) - low) / (high - low || 1) * plotHeight) }));
     const line = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `Equity ${journalMoney(value)}`, secondary: formatLocalDateTime(point.at), tertiary: `Cash ${journalMoney(point.cash_eur)} · Positions ${journalMoney(point.position_value_eur)}`, lineGap: 13 }));
+    const capitalBase = Number(initialCapital);
+    const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: journalDayMonthLabel(point.at), secondary: '', tertiary: '', price: journalMoney(value), change: capitalBase > 0 ? (value / capitalBase - 1) * 100 : null }));
     const ariaLabel = `Equity curve using ${resolution} closing samples from ${formatLocalDate(clean[0].at)} to ${formatLocalDate(clean[clean.length - 1].at)}`;
     const yTicks = axisValues.map(value => ({ value, y: top + plotHeight - ((value - low) / (high - low || 1) * plotHeight) }));
     const xTicks = Array.from({ length: 12 }, (_, index) => {
         const ratio = index / 11;
-        return { ratio, x: left + plotWidth * ratio, label: equityTimeLabel(new Date(firstTime + timeRange * ratio).toISOString(), timeRange) };
+        return { ratio, x: left + plotWidth * ratio, label: journalDayMonthLabel(new Date(firstTime + timeRange * ratio).toISOString()) };
     });
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
     const xAxis = xTicks.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight}" y2="${top + plotHeight}"/></g>`, lineClass: 'equity-line', linePoints: line, hoverPoints, ariaLabel });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${journalAxisMoney(value)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
-    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels equity-x-labels" aria-hidden="true">${xLabels}</div></div>`;
+    const lastEquity = values[values.length - 1];
+    const equityChange = capitalBase > 0 ? (lastEquity / capitalBase - 1) * 100 : undefined;
+    return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(journalMoney(lastEquity), equityChange, '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels equity-x-labels" aria-hidden="true">${xLabels}</div></div></div>`;
 }
 
 function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
@@ -137,7 +153,7 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
     const fixedSlots = daily
         ? Array.from({ length: periodCount }, (_, index) => {
             const point = visibleRows[index] || null;
-            const label = point ? parseOpenStockDate(point.at).toLocaleDateString('en-GB', { timeZone: 'Europe/Berlin', day: '2-digit', month: 'short' }) : '';
+            const label = point ? journalDayMonthLabel(point.at) : '';
             return { point, label, x: left + periodSlotWidth * (index + .5), left: left + periodSlotWidth * index, width: periodSlotWidth };
         })
         : Array.from({ length: periodCount }, (_, index) => {
@@ -152,10 +168,11 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
         x: slot.x,
         y: top + plotHeight - ((slot.point.value - low) / (high - low || 1) * plotHeight)
     }] : []);
-    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: `${periodName} P/L ${journalSigned(value)}`, secondary: formatLocalDate(point.at), tertiary: `${journalPercent(capitalBase > 0 ? value / capitalBase * 100 : null)} of capital · ${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`, lineGap: 13 });
+    const performanceDetail = point => `${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`;
+    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: daily ? journalDayMonthLabel(point.at) : journalMonthLabel(point.at), secondary: '', tertiary: '', price: journalSigned(value), detail: performanceDetail(point), change: capitalBase > 0 ? value / capitalBase * 100 : null });
     const hoverPoints = fixedSlots.map(({ point, label, x }) => point
         ? performanceHoverPoint(point, point.value, x, top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight))
-        : { x: Number(x.toFixed(1)), y: Number((top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)).toFixed(1)), primary: label ? `${label} · No data` : 'No data', secondary: '', tertiary: '' });
+        : { x: Number(x.toFixed(1)), y: Number((top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)).toFixed(1)), primary: label || 'No data', secondary: '', tertiary: '', price: 'N/A', detail: '', change: null });
     const yTicks = axisValues.map(value => ({ value, y: top + plotHeight - ((value - low) / (high - low || 1) * plotHeight) }));
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
     const xAxis = fixedSlots.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
@@ -188,7 +205,9 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}${journalAxisMoney(value)}</span>`).join('');
     const xLabels = fixedSlots.map(({ x, label }) => `<span style="left:${(x / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
     const xLabelClass = daily ? 'journal-equity-x-labels daily-performance-labels' : 'journal-equity-x-labels';
-    return `<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div>`;
+    const lastPoint = [...fixedSlots].reverse().find(slot => slot.point)?.point;
+    const latestChange = lastPoint && capitalBase > 0 ? lastPoint.value / capitalBase * 100 : undefined;
+    return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(lastPoint ? journalSigned(lastPoint.value) : 'N/A', latestChange, lastPoint ? performanceDetail(lastPoint) : '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div></div>`;
 }
 
 function journalChartControls(active, chartType) {
@@ -197,10 +216,10 @@ function journalChartControls(active, chartType) {
     return `<div class="journal-chart-control-groups">${metrics}${styles}</div>`;
 }
 
-function renderJournalChart(analytics, mode, chartType) {
+function renderJournalChart(analytics, mode, chartType, initialCapital) {
     if (mode === 'daily') return renderPerformanceCurve(analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_eur), chartType);
     if (mode === 'monthly') return renderPerformanceCurve(analytics?.monthly_performance?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_eur), chartType);
-    return renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution);
+    return renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution, initialCapital);
 }
 
 function renderTradeRows(items) {
@@ -282,7 +301,7 @@ function renderJournal() {
         : 'Set Initial Capital once to establish the starting balance. Later cash changes should be recorded as Deposits or Withdrawals.';
     container.innerHTML = `<header><h1>📓 Trading Journal</h1></header><div id="ac"></div>${analytics?.equity_available ? '' : '<div class="alert-box info">Add an <strong>Initial capital</strong> event below to calculate current capital, return, exposure and an equity curve.</div>'}
       <div class="journal-kpi-grid">${journalKpi('Current Capital', journalMoney(capital.current_eur), 'Cash plus priced open positions.')}${journalKpi('Net P/L', journalSigned(currentPnl), 'Realized plus unrealized P/L; capital events excluded.', journalClass(currentPnl))}${journalKpi('Avg Daily', `${journalSigned(performance.average_daily_pnl_eur)} · ${journalPercent(performance.average_daily_return_pct)}`, 'Average realized P/L per completed trading day and its percentage of contributed capital.', journalClass(performance.average_daily_pnl_eur))}${journalKpi('YTD P/L', journalSigned(performance.ytd_pnl_eur), 'Net P/L from completed trades this calendar year.', journalClass(performance.ytd_pnl_eur))}${journalKpi('Est. Yearly Profit', journalSigned(performance.estimated_yearly_profit_eur), 'Observed-rate annual profit illustration.', journalClass(performance.estimated_yearly_profit_eur))}${journalKpi('Win Rate', journalPercent(tradeStats.win_rate_pct), 'Winning completed trades divided by completed trades.')}${journalKpi('Available Cash', journalMoney(capital.available_cash_eur), 'Capital events less purchases/fees plus sales.')}${journalKpi('Return', journalPercent(capital.current_return_pct), 'Current capital less net owner contributions divided by net owner contributions.', journalClass(capital.current_return_pct))}${journalKpi('Avg Monthly', `${journalSigned(performance.average_monthly_pnl_eur)} · ${journalPercent(performance.average_monthly_return_pct)}`, 'Average realized P/L per completed month and its percentage of contributed capital.', journalClass(performance.average_monthly_pnl_eur))}${journalKpi('Annualized Return', journalPercent(performance.annualized_return_pct), 'Observed return, compounded to one year.', journalClass(performance.annualized_return_pct))}${journalKpi('Open Positions', String(tradeStats.open ?? 0), 'Lots not yet closed.')}${journalKpi('Max Drawdown', journalPercent(risk.max_drawdown_pct), 'Largest peak-to-trough decline in equity snapshots.', journalClass(risk.max_drawdown_pct))}</div>
-      <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution)}</div>
+      <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution, initialCapital?.amount_eur)}</div>
       <div class="card journal-performance-card"></div>
       <div class="card journal-trade-editor ${isClosing ? 'is-closing' : edit ? 'is-editing' : ''}" id="journal-trade-editor" tabindex="-1"><div class="section-header"><div><div class="section-title">${editorTitle}</div><p class="subtitle" aria-live="polite">${editorContext}</p></div>${edit ? '<button type="button" class="btn btn-sm btn-secondary" data-trade-action="cancel">Cancel</button>' : ''}</div><form id="trade-form"><div class="form-row"><div class="form-group"><label for="trade-stock">Stock</label><select id="trade-stock" name="stock_id" required ${isClosing ? 'disabled' : ''}>${options}</select></div><div class="form-group"><label for="trade-opened">Opened</label><input id="trade-opened" name="opened_at" type="datetime-local" step="1" required ${isClosing ? 'readonly' : ''} value="${journalInputDate(edit?.opened_at) || journalInputDate(new Date().toISOString())}"></div><div class="form-group"><label for="trade-quantity">Open Quantity</label><input id="trade-quantity" name="quantity" type="number" min=".000001" step=".000001" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.quantity ?? '')}"></div></div><div class="form-row"><div class="form-group"><label for="trade-currency">Currency</label><input id="trade-currency" name="currency" maxlength="3" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.currency || 'EUR')}"></div><div class="form-group"><label for="trade-entry-price">Buy Price</label><input id="trade-entry-price" name="entry_price" type="number" min=".000001" step=".000001" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(journalInputNumber(edit?.entry_price, 6))}"></div><div class="form-group"><label for="trade-entry-fx">EUR Rate at Buy</label><input id="trade-entry-fx" name="entry_fx_rate" type="number" min=".000001" step=".000001" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.entry_fx_rate ?? 1)}"></div><div class="form-group"><label for="trade-entry-fee">Buy Fees (€)</label><input id="trade-entry-fee" name="entry_fee_eur" type="number" min="0" step=".000001" ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.entry_fee_eur ?? 1)}"></div></div><details ${edit?.closed_at || isClosing ? 'open' : ''}><summary>${edit?.closed_at ? 'Closed trade details' : 'Close trade (optional)'}</summary><div class="form-row" style="margin-top:.75rem">${isClosing ? `<div class="form-group"><label for="trade-close-quantity">Quantity to sell</label><input id="trade-close-quantity" name="close_quantity" type="number" min=".000001" max="${escapeHtml(edit.quantity)}" step=".000001" required value="${escapeHtml(edit.quantity)}"></div>` : ''}<div class="form-group"><label for="trade-closed">Closed</label><input id="trade-closed" name="closed_at" type="datetime-local" step="1" ${isClosing ? 'required' : ''} value="${journalInputDate(edit?.closed_at || (isClosing ? new Date().toISOString() : ''))}"></div><div class="form-group"><label for="trade-exit-price">Sell Price</label><input id="trade-exit-price" name="exit_price" type="number" min=".000001" step=".000001" ${isClosing ? 'required' : ''} value="${escapeHtml(journalInputNumber(edit?.exit_price, 6))}"></div><div class="form-group"><label for="trade-exit-fx">EUR Rate at Sell</label><input id="trade-exit-fx" name="exit_fx_rate" type="number" min=".000001" step=".000001" required ${isClosing ? 'required' : ''} value="${escapeHtml(edit?.exit_fx_rate ?? 1)}"></div><div class="form-group"><label for="trade-exit-fee">Sell Fees (€)</label><input id="trade-exit-fee" name="exit_fee_eur" type="number" min="0" step=".000001" value="${escapeHtml(edit?.exit_fee_eur ?? 1)}"></div></div></details><div class="form-row" style="margin-top:.75rem"><div class="form-group"><label for="trade-strategy">Strategy / Reason</label><input id="trade-strategy" name="strategy" value="${escapeHtml(edit?.strategy || '')}"></div><div class="form-group"><label for="trade-notes">Notes</label><input id="trade-notes" name="notes" value="${escapeHtml(edit?.notes || '')}"></div></div><div class="btn-group"><button type="submit" class="btn btn-primary">${isClosing ? 'Record Sale' : edit ? 'Save Changes' : 'Record Trade'}</button>${edit ? '<button type="button" class="btn btn-secondary" data-trade-action="cancel">Cancel</button>' : ''}</div></form></div>
       <div class="card"><div class="section-title">Capital Events</div><p class="subtitle">Capital events change cash/equity, never trading P/L.</p><form class="journal-capital-form" id="capital-event-form"><label class="sr-only" for="capital-type">Event type</label><select id="capital-type" name="event_type"><option value="INITIAL" ${initialCapitalExists ? 'disabled' : ''}>Initial Capital${initialCapitalExists ? ' (already recorded)' : ''}</option><option value="DEPOSIT" ${initialCapitalExists ? 'selected' : ''}>Deposit</option><option value="WITHDRAWAL">Withdrawal</option><option value="FINANCING">Financing / Debt</option></select><label class="sr-only" for="capital-amount">Amount</label><input id="capital-amount" name="amount_eur" type="number" min=".01" step=".000001" placeholder="Amount €" required><label class="sr-only" for="capital-date">Date and time</label><input id="capital-date" name="occurred_at" type="datetime-local" value="${journalInputDate(new Date().toISOString())}" required><label class="sr-only" for="capital-notes">Note</label><input id="capital-notes" name="notes" placeholder="Optional note"><button type="submit" class="btn btn-primary">Add Event</button></form><p class="journal-help" id="capital-event-help" aria-live="polite">${capitalHelp}</p>${getCapitalEvents().length ? `<div class="journal-events">${getCapitalEvents().map(event => `<span><strong>${escapeHtml(event.event_type)}</strong> ${journalMoney(event.amount_eur)} · ${formatLocalDate(event.occurred_at)}</span>`).join('')}</div>` : '<p class="journal-empty">No capital events recorded.</p>'}</div>
@@ -295,7 +314,7 @@ function renderJournal() {
         chartHeader.querySelector('.section-title').textContent = journalChartMode === 'equity' ? 'Equity Curve' : journalChartMode === 'daily' ? 'Daily Performance' : 'Monthly Performance';
         chartHeader.insertAdjacentHTML('beforeend', journalChartControls(journalChartMode, journalPerformanceChartType));
         [...chartCard.children].filter(child => child !== chartHeader).forEach(child => child.remove());
-        chartHeader.insertAdjacentHTML('afterend', renderJournalChart(analytics, journalChartMode, journalPerformanceChartType));
+        chartHeader.insertAdjacentHTML('afterend', renderJournalChart(analytics, journalChartMode, journalPerformanceChartType, initialCapital?.amount_eur));
     }
     const performanceCard = container.querySelector('.journal-performance-card');
     if (performanceCard && chartCard) {

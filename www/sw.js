@@ -1,4 +1,4 @@
-const CACHE_NAME = 'openstock-v1.3.0';
+const CACHE_NAME = 'openstock-v1.3.0-shared-chart-readout';
 const REQUIRED_ASSETS = [
   './',
   './index.html',

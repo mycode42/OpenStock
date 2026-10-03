@@ -16,11 +16,12 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     const formatting = fs.readFileSync(path.join(root, 'www/modules/formatting.js'), 'utf8');
     assert.match(source, /Number\(point\.price_eur\)/);
-    assert.match(source, /primary: formatChartHoverTime\(point\.recorded_at\)/);
+    assert.match(source, /primary: \['1y', '5y'\]\.includes\(range\) \? formatChartDate\(point\.recorded_at\) : formatChartHoverTime\(point\.recorded_at\)/);
     assert.match(source, /price: `€\$\{money\(point\.price_eur\)\}`/);
-    assert.match(source, /data-history-price/);
-    assert.match(source, /updatePrice\(point\)/);
-    assert.match(source, /resetPrice\(\)/);
+    assert.match(source, /data-chart-readout/);
+    assert.match(source, /data-chart-value/);
+    assert.match(source, /updateValue\(point\)/);
+    assert.match(source, /resetValue\(\)/);
     assert.match(source, /native EUR price chart/);
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
@@ -54,7 +55,7 @@ test('one-day charts reserve future session time on a 07:30–22:00 wall-clock s
         ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
         assert.match(html, /&quot;x&quot;:132/);
         assert.match(html, /&quot;primary&quot;:&quot;16\. Sept – 07:30&quot;,&quot;secondary&quot;:&quot;&quot;,&quot;price&quot;:&quot;€100,00&quot;/);
-        assert.match(html, /class="history-price" data-history-price data-default-price-range="€100,00 – €101,00"/);
+        assert.match(html, /class="history-price" data-chart-value data-default-chart-value="€100,00 – €101,00"/);
         assert.match(html, /<span style="left:0%">07:30<\/span><span style="left:25%">11:07<\/span><span style="left:50%">14:45<\/span><span style="left:75%">18:22<\/span><span style="left:100%">22:00<\/span>/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -63,8 +64,8 @@ test('one-day charts reserve future session time on a 07:30–22:00 wall-clock s
 
 test('dashboard history percentage follows the inspected point and resets to the range return', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
-    assert.match(source, /data-history-change/);
-    assert.match(source, /data-default-change/);
+    assert.match(source, /data-chart-change/);
+    assert.match(source, /data-default-chart-change/);
     assert.match(source, /change: \(Number\(point\.price_eur\) \/ Number\(clean\[0\]\.price_eur\) - 1\) \* 100/);
     assert.match(source, /updateChange\(point\)/);
     assert.match(source, /resetChange\(\)/);
@@ -170,11 +171,19 @@ test('market closures are removed from chart spacing and render as one smooth pa
 test('hover labels compensate for responsive SVG stretching and support three lines', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
+    const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
     assert.match(source, /const compensateStretch =/);
     assert.match(source, /text\.setAttribute\('transform', compensateStretch/);
     assert.match(source, /class="chart-hover-tertiary"/);
-    assert.match(journal, /tertiary: `Cash \$\{journalMoney\(point\.cash_eur\)\} · Positions/);
+    assert.doesNotMatch(journal, /const equityDetail/);
+    assert.match(journal, /const performanceDetail = point => `\$\{point\.trades\} \$\{point\.trades === 1 \? 'trade' : 'trades'\}`/);
+    assert.match(journal, /primary: daily \? journalDayMonthLabel\(point\.at\) : journalMonthLabel\(point\.at\), secondary: '', tertiary: ''/);
+    assert.match(journal, /const capitalBase = Number\(initialCapital\)/);
+    assert.match(journal, /change: capitalBase > 0 \? \(value \/ capitalBase - 1\) \* 100 : null/);
+    assert.match(journal, /renderJournalChart\(analytics, journalChartMode, journalPerformanceChartType, initialCapital\?\.amount_eur\)/);
+    assert.match(styles, /\.journal-equity-curve \.chart-hover-text\{font-size:10px\}/);
     assert.match(journal, /function equityAxisBounds/);
+    assert.match(journal, /return `\$\{number > 0 \? '\+' : number < 0 \? '-' : ''\}\$\{journalMoney\(Math\.abs\(number\)\)\}`/);
     assert.match(journal, /class="equity-grid-line"/);
     assert.match(journal, /class="journal-equity-y-labels"/);
     assert.match(journal, /class="journal-equity-x-labels(?:\s[^"]*)?"/);
