@@ -105,20 +105,23 @@ test('live prices select the enabled Handelsrepublik SDK before the UAPI sidecar
     const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'SDK', name: 'SDK', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await created.json()).stock;
     f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'SDK', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-10-02T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
-    let sidecarCalls = 0;
+    let sidecarCalls = 0, sdkRetryFlags = [];
     f.server.close();
     const app = createApp({
         db: f.db,
         backfill: { enqueue() {}, enqueueMissing() { return 0; } },
         fetchImpl: async () => { throw new Error('unexpected external fetch'); },
         now: () => new Date('2026-10-02T11:00:00Z'),
-        sdkClient: { isEnabled: () => true, getQuote: async () => ({ bid_eur: 10.123456, ask_eur: 10.123457, bid_unit: 'EUR', ask_unit: 'EUR', currency: 'EUR', observed_at: '2026-10-02T11:00:00Z' }) },
+        sdkClient: { isEnabled: () => true, getQuote: async ({ forceAuthRetry }) => { sdkRetryFlags.push(forceAuthRetry); return { bid_eur: 10.123456, ask_eur: 10.123457, bid_unit: 'EUR', ask_unit: 'EUR', currency: 'EUR', observed_at: '2026-10-02T11:00:00Z' }; } },
     });
     app.locals.brokerClient = { getQuote: async () => { sidecarCalls += 1; throw new Error('sidecar must not be used'); } };
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     t.after(() => server.close());
-    const payload = await (await fetch(`http://127.0.0.1:${server.address().port}/api/live-prices`)).json();
+    const base = `http://127.0.0.1:${server.address().port}`;
+    await fetch(`${base}/api/live-prices`);
+    const payload = await (await fetch(`${base}/api/live-prices?retrySdkAuth=1`)).json();
     assert.equal(sidecarCalls, 0);
+    assert.deepEqual(sdkRetryFlags, [false, true]);
     assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 10.1234565, bid_eur: 10.123456, ask_eur: 10.123457, quote_time: '2026-10-02T11:00:00.000Z', observed_at: '2026-10-02T11:00:00Z', source: 'trade_republic_sdk_order_price', fallback: false });
     assert.equal(f.db.getStockById(stock.id).current_price_eur, null);
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);

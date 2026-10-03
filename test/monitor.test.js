@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Database = require('better-sqlite3');
-const { parseTradeRepublicMonitorQuote, sendTelegram, formatAlert, runMonitor, acquireLock, EXIT } = require('../lib/monitor');
+const { parseTradeRepublicMonitorQuote, sendTelegram, formatAlert, formatSdkConnectivityAlert, formatQuoteFeedAlert, checkQuoteAvailability, runMonitor, acquireLock, EXIT } = require('../lib/monitor');
 const { initDatabase } = require('../database/init');
 
 function fixture() {
@@ -37,6 +37,33 @@ test('alert text uses consistent EUR formatting and the executable side', () => 
     const message = formatAlert({ symbol: 'SIX', name: 'Six digits' }, 'BUY_TRIGGERED', 1.234568, new Date('2026-01-01T12:00:00Z'), { side: 'BUY', price_eur: 1.234568 }, null, quote);
     assert.match(message, /€1,234568/);
     assert.match(message, /Handelsrepublik SDK ask: €1,234568/);
+});
+
+test('SDK connectivity alert tells the user when quotes fall back and when the SDK recovers', () => {
+    assert.match(formatSdkConnectivityAlert(false, new Date('2026-01-01T12:00:00Z')), /using the UAPI fallback/);
+    assert.match(formatSdkConnectivityAlert(true, new Date('2026-01-01T12:00:00Z')), /Primary quote source restored/);
+    assert.match(formatQuoteFeedAlert(false, null, new Date('2026-01-01T12:00:00Z')), /Price monitoring is paused/);
+});
+
+test('total quote outage notifies once, UAPI recovery resumes monitoring, and SDK recovery is reported', async t => {
+    const { dir, db } = fixture();
+    t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    let requests = 0;
+    const fetchImpl = async () => { requests += 1; return { ok: true, json: async () => ({ ok: true, result: { message_id: requests } }) }; };
+    const now = new Date('2026-01-01T12:00:00Z');
+    const stock = { mapping: { verified_at: '2026-01-01T00:00:00Z', currency: 'EUR' } };
+    const offlineRows = [{ stock, error: new Error('SDK and UAPI failed') }];
+    const offline = await checkQuoteAvailability({ db, quoteRows: offlineRows, sdkEnabled: true, telegram: { token: 'token', chatId: '42' }, fetchImpl, now });
+    const stillOffline = await checkQuoteAvailability({ db, quoteRows: offlineRows, sdkEnabled: true, telegram: { token: 'token', chatId: '42' }, fetchImpl, now });
+    const uapiRecovery = await checkQuoteAvailability({ db, quoteRows: [{ stock, quote: { source: 'trade_republic_order_price' } }], sdkEnabled: true, telegram: { token: 'token', chatId: '42' }, fetchImpl, now });
+    const sdkRecovery = await checkQuoteAvailability({ db, quoteRows: [{ stock, quote: { source: 'trade_republic_sdk_order_price' } }], sdkEnabled: true, telegram: { token: 'token', chatId: '42' }, fetchImpl, now });
+    assert.equal(offline.notified, true);
+    assert.equal(stillOffline.notified, false);
+    assert.equal(uapiRecovery.notified, true);
+    assert.equal(sdkRecovery.notified, true);
+    assert.equal(requests, 3);
+    assert.deepEqual(db.prepare("SELECT status,last_notified_status FROM broker_health_state WHERE broker='trade_republic_quotes'").get(), { status: 'ONLINE', last_notified_status: 'ONLINE' });
+    assert.deepEqual(db.prepare("SELECT status,last_notified_status FROM broker_health_state WHERE broker='trade_republic_sdk'").get(), { status: 'ONLINE', last_notified_status: 'ONLINE' });
 });
 
 test('monitor stores SDK quote precision and evaluates BUY against ask and SELL against bid', async t => {

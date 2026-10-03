@@ -24,6 +24,14 @@ test('SDK is primary and retains six-decimal executable prices', async () => {
     assert.equal(sidecarCalls, 0);
 });
 
+test('explicit refresh requests bypass an SDK authentication cooldown', async () => {
+    let forceAuthRetry;
+    const service = new QuoteService({ db: {}, sdkClient: { isEnabled: () => true, getQuote: async request => { forceAuthRetry = request.forceAuthRetry; return quote; } } });
+    const [row] = await service.fetchMany([stock], { forceSdkAuthRetry: true });
+    assert.equal(forceAuthRetry, true);
+    assert.equal(row.quote.source, 'trade_republic_sdk_order_price');
+});
+
 test('UAPI sidecar is used when SDK is disabled or fails', async t => {
     const events = [];
     const service = new QuoteService({

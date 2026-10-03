@@ -17,7 +17,7 @@ app.get('/api/dashboard', (req, res) => {
 
 // Display-only fast prices: no stock, history, alert, or equity writes occur here.
 app.get('/api/live-prices', async (req, res) => {
-    try { res.json(await req.app.locals.liveQuoteFeed.get()); }
+    try { res.json(await req.app.locals.liveQuoteFeed.get({ retrySdkAuth: req.query.retrySdkAuth === '1' })); }
     catch (error) { console.warn(`Live prices unavailable: ${error.message}`); res.status(503).json({ error: 'Live prices are unavailable' }); }
 });
 
@@ -35,7 +35,7 @@ app.post('/api/refresh-prices', async (req, res) => {
         
         let updatedCount = 0;
         const service = quoteServiceFor(req.app, () => now());
-        const quotes = await service.fetchMany(stocks.map(stock => ({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) })), { deadlineAt: Date.now() + Math.max(1000, Number(process.env.QUOTE_FETCH_DEADLINE_MS || 45000)) });
+        const quotes = await service.fetchMany(stocks.map(stock => ({ ...stock, mapping: req.app.locals.db.getBrokerMapping(stock.id) })), { deadlineAt: Date.now() + Math.max(1000, Number(process.env.QUOTE_FETCH_DEADLINE_MS || 45000)), forceSdkAuthRetry: true });
         for (const { stock, quote, error: stockError } of quotes) {
             try {
                 if (stockError) throw stockError;

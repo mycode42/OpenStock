@@ -35,6 +35,7 @@ export function createDashboard(context) {
     let liveTimer = null;
     let liveRequestInFlight = false;
     let liveAbortController = null;
+    let retrySdkAuthOnNextPoll = true;
     const livePollMs = 1000;
     const chartRefreshMs = 60000;
     let chartRefreshTimer = null;
@@ -64,7 +65,10 @@ export function createDashboard(context) {
         if (liveRequestInFlight || document.hidden || (window.location.hash && window.location.hash !== '#/dashboard')) return;
         liveRequestInFlight = true;
         liveAbortController = new AbortController();
-        try { applyLivePrices(await af('/live-prices', { signal: liveAbortController.signal })); }
+        const retrySdkAuth = retrySdkAuthOnNextPoll;
+        retrySdkAuthOnNextPoll = false;
+        const endpoint = retrySdkAuth ? '/live-prices?retrySdkAuth=1' : '/live-prices';
+        try { applyLivePrices(await af(endpoint, { signal: liveAbortController.signal })); }
         finally { liveAbortController = null; liveRequestInFlight = false; }
     }
     async function refreshOpenCharts() {
@@ -75,6 +79,7 @@ export function createDashboard(context) {
     }
     function startLivePolling() {
         if (liveTimer) return;
+        retrySdkAuthOnNextPoll = true;
         pollLivePrices();
         liveTimer = window.setInterval(pollLivePrices, livePollMs);
         chartRefreshTimer = window.setInterval(refreshOpenCharts, chartRefreshMs);

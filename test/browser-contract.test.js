@@ -38,6 +38,8 @@ test('dashboard cards retain live bid and ask placeholders for broker quotes', (
     assert.match(dashboard, /quoteMoney\(quote\.bid_eur\)/);
     assert.match(dashboard, /quoteMoney\(quote\.ask_eur\)/);
     assert.match(dashboard, /Handelsrepublik SDK/);
+    assert.match(dashboard, /retrySdkAuthOnNextPoll/);
+    assert.match(dashboard, /live-prices\?retrySdkAuth=1/);
 });
 
 test('dashboard cards show the Journal buy-in and a live current-price percentage', () => {
