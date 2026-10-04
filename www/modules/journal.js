@@ -62,10 +62,6 @@ function journalKpi(label, displayValue, hint = '', cssClass = '') {
     return `<div class="journal-kpi" title="${escapeHtml(hint)}"><div>${escapeHtml(label)}</div><strong class="${cssClass}">${displayValue}</strong></div>`;
 }
 
-function performanceMetric(label, value, description = '', cssClass = '') {
-    return `<div class="journal-performance-metric"><span>${escapeHtml(label)}</span><strong class="${cssClass}">${value}</strong>${description ? `<small>${escapeHtml(description)}</small>` : ''}</div>`;
-}
-
 function equityAxisBounds(minimum, maximum, ticks = 5) {
     const range = Math.max(maximum - minimum, 1);
     const exponent = Math.floor(Math.log10(range / Math.max(1, ticks - 1)));
@@ -245,18 +241,10 @@ function renderMonthlyPerformance(rows = [], capitalBase = 0) {
     return `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Month</th><th>P/L</th><th>Return</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody>${rows.slice(-12).reverse().map(row => `<tr><td>${escapeHtml(row.month)}</td><td class="${journalClass(row.pnl_eur)}">${journalSigned(row.pnl_eur)}</td><td class="${journalClass(row.pnl_eur)}">${journalPercent(capitalBase > 0 ? Number(row.pnl_eur) / capitalBase * 100 : null)}</td><td>${row.trades}</td><td>${journalPercent(row.wins / row.trades * 100)}</td></tr>`).join('')}</tbody></table></div>`;
 }
 
-function renderPerformanceDetails(analytics, mode) {
+function renderPerformanceDetails(analytics) {
     const capital = analytics?.capital || {};
-    const performance = analytics?.performance || {};
-    const tradeStats = analytics?.trades || {};
-    const risk = analytics?.risk || {};
-    const realized = analytics?.realized || {};
-    const daily = mode === 'daily';
-    const monthly = mode === 'monthly';
-    const tableHeading = daily ? 'Daily performance table' : monthly ? 'Monthly performance table' : 'Performance tables';
     const capitalBase = Number(capital.net_contributions_eur);
-    const table = daily ? renderDailyPerformance(analytics?.daily_performance, capitalBase) : monthly ? renderMonthlyPerformance(analytics?.monthly_performance, capitalBase) : `<div class="journal-performance-section"><div class="journal-performance-heading">Daily performance <span>Latest 14 trading days · return on contributed capital</span></div>${renderDailyPerformance(analytics?.daily_performance, capitalBase)}</div><div class="journal-performance-section"><div class="journal-performance-heading">Monthly performance <span>Completed months · return on contributed capital</span></div>${renderMonthlyPerformance(analytics?.monthly_performance, capitalBase)}</div>`;
-    return `<details class="journal-collapsible journal-performance-details"><summary><span>Performance details</span><small>Returns, compounding and trade quality</small></summary><div class="journal-collapsible-content"><div class="journal-performance-overview"><div><p class="journal-eyebrow">Capital growth</p><strong class="${journalClass(performance.investment_profit_eur)}">${journalSigned(performance.investment_profit_eur)}</strong><span>investment profit on ${journalMoney(capital.net_contributions_eur)} contributed</span></div><div><p class="journal-eyebrow">Growth multiple</p><strong>${performance.growth_multiple == null ? 'N/A' : `${Number(performance.growth_multiple).toFixed(3)}×`}</strong><span>current capital relative to contributions</span></div></div><div class="journal-performance-metric-grid">${performanceMetric('Cumulative return', journalPercent(capital.current_return_pct), 'Profit on contributed capital', journalClass(capital.current_return_pct))}${performanceMetric('Annualized return', journalPercent(performance.annualized_return_pct), 'Observed return, compounded to one year', journalClass(performance.annualized_return_pct))}${performanceMetric('Monthly compound rate', journalPercent(performance.monthly_compounding_rate_pct), 'Equivalent monthly rate from annualized return', journalClass(performance.monthly_compounding_rate_pct))}${performanceMetric('1-year capital illustration', journalMoney(performance.projected_one_year_capital_eur), `Change ${journalSigned(performance.estimated_yearly_profit_eur)} at the observed annualized rate`, journalClass(performance.estimated_yearly_profit_eur))}</div><p class="journal-compounding-note">${escapeHtml(performance.estimate_methodology || 'Compounding metrics become available when sufficient capital history exists.')}</p><div class="journal-stat-strip">${performanceMetric('Net realized P/L', journalSigned(realized.net_eur), '', journalClass(realized.net_eur))}${performanceMetric('Avg. trade', journalSigned(tradeStats.expectancy_eur), '', journalClass(tradeStats.expectancy_eur))}${performanceMetric('Profit factor', tradeStats.profit_factor == null ? 'N/A' : Number(tradeStats.profit_factor).toFixed(2))}${performanceMetric('Max drawdown', journalPercent(risk.max_drawdown_pct), '', journalClass(risk.max_drawdown_pct))}</div><div class="journal-performance-table"><div class="journal-performance-heading">${tableHeading}<span>${daily ? 'Latest 14 trading days' : monthly ? 'Latest 12 completed months' : 'Completed-trade results'}</span></div>${table}</div></div></details>`;
+    return `<details class="journal-collapsible journal-performance-details"><summary><span>Performance details</span></summary><div class="journal-collapsible-content"><div class="journal-performance-section"><div class="journal-performance-heading">Daily performance <span>Latest 14 trading days · return on contributed capital</span></div>${renderDailyPerformance(analytics?.daily_performance, capitalBase)}</div><div class="journal-performance-section"><div class="journal-performance-heading">Monthly performance <span>Latest 12 completed months · return on contributed capital</span></div>${renderMonthlyPerformance(analytics?.monthly_performance, capitalBase)}</div></div></details>`;
 }
 
 function collapseJournalCard(container, selector, label, description = '') {
@@ -318,7 +306,7 @@ function renderJournal() {
     }
     const performanceCard = container.querySelector('.journal-performance-card');
     if (performanceCard && chartCard) {
-        performanceCard.innerHTML = renderPerformanceDetails(analytics, journalChartMode);
+        performanceCard.innerHTML = renderPerformanceDetails(analytics);
         chartCard.insertAdjacentElement('afterend', performanceCard);
     }
     if (!edit) collapseJournalCard(container, '#journal-trade-editor', 'Add a trade', 'Record a purchase or an historical lot');

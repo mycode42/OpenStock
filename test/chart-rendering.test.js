@@ -62,6 +62,27 @@ test('one-day charts reserve future session time on a 07:30–22:00 wall-clock s
     }
 });
 
+test('empty 1d charts show Market closed on Berlin weekends', async () => {
+    const sourceDir = path.join(root, 'www/modules');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-weekend-chart-'));
+    fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"module"}\n');
+    fs.cpSync(sourceDir, path.join(tempDir, 'modules'), { recursive: true });
+    try {
+        const { createCharts } = await import(pathToFileURL(path.join(tempDir, 'modules/charts.js')).href);
+        const { renderHistoryChart } = createCharts({ request: async () => null, historyCache: new Map() });
+        const saturday = new Date('2026-10-03T12:00:00+02:00');
+        const monday = new Date('2026-10-05T12:00:00+02:00');
+        assert.match(renderHistoryChart([], '1d', { now: saturday }), /market closed/);
+        assert.match(renderHistoryChart([{ recorded_at: '2026-10-02T12:00:00Z', price_eur: 100 }], '1d', { now: saturday }), /market closed/);
+        assert.match(renderHistoryChart([], '1d', { now: monday }), /collecting price history/);
+        assert.match(renderHistoryChart([], '1w', { now: saturday }), /collecting price history/);
+        const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
+        assert.match(source, /history-loading">loading price history/);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('dashboard history percentage follows the inspected point and resets to the range return', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     assert.match(source, /data-chart-change/);

@@ -18,6 +18,11 @@ function smoothCoordinatePath(points) {
     return path;
 }
 
+function isMarketClosedWeekend(date) {
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', weekday: 'short' }).format(date);
+    return weekday === 'Sat' || weekday === 'Sun';
+}
+
 function interactiveChartSvg({ className, width, height, grid, lineClass = '', linePoints, lineSegments = null, smooth = false, hoverPoints, ariaLabel }) {
     const encodedPoints = escapeHtml(JSON.stringify(hoverPoints));
     const segments = Array.isArray(lineSegments) ? lineSegments : [linePoints];
@@ -140,11 +145,14 @@ function attachInteractiveLineCharts(root) {
     });
 }
 
-function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt } = {}) {
+function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, now = new Date() } = {}) {
     const clean = points
         .filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at))
         .sort((left, right) => parseOpenStockDate(left.recorded_at).getTime() - parseOpenStockDate(right.recorded_at).getTime());
-    if (clean.length < 2) return '<div class="history-empty">Collecting native EUR price history…</div>';
+    if (clean.length < 2) {
+        const message = range === '1d' && isMarketClosedWeekend(now) ? 'market closed' : 'collecting price history';
+        return `<div class="history-empty">${message}</div>`;
+    }
     const values = clean.map(point => Number(point.price_eur));
     const min = Math.min(...values), max = Math.max(...values);
     const padding = Math.max((max - min) * 0.08, max * 0.002, 0.01);
@@ -193,7 +201,7 @@ async function loadCardHistory(card, range = '1d', { force = false, showLoading 
     if (!Number.isInteger(stockId) || !panel) return;
     const key = `${stockId}:${range}`;
     panel.dataset.requestedRange = range;
-    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">Loading native EUR history…</div>`;
+    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">loading price history</div>`;
     let history = force ? null : historyCache.get(key);
     if (!history) {
         history = await request(`/stocks/${stockId}/history?range=${range}`);
