@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,30 +33,21 @@ load_dotenv()
 import requests
 
 from src.config import get_mode_config, resolve_mode
+from src.accounts import get_account_for_mode
 
 # Alpaca trading API
 API_BASE = "https://paper-api.alpaca.markets/v2"
 # Alpaca market data API (separate base URL)
 DATA_BASE = "https://data.alpaca.markets/v2"
+MARKET_TZ = ZoneInfo("America/New_York")
+log = logging.getLogger("gather_data")
+
+# Module-level active mode — set by main() before any Alpaca calls.
+_active_mode: str = "swing"
 
 def _alpaca_headers(mode: str = None) -> dict:
     """Return Alpaca API headers for the given mode (swing/day)."""
-    if mode == "day":
-        return {
-            "APCA-API-KEY-ID": os.environ.get("ALPACA_DAY_API_KEY", ""),
-            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_DAY_API_SECRET", ""),
-        }
-    # Default / swing mode uses the original keys
-    return {
-        "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-        "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-    }
-
-# Keep HEADERS as default for backwards compat (market data calls, etc.)
-HEADERS = _alpaca_headers()
-
-# Module-level active mode — set by main() before any portfolio calls
-_active_mode: str = "swing"
+    return get_account_for_mode(mode or _active_mode).headers
 
 def alpaca_get(endpoint, base=API_BASE, params=None, mode=None):
     headers = _alpaca_headers(mode or _active_mode) if base == API_BASE else _alpaca_headers(_active_mode)
@@ -228,20 +221,44 @@ def get_intraday_bars(ticker: str, today: str, limit: int = 100) -> list[dict]:
     try:
         resp = requests.get(
             f"{DATA_BASE}/stocks/{ticker}/bars",
-            headers=HEADERS,
+            headers=_alpaca_headers(),
             params={
                 "timeframe": "5Min",
-                "start": f"{today}T09:30:00-04:00",
+                "start": datetime.fromisoformat(today).replace(
+                    hour=9, minute=30, second=0, microsecond=0, tzinfo=MARKET_TZ
+                ).isoformat(),
                 "limit": limit,
                 "feed": "iex",
             },
             timeout=15,
         )
-        if resp.status_code == 200:
-            return resp.json().get("bars", [])
-    except Exception:
-        pass
+        return _extract_bars(resp, ticker, "intraday")
+    except Exception as e:
+        log.warning("Alpaca intraday bars request failed for %s: %s", ticker, e)
     return []
+
+
+def _extract_bars(resp, ticker: str, label: str) -> list[dict]:
+    """Return bars from an Alpaca response, treating null/malformed bars as empty."""
+    if resp.status_code != 200:
+        log.warning("Alpaca %s bars request for %s returned HTTP %s", label, ticker, resp.status_code)
+        return []
+    try:
+        payload = resp.json()
+    except Exception as e:
+        log.warning("Alpaca %s bars response for %s was not valid JSON: %s", label, ticker, e)
+        return []
+
+    bars = payload.get("bars") if isinstance(payload, dict) else None
+    if bars is None:
+        log.warning("Alpaca returned null/missing %s bars for %s", label, ticker)
+        return []
+    if not isinstance(bars, list):
+        log.warning("Alpaca returned malformed %s bars for %s (%s)", label, ticker, type(bars).__name__)
+        return []
+    if not bars:
+        log.warning("Alpaca returned no %s bars for %s", label, ticker)
+    return bars
 
 
 def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
@@ -280,7 +297,7 @@ def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
     try:
         resp = requests.get(
             f"{DATA_BASE}/stocks/{ticker}/bars",
-            headers=HEADERS,
+            headers=_alpaca_headers(),
             params={
                 "timeframe": "1Day",
                 "start": (datetime.strptime(prev_date, "%Y-%m-%d") - timedelta(days=30)).strftime("%Y-%m-%d"),
@@ -290,47 +307,50 @@ def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
             },
             timeout=15,
         )
-        if resp.status_code == 200:
-            daily_bars = resp.json().get("bars", [])
-            if daily_bars:
-                prev_close = float(daily_bars[-1]["c"])
-                data["intraday"]["prev_close"] = prev_close
-                if data["intraday"].get("close"):
-                    data["prices"]["change_1d"] = round(
-                        (data["intraday"]["close"] - prev_close) / prev_close * 100, 3
-                    )
-                # 20-day average volume
-                if len(daily_bars) >= 2:
-                    avg_vol_20d = sum(float(b.get("v", 0)) for b in daily_bars[:-1]) / (len(daily_bars) - 1)
-                    data["intraday"]["avg_volume_20d"] = avg_vol_20d
-                    today_vol = data["intraday"].get("volume", 0)
-                    if avg_vol_20d > 0:
-                        data["intraday"]["volume_ratio"] = round(today_vol / avg_vol_20d, 2)
+        daily_bars = _extract_bars(resp, ticker, "daily")
+        if daily_bars:
+            prev_close = float(daily_bars[-1]["c"])
+            data["intraday"]["prev_close"] = prev_close
+            if data["intraday"].get("close"):
+                data["prices"]["change_1d"] = round(
+                    (data["intraday"]["close"] - prev_close) / prev_close * 100, 3
+                )
+            # 20-day average volume
+            if len(daily_bars) >= 2:
+                avg_vol_20d = sum(float(b.get("v", 0)) for b in daily_bars[:-1]) / (len(daily_bars) - 1)
+                data["intraday"]["avg_volume_20d"] = avg_vol_20d
+                today_vol = data["intraday"].get("volume", 0)
+                if avg_vol_20d > 0:
+                    data["intraday"]["volume_ratio"] = round(today_vol / avg_vol_20d, 2)
     except Exception as e:
         data["intraday"]["prev_close_error"] = str(e)
+        log.warning("Alpaca daily bars request failed for %s: %s", ticker, e)
 
     # Premarket data (4:00–9:30 AM)
     try:
         pre_resp = requests.get(
             f"{DATA_BASE}/stocks/{ticker}/bars",
-            headers=HEADERS,
+            headers=_alpaca_headers(),
             params={
                 "timeframe": "5Min",
-                "start": f"{today}T04:00:00-04:00",
-                "end": f"{today}T09:30:00-04:00",
+                "start": datetime.fromisoformat(today).replace(
+                    hour=4, minute=0, second=0, microsecond=0, tzinfo=MARKET_TZ
+                ).isoformat(),
+                "end": datetime.fromisoformat(today).replace(
+                    hour=9, minute=30, second=0, microsecond=0, tzinfo=MARKET_TZ
+                ).isoformat(),
                 "limit": 30,
                 "feed": "iex",
             },
             timeout=15,
         )
-        if pre_resp.status_code == 200:
-            pre_bars = pre_resp.json().get("bars", [])
-            if pre_bars:
-                data["intraday"]["premarket_high"] = max(float(b["h"]) for b in pre_bars)
-                data["intraday"]["premarket_low"] = min(float(b["l"]) for b in pre_bars)
-                data["intraday"]["premarket_volume"] = sum(float(b.get("v", 0)) for b in pre_bars)
-    except Exception:
-        pass
+        pre_bars = _extract_bars(pre_resp, ticker, "premarket")
+        if pre_bars:
+            data["intraday"]["premarket_high"] = max(float(b["h"]) for b in pre_bars)
+            data["intraday"]["premarket_low"] = min(float(b["l"]) for b in pre_bars)
+            data["intraday"]["premarket_volume"] = sum(float(b.get("v", 0)) for b in pre_bars)
+    except Exception as e:
+        log.warning("Alpaca premarket bars request failed for %s: %s", ticker, e)
 
     # Light news (top 3 headlines) — useful even in day mode for catalyst awareness
     try:

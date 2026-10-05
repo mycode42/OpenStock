@@ -9,8 +9,9 @@ Pure-Python deterministic trading strategy.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import datetime, time, timezone
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 
 EXPERIMENT_NAME = "tighter_vwap_entry_band"
@@ -59,6 +60,7 @@ REGIME_MULTIPLIER: dict[str, float] = {
 
 NO_TRADE_OPEN_MINUTES = 5
 MARKET_CLOSE_CUTOFF = time(15, 40)
+MARKET_TZ = ZoneInfo("America/New_York")
 MODE = "day"
 
 SMA_FAST = 20
@@ -145,10 +147,10 @@ def _calc_macd(
 
 def _parse_bar_time_et(value: str) -> time | None:
     try:
-        text = value[11:16]
-        hour = int(text[:2])
-        minute = int(text[3:5])
-        return time((hour - 4) % 24, minute)
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(MARKET_TZ).time()
     except Exception:
         return None
 

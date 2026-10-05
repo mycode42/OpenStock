@@ -389,7 +389,7 @@ poetry run python run_hedge_fund.py --mode swing --execute
 # Check portfolio
 poetry run python check_portfolio.py --mode swing
 
-# Monitor stops
+# Preview stop monitoring without placing sells
 poetry run python portfolio_monitor.py --mode swing --dry-run
 
 # Rebalance — sell anything outside the swing universe
@@ -625,7 +625,7 @@ All scripts support `--mode swing|day`. Mode defaults to the resolved value from
 | `gather_data.py` | Market data gathering | `--mode`, `--tickers`, `--top N`, `--output` |
 | `execute_trades.py` | Trade execution with risk validation | `--mode`, `--file`, `--flatten`, `--dry-run` |
 | `risk_manager.py` | Risk status check | `--status`, `--mode` |
-| `portfolio_monitor.py` | Stop loss monitoring + auto-sell | `--mode`, `--dry-run` |
+| `portfolio_monitor.py` | Stop loss monitoring + auto-sell | `--mode`, `--dry-run` / `--no-sell` |
 | `performance_tracker_v2.py` | Daily snapshots + benchmarking | `--snapshot`, `--report`, `--json`, `--days N` |
 | `check_portfolio.py` | Quick portfolio overview | `--mode`, `--telegram`, `--json` |
 | `check_moves.py` | Universe pulse check | `--mode` |

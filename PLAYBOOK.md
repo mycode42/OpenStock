@@ -933,7 +933,7 @@ Prefer providing explicit stops at actual key levels (VWAP, day low, round numbe
 
 ### Flatten-by-Close Concept
 
-Day traders must exit speculative positions before market close to avoid overnight gap risk. The `FLATTEN_BY = "15:45"` constant is the target time. This is not enforced automatically — Cassius needs to call `execute_trades.py --flatten` as part of the end-of-day cron:
+Day traders must exit speculative positions before market close to avoid overnight gap risk. The day-mode portfolio monitor automatically flattens positions after the configured `flatten_by` time (15:45 ET). The end-of-day cron also calls `execute_trades.py --mode day --flatten` to make the scheduled close explicit. Use `portfolio_monitor.py --mode day --dry-run` to preview monitor actions without placing sells:
 
 ```bash
 # In your cron at 3:45 PM ET (15:45 ET = 12:45 PT)

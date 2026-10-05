@@ -9,7 +9,7 @@ positions if it's past the flatten_by time.  Compares daily performance to SPY.
 
 Usage:
   poetry run python portfolio_monitor.py              # Full check + auto-sell
-  poetry run python portfolio_monitor.py --dry-run   # Report only, no sells
+  poetry run python portfolio_monitor.py --dry-run     # Report only, no sells
   poetry run python portfolio_monitor.py --mode day  # Day trading mode
   poetry run python portfolio_monitor.py --mode day --dry-run
 """
@@ -20,6 +20,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -36,6 +37,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("portfolio_monitor")
+MARKET_TZ = ZoneInfo("America/New_York")
 
 from src.accounts import get_account_for_mode
 
@@ -69,7 +71,7 @@ def get_positions() -> list[dict]:
 
 
 def place_market_sell(symbol: str, qty: int, reason: str, dry_run: bool) -> dict:
-    """Submit a market sell order (or log it in dry-run mode)."""
+    """Submit a market sell order, or report it without selling in dry-run mode."""
     if dry_run:
         msg = f"DRY-RUN: Would sell {qty} {symbol} — {reason}"
         log.info(msg)
@@ -102,6 +104,7 @@ def get_intraday_high(symbol: str) -> float | None:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1d", interval="1m")
         if hist.empty:
+            log.warning("Yahoo Finance returned no intraday bars for %s", symbol)
             return None
         return float(hist["High"].max())
     except Exception as e:
@@ -115,6 +118,7 @@ def get_spy_daily_return() -> float | None:
         spy = yf.Ticker("SPY")
         hist = spy.history(period="2d", interval="1d")
         if len(hist) < 2:
+            log.warning("Yahoo Finance returned fewer than two daily bars for SPY")
             return None
         prev_close = float(hist["Close"].iloc[-2])
         last_close = float(hist["Close"].iloc[-1])
@@ -219,7 +223,7 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
     if mode_risk.get("flatten_eod", False):
         flatten_time = mode_risk.get("flatten_by", "15:45")
         h, m = map(int, flatten_time.split(":"))
-        now = datetime.now()
+        now = datetime.now(MARKET_TZ)
         if now.hour > h or (now.hour == h and now.minute >= m):
             log.info(f"Day mode: past {flatten_time} ET — flattening all positions")
             try:
@@ -236,7 +240,7 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
                 dry_run=dry_run, mode=mode, stop_loss_pct=stop_loss_pct, trailing_stop_pct=trailing_stop_pct,
             )
             return {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(MARKET_TZ).isoformat(),
                 "trading_mode": mode,
                 "mode": "dry_run" if dry_run else "live",
                 "equity": equity,
@@ -255,6 +259,8 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
         qty = int(float(pos["qty"]))
 
         intraday_high = get_intraday_high(symbol)
+        if intraday_high is None:
+            warnings.append(f"{symbol}: trailing stop check unavailable (intraday price data missing)")
 
         hard_triggered, hard_reason = check_hard_stop(pos, stop_loss_pct)
         if hard_triggered:
@@ -297,7 +303,7 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
     )
 
     return {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(MARKET_TZ).isoformat(),
         "trading_mode": mode,
         "mode": "dry_run" if dry_run else "live",
         "equity": equity,
@@ -326,10 +332,10 @@ def _print_summary(
 ) -> None:
     """Pretty-print the monitor summary to stdout."""
     mode_config = get_mode_config(mode)
-    mode_tag = " [DRY RUN]" if dry_run else ""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(MARKET_TZ).strftime("%Y-%m-%d %H:%M %Z")
 
     print(f"{'='*65}")
+    mode_tag = " [DRY RUN]" if dry_run else ""
     print(f"  SWARM TRADER — PORTFOLIO MONITOR{mode_tag}")
     print(f"  Mode: {mode.upper()} — {mode_config['label']}")
     print(f"  Stops: -{stop_loss_pct*100:.1f}% hard  /  -{trailing_stop_pct*100:.1f}% trailing")
