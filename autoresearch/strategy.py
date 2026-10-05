@@ -1,6 +1,6 @@
-# EXPERIMENT: tighter_vwap_entry_band
-# HYPOTHESIS: Allowing signals slightly closer to VWAP should admit moderately displaced mean-reversion setups while preserving the existing confidence and risk filters, increasing useful opportunities without broadly increasing noise.
-# CHANGE: Reduced VWAP_NEAR_BAND_PCT from 1.00% to 0.90%
+# EXPERIMENT: earlier_close_cutoff
+# HYPOTHESIS: The existing earlier-entry cutoff improved fitness by avoiding late-session trades; moving it five minutes earlier may further avoid setups with too little time to reach their targets before intraday flattening.
+# CHANGE: Moved MARKET_CLOSE_CUTOFF from 15:40 to 15:35
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,13 +14,13 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "tighter_vwap_entry_band"
+EXPERIMENT_NAME = "earlier_close_cutoff"
 EXPERIMENT_HYPOTHESIS = (
-    "Allowing signals slightly closer to VWAP should admit moderately displaced "
-    "mean-reversion setups while preserving the existing confidence and risk filters, "
-    "increasing useful opportunities without broadly increasing noise."
+    "The existing earlier-entry cutoff improved fitness by avoiding late-session "
+    "trades; moving it five minutes earlier may further avoid setups with too little "
+    "time to reach their targets before intraday flattening."
 )
-EXPERIMENT_CHANGE = "Reduced VWAP_NEAR_BAND_PCT from 1.00% to 0.90%"
+EXPERIMENT_CHANGE = "Moved MARKET_CLOSE_CUTOFF from 15:40 to 15:35"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -59,7 +59,7 @@ REGIME_MULTIPLIER: dict[str, float] = {
 }
 
 NO_TRADE_OPEN_MINUTES = 5
-MARKET_CLOSE_CUTOFF = time(15, 40)
+MARKET_CLOSE_CUTOFF = time(15, 35)
 MARKET_TZ = ZoneInfo("America/New_York")
 MODE = "day"
 
