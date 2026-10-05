@@ -1,6 +1,6 @@
-# EXPERIMENT: earlier_close_cutoff
-# HYPOTHESIS: The existing earlier-entry cutoff improved fitness by avoiding late-session trades; moving it five minutes earlier may further avoid setups with too little time to reach their targets before intraday flattening.
-# CHANGE: Moved MARKET_CLOSE_CUTOFF from 15:40 to 15:35
+# EXPERIMENT: stricter_overbought
+# HYPOTHESIS: Raising the overbought threshold should filter weaker short mean-reversion signals and reserve strong bearish confidence for more extended pullbacks.
+# CHANGE: Raised RSI_OVERBOUGHT from 60 to 63
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,20 +14,19 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "earlier_close_cutoff"
+EXPERIMENT_NAME = "stricter_overbought"
 EXPERIMENT_HYPOTHESIS = (
-    "The existing earlier-entry cutoff improved fitness by avoiding late-session "
-    "trades; moving it five minutes earlier may further avoid setups with too little "
-    "time to reach their targets before intraday flattening."
+    "Raising the overbought threshold should filter weaker short mean-reversion "
+    "signals and reserve strong bearish confidence for more extended pullbacks."
 )
-EXPERIMENT_CHANGE = "Moved MARKET_CLOSE_CUTOFF from 15:40 to 15:35"
+EXPERIMENT_CHANGE = "Raised RSI_OVERBOUGHT from 60 to 63"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
 RSI_VERY_OVERSOLD = 28
 RSI_STRONG_OVERSOLD = 31
 RSI_MODERATE_OVERSOLD = 38
-RSI_OVERBOUGHT = 60
+RSI_OVERBOUGHT = 63
 RSI_NEUTRAL_LOW = 48
 RSI_NEUTRAL_HIGH = 53
 
