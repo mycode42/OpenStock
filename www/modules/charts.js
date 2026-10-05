@@ -2,6 +2,7 @@ import { escapeHtml } from './escape.js';
 import { money, parseOpenStockDate, formatChartHoverTime, formatChartDate, formatChartTime, chartRangeLabel } from './formatting.js';
 
 export function createCharts({ request, historyCache }) {
+const historyRequests = new Map();
 function chartRangeControls(activeRange) {
     return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1w', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
 }
@@ -204,8 +205,17 @@ async function loadCardHistory(card, range = '1d', { force = false, showLoading 
     if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">loading price history</div>`;
     let history = force ? null : historyCache.get(key);
     if (!history) {
-        history = await request(`/stocks/${stockId}/history?range=${range}`);
-        if (history) historyCache.set(key, history);
+        let pending = historyRequests.get(key);
+        if (!pending) {
+            pending = request(`/stocks/${stockId}/history?range=${range}`);
+            historyRequests.set(key, pending);
+        }
+        try {
+            history = await pending;
+            if (history) historyCache.set(key, history);
+        } finally {
+            if (historyRequests.get(key) === pending) historyRequests.delete(key);
+        }
     }
     if (panel.dataset.requestedRange !== range) return;
     if (!history) {
@@ -215,8 +225,11 @@ async function loadCardHistory(card, range = '1d', { force = false, showLoading 
     renderHistoryPanel(panel, history, range);
 }
 
-async function refreshOpenHistoryPanels(container = document) {
-    const openPanels = [...container.querySelectorAll('.stock-card[data-stock-id] .history-popover.is-open')];
+async function refreshOpenHistoryPanels(container = document, { includePreviouslyOpened = false } = {}) {
+    const openPanels = [...container.querySelectorAll('.stock-card[data-stock-id] .history-popover')]
+        .filter(panel => panel.classList.contains('is-open')
+            || panel.closest('.stock-card')?.matches(':hover, :focus-within')
+            || (includePreviouslyOpened && panel.dataset.requestedRange));
     await Promise.all(openPanels.map(panel => {
         const card = panel.closest('.stock-card[data-stock-id]');
         return card ? loadCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false }) : null;
@@ -237,6 +250,7 @@ function attachChartHovers(container) {
     }
     container.querySelectorAll('.stock-card[data-stock-id]').forEach(card => {
         const panel = card.querySelector('.history-popover');
+        const refreshCardHistory = () => loadCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false });
         let closeTimer;
         const cancelPopoverClose = () => {
             clearTimeout(closeTimer);
@@ -248,24 +262,24 @@ function attachChartHovers(container) {
             closeTimer = setTimeout(() => panel.classList.remove('is-open'), 300);
         };
 
-        card.addEventListener('mouseenter', () => { if (!usesMobileChartInteraction()) loadCardHistory(card, '1d'); }, { once: true });
+        card.addEventListener('mouseenter', () => { if (!usesMobileChartInteraction()) refreshCardHistory(); });
         card.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
         card.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
         panel.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
         panel.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
-        card.addEventListener('focusin', () => { if (!usesMobileChartInteraction()) loadCardHistory(card, '1d'); }, { once: true });
+        card.addEventListener('focusin', () => { if (!usesMobileChartInteraction()) refreshCardHistory(); });
         card.addEventListener('click', event => {
             if (!usesMobileChartInteraction() || event.target.closest('.history-popover')) return;
             closeMobilePopovers(panel);
             panel.classList.add('is-open');
-            loadCardHistory(card, panel.dataset.requestedRange || '1d');
+            refreshCardHistory();
         });
         panel.addEventListener('click', event => {
             const button = event.target.closest('[data-history-range]');
             if (!button) return;
             event.preventDefault();
             event.stopPropagation();
-            loadCardHistory(card, button.dataset.historyRange);
+            loadCardHistory(card, button.dataset.historyRange, { force: true });
         });
     });
 }

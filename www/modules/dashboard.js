@@ -37,7 +37,7 @@ export function createDashboard(context) {
     let liveAbortController = null;
     let retrySdkAuthOnNextPoll = true;
     const livePollMs = 1000;
-    const chartRefreshMs = 60000;
+    const chartRefreshMs = 10000;
     let chartRefreshTimer = null;
     let chartRefreshInFlight = false;
     function applyLivePrices(payload) {
@@ -94,7 +94,7 @@ export function createDashboard(context) {
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden && liveTimer) {
             pollLivePrices();
-            refreshOpenCharts();
+            refreshOpenHistoryPanels(document.getElementById('page-dashboard'), { includePreviouslyOpened: true });
         }
     });
 function renderDashboard() {
