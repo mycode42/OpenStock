@@ -98,6 +98,33 @@ MODES = {
     },
 }
 
+# Dip mode is a separate, rule-based daemon with its own Alpaca paper account.
+# It is deliberately kept outside MODES so the Swing/Day mode resolver and its
+# existing CLI/cron behavior remain unchanged.
+DIP_CONFIG = {
+    "enabled": True,
+    "universe": ["SPCX", "IONQ", "TSLA", "TEM", "ASTS", "CRSP", "SUNB"],
+    "pre_open_minutes": 5,
+    "start": "market_open",
+    "stop": "11:30",  # America/New_York local market time
+    "reference": "previous_close",
+    "dip_percent": 1.0,
+    "confirmation_seconds": 30,
+    "target_percent": 1.5,
+    "stop_loss_percent": 1.0,
+    "reentry_enabled": True,
+    "minimum_dip_from_last_sell_percent": 0.8,
+    "max_opening_gap_percent": 3.0,
+    "max_trades_per_day": 5,
+    "max_trades_per_instrument_per_day": 2,
+    "max_position_size": 5000.0,
+    "max_total_exposure": 10000.0,
+    "max_daily_loss": None,
+    "poll_seconds": 15,
+    "stale_data_seconds": 60,
+    "state_file": "data/dip_state.json",
+}
+
 
 def resolve_mode(cli_mode: str = None) -> str:
     """

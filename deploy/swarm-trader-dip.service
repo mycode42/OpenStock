@@ -1,0 +1,29 @@
+[Unit]
+Description=Swarm Trader Opening Dip paper-trading daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/swarm-trader
+EnvironmentFile=/opt/swarm-trader/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/local/bin/poetry run python -m src.dip.daemon
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/swarm-trader/data /run/lock
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=swarm-trader-dip
+
+[Install]
+WantedBy=multi-user.target

@@ -72,12 +72,13 @@ set_mode("day", reason="FOMC day", updated_by="human", override=True, override_h
 
 ### Multi-Account Routing
 
-Each trading mode operates on its own Alpaca paper trading account. This provides clean separation — swing positions don't interfere with day trades, each account has its own equity and P&L tracking, and risk limits are enforced per-account.
+Swing and Day operate on their configured Alpaca accounts. Dip is a separate paper-only daemon with its own explicit credentials and instrument universe; it is not selected by the shared Swing/Day mode resolver.
 
 | Mode | Account | Purpose |
 |---|---|---|
 | `swing` | Primary account | Multi-day holds, conservative risk |
 | `day` | Day trading account | Intraday only, flattens EOD |
+| `dip` | Dedicated Dip paper account | Opening dip mean reversion, independent process |
 
 Credentials are configured in `.env`:
 
@@ -99,6 +100,74 @@ from src.accounts import get_account_for_mode
 acct = get_account_for_mode("swing")  # returns AlpacaAccount with correct keys
 acct.headers  # ready-to-use API headers
 ```
+
+### Opening Dip Mode
+
+Dip Mode is a deterministic, independent long-running strategy for mean reversion near the US equity market open. It records the prior session close, watches the configured symbols using Alpaca's free IEX latest-trade feed, waits for a confirmed decline, then manages profit target and stop loss from actual fills. It may re-enter after a qualifying decline from the previous sell. It does not call an LLM. Market/session timing uses Alpaca's trading calendar and `America/New_York`.
+
+The default is **disabled** (`DIP_CONFIG["enabled"] = False`) so installing the unit cannot submit orders by itself. When disabled, the daemon logs that setting and exits successfully; systemd will leave it inactive without a restart loop. Dip is paper-only: its adapter has the fixed `https://paper-api.alpaca.markets/v2` trading URL, reads only the `ALPACA_DIP_*` credentials, and verifies the returned paper account ID before starting. Do not point this service at another endpoint.
+
+Configure the independent universe and strategy in `DIP_CONFIG` in [src/config.py](src/config.py). Example values (the code defaults are the source of truth):
+
+```python
+DIP_CONFIG = {
+    "enabled": False,  # set True only when ready to run the paper service
+    "universe": ["NVDA", "AMD", "TSLA", "SAP"],
+    "pre_open_minutes": 5,
+    "start": "market_open",
+    "stop": "11:30",  # New York time; stops new entries, keeps managing open positions to close
+    "reference": "previous_close",
+    "dip_percent": 1.0,
+    "confirmation_seconds": 30,
+    "target_percent": 1.5,
+    "stop_loss_percent": 1.0,
+    "reentry_enabled": True,
+    "minimum_dip_from_last_sell_percent": 0.8,
+    "max_opening_gap_percent": 3.0,
+    "max_trades_per_day": 5,
+    "max_trades_per_instrument_per_day": 2,
+    "max_position_size": 5000.0,      # maximum dollars in one position
+    "max_total_exposure": 10000.0,    # maximum dollars across Dip symbols
+    "max_daily_loss": None,           # optional dollar circuit breaker
+    "poll_seconds": 15,
+    "stale_data_seconds": 60,
+    "state_file": "data/dip_state.json",
+}
+```
+
+`previous_close` is the last completed daily bar before the current market session, not the premarket quote. The first regular-session trade is compared with that reference for the opening-gap guard. A gap down at or beyond `max_opening_gap_percent` blocks entries for that instrument for the day. Re-entry requires the configured decline from the last sell; the first-entry dip threshold is not reused for re-entries. Alpaca's IEX feed represents trades on IEX, not consolidated US market volume; stale or missing prints block new actions. All prices and thresholds are percentages; `max_position_size`, `max_total_exposure`, and optional `max_daily_loss` are USD.
+
+#### Paper account setup
+
+Create a dedicated Alpaca paper account and put its paper API credentials and exact account ID in `.env`:
+
+```bash
+ALPACA_DIP_API_KEY=your_dip_paper_key
+ALPACA_DIP_API_SECRET=your_dip_paper_secret
+ALPACA_DIP_ACCOUNT_ID=your_dip_paper_account_id
+```
+
+The daemon requires all three values and fails closed if the API reports a different account. `ALPACA_DIP_ACCOUNT_ID` may match the API response's UUID `id` or its `account_number`. A mismatch stops the service cleanly; correct the identifier or use the keys belonging to the intended paper account, then restart. The account should be reserved for Dip Mode because any existing position in a configured symbol will be treated as an existing position and managed by this strategy. Keep `.env` private.
+
+#### Service installation and operation
+
+The service unit is [deploy/swarm-trader-dip.service](deploy/swarm-trader-dip.service). It runs as `openclaw`, loads the project `.env`, starts after networking, restarts after failures, and writes logs to journald. It does not alter or replace Swing/Day cron jobs.
+
+```bash
+sudo install -m 0644 deploy/swarm-trader-dip.service /etc/systemd/system/swarm-trader-dip.service
+sudo systemctl daemon-reload
+# After setting DIP_CONFIG["enabled"] = True and validating paper credentials:
+sudo systemctl enable --now swarm-trader-dip.service
+sudo systemctl status swarm-trader-dip.service
+sudo systemctl stop swarm-trader-dip.service
+sudo systemctl start swarm-trader-dip.service
+sudo systemctl restart swarm-trader-dip.service
+sudo journalctl -u swarm-trader-dip.service -f
+```
+
+The persisted state/status snapshot is `data/dip_state.json`; inspect it without contacting Alpaca using `poetry run python -m src.dip.daemon --status`. For a completely offline sample sequence, run `poetry run python -m src.dip.daemon --simulate`. The daemon uses an exclusive process lock, atomically saves state, and assigns deterministic per-session client order IDs before submitting an order. On restart it reconciles broker positions and open/closed order state before considering a new buy. Order fills, including partial fills and terminal rejections/cancellations, drive state transitions; order submission is never treated as an immediate fill.
+
+Dip Mode uses market orders and polling (15 seconds by default), does not guarantee execution at the observed price, and does not flatten a remaining position at the end of its entry window. It monitors existing positions to market close for its configured target/stop. Paper trading does not model all live execution costs or slippage. The chosen thresholds need backtesting before any broader use.
 
 ### Recommended: Separate Trading Agents
 
@@ -475,11 +544,11 @@ Create your own — see `src/agents/mordecai.py` as a template. Register in `src
 
 ## Automation with OpenClaw
 
-The system runs fully autonomous via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. The recommended setup uses **two dedicated agents** — one for swing, one for day trading — each with their own cron schedule and account.
+The system can run autonomously via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. Swing and Day use dedicated trading agents; the optional Dip agent below is a monitor only and reports the independent Dip paper daemon's status and logs.
 
 ### Two-Agent Setup (Recommended)
 
-| Time (PT) | Agent | Job | Purpose |
+| Time (ET) | Agent | Job | Purpose |
 |---|---|---|---|
 | 6:30 AM | Day trader | `day-morning` | Pre-market scan, VIX check, identify targets |
 | 9:30 AM | Swing trader | `swing-morning` | Health check, run stops, take snapshot |
@@ -577,6 +646,73 @@ openclaw cron add --name day-flatten \
     2. Verify flat: poetry run python portfolio_monitor.py --mode day
     3. Run: poetry run python performance_tracker_v2.py --snapshot --force
     4. EOD report: daily P&L, win rate, best/worst trade, alpha vs SPY.'
+```
+
+### Dip Mode Monitoring Agent and Crons
+
+Dip Mode runs as the `swarm-trader-dip.service` systemd daemon. Add a dedicated OpenClaw agent for read-only monitoring; these jobs report the daemon status and recent journal activity and do not place or manage trades.
+
+Create the agent (after configuring OpenClaw's OpenAI provider):
+
+```bash
+openclaw agents add dip-agent \
+  --workspace ~/.openclaw/workspace-dip-agent \
+  --model openai/gpt-6-luna \
+  --non-interactive
+```
+
+The OpenClaw process must be able to read the Dip service journal. Check that before enabling the jobs:
+
+```bash
+sudo -u openclaw journalctl -u swarm-trader-dip.service --since "10 minutes ago" --no-pager
+```
+
+If that returns a permission error, grant the `openclaw` user read access to the system journal (for example, add it to `systemd-journal`) and restart the OpenClaw Gateway process so it receives the updated group membership. Do not grant the monitoring agent broad `sudo` access.
+
+These three weekday checks use New York time and send summaries to the same Telegram destination as the other examples. The morning and midday jobs stay quiet when there is no material change; the closing check always sends a short end-of-day summary. Their journal windows are sized to the intervals between checks.
+
+```bash
+# Morning check (9:35 AM ET, Mon-Fri)
+openclaw cron add --name dip-morning \
+  --cron "35 9 * * 1-5" --tz "America/New_York" --exact \
+  --agent dip-agent \
+  --model openai/gpt-6-luna \
+  --session isolated \
+  --announce --channel telegram --to 8545556566 \
+  --best-effort-deliver \
+  --message 'Dip morning monitor. Read-only: do not place, cancel, or modify orders.
+    1. Run: systemctl is-active swarm-trader-dip.service
+    2. Run: cd /opt/swarm-trader && poetry run python -m src.dip.daemon --status
+    3. Run: journalctl -u swarm-trader-dip.service --since "20 minutes ago" --no-pager
+    4. Summarize service state, positions, realized/unrealized P&L, fills, and errors from the status and journal. Send a concise Telegram update only if there is a material event or unhealthy state; otherwise return NO_REPLY.'
+
+# Midday check after the new-entry window (11:35 AM ET, Mon-Fri)
+openclaw cron add --name dip-midday \
+  --cron "35 11 * * 1-5" --tz "America/New_York" --exact \
+  --agent dip-agent \
+  --model openai/gpt-6-luna \
+  --session isolated \
+  --announce --channel telegram --to 8545556566 \
+  --best-effort-deliver \
+  --message 'Dip midday monitor. Read-only: do not place, cancel, or modify orders.
+    1. Run: systemctl is-active swarm-trader-dip.service
+    2. Run: cd /opt/swarm-trader && poetry run python -m src.dip.daemon --status
+    3. Run: journalctl -u swarm-trader-dip.service --since "2 hours ago" --no-pager
+    4. Summarize material fills, rejected orders, errors, and current positions using both status and journal output. Note that the Dip entry window has ended while position monitoring continues. Send only if there is a material event or unhealthy state; otherwise return NO_REPLY.'
+
+# End-of-day check after the regular session (4:05 PM ET, Mon-Fri)
+openclaw cron add --name dip-close \
+  --cron "5 16 * * 1-5" --tz "America/New_York" --exact \
+  --agent dip-agent \
+  --model openai/gpt-6-luna \
+  --session isolated \
+  --announce --channel telegram --to 8545556566 \
+  --best-effort-deliver \
+  --message 'Dip end-of-day monitor. Read-only: do not place, cancel, or modify orders.
+    1. Run: systemctl is-active swarm-trader-dip.service
+    2. Run: cd /opt/swarm-trader && poetry run python -m src.dip.daemon --status
+    3. Run: journalctl -u swarm-trader-dip.service --since "4 hours 30 minutes ago" --no-pager
+    4. Send a concise Telegram daily summary based on both status and journal output: service health, trades/fills/rejections, current positions, and any errors. Say when there was no session or no trading activity.'
 ```
 
 **AutoResearch crons** (optional, after market close):
