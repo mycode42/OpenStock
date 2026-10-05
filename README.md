@@ -656,7 +656,7 @@ Create the agent (after configuring OpenClaw's OpenAI provider):
 
 ```bash
 openclaw agents add dip-agent \
-  --workspace ~/.openclaw/workspace-dip-agent \
+  --workspace /opt/swarm-trader \
   --model openai/gpt-6-luna \
   --non-interactive
 ```
