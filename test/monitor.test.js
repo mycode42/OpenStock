@@ -8,6 +8,7 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const { parseTradeRepublicMonitorQuote, sendTelegram, formatAlert, formatSdkConnectivityAlert, formatQuoteFeedAlert, checkQuoteAvailability, runMonitor, acquireLock, EXIT } = require('../lib/monitor');
 const { initDatabase } = require('../database/init');
+const OpenStockDB = require('../database/db');
 
 function fixture() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-monitor-'));
@@ -92,6 +93,54 @@ test('monitor stores SDK quote precision and evaluates BUY against ask and SELL 
     assert.equal(db.prepare('SELECT current_price_eur FROM stocks WHERE id=?').get(id).current_price_eur, 1.2345675);
     assert.deepEqual(db.prepare('SELECT current_bid_eur,current_ask_eur,current_midpoint_eur FROM stocks WHERE id=?').get(id), { current_bid_eur: 1.234567, current_ask_eur: 1.234568, current_midpoint_eur: 1.2345675 });
     assert.deepEqual(db.prepare('SELECT side,triggered FROM alert_levels ORDER BY side').all(), [{ side: 'BUY', triggered: 1 }, { side: 'SELL', triggered: 1 }]);
+});
+
+test('percentage GAIN alerts notify even when no Journal position is open', async t => {
+    const { dir, db } = fixture();
+    t.after(() => { db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const id = addMappedStock(db, { symbol: 'MOVE', buy: 80, sell: 120 });
+    db.prepare(`INSERT INTO alert_levels(stock_id,side,price_eur,trigger_mode,change_pct,reference_price_eur)
+        VALUES (?, 'SELL', 110, 'PERCENT', 10, 100)`).run(id);
+    const messages = [];
+    const code = await runMonitor({
+        db, now: new Date('2026-01-01T12:00:00Z'),
+        config: {
+            lockPath: path.join(dir, 'lock'), concurrency: 1, cycleDeadlineMs: 5000,
+            tradeRepublicSdk: { isEnabled: () => true, getQuote: async () => ({ bid_eur: 111, ask_eur: 112, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', observed_at: '2026-01-01T12:00:00Z' }), close() {} },
+            tradeRepublic: { getQuote: async () => { throw new Error('unused backup'); } },
+            telegram: { token: 'token', chatId: '42' }
+        },
+        fetchImpl: async (_url, options) => { messages.push(new URLSearchParams(options?.body).get('text') || ''); return { ok: true, json: async () => ({ ok: true, result: { message_id: messages.length } }) }; },
+        log() {}, error: assert.fail
+    });
+    assert.equal(code, EXIT.OK);
+    assert.ok(messages.some(message => /GAIN .*10% threshold from €100,00/.test(message)));
+    assert.equal(db.prepare('SELECT retired FROM alert_levels WHERE trigger_mode=?').get('PERCENT').retired, 1);
+});
+
+test('monitor sends executed history through the Journal database repository', async t => {
+    const { dir, db } = fixture();
+    const journalDb = new OpenStockDB(path.join(dir, 'test.db'));
+    t.after(() => { db.close(); journalDb.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const categories = [];
+    const code = await runMonitor({
+        db, journalDb, now: new Date('2026-01-01T12:00:00Z'),
+        config: {
+            lockPath: path.join(dir, 'lock'), concurrency: 1, cycleDeadlineMs: 5000,
+            tradeRepublicSdk: {
+                isEnabled: () => true,
+                sessionFile: '/private/test-session.json',
+                connect: async () => ({ orders: { executed: async options => { categories.push(options.instrumentCategory); return []; } } }),
+                close() {}
+            },
+            tradeRepublic: { getQuote: async () => { throw new Error('no stocks should be quoted'); } },
+            telegram: {}
+        }, log() {}, error: assert.fail
+    });
+    assert.equal(code, EXIT.OK);
+    assert.deepEqual(categories, ['brokerage', 'crypto']);
+    assert.equal(journalDb.getBrokerSyncState('trade_republic_executions_brokerage').updated_at, '2026-01-01T12:00:00.000Z');
+    assert.equal(journalDb.getBrokerSyncState('trade_republic_executions_crypto').updated_at, '2026-01-01T12:00:00.000Z');
 });
 
 test('one stock quote failure does not stop other symbols in the cycle', async t => {

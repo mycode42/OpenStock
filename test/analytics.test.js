@@ -45,6 +45,17 @@ test('open positions stay out of completed statistics and use current value only
     assert.equal(result.capital.current_eur, 2095);
 });
 
+test('sub-1e-12 open remainders do not create dashboard positions', () => {
+    const result = calculateDashboard({
+        stocks: [{ id: 1, current_price_eur: 100 }],
+        capitalEvents: [{ event_type: 'INITIAL', amount_eur: 1000, occurred_at: '2026-01-01 00:00:00' }],
+        trades: [{ stock_id: 1, quantity: 5e-13, entry_price_eur: 100, entry_fee_eur: 0, opened_at: '2026-01-02 00:00:00' }]
+    });
+    assert.equal(result.trades.open, 0);
+    assert.equal(result.positions.length, 0);
+    assert.equal(result.capital.invested_eur, 0);
+});
+
 test('equity curve scaling chooses readable hourly samples for several days of minute data', () => {
     const start = Date.parse('2026-01-01T00:00:00Z');
     const points = Array.from({ length: 4 * 24 * 60 + 1 }, (_, index) => ({ at: new Date(start + index * 60000).toISOString(), equity_eur: 100 + index / 100 }));

@@ -78,6 +78,38 @@ test('analytics reads do not create equity snapshots', async t => {
     assert.equal(after, before);
 });
 
+test('broker confirmed journal executions are read-only through the API', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const stock = f.db.addStock('LOCKED', 'Locked', 'EUR', 1, 2);
+    const inserted = f.db.addTrade({
+        trade_id: 'TR-EXEC-read-only', stock_id: Number(stock.lastInsertRowid), opened_at: '2026-09-17 10:00:00', closed_at: null,
+        quantity: 1, currency: 'EUR', entry_price: 10, entry_fx_rate: 1, entry_price_eur: 10, entry_fee_eur: 0,
+        exit_price: null, exit_fx_rate: null, exit_price_eur: null, exit_fee_eur: 0, dividend_eur: 0, strategy: 'trade_republic_execution', notes: ''
+    });
+    const tradeId = Number(inserted.lastInsertRowid);
+    assert.equal(f.db.getTradeById(tradeId).broker_confirmed, 1);
+    const edit = await f.request(`/api/trades/${tradeId}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const close = await f.request(`/api/trades/${tradeId}/close`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(edit.status, 409);
+    assert.equal(close.status, 409);
+    assert.equal(f.db.getTradeById(tradeId).quantity, 1);
+});
+
+test('percentage alert API captures the latest saved EUR quote as its reference', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const stock = f.db.addStock('PCT', 'Percent', 'EUR', 80, 120);
+    f.db.db.prepare('UPDATE stocks SET current_price_eur=100 WHERE id=?').run(stock.lastInsertRowid);
+    const response = await f.request(`/api/stocks/${stock.lastInsertRowid}/percent-alerts`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ direction: 'DROP', change_pct: 5 })
+    });
+    const result = await response.json();
+    assert.equal(response.status, 201, JSON.stringify(result));
+    const { alert_level: level } = result;
+    assert.deepEqual([level.trigger_mode, level.side, level.reference_price_eur, level.price_eur], ['PERCENT', 'BUY', 100, 95]);
+});
+
 test('live prices use the UAPI backup in memory only and coalesce concurrent requests', async t => {
     const f = await fixture({ now: () => new Date('2026-09-17T12:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
@@ -166,13 +198,16 @@ test('verified-instrument charts exclude observations from legacy providers', as
     const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GAP', name: 'Gap', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await response.json()).stock;
     f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'GAP', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-01T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
-    for (const timestamp of ['2026-09-25T20:00:00Z', '2026-09-26T08:00:00Z', '2026-09-27T08:00:00Z', '2026-09-28T07:00:00Z']) {
+    const timestampAt = offsetMs => new Date(Date.now() + offsetMs).toISOString();
+    for (const timestamp of [-5, -4, -3, -2].map(days => timestampAt(days * 24 * 60 * 60 * 1000))) {
         f.db.addPriceSnapshot(stock.id, null, 100, null, 'legacy_import', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
     }
-    f.db.addPriceSnapshot(stock.id, null, 101, null, 'legacy_import', '2026-09-28T10:00:00Z', '2026-09-28 10:00:00');
-    f.db.addPriceSnapshot(stock.id, null, 102, null, 'trade_republic_order_price', '2026-09-28T11:00:00Z', '2026-09-28 11:00:00');
+    const legacyTimestamp = timestampAt(-2 * 60 * 60 * 1000);
+    const verifiedTimestamp = timestampAt(-60 * 60 * 1000);
+    f.db.addPriceSnapshot(stock.id, null, 101, null, 'legacy_import', legacyTimestamp, legacyTimestamp.replace('T', ' ').replace('.000Z', ''));
+    f.db.addPriceSnapshot(stock.id, null, 102, null, 'trade_republic_order_price', verifiedTimestamp, verifiedTimestamp.replace('T', ' ').replace('.000Z', ''));
     const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1w`)).json();
-    assert.deepEqual(history.points.map(point => [point.recorded_at, point.price_eur]), [['2026-09-28T11:00:00.000Z', 102]]);
+    assert.deepEqual(history.points.map(point => [point.recorded_at, point.price_eur]), [[verifiedTimestamp, 102]]);
 });
 
 test('API factory covers lifecycle, history, journal, analytics, refresh isolation, and archive restore', async t => {

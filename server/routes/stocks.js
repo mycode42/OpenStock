@@ -1,6 +1,6 @@
 'use strict';
 
-module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, booleanField, queueStockHistory, resolveVerifiedInstrument, brokerError, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
+module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, queueStockHistory, resolveVerifiedInstrument, resolveCryptoCandidates, resolveVerifiedCryptoInstrument, brokerError, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
     try {
@@ -90,6 +90,18 @@ app.post('/api/stocks/:id/alert-levels', (req, res) => {
     } catch (e) { res.status(e.code === 'SQLITE_CONSTRAINT_UNIQUE' ? 409 : 400).json({ error: e.message || 'Invalid alert level' }); }
 });
 
+app.post('/api/stocks/:id/percent-alerts', (req, res) => {
+    try {
+        const stock = req.app.locals.db.getStockById(req.params.id);
+        if (!stock) return res.status(404).json({ error: 'Stock not found' });
+        const direction = String(req.body.direction || '').toUpperCase();
+        if (!['DROP', 'GAIN'].includes(direction)) return res.status(400).json({ error: 'Direction must be DROP or GAIN' });
+        const changePct = numberField(req.body.change_pct, 'Percentage move', { minimum: Number.EPSILON });
+        const level = req.app.locals.db.addPercentAlertLevel(stock.id, direction, changePct);
+        res.status(201).json({ alert_level: serializeAlertLevel(level) });
+    } catch (e) { res.status(e.code === 'SQLITE_CONSTRAINT_UNIQUE' ? 409 : 400).json({ error: e.message || 'Invalid percentage alert' }); }
+});
+
 app.put('/api/alert-levels/:id', (req, res) => {
     try {
         const existing = req.app.locals.db.getAlertLevelById(req.params.id);
@@ -115,6 +127,10 @@ app.delete('/api/alert-levels/:id', (req, res) => {
 
 app.post('/api/instruments/resolve', async (req, res) => {
     try {
+        if (String(req.body?.asset_type || 'stock').toLowerCase() === 'crypto') {
+            const candidates = await resolveCryptoCandidates(req.app.locals.sdkClient, req.body?.query);
+            return res.json({ asset_type: 'crypto', candidates });
+        }
         const result = await resolveVerifiedInstrument(req.app.locals.brokerClient, req.body?.isin);
         res.json({ verified: true, ...result });
     } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message, verified: false }); brokerError(res, e); }
@@ -122,22 +138,58 @@ app.post('/api/instruments/resolve', async (req, res) => {
 
 app.post('/api/stocks', async (req, res) => {
     try {
+        const assetType = String(req.body?.asset_type || 'stock').toLowerCase();
+        if (assetType === 'crypto') {
+            const instrumentId = String(req.body?.instrument_id || '').trim().toUpperCase();
+            const exchange = String(req.body?.exchange || '').trim().toUpperCase();
+            const requestedSymbol = String(req.body?.symbol || '').trim().toUpperCase();
+            const buyThreshold = Number(req.body?.buy_threshold_eur), sellThreshold = Number(req.body?.sell_threshold_eur);
+            if (!/^[A-Z0-9.\-]{1,12}$/.test(requestedSymbol)) return res.status(400).json({ error: 'A valid crypto symbol is required' });
+            if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
+            const { instrument, home, asset, destination } = await resolveVerifiedCryptoInstrument(req.app.locals.sdkClient, { instrumentId, exchange });
+            const symbol = String(instrument.ticker || '').trim().toUpperCase();
+            if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) return res.status(422).json({ error: 'Trade Republic did not return a usable crypto ticker' });
+            const db = req.app.locals.db;
+            const existing = db.getStockByBrokerInstrument(instrumentId);
+            const existingMapping = existing && db.getBrokerMapping(existing.id);
+            if (existingMapping?.verified_at) return res.status(409).json({ error: existing.archived ? 'Crypto instrument is already configured; restore it explicitly' : 'Crypto instrument is already configured', stock_id: existing.id });
+            if ((!existing || !Number(existing.enabled)) && db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active monitored names allowed' });
+            if (!existing && db.getStockBySymbol(symbol)) return res.status(409).json({ error: 'Derived symbol already exists' });
+            const mapping = { broker: 'trade_republic', ticker: symbol, isin: instrumentId, exchange: home.exchange, currency: 'EUR', broker_metadata_json: JSON.stringify({ instrument, asset, destination, asset_type: 'crypto' }), source: 'sdk_crypto_verified', verified_at: new Date().toISOString() };
+            let stock;
+            if (existing) {
+                stock = db.configureJournalStockWithMapping({ stockId: existing.id, symbol, name: instrument.name, isin: instrumentId, currency: 'EUR', assetType: 'crypto', buyThreshold, sellThreshold, mapping });
+            } else {
+                const result = db.addStockWithMapping({ symbol, name: instrument.name, isin: instrumentId, currency: 'EUR', buyThreshold, sellThreshold, assetType: 'crypto', mapping });
+                stock = db.getStockById(result.lastInsertRowid);
+            }
+            return res.status(existing ? 200 : 201).json({ message: 'Crypto instrument added from verified Trade Republic data', stock: serializeConfiguredStock(stock), mapping: db.getBrokerMapping(stock.id) });
+        }
+        if (assetType !== 'stock') return res.status(400).json({ error: 'Instrument type must be stock or crypto' });
         const isin = String(req.body?.isin || '').trim().toUpperCase();
         const buyThreshold = Number(req.body?.buy_threshold_eur), sellThreshold = Number(req.body?.sell_threshold_eur);
         if (!/^[A-Z0-9]{12}$/.test(isin)) return res.status(400).json({ error: 'A valid 12-character ISIN is required' });
         if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
         const { instrument, home } = await resolveVerifiedInstrument(req.app.locals.brokerClient, isin);
         const exchange = home.exchange, currency = home.currency;
-        const existingIsin = req.app.locals.db.getConfigStocks().find(stock => stock.isin === isin) || req.app.locals.db.getArchivedStocks().find(stock => stock.isin === isin);
-        if (existingIsin) return res.status(409).json({ error: existingIsin.archived ? 'ISIN belongs to an archived stock; restore that identity explicitly' : 'ISIN already exists', stock_id: existingIsin.id });
-        if (req.app.locals.db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
+        const db = req.app.locals.db;
+        const existing = db.getStockByBrokerInstrument(isin);
+        const existingMapping = existing && db.getBrokerMapping(existing.id);
+        if (existingMapping?.verified_at) return res.status(409).json({ error: existing.archived ? 'Stock instrument is already configured; restore it explicitly' : 'Stock instrument is already configured', stock_id: existing.id });
+        if ((!existing || !Number(existing.enabled)) && db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active monitored names allowed' });
         const symbol = instrument.ticker;
-        const existingSymbol = req.app.locals.db.getStockBySymbol(symbol);
+        const existingSymbol = !existing && db.getStockBySymbol(symbol);
         if (existingSymbol) return res.status(409).json({ error: existingSymbol.archived ? 'Derived symbol belongs to an archived stock; restore that identity explicitly' : 'Derived symbol already exists' });
         const mapping = { broker: 'trade_republic', ticker: symbol, isin, exchange, currency, broker_metadata_json: JSON.stringify({ instrument, home }), source: 'broker_verified', verified_at: new Date().toISOString() };
-        const result = req.app.locals.db.addStockWithMapping({ symbol, name: instrument.name, isin, currency, buyThreshold, sellThreshold, mapping });
-        const stock = req.app.locals.db.getStockById(result.lastInsertRowid); queueStockHistory(req.app.locals.historyBackfill, stock);
-        res.status(201).json({ message: 'Stock added from verified Trade Republic instrument', stock: serializeConfiguredStock(stock), mapping: req.app.locals.db.getBrokerMapping(stock.id) });
+        let stock;
+        if (existing) {
+            stock = db.configureJournalStockWithMapping({ stockId: existing.id, symbol, name: instrument.name, isin, currency, assetType: 'stock', buyThreshold, sellThreshold, mapping });
+        } else {
+            const result = db.addStockWithMapping({ symbol, name: instrument.name, isin, currency, buyThreshold, sellThreshold, mapping });
+            stock = db.getStockById(result.lastInsertRowid);
+        }
+        queueStockHistory(req.app.locals.historyBackfill, stock);
+        res.status(existing ? 200 : 201).json({ message: 'Stock added from verified Trade Republic instrument', stock: serializeConfiguredStock(stock), mapping: db.getBrokerMapping(stock.id) });
     } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message }); if (e.code === 'SQLITE_CONSTRAINT') return res.status(409).json({ error: 'Stock ISIN or derived symbol already exists' }); console.error('Error adding stock:', e.message); res.status(500).json({ error: 'Failed to add stock' }); }
 });
 
@@ -161,6 +213,9 @@ app.put('/api/stocks/:id', (req, res) => {
             const newEnabled = enabled === 1 || enabled === '1' || enabled === true || enabled === 'true';
             if (newEnabled && Number(stock.archived)) {
                 return res.status(400).json({ error: 'Archived stocks must be restored with the restore action' });
+            }
+            if (newEnabled && !req.app.locals.db.getBrokerMapping(stock.id)?.verified_at) {
+                return res.status(409).json({ error: 'Add this instrument from Trade Republic before enabling monitoring' });
             }
             if (newEnabled && !Number(stock.enabled) && req.app.locals.db.getActiveStocks().length >= 25) {
                 return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
@@ -194,6 +249,7 @@ app.post('/api/stocks/:id/restore', (req, res) => {
     try {
         const existing = req.app.locals.db.getStockById(req.params.id);
         if (!existing || !Number(existing.archived)) return res.status(404).json({ error: 'Archived stock not found' });
+        if (!req.app.locals.db.getBrokerMapping(existing.id)?.verified_at) return res.status(409).json({ error: 'Add this instrument from Trade Republic to restore monitoring and Journal access' });
         if (req.app.locals.db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
         const name = String(req.body.name ?? existing.name ?? '').trim();
         const currency = String(req.body.currency ?? existing.currency ?? 'USD').trim().toUpperCase();

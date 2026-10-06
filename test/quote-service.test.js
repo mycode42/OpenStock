@@ -24,6 +24,23 @@ test('SDK is primary and retains six-decimal executable prices', async () => {
     assert.equal(sidecarCalls, 0);
 });
 
+test('verified EUR crypto mappings use the SDK executable quote path', async () => {
+    let request;
+    const service = new QuoteService({
+        db: {},
+        sdkClient: { isEnabled: () => true, getQuote: async value => { request = value; return quote; } },
+        now: () => new Date('2026-01-01T12:00:00Z')
+    });
+    const [row] = await service.fetchMany([{
+        id: 2, symbol: 'ETH', asset_type: 'crypto',
+        mapping: { isin: 'XF000ETH0019', exchange: 'BHS', currency: 'EUR', verified_at: '2026-01-01T00:00:00Z' }
+    }]);
+    assert.equal(request.isin, 'XF000ETH0019');
+    assert.equal(request.exchange, 'BHS');
+    assert.equal(row.quote.source, 'trade_republic_sdk_order_price');
+    assert.equal(row.quote.priceEur, 1.2345675);
+});
+
 test('explicit refresh requests bypass an SDK authentication cooldown', async () => {
     let forceAuthRetry;
     const service = new QuoteService({ db: {}, sdkClient: { isEnabled: () => true, getQuote: async request => { forceAuthRetry = request.forceAuthRetry; return quote; } } });

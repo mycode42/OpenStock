@@ -6,7 +6,7 @@ export function createTrading(context) {
 
   function renderTrading() {
     const el = document.getElementById('page-trading');
-    const stocks = getStocks().filter(stock => stock.isin && stock.broker_mapping);
+    const stocks = getStocks().filter(stock => stock.asset_type !== 'crypto' && stock.isin && stock.broker_mapping);
     let accounts = [];
     let portfolio = [];
     let intentKey = '';
@@ -14,7 +14,7 @@ export function createTrading(context) {
     let busy = false;
     let brokerStateReady = false;
 
-    el.innerHTML = `<header><h1>Trading</h1><p class="subtitle">Broker-derived instrument identity with fail-closed, live account and holding checks</p></header><div id="trading-alert"></div>
+    el.innerHTML = `<header><h1>Trading</h1><p class="subtitle">Broker-derived stock orders with fail-closed, live account and holding checks</p></header><div id="trading-alert"></div>${stocks.length ? '' : '<div class="card journal-help">No supported stocks are configured for manual orders. Crypto order placement is disabled.</div>'}
       <section class="card"><form id="trading-form"><div class="form-row"><div class="form-group"><label for="tr-stock">Stock</label><select id="tr-stock" required>${stocks.map(stock => `<option value="${escapeHtml(stock.id)}">${escapeHtml(stock.symbol)} · ${escapeHtml(stock.isin)}</option>`).join('')}</select></div><div class="form-group"><label for="tr-account">Account</label><select id="tr-account" required><option value="">Loading Trade Republic accounts…</option></select></div></div>
       <div class="trading-derived" id="tr-derived"></div><div class="trading-account-summary" id="tr-account-summary"></div><div class="form-row"><div class="form-group"><label for="tr-side">Side</label><select id="tr-side"><option value="buy">BUY</option><option value="sell">SELL</option></select></div><div class="form-group"><label for="tr-mode">Mode</label><select id="tr-mode"><option value="market">Market</option><option value="limit">Limit</option><option value="stopMarket">Stop market</option></select></div><div class="form-group"><label for="tr-validity">Validity</label><select id="tr-validity"><option value="GFD">GFD</option><option value="GTD">GTD</option><option value="GTC">GTC</option></select></div></div>
       <div class="form-row"><div class="form-group conditional hidden" data-mode="limit"><label for="tr-limit">Limit price €</label><input id="tr-limit" type="number" min="0.01" step="0.000001"></div><div class="form-group conditional hidden" data-mode="stopMarket"><label for="tr-stop">Stop price €</label><input id="tr-stop" type="number" min="0.01" step="0.000001"></div><div class="form-group"><label for="tr-size-mode">Order size</label><select id="tr-size-mode"><option value="quantity">Shares / units</option><option value="amount">Euro value</option></select></div><div class="form-group sizing-input" data-sizing="quantity"><label for="tr-qty">Quantity</label><input id="tr-qty" type="number" min="1" step="1" required></div><div class="form-group sizing-input hidden" data-sizing="amount"><label for="tr-amount">Euro value</label><input id="tr-amount" type="number" min="0.01" step="0.000001"></div></div><p class="journal-help">Euro sizing is converted to whole units using the current executable EUR price and excludes broker fees. GTD sends the documented validity value; the sidecar API does not accept a separate GTD date.</p>

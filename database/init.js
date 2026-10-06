@@ -20,6 +20,8 @@ const migrations = [
   ,require('./migrations/018_reliable_monitoring')
   ,require('./migrations/019_broker_health_debounce')
   ,require('./migrations/020_trade_republic_only_quotes')
+  ,require('./migrations/021_crypto_execution_sync')
+  ,require('./migrations/022_percentage_move_alerts')
 ];
 
 function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {

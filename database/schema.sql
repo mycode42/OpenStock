@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS stocks (
     owned INTEGER DEFAULT 0 NOT NULL, -- 0 = Sold, 1 = Owned
     enabled INTEGER DEFAULT 1 NOT NULL, -- 0 = Disabled, 1 = Enabled
     archived INTEGER DEFAULT 0 NOT NULL, -- 0 = active catalogue, 1 = historical only
+    asset_type TEXT NOT NULL DEFAULT 'stock', -- stock or crypto
     last_price_update TEXT,
     last_exchange_rate REAL,
     trigger_state TEXT DEFAULT 'NONE', -- NONE, BUY_TRIGGERED, SELL_TRIGGERED
@@ -51,6 +52,9 @@ CREATE TABLE IF NOT EXISTS alert_levels (
     retired INTEGER NOT NULL DEFAULT 0 CHECK (retired IN (0, 1)),
     triggered_at TEXT,
     retired_at TEXT,
+    trigger_mode TEXT NOT NULL DEFAULT 'PRICE' CHECK (trigger_mode IN ('PRICE','PERCENT')),
+    change_pct REAL,
+    reference_price_eur REAL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE,

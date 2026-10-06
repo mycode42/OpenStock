@@ -1,9 +1,9 @@
-const CACHE_NAME = 'openstock-v1.3.0-shared-chart-readout';
+const CACHE_NAME = 'openstock-v1.4.0';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.3.0',
-  './app.js?v=1.3.0',
+  './styles.css?v=1.4.0',
+  './app.js?v=1.4.0',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',

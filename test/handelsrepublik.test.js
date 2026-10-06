@@ -34,6 +34,32 @@ test('SDK adapter produces executable EUR bid/ask from separate sell and buy rea
   assert.equal(closed, 1);
 });
 
+test('SDK adapter downloads sanitized EUR candle history at an available resolution', async () => {
+  const requests = [];
+  const module = {
+    FileSessionStore: class {},
+    TradeRepublicClient: { create: () => ({
+      auth: { restoreSession: async () => ({ id: 'session' }), refreshSession: async () => {} },
+      market: {
+        availableCandleResolutions: async ({ assetId }) => { assert.equal(assetId, 'XF000ETH0019'); return ['10m', '1h', '4h', '1d', '1w']; },
+        downloadCandles: async (options, paging) => { requests.push({ options, paging }); return [{ time: '2026-10-01T00:00:00.000Z', close: 2400 }, { time: 'invalid', close: 0 }]; }
+      },
+      close() {}
+    }) }
+  };
+  const client = new HandelsrepublikQuoteClient({ env: { TRADE_REPUBLIC_SDK_ENABLED: 'true' }, sessionFile: '/private/session.json', importer: async () => module });
+  const result = await client.getInstrumentHistory({ isin: 'xf000eth0019', exchange: 'bhs', range: '1y', assetType: 'crypto' });
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.timeframe, '1d');
+  assert.equal(requests[0].options.exchangeId, 'BHS');
+  assert.equal(requests[0].options.instrumentType, 'crypto');
+  assert.equal(requests[0].options.range, '1y');
+  assert.equal(requests[0].options.from, undefined);
+  assert.equal(requests[0].paging.maxCandlesPerRequest, 500);
+  assert.deepEqual(result.points.map(point => [point.quoteTime, point.priceEur, point.source]), [['2026-10-01T00:00:00.000Z', 2400, 'trade_republic_history']]);
+  client.close();
+});
+
 test('SDK adapter shares one session handshake across concurrent quotes while quote reads remain parallel', async () => {
   let imports = 0, created = 0, restored = 0, refreshed = 0, quoteCalls = 0, releaseRestore;
   const restoreGate = new Promise(resolve => { releaseRestore = resolve; });

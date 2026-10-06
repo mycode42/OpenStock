@@ -44,6 +44,35 @@ class StocksMethods extends DatabaseCore {
         return this.db.prepare('SELECT * FROM stocks WHERE id = ?').get(id);
     }
 
+    getStockByBrokerInstrument(instrumentId) {
+        return this.db.prepare(`SELECT s.* FROM stocks s
+            LEFT JOIN broker_instrument_mappings m ON m.stock_id=s.id AND m.broker='trade_republic'
+            WHERE s.isin=? OR m.isin=? ORDER BY s.archived, s.id LIMIT 1`).get(instrumentId, instrumentId) || null;
+    }
+
+    ensureBrokerJournalStock({ instrumentId, symbol, name, currency = 'EUR', assetType = 'stock' }) {
+        const ensure = this.db.transaction(() => {
+            const existing = this.getStockByBrokerInstrument(instrumentId);
+            if (existing) return existing;
+            const base = String(symbol || instrumentId).trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 16) || 'ASSET';
+            let uniqueSymbol = base;
+            if (this.db.prepare('SELECT 1 FROM stocks WHERE symbol=?').get(uniqueSymbol)) {
+                const suffix = String(instrumentId).replace(/[^A-Z0-9]/gi, '').slice(-5).toUpperCase() || 'TR';
+                uniqueSymbol = `${base.slice(0, 14)}-${suffix}`;
+                let collision = 2;
+                while (this.db.prepare('SELECT 1 FROM stocks WHERE symbol=?').get(uniqueSymbol)) {
+                    uniqueSymbol = `${base.slice(0, 12)}-${suffix}-${collision++}`;
+                }
+            }
+            const insert = this.db.prepare(`INSERT INTO stocks
+                (symbol,isin,name,currency,buy_threshold_eur,sell_threshold_eur,enabled,archived,price_source,asset_type)
+                VALUES (?,?,?,?,0,0,0,0,'trade_republic',?)`);
+            const row = insert.run(uniqueSymbol, instrumentId, name || uniqueSymbol, currency, assetType);
+            return this.getStockById(row.lastInsertRowid);
+        });
+        return ensure.immediate();
+    }
+
     getStockBySymbol(symbol) {
         return this.db.prepare('SELECT * FROM stocks WHERE symbol = ?').get(symbol);
     }
@@ -82,17 +111,40 @@ class StocksMethods extends DatabaseCore {
         if (!Number.isFinite(Number(priceEur)) || Number(priceEur) <= 0) throw new Error('Alert price must be positive');
         const result = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)').run(stockId, String(side).toUpperCase(), Number(priceEur)); return this.getAlertLevelById(result.lastInsertRowid);
     }
+    addPercentAlertLevel(stockId, direction, changePct) {
+        const stock = this.getStockById(stockId);
+        if (!stock) throw new Error('Stock not found');
+        const move = String(direction).toUpperCase();
+        if (!['DROP', 'GAIN'].includes(move)) throw new Error('Direction must be DROP or GAIN');
+        const pct = Number(changePct);
+        if (!Number.isFinite(pct) || pct <= 0 || pct >= (move === 'DROP' ? 100 : 10000)) throw new Error('Percentage must be positive and below the maximum for that direction');
+        const reference = Number(stock.current_price_eur);
+        if (!Number.isFinite(reference) || reference <= 0) throw new Error('A saved EUR quote is required before adding a percentage alert');
+        const side = move === 'DROP' ? 'BUY' : 'SELL';
+        const moveAmount = reference * pct / 100;
+        const target = move === 'DROP' ? reference - moveAmount : reference + moveAmount;
+        const result = this.db.prepare(`INSERT INTO alert_levels (stock_id, side, price_eur, trigger_mode, change_pct, reference_price_eur)
+            VALUES (?, ?, ?, 'PERCENT', ?, ?)`).run(stockId, side, target, pct, reference);
+        return this.getAlertLevelById(result.lastInsertRowid);
+    }
     updateAlertLevel(id, updates) {
         const existing = this.getAlertLevelById(id);
         if (!existing) throw new Error('Alert level not found');
         if (updates.side !== undefined && !['BUY', 'SELL'].includes(String(updates.side).toUpperCase())) throw new Error('Side must be BUY or SELL');
+        if (existing.trigger_mode === 'PERCENT' && updates.price_eur !== undefined) throw new Error('The target price for a percentage alert is calculated from its reference price');
         if (updates.price_eur !== undefined && (!Number.isFinite(Number(updates.price_eur)) || Number(updates.price_eur) <= 0)) throw new Error('Alert price must be positive');
+        if (updates.change_pct !== undefined && (existing.trigger_mode !== 'PERCENT' || !Number.isFinite(Number(updates.change_pct)) || Number(updates.change_pct) <= 0 || Number(updates.change_pct) >= (existing.side === 'BUY' ? 100 : 10000))) throw new Error('Percentage alert value is invalid');
         for (const key of ['enabled', 'active']) if (updates[key] !== undefined && ![0, 1, true, false].includes(updates[key])) throw new Error(`${key} must be boolean`);
         if ((existing.triggered || existing.retired) && (updates.enabled === 1 || updates.enabled === true || updates.active === 1 || updates.active === true)) throw new Error('Retired alert levels must be rearmed explicitly');
 
         const normalized = {};
         if (updates.side !== undefined) normalized.side = String(updates.side).toUpperCase();
         if (updates.price_eur !== undefined) normalized.price_eur = Number(updates.price_eur);
+        if (updates.change_pct !== undefined) {
+            normalized.change_pct = Number(updates.change_pct);
+            const moveAmount = Number(existing.reference_price_eur) * normalized.change_pct / 100;
+            normalized.price_eur = existing.side === 'BUY' ? Number(existing.reference_price_eur) - moveAmount : Number(existing.reference_price_eur) + moveAmount;
+        }
         if (updates.enabled !== undefined) normalized.enabled = updates.enabled ? 1 : 0;
         if (updates.active !== undefined) normalized.active = updates.active ? 1 : 0;
         if (normalized.enabled === 0) normalized.active = 0;
@@ -136,15 +188,31 @@ class StocksMethods extends DatabaseCore {
         })();
     }
 
-    addStockWithMapping({ symbol, name, isin, currency = 'EUR', buyThreshold, sellThreshold, mapping }) {
+    addStockWithMapping({ symbol, name, isin, currency = 'EUR', buyThreshold, sellThreshold, assetType = 'stock', mapping }) {
         return this.db.transaction(() => {
-            const result = this.db.prepare(`INSERT INTO stocks (symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur, price_source, current_price_usd, last_exchange_rate)
-                VALUES (?, ?, ?, ?, ?, ?, 'trade_republic', NULL, NULL)`).run(symbol, name, isin, currency, buyThreshold, sellThreshold);
+            const result = this.db.prepare(`INSERT INTO stocks (symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur, price_source, current_price_usd, last_exchange_rate, asset_type)
+                VALUES (?, ?, ?, ?, ?, ?, 'trade_republic', NULL, NULL, ?)`).run(symbol, name, isin, currency, buyThreshold, sellThreshold, assetType);
             const stockId = Number(result.lastInsertRowid);
             const add = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
             add.run(stockId, 'BUY', buyThreshold); add.run(stockId, 'SELL', sellThreshold);
             this.saveBrokerMapping({ ...mapping, stock_id: stockId });
             return { lastInsertRowid: stockId };
+        })();
+    }
+
+    configureJournalStockWithMapping({ stockId, symbol, name, isin, currency = 'EUR', assetType = 'stock', buyThreshold, sellThreshold, mapping }) {
+        return this.db.transaction(() => {
+            const stock = this.getStockById(stockId);
+            if (!stock) throw new Error('Journal instrument is unavailable');
+            this.db.prepare(`UPDATE stocks SET symbol=?,name=?,isin=?,currency=?,asset_type=?,archived=0,enabled=1,owned=0,trigger_state='NONE',price_source='trade_republic',
+                buy_threshold_eur=?,sell_threshold_eur=?,updated_at=datetime('now') WHERE id=?`)
+                .run(symbol, name, isin, currency, assetType, buyThreshold, sellThreshold, stockId);
+            if (Number(stock.archived)) this.db.prepare('UPDATE alert_levels SET enabled=CASE WHEN retired=0 THEN 1 ELSE 0 END,active=CASE WHEN retired=0 THEN 1 ELSE 0 END WHERE stock_id=?').run(stockId);
+            this.saveBrokerMapping({ ...mapping, stock_id: stockId });
+            const addLevel = this.db.prepare('INSERT OR IGNORE INTO alert_levels (stock_id,side,price_eur) VALUES (?,?,?)');
+            addLevel.run(stockId, 'BUY', buyThreshold);
+            addLevel.run(stockId, 'SELL', sellThreshold);
+            return this.getStockById(stockId);
         })();
     }
 

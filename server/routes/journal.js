@@ -38,6 +38,7 @@ app.put('/api/trades/:id', (req, res) => {
     try {
         const existing = req.app.locals.db.getTradeById(req.params.id);
         if (!existing) return res.status(404).json({ error: 'Trade not found' });
+        if (existing.broker_confirmed) return res.status(409).json({ error: 'Broker-confirmed trades are read-only' });
         const trade = normaliseTrade(req.body, existing);
         if (!Number.isInteger(trade.stock_id) || !req.app.locals.db.getStockById(trade.stock_id)) return res.status(400).json({ error: 'A valid stock is required' });
         req.app.locals.db.updateTrade(existing.id, trade);
@@ -52,6 +53,7 @@ app.post('/api/trades/:id/close', (req, res) => {
     try {
         const existing = req.app.locals.db.getTradeById(req.params.id);
         if (!existing) return res.status(404).json({ error: 'Trade not found' });
+        if (existing.broker_confirmed) return res.status(409).json({ error: 'Broker-confirmed trades are read-only' });
         if (existing.closed_at) return res.status(409).json({ error: 'Trade is already closed; use explicit edit to correct it' });
         const closeQuantity = numberField(req.body.close_quantity ?? existing.quantity, 'Sale quantity', { minimum: Number.EPSILON });
         const trade = normaliseTrade({ ...req.body, quantity: existing.quantity, closed_at: req.body.closed_at || new Date().toISOString() }, existing);

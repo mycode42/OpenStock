@@ -6,7 +6,7 @@ const { initDatabase } = require('./database/init');
 const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/analytics');
 const { HistoryBackfillQueue } = require('./lib/history-backfill');
 const { TradeRepublicClient, BrokerError } = require('./lib/brokers/trade-republic');
-const { resolveVerifiedInstrument } = require('./lib/instrument-resolution');
+const { resolveVerifiedInstrument, resolveCryptoCandidates, resolveVerifiedCryptoInstrument } = require('./lib/instrument-resolution');
 const { QuoteService } = require('./lib/quote-service');
 const { HandelsrepublikQuoteClient } = require('./lib/brokers/handelsrepublik');
 const APP_VERSION = require('./package.json').version;
@@ -84,7 +84,7 @@ function serializeBrokerStock(stock, db) {
     const safeQuote = brokerPriceIsCurrent ? { bid_eur: quote.bid_eur, ask_eur: quote.ask_eur, spread_eur: quote.bid_eur !== null && quote.ask_eur !== null ? quote.ask_eur - quote.bid_eur : null, quote_time: quote.quote_time, observed_at: quote.observed_at, source: quote.source } : null;
     const fallback = observation?.source === 'trade_republic_order_price';
     const marketLabel = !observation ? 'No quote' : observation.source === 'trade_republic_sdk_order_price' ? 'Handelsrepublik SDK' : observation.source === 'trade_republic_order_price' ? 'Trade Republic UAPI sidecar' : 'Trade Republic history';
-    return { ...serializeStock(stock), broker_mapping: mapping ? { broker: mapping.broker, ticker: mapping.ticker, isin: mapping.isin, exchange: mapping.exchange, currency: mapping.currency, verified_at: mapping.verified_at, source: mapping.source } : null, broker_quote: safeQuote,
+    return { ...serializeStock(stock), asset_type: stock.asset_type || 'stock', broker_mapping: mapping ? { broker: mapping.broker, ticker: mapping.ticker, isin: mapping.isin, exchange: mapping.exchange, currency: mapping.currency, asset_type: stock.asset_type || 'stock', verified_at: mapping.verified_at, source: mapping.source } : null, broker_quote: safeQuote,
         market_data: { source: observation?.source || null, label: marketLabel, fallback, quote_time: toISODateTime(observation?.quote_time) },
         position: db.getPositionSummary(stock.id), alert_levels: db.getAlertLevels(stock.id).map(serializeAlertLevel) };
 }
@@ -122,6 +122,11 @@ function serializeAlertLevel(level) {
 }
 
 function alertLevelInput(body, existing = null) {
+    if (existing?.trigger_mode === 'PERCENT') {
+        const input = {};
+        if (body.change_pct !== undefined) input.change_pct = numberField(body.change_pct, 'Percentage move', { minimum: Number.EPSILON });
+        return input;
+    }
     const side = String(body.side ?? existing?.side ?? '').toUpperCase();
     if (!['BUY', 'SELL'].includes(side)) throw new Error('Side must be BUY or SELL');
     return { side, price_eur: numberField(body.price_eur ?? existing?.price_eur, 'Alert price', { minimum: Number.EPSILON }) };
@@ -253,6 +258,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     });
     app.locals.sdkClient = sdkClient || new HandelsrepublikQuoteClient();
     historyBackfill.brokerClient = app.locals.brokerClient;
+    historyBackfill.sdkClient = app.locals.sdkClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
@@ -273,7 +279,7 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
     app.use(express.static(path.join(__dirname, 'www')));
     app.locals.liveQuoteFeed = createLiveQuoteFeed({ app, now });
 
-require('./server/routes/stocks')({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, booleanField, queueStockHistory, resolveVerifiedInstrument, brokerError, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime });
+require('./server/routes/stocks')({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, queueStockHistory, resolveVerifiedInstrument, resolveCryptoCandidates, resolveVerifiedCryptoInstrument, brokerError, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime });
 
 require('./server/routes/journal')({ app, serializeTrade, normaliseTrade, numberField, toDatabaseDate, dashboardData, captureEquitySnapshot, toISODateTime });
 

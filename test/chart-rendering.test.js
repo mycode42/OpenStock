@@ -26,10 +26,10 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
     assert.match(source, /async function loadCardHistory\(card, range = '1d', \{ force = false, showLoading = true \} = \{\}\)/);
-    assert.match(source, /async function refreshOpenHistoryPanels\(container = document\)/);
+    assert.match(source, /async function refreshOpenHistoryPanels\(container = document, \{ includePreviouslyOpened = false \} = \{\}\)/);
     assert.match(source, /loadCardHistory\(card, panel\.dataset\.requestedRange \|\| '1d', \{ force: true, showLoading: false \}\)/);
-    assert.match(source, /mouseenter', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) loadCardHistory\(card, '1d'\); \}/);
-    assert.match(source, /focusin', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) loadCardHistory\(card, '1d'\); \}/);
+    assert.match(source, /mouseenter', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) refreshCardHistory\(\); \}/);
+    assert.match(source, /focusin', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) refreshCardHistory\(\); \}/);
     assert.match(source, /panel\.dataset\.requestedRange \|\| '1d'/);
     assert.match(formatting, /'1w': '1-week'/);
     assert.match(source, /function smoothCoordinatePath/);
@@ -150,10 +150,11 @@ test('dashboard charts provide five position-matched x-axis labels on desktop', 
     }
 });
 
-test('trade buy and sell prices use six-decimal input precision', () => {
+test('trade buy and sell fields support crypto precision and retain six-decimal stock formatting', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
-    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.000001" step="\.000001" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, 6\)\)\}"/);
-    assert.match(journal, /id="trade-exit-price" name="exit_price" type="number" min="\.000001" step="\.000001" \$\{isClosing \? 'required' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.exit_price, 6\)\)\}"/);
+    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.000000000001" step="\.000000000001" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, edit\?\.asset_type === 'crypto' \? 12 : 6\)\)\}"/);
+    assert.match(journal, /id="trade-exit-price" name="exit_price" type="number" min="\.000000000001" step="\.000000000001" \$\{isClosing \? 'required' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.exit_price, edit\?\.asset_type === 'crypto' \? 12 : 6\)\)\}"/);
+    assert.match(journal, /id="trade-quantity" name="quantity" type="number" min="\.000000000001" step="\.000000000001"/);
 });
 
 test('journal close workflow accepts a sale quantity and preserves the open balance', () => {
@@ -221,8 +222,7 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(journal, /journal-performance-card/);
     assert.match(journal, /function renderPerformanceDetails/);
     assert.match(journal, /<details class="journal-collapsible journal-performance-details">/);
-    assert.match(journal, /Monthly compound rate/);
-    assert.match(journal, /1-year capital illustration/);
+    assert.match(journal, /Est\. Yearly Profit/);
     assert.match(journal, /chartCard\.insertAdjacentElement\('afterend', performanceCard\)/);
 });
 
@@ -251,8 +251,11 @@ test('journal chart modes use concise labels with no explanatory subtitle', () =
     assert.doesNotMatch(journal, /Trades, performance and risk/);
     assert.doesNotMatch(journal, /Current capital and peak equity over time/);
     assert.doesNotMatch(journal, /Realized P\/L in euros, with percentage return on contributed capital/);
-    assert.match(journal, /journalKpi\('Est\. Yearly Profit'/);
-    assert.match(journal, /journalKpi\('Annualized Return'/);
+    const compactKpis = journal.match(/<div class="journal-kpi-grid journal-kpi-secondary-grid">([\s\S]*?)<\/div>/)?.[1];
+    assert.ok(compactKpis);
+    assert.deepEqual([...compactKpis.matchAll(/journalKpi\('([^']+)'/g)].map(([, label]) => label), [
+        'Available Cash', 'Avg Daily', 'Avg Monthly', 'YTD P/L', 'Est. Yearly Profit', 'Open Positions'
+    ]);
     assert.doesNotMatch(journal, /<div class="journal-small">Estimated yearly profit/);
     assert.match(styles, /\.journal-chart-controls \.history-range\{min-width:0;min-height:0;padding:\.33rem \.38rem;font-size:\.65rem\}/);
     assert.match(journal, /function journalAxisMoney/);

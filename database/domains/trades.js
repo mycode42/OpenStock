@@ -3,6 +3,12 @@
 const QuotesMethods = require('./quotes');
 const crypto = require('node:crypto');
 
+const BROKER_CONFIRMED_SQL = `CASE WHEN (t.trade_id LIKE 'TR-EXEC-%' OR t.trade_id LIKE 'TR-SELL-%')
+    OR instr(COALESCE(t.notes,''),'Trade Republic confirmed execution') > 0
+    OR EXISTS (SELECT 1 FROM trade_merge_events broker_source WHERE broker_source.target_trade_id=t.id
+        AND (broker_source.source_trade_id LIKE 'TR-EXEC-%' OR broker_source.source_trade_json LIKE '%"kind":"broker_execution"%'))
+    THEN 1 ELSE 0 END AS broker_confirmed`;
+
 class TradesMethods extends QuotesMethods {
     tradeQueryParts(filters = {}) {
         const clauses = [];
@@ -17,7 +23,8 @@ class TradesMethods extends QuotesMethods {
     getAllTrades(filters = {}) {
         const { where, values } = this.tradeQueryParts(filters);
         return this.db.prepare(`
-            SELECT t.*, s.symbol, s.name, s.current_price_eur,
+            SELECT t.*, s.symbol, s.name, s.asset_type, s.current_price_eur,
+                   ${BROKER_CONFIRMED_SQL},
                    (SELECT COUNT(*) FROM trades numbered WHERE numbered.id <= t.id) AS trade_number
             FROM trades t JOIN stocks s ON s.id = t.stock_id
             ${where}
@@ -27,25 +34,42 @@ class TradesMethods extends QuotesMethods {
 
     getTradesPage(filters = {}, { page = 1, pageSize = 20 } = {}) {
         const { where, values } = this.tradeQueryParts(filters);
+        const groupedWhere = where ? `${where} AND t.trade_id NOT LIKE 'TR-SELL-%' AND instr(COALESCE(t.notes,''),'Partial sale of ') = 0`
+            : `WHERE t.trade_id NOT LIKE 'TR-SELL-%' AND instr(COALESCE(t.notes,''),'Partial sale of ') = 0`;
         const safePageSize = Math.min(100, Math.max(1, Math.floor(Number(pageSize) || 20)));
         const requestedPage = Math.max(1, Math.floor(Number(page) || 1));
-        const total = this.db.prepare(`SELECT COUNT(*) AS total FROM trades t JOIN stocks s ON s.id = t.stock_id ${where}`).get(...values).total;
+        const total = this.db.prepare(`SELECT COUNT(*) AS total FROM trades t JOIN stocks s ON s.id = t.stock_id ${groupedWhere}`).get(...values).total;
         const totalPages = Math.max(1, Math.ceil(total / safePageSize));
         const safePage = Math.min(requestedPage, totalPages);
         const items = this.db.prepare(`
-            SELECT t.*, s.symbol, s.name, s.current_price_eur,
+            SELECT t.*, s.symbol, s.name, s.asset_type, s.current_price_eur,
+                   ${BROKER_CONFIRMED_SQL},
                    (SELECT COUNT(*) FROM trades numbered WHERE numbered.id <= t.id) AS trade_number
             FROM trades t JOIN stocks s ON s.id = t.stock_id
-            ${where}
+            ${groupedWhere}
             ORDER BY COALESCE(t.closed_at, t.opened_at) DESC, t.id DESC
             LIMIT ? OFFSET ?
         `).all(...values, safePageSize, (safePage - 1) * safePageSize);
-        return { items, page: safePage, page_size: safePageSize, total, total_pages: totalPages };
+        return { items: items.map(item => ({ ...item, group_details: this.getTradeGroupDetails(item) })), page: safePage, page_size: safePageSize, total, total_pages: totalPages };
+    }
+
+    getTradeGroupDetails(trade) {
+        const mergedEntries = this.db.prepare('SELECT source_trade_id,source_trade_json FROM trade_merge_events WHERE target_trade_id=? ORDER BY id').all(trade.id)
+            .map(event => {
+                try { return { source_trade_id: event.source_trade_id, ...JSON.parse(event.source_trade_json) }; }
+                catch { return { source_trade_id: event.source_trade_id }; }
+            })
+            .filter(event => !String(event.audit_type || '').startsWith('duplicate_manual_'));
+        const partialSales = this.db.prepare(`SELECT t.*,s.symbol,s.asset_type FROM trades t JOIN stocks s ON s.id=t.stock_id
+            WHERE (t.trade_id LIKE 'TR-SELL-%-' || ?) OR instr(COALESCE(t.notes,''),?)>0
+            ORDER BY COALESCE(t.closed_at,t.opened_at),t.id`).all(String(trade.id), `from open trade ${trade.trade_id}.`);
+        return { merged_entries: mergedEntries, partial_sales: partialSales };
     }
 
     getTradeById(id) {
         return this.db.prepare(`
-            SELECT t.*, s.symbol, s.name, s.current_price_eur,
+            SELECT t.*, s.symbol, s.name, s.asset_type, s.current_price_eur,
+                   ${BROKER_CONFIRMED_SQL},
                    (SELECT COUNT(*) FROM trades numbered WHERE numbered.id <= t.id) AS trade_number
             FROM trades t JOIN stocks s ON s.id = t.stock_id
             WHERE t.id = ?
@@ -87,12 +111,12 @@ class TradesMethods extends QuotesMethods {
             if (!(Number.isFinite(Number(row.quantity)) && Number(row.quantity) > 0 && Number.isFinite(Number(row.entry_price)) && Number(row.entry_price) > 0 && Number.isFinite(Number(row.entry_price_eur)) && Number(row.entry_price_eur) > 0 && Number.isFinite(Number(row.entry_fee_eur)) && Number(row.entry_fee_eur) >= 0)) throw new Error('Cannot merge an invalid open trade');
         }
         const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity), 0);
-        const entryPriceEur = Number((rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price_eur), 0) / totalQuantity).toFixed(4));
+        const entryPriceEur = rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price_eur), 0) / totalQuantity;
         const currencies = [...new Set(rows.map(row => String(row.currency).toUpperCase()))];
         const currency = currencies.length === 1 ? currencies[0] : 'EUR';
         const entryPrice = currency === 'EUR'
             ? entryPriceEur
-            : Number((rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price), 0) / totalQuantity).toFixed(4));
+            : rows.reduce((sum, row) => sum + Number(row.quantity) * Number(row.entry_price), 0) / totalQuantity;
         const entryFxRate = currency === 'EUR' ? 1 : entryPriceEur / entryPrice;
         const strategies = [...new Set(rows.map(row => String(row.strategy || '').trim()).filter(Boolean))];
         const notes = [...new Set(rows.map(row => String(row.notes || '').trim()).filter(Boolean))];
@@ -121,6 +145,7 @@ class TradesMethods extends QuotesMethods {
     }
 
     updateTrade(id, trade) {
+        if (this.isBrokerConfirmedTrade(id)) throw new Error('Broker-confirmed trades are read-only');
         return this.db.prepare(`
             UPDATE trades SET
                 stock_id=@stock_id, opened_at=@opened_at, closed_at=@closed_at, quantity=@quantity, currency=@currency,
@@ -137,6 +162,7 @@ class TradesMethods extends QuotesMethods {
         return this.db.transaction(() => {
             const existing = this.db.prepare('SELECT * FROM trades WHERE id = ?').get(id);
             if (!existing) throw new Error('Trade not found');
+            if (this.isBrokerConfirmedTrade(id)) throw new Error('Broker-confirmed trades are read-only');
             if (existing.closed_at) throw new Error('Trade is already closed; use explicit edit to correct it');
             const openQuantity = Number(existing.quantity);
             if (quantity > openQuantity) throw new Error(`Sale quantity cannot exceed the open quantity (${openQuantity})`);
@@ -167,6 +193,11 @@ class TradesMethods extends QuotesMethods {
                 .run(remainingQuantity, remainingEntryFee, id);
             return { id, partial: true, closedTradeId };
         })();
+    }
+
+    isBrokerConfirmedTrade(id) {
+        const row = this.db.prepare(`SELECT ${BROKER_CONFIRMED_SQL} FROM trades t WHERE t.id=?`).get(id);
+        return Boolean(row?.broker_confirmed);
     }
 
     // ===== CAPITAL & EQUITY =====

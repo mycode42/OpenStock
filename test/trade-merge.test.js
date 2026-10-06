@@ -89,3 +89,22 @@ test('closed historical trades remain separate', t => {
     assert.equal(rows.length, 2);
     assert.deepEqual(rows.map(row => row.trade_number), [2, 1], 'display numbers increment by trade creation order even when the newest trade is listed first');
 });
+
+test('trade page keeps partial sales under an expandable main position', t => {
+    const { dir, db } = fixture();
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const main = db.addTrade(trade({ trade_id: 'GROUP-1', quantity: 4, entry_price: 10, entry_price_eur: 10 }));
+    db.addTrade(trade({ trade_id: 'GROUP-2', opened_at: '2026-09-14 10:05:00', quantity: 2, entry_price: 12, entry_price_eur: 12 }));
+    db.closeTradeQuantity(main.lastInsertRowid, trade({ trade_id: 'GROUP-1', stock_id: 1, opened_at: '2026-09-14 10:00:00', closed_at: '2026-09-15 10:00:00', quantity: 4, entry_price: 10, entry_price_eur: 10, exit_price: 15, exit_fx_rate: 1, exit_price_eur: 15, exit_fee_eur: 1 }), 1);
+    const page = db.getTradesPage({}, { page: 1, pageSize: 10 });
+    assert.equal(page.total, 1);
+    assert.equal(page.items.length, 1);
+    assert.equal(page.items[0].trade_id, 'GROUP-1');
+    assert.equal(page.items[0].group_details.merged_entries.length, 1);
+    assert.equal(page.items[0].group_details.partial_sales.length, 1);
+    assert.equal(page.items[0].group_details.partial_sales[0].quantity, 1);
+    db.db.prepare('INSERT INTO trade_merge_events (target_trade_id,source_trade_id,source_trade_json) VALUES (?,?,?)')
+        .run(main.lastInsertRowid, 'AUDIT-MANUAL-1', JSON.stringify({ audit_type: 'duplicate_manual_record', trade_id: 'OLD-MANUAL-1' }));
+    const refreshed = db.getTradesPage({}, { page: 1, pageSize: 10 });
+    assert.equal(refreshed.items[0].group_details.merged_entries.length, 1, 'manual duplicate audit snapshots stay out of the expandable position details');
+});

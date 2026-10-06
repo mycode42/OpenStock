@@ -60,6 +60,23 @@ test('alert levels are independently rearmable and state transitions are normali
     db.db.close();
 });
 
+test('percentage alerts keep a fixed reference and derive the target from the requested move', t => {
+    const { dir, file } = fixture(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const db = new OpenStockDB(file);
+    db.addStock('MOVE', 'Move', 'EUR', 80, 120);
+    db.db.prepare('UPDATE stocks SET current_price_eur=100 WHERE id=1').run();
+
+    const drop = db.addPercentAlertLevel(1, 'DROP', 5);
+    const gain = db.addPercentAlertLevel(1, 'GAIN', 10);
+    assert.deepEqual([drop.trigger_mode, drop.side, drop.change_pct, drop.reference_price_eur, drop.price_eur], ['PERCENT', 'BUY', 5, 100, 95]);
+    assert.deepEqual([gain.trigger_mode, gain.side, gain.change_pct, gain.reference_price_eur, gain.price_eur], ['PERCENT', 'SELL', 10, 100, 110]);
+    const adjusted = db.updateAlertLevel(drop.id, { change_pct: 7.5 });
+    assert.equal(adjusted.reference_price_eur, 100);
+    assert.equal(adjusted.price_eur, 92.5);
+    assert.throws(() => db.addPercentAlertLevel(1, 'DROP', 100), /maximum/);
+    db.db.close();
+});
+
 test('rearming a delivered level clears its prior outbox occurrence but preserves alert history', t => {
     const { dir, file } = fixture(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const db = new OpenStockDB(file);

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
 const { initDatabase } = require('../database/init');
+const OpenStockDB = require('../database/db');
 const { EXIT, runMonitor, safeError } = require('../lib/monitor');
 const { TradeRepublicClient } = require('../lib/brokers/trade-republic');
 const { HandelsrepublikQuoteClient } = require('../lib/brokers/handelsrepublik');
@@ -39,6 +40,7 @@ async function main() {
     if (!fs.existsSync(dbPath)) { error(`Database not found: ${dbPath}`); return EXIT.CONFIG; }
     initDatabase({ silent: true });
     const db = new Database(dbPath);
+    const journalDb = new OpenStockDB(dbPath);
     db.pragma('journal_mode = WAL'); db.pragma('foreign_keys = ON');
     const chatId = process.env.TELEGRAM_CHAT_ID || '';
     if (!chatId) error('No Telegram recipient configured; trigger notifications will fail safely');
@@ -47,7 +49,7 @@ async function main() {
         const tradeRepublic = new TradeRepublicClient({ timeoutMs });
         const tradeRepublicSdk = new HandelsrepublikQuoteClient({ timeoutMs });
         log('=== Monitoring cycle started ===');
-        return await runMonitor({ db, log, error, config: {
+        return await runMonitor({ db, journalDb, log, error, config: {
             timeoutMs,
             concurrency: positiveSetting('MONITOR_CONCURRENCY', 3),
             cycleDeadlineMs: positiveSetting('MONITOR_CYCLE_DEADLINE_MS', 45000),
@@ -57,7 +59,7 @@ async function main() {
             tradeRepublicSdk
         }});
     } catch (monitorError) { error(safeError(monitorError)); return EXIT.CONFIG; }
-    finally { db.close(); }
+    finally { db.close(); journalDb.db.close(); }
 }
 
 main().then(code => { log(`Monitoring cycle complete (exit=${code})`); process.exitCode = code; }).catch(errorValue => { error(safeError(errorValue)); process.exitCode = EXIT.CONFIG; });

@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { sanitizeQuote, sanitizeInstrument, sanitizeAccount, sanitizeCollection } = require('../../lib/brokers/trade-republic');
 const { normalizedBrokerRows } = require('../../lib/broker-sync-service');
+const { syncTradeRepublicExecutions } = require('../../lib/brokers/handelsrepublik-execution-sync');
 const { normalizeOrderSizing, hasValidOrderSizingInput, failedGateNames, fetchLiveOrderAuthority } = require('../../lib/order-safety');
 
 module.exports = function registerTradeRepublicRoutes({ app, resolveVerifiedInstrument, serializeConfiguredStock, brokerError, serializeTrade }) {
@@ -36,19 +37,25 @@ app.post('/api/broker/trade-republic/sync', async (req, res) => {
     const orderRows=normalizedBrokerRows(orders,'orders',sanitizeCollection,observed_at);
     const transactionRows=normalizedBrokerRows(transactions,'transactions',sanitizeCollection,observed_at);
     const counts={accounts:req.app.locals.db.syncBrokerRows('broker_accounts',accountRows),portfolio:req.app.locals.db.syncBrokerRows('broker_portfolio',normalizedBrokerRows(portfolio,'portfolio',sanitizeCollection,observed_at).filter(x=>x.quantity!==null)),orders:req.app.locals.db.syncBrokerRows('broker_orders',orderRows),transactions:req.app.locals.db.syncBrokerRows('broker_transactions',transactionRows)};
-    const candidates=[...orderRows,...transactionRows].filter(row=>['FILLED','EXECUTED'].includes(String(row.status).toUpperCase()) && !(row.execution_identity && req.app.locals.db.getBrokerExecution(row.execution_identity))).map(row=>{
+    let journal_sync = null;
+    try {
+      journal_sync = await syncTradeRepublicExecutions({ db:req.app.locals.db, sdkClient:req.app.locals.sdkClient });
+    } catch { journal_sync = { skipped:false, error:'Trade Republic execution history could not be synchronized' }; }
+    const candidates=(journal_sync.skipped || journal_sync.error ? [...orderRows,...transactionRows] : []).filter(row=>['FILLED','EXECUTED'].includes(String(row.status).toUpperCase()) && !(row.execution_identity && req.app.locals.db.getBrokerExecution(row.execution_identity))).map(row=>{
       const complete=Boolean(row.execution_identity && row.instrument && row.side && row.quantity>0 && row.execution_price_eur>0 && row.execution_fees_eur!==null && row.execution_fees_eur!==undefined && row.executed_at);
       const candidateKey=crypto.createHash('sha256').update(JSON.stringify([row.external_ref_masked||null,row.occurred_at||null,row.title||null,row.amount_eur??null])).digest('hex');
       return {broker:'trade_republic',candidate_key:candidateKey,external_ref_masked:row.external_ref_masked,status:row.status,title:row.title||null,subtitle:row.subtitle||null,amount_eur:row.amount_eur,currency:row.currency,occurred_at:row.occurred_at,reason:complete?'Execution is not linked to an OpenStock order intent; review before journaling':'Authoritative ISIN, side, quantity, execution price, fees, or execution identity is missing; complete manually before journaling'};
     });
     const newCandidates=candidates.reduce((sum,candidate)=>sum+req.app.locals.db.addBrokerReconciliationCandidate(candidate).changes,0);
-    res.json({broker:'trade_republic',observed_at,counts,new_reconciliation_candidates:newCandidates,pending_reconciliation:req.app.locals.db.getBrokerReconciliationCandidates().length});
+    res.json({broker:'trade_republic',observed_at,counts,new_reconciliation_candidates:newCandidates,pending_reconciliation:req.app.locals.db.getBrokerReconciliationCandidates().length,journal_sync});
   } catch(e) { brokerError(res,e); }
 });
 app.post('/api/broker/trade-republic/order-preview', async (req, res) => {
     try {
         const b = req.body || {};
         const db = req.app.locals.db;
+        const stock = db.getStockById(Number(b.stock_id));
+        if (stock?.asset_type === 'crypto') return res.status(409).json({ error: 'Crypto is available for monitoring and Journal only; manual crypto orders are disabled' });
         const mapping = db.getBrokerMapping(Number(b.stock_id));
         if (!mapping?.verified_at || mapping.currency !== 'EUR') return res.status(409).json({ error: 'Verified EUR mapping required' });
         const mode = String(b.mode || 'market');
@@ -86,6 +93,7 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
     const key=String(b.idempotency_key||'');
     const existing=key ? db.getBrokerOrderIntent(key) : null;
     if(existing) return res.status(existing.status==='REJECTED'?409:200).json({order:{idempotency_key:key,status:existing.status,external_ref_masked:existing.external_ref_masked||null},duplicate:true});
+    const stock=db.getStockById(Number(b.stock_id));
     const mapping=db.getBrokerMapping(Number(b.stock_id));
     const side=String(b.type||'').toLowerCase();
     const rawMode=String(b.mode||'market');
@@ -100,6 +108,7 @@ app.post('/api/broker/trade-republic/orders', async (req,res) => {
         dry_run_disabled:process.env.TRADE_REPUBLIC_DRY_RUN==='false',
         kill_switch_clear:process.env.TRADE_REPUBLIC_KILL_SWITCH!=='true',
         acknowledged:process.env.TRADE_REPUBLIC_LIVE_ACK==='true',
+        valid_asset_type:stock?.asset_type!=='crypto',
         mapped:Boolean(mapping&&mapping.verified_at&&mapping.currency==='EUR'),
         account_selected:Boolean(accountRef),
         confirmed:[`PLACE ${key}`,'PLACE ORDER'].includes(String(b.confirmation||'').trim()),

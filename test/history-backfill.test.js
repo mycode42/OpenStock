@@ -41,9 +41,29 @@ test('history queue processes active mapped stocks and is idempotent', async t =
 
     assert.equal(queue.enqueueMissing(), 1);
     await queue.run();
-    assert.deepEqual(requests, ['5y', '1y', '1mo', '1d'].map(range => ({ isin: `US${String(activeId).padStart(10, '0')}`, range })));
+    assert.deepEqual(requests, ['5y', '1y', '1mo', '1d'].map(range => ({ isin: `US${String(activeId).padStart(10, '0')}`, exchange: 'TIB', range, assetType: 'stock' })));
     assert.equal(db.db.prepare("SELECT COUNT(*) count FROM price_history WHERE stock_id=? AND source='trade_republic_history'").get(activeId).count, 4);
     assert.equal(queue.enqueueMissing(), 0);
+});
+
+test('crypto history uses the SDK candle reader instead of the stock sidecar', async t => {
+    const { dir, db } = fixture();
+    t.after(() => { db.db.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const id = addMappedStock(db, 'ETH');
+    db.db.prepare("UPDATE stocks SET asset_type='crypto' WHERE id=?").run(id);
+    const sdkRequests = [];
+    const queue = new HistoryBackfillQueue({
+        db, delayMs: 0,
+        brokerClient: { getInstrumentHistory: async () => { assert.fail('crypto history should use SDK'); } },
+        sdkClient: { getInstrumentHistory: async request => { sdkRequests.push(request); return history(request.range); } },
+        logger: { log() {}, error: assert.fail }
+    });
+    queue.enqueueMissing();
+    await queue.run();
+    assert.equal(sdkRequests.length, 4);
+    assert.equal(sdkRequests[0].isin, `US${String(id).padStart(10, '0')}`);
+    assert.equal(sdkRequests[0].exchange, 'TIB');
+    assert.equal(db.db.prepare("SELECT COUNT(*) count FROM price_history WHERE stock_id=? AND source='trade_republic_history'").get(id).count, 4);
 });
 
 test('history failures are recorded and isolated to the affected symbol', async t => {

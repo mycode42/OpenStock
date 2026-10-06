@@ -16,6 +16,8 @@ test('fresh initialization is versioned and idempotent', t => {
     const db = new Database(file);
     assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), migrations.map(migration => migration.version));
     assert.equal(db.prepare('PRAGMA table_info(stocks)').all().some(row => row.name === 'archived'), true);
+    assert.equal(db.prepare('PRAGMA table_info(stocks)').all().some(row => row.name === 'asset_type'), true);
+    assert.deepEqual(db.prepare('PRAGMA table_info(broker_sync_state)').all().map(row => row.name), ['sync_key', 'updated_at', 'changed_at']);
     assert.deepEqual(db.prepare('PRAGMA table_info(broker_health_state)').all().map(row => row.name), ['broker', 'status', 'checked_at', 'changed_at', 'last_notified_at', 'last_error', 'last_notified_status', 'failure_streak', 'success_streak']);
     db.close();
 });
@@ -35,6 +37,8 @@ test('migration 017 upgrades an already-applied broker health table', t => {
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=17').get()['1'], 1);
     assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'failure_streak'), true);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=20').get()['1'], 1);
+    assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=21').get()['1'], 1);
+    assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=22').get()['1'], 1);
     upgraded.close();
 });
 
@@ -46,6 +50,7 @@ test('fresh seeded initialization creates one BUY and SELL level per stock', t =
     assert.equal(db.prepare('SELECT COUNT(*) count FROM stocks').get().count, 5);
     assert.equal(db.prepare("SELECT COUNT(*) count FROM stocks WHERE price_source='trade_republic'").get().count, 5);
     assert.equal(db.prepare('SELECT COUNT(*) count FROM alert_levels').get().count, 10);
+    assert.deepEqual(db.prepare('PRAGMA table_info(alert_levels)').all().filter(column => ['trigger_mode', 'change_pct', 'reference_price_eur'].includes(column.name)).map(column => column.name), ['trigger_mode', 'change_pct', 'reference_price_eur']);
     assert.equal(db.prepare(`SELECT COUNT(*) count FROM stocks s
       WHERE (SELECT COUNT(*) FROM alert_levels al WHERE al.stock_id=s.id AND al.side='BUY')=1
         AND (SELECT COUNT(*) FROM alert_levels al WHERE al.stock_id=s.id AND al.side='SELL')=1`).get().count, 5);

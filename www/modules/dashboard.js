@@ -27,6 +27,11 @@ function liveQuoteSourceLabel(source) {
     return 'Trade Republic history';
 }
 
+function alertText(level) {
+    if (level.trigger_mode === 'PERCENT') return `${level.side === 'BUY' ? 'DROP' : 'GAIN'} ${Number(level.change_pct).toFixed(2)}%`;
+    return `${level.side} €${money(level.price_eur)}`;
+}
+
 export function createDashboard(context) {
     const { getStocks, request: af, charts, actions } = context;
     const attachChartHovers = charts.attachChartHovers;
@@ -37,7 +42,7 @@ export function createDashboard(context) {
     let liveAbortController = null;
     let retrySdkAuthOnNextPoll = true;
     const livePollMs = 1000;
-    const chartRefreshMs = 10000;
+    const chartRefreshMs = 60000;
     let chartRefreshTimer = null;
     let chartRefreshInFlight = false;
     function applyLivePrices(payload) {
@@ -135,12 +140,12 @@ function renderDashboard() {
             <div class="stock-price eu" data-live-price>€${money(stock.current_price_eur)}</div>
             <div class="quote-sides" aria-label="Live bid and ask prices"><span>Bid <strong data-live-bid>${quoteMoney(bid)}</strong></span><span>Ask <strong data-live-ask>${quoteMoney(ask)}</strong></span></div>
             ${heldValue}
-            <div class="level-summary"><strong>Active levels</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(level.side)} €${money(level.price_eur)}</span>`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(level.side)} €${money(level.price_eur)} · ${level.retired ? 'retired' : 'triggered'}</span>`).join('') : 'None'}</div></div>
-            <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div><div class="history-popover" role="status" aria-live="polite"></div>
+            <div class="level-summary"><strong>Active alerts</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertText(level))}</span>`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(alertText(level))} · ${level.retired ? 'retired' : 'triggered'}</span>`).join('') : 'None'}</div></div>
+            <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div><button type="button" class="btn btn-sm btn-secondary dashboard-alert-link" data-stock-action="configureAlerts" data-stock-id="${escapeHtml(stock.id)}">Manage alerts</button><div class="history-popover" role="status" aria-live="polite"></div>
         </div>`;
     }).join('');
     container.innerHTML = `<header><h1>📊 OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} held</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} triggered/retired level(s)</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Held</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggered levels</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Open a stock chart with mouse, keyboard focus, or a tap.</div>${monitoredStocks.length ? `<div class="stock-grid">${cards}</div>` : '<div class="card empty-state">No stocks are enabled. Enable a stock in Configure to monitor it here.</div>'}`;
-    container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => actions[button.dataset.stockAction]?.(button.dataset.stockSymbol)));
+    container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => actions[button.dataset.stockAction]?.(button.dataset.stockId || button.dataset.stockSymbol)));
     attachChartHovers(container);
     startLivePolling();
 }
