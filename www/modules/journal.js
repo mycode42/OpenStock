@@ -2,13 +2,9 @@ import { escapeHtml } from './escape.js';
 import { money, parseOpenStockDate, formatLocalDate } from './formatting.js';
 
 export function createJournal(context) {
-    let editingTradeId = null;
-    let editingIntent = 'create';
     let journalChartMode = 'equity';
     let journalPerformanceChartType = 'line';
-    const { getStocks, getTrades, getTradePagination, getCapitalEvents, getAnalytics, request: af, showA, setJournalPage, reloadJournal, charts } = context;
-    const stocks = getStocks;
-    const trades = getTrades;
+    const { getTrades, getTradePagination, getCapitalEvents, getAnalytics, request: af, showA, setJournalPage, reloadJournal, charts } = context;
     const capitalEvents = getCapitalEvents;
     const tradingAnalytics = getAnalytics;
     const attachInteractiveLineCharts = charts.attachInteractiveLineCharts;
@@ -37,10 +33,6 @@ function journalInputDate(value) {
     if (!date) return '';
     const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
     return local.toISOString().slice(0, 19);
-}
-
-function journalInputNumber(value, decimals = 4) {
-    return value === null || value === undefined || !Number.isFinite(Number(value)) ? '' : Number(value).toFixed(decimals);
 }
 
 function journalTradeOpenedDate(value) {
@@ -268,15 +260,12 @@ function tradeGroupLegs(trade) {
 }
 
 function renderTradeRows(items) {
-    if (!items.length) return '<tr><td colspan="10" style="color:#64748b">No trades recorded.</td></tr>';
+    if (!items.length) return '<tr><td colspan="9" style="color:#64748b">No trades recorded.</td></tr>';
     const quantity = value => Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-GB', { maximumFractionDigits: 12 }).format(Number(value)) : '—';
     return items.map(trade => {
         const legs = tradeGroupLegs(trade);
         const details = legs.length ? `<details class="journal-trade-details"><summary>View ${legs.length} fill${legs.length === 1 ? '' : 's'}</summary><div class="journal-trade-fill-list">${legs.map(leg => `<div><strong>${escapeHtml(leg.type)}</strong> · ${escapeHtml(journalTradeOpenedDate(leg.at))} · ${quantity(leg.quantity)} @ ${escapeHtml(journalTradePrice(leg.price, leg.currency, leg.asset_type))}${Number(leg.fee) > 0 ? ` · fee ${escapeHtml(journalMoney(leg.fee))}` : ''}</div>`).join('')}</div></details>` : '';
-        const actions = trade.broker_confirmed
-            ? '<span class="badge broker-read-only" title="Execution details are imported from the broker">Broker confirmed · read only</span>'
-            : `<button class="btn btn-sm btn-secondary" data-trade-action="edit" data-trade-id="${escapeHtml(trade.id)}">View / Edit</button>${trade.is_closed ? '' : ` <button class="btn btn-sm btn-success" data-trade-action="close" data-trade-id="${escapeHtml(trade.id)}">Close</button>`}`;
-        return `<tr class="${trade.broker_confirmed ? 'broker-confirmed-row' : ''}"><td>${Number(trade.trade_number)}</td><td>${journalTradeOpenedDate(trade.opened_at)}</td><td><span class="badge ${trade.is_closed ? 'sold' : 'owned'}">${trade.is_closed ? 'CLOSED' : 'OPEN'}</span></td><td><strong>${escapeHtml(trade.symbol)}</strong>${details}</td><td>${quantity(trade.quantity)}</td><td>${journalTradePrice(trade.entry_price, trade.currency, trade.asset_type)}</td><td>${journalTradePrice(trade.exit_price, trade.currency, trade.asset_type)}</td><td class="${journalClass(trade.net_pnl_eur)}">${journalSigned(trade.net_pnl_eur)}</td><td class="${journalClass(trade.return_pct)}">${journalPercent(trade.return_pct)}</td><td>${actions}</td></tr>`;
+        return `<tr><td>${Number(trade.trade_number)}</td><td>${journalTradeOpenedDate(trade.opened_at)}</td><td><span class="badge ${trade.is_closed ? 'sold' : 'owned'}">${trade.is_closed ? 'CLOSED' : 'OPEN'}</span></td><td><strong>${escapeHtml(trade.symbol)}</strong>${details}</td><td>${quantity(trade.quantity)}</td><td>${journalTradePrice(trade.entry_price, trade.currency, trade.asset_type)}</td><td>${journalTradePrice(trade.exit_price, trade.currency, trade.asset_type)}</td><td class="${journalClass(trade.net_pnl_eur)}">${journalSigned(trade.net_pnl_eur)}</td><td class="${journalClass(trade.return_pct)}">${journalPercent(trade.return_pct)}</td></tr>`;
     }).join('');
 }
 
@@ -339,12 +328,6 @@ function renderJournal() {
     const realized = analytics?.realized || {};
     const tradeStats = analytics?.trades || {};
     const performance = analytics?.performance || {};
-    const edit = editingTradeId ? getTrades().find(trade => String(trade.id) === String(editingTradeId)) : null;
-    const isClosing = Boolean(edit && !edit.is_closed && editingIntent === 'close');
-    const editorTitle = isClosing ? `Close ${escapeHtml(edit.trade_id)}` : edit ? `View / Edit ${escapeHtml(edit.trade_id)}` : 'Record external or historical trade';
-    const editorContext = edit ? `Trade ${escapeHtml(edit.trade_id)} · ${edit.is_closed ? 'CLOSED' : 'OPEN'} · ID ${escapeHtml(edit.id)}${isClosing ? ' · Enter the quantity to sell; the unsold balance remains open.' : ''}` : 'Use this for external activity or history the broker cannot provide. Trade Republic executions are imported automatically.';
-    const selectableStocks = getStocks().filter(stock => (Number(stock.archived) !== 1 && Number(stock.enabled) === 1) || String(edit?.stock_id) === String(stock.id));
-    const options = selectableStocks.map(stock => `<option value="${stock.id}" ${String(edit?.stock_id) === String(stock.id) ? 'selected' : ''}>${escapeHtml(stock.symbol)} — ${escapeHtml(stock.name || '')}${stock.archived ? ' (archived history)' : ''}</option>`).join('');
     const currentPnl = (Number(realized.net_eur) || 0) + (Number(capital.unrealized_pnl_eur) || 0);
     const initialCapital = getCapitalEvents().find(item => item.event_type === 'INITIAL');
     const initialCapitalExists = Boolean(initialCapital);
@@ -356,10 +339,9 @@ function renderJournal() {
       <div class="journal-kpi-grid journal-kpi-secondary-grid">${journalKpi('Available Cash', journalMoney(capital.available_cash_eur), 'Capital events less purchases/fees plus sales.')}${journalKpi('Avg Daily', `${journalSigned(performance.average_daily_pnl_eur)} · ${journalPercent(performance.average_daily_return_pct)}`, 'Average realized P/L per completed trading day and its percentage of contributed capital.', journalClass(performance.average_daily_pnl_eur))}${journalKpi('Avg Monthly', `${journalSigned(performance.average_monthly_pnl_eur)} · ${journalPercent(performance.average_monthly_return_pct)}`, 'Average realized P/L per completed month and its percentage of contributed capital.', journalClass(performance.average_monthly_pnl_eur))}${journalKpi('YTD P/L', journalSigned(performance.ytd_pnl_eur), 'Net P/L from completed trades this calendar year.', journalClass(performance.ytd_pnl_eur))}${journalKpi('Est. Yearly Profit', journalSigned(performance.estimated_yearly_profit_eur), 'Observed-rate annual profit illustration.', journalClass(performance.estimated_yearly_profit_eur))}${journalKpi('Open Positions', String(tradeStats.open ?? 0), 'Lots not yet closed.')}</div>
       <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution, initialCapital?.amount_eur)}</div>
       <div class="card journal-performance-card"></div>
-      <div class="card journal-trade-editor ${isClosing ? 'is-closing' : edit ? 'is-editing' : ''}" id="journal-trade-editor" tabindex="-1"><div class="section-header"><div><div class="section-title">${editorTitle}</div><p class="subtitle" aria-live="polite">${editorContext}</p></div>${edit ? '<button type="button" class="btn btn-sm btn-secondary" data-trade-action="cancel">Cancel</button>' : ''}</div><form id="trade-form"><div class="form-row"><div class="form-group"><label for="trade-stock">Instrument</label><select id="trade-stock" name="stock_id" required ${isClosing ? 'disabled' : ''}>${options}</select></div><div class="form-group"><label for="trade-opened">Opened</label><input id="trade-opened" name="opened_at" type="datetime-local" step="1" required ${isClosing ? 'readonly' : ''} value="${journalInputDate(edit?.opened_at) || journalInputDate(new Date().toISOString())}"></div><div class="form-group"><label for="trade-quantity">Open Quantity</label><input id="trade-quantity" name="quantity" type="number" min=".000000000001" step=".000000000001" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.quantity ?? '')}"></div></div><div class="form-row"><div class="form-group"><label for="trade-currency">Currency</label><input id="trade-currency" name="currency" maxlength="3" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.currency || 'EUR')}"></div><div class="form-group"><label for="trade-entry-price">Buy Price</label><input id="trade-entry-price" name="entry_price" type="number" min=".000000000001" step=".000000000001" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(journalInputNumber(edit?.entry_price, edit?.asset_type === 'crypto' ? 12 : 6))}"></div><div class="form-group"><label for="trade-entry-fx">EUR Rate at Buy</label><input id="trade-entry-fx" name="entry_fx_rate" type="number" min=".000001" step=".000001" required ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.entry_fx_rate ?? 1)}"></div><div class="form-group"><label for="trade-entry-fee">Buy Fees (€)</label><input id="trade-entry-fee" name="entry_fee_eur" type="number" min="0" step=".000001" ${isClosing ? 'readonly' : ''} value="${escapeHtml(edit?.entry_fee_eur ?? 1)}"></div></div><details ${edit?.closed_at || isClosing ? 'open' : ''}><summary>${edit?.closed_at ? 'Closed trade details' : 'Close trade (optional)'}</summary><div class="form-row" style="margin-top:.75rem">${isClosing ? `<div class="form-group"><label for="trade-close-quantity">Quantity to sell</label><input id="trade-close-quantity" name="close_quantity" type="number" min=".000000000001" max="${escapeHtml(edit.quantity)}" step=".000000000001" required value="${escapeHtml(edit.quantity)}"></div>` : ''}<div class="form-group"><label for="trade-closed">Closed</label><input id="trade-closed" name="closed_at" type="datetime-local" step="1" ${isClosing ? 'required' : ''} value="${journalInputDate(edit?.closed_at || (isClosing ? new Date().toISOString() : ''))}"></div><div class="form-group"><label for="trade-exit-price">Sell Price</label><input id="trade-exit-price" name="exit_price" type="number" min=".000000000001" step=".000000000001" ${isClosing ? 'required' : ''} value="${escapeHtml(journalInputNumber(edit?.exit_price, edit?.asset_type === 'crypto' ? 12 : 6))}"></div><div class="form-group"><label for="trade-exit-fx">EUR Rate at Sell</label><input id="trade-exit-fx" name="exit_fx_rate" type="number" min=".000001" step=".000001" required ${isClosing ? 'required' : ''} value="${escapeHtml(edit?.exit_fx_rate ?? 1)}"></div><div class="form-group"><label for="trade-exit-fee">Sell Fees (€)</label><input id="trade-exit-fee" name="exit_fee_eur" type="number" min="0" step=".000001" value="${escapeHtml(edit?.exit_fee_eur ?? 1)}"></div></div></details><div class="form-row" style="margin-top:.75rem"><div class="form-group"><label for="trade-strategy">Strategy / Reason</label><input id="trade-strategy" name="strategy" value="${escapeHtml(edit?.strategy || '')}"></div><div class="form-group"><label for="trade-notes">Notes</label><input id="trade-notes" name="notes" value="${escapeHtml(edit?.notes || '')}"></div></div><div class="btn-group"><button type="submit" class="btn btn-primary">${isClosing ? 'Record Sale' : edit ? 'Save Changes' : 'Record Trade'}</button>${edit ? '<button type="button" class="btn btn-secondary" data-trade-action="cancel">Cancel</button>' : ''}</div></form></div>
       <div class="card"><div class="section-title">Capital Events</div><p class="subtitle">Capital events change cash/equity, never trading P/L.</p><form class="journal-capital-form" id="capital-event-form"><label class="sr-only" for="capital-type">Event type</label><select id="capital-type" name="event_type"><option value="INITIAL" ${initialCapitalExists ? 'disabled' : ''}>Initial Capital${initialCapitalExists ? ' (already recorded)' : ''}</option><option value="DEPOSIT" ${initialCapitalExists ? 'selected' : ''}>Deposit</option><option value="WITHDRAWAL">Withdrawal</option><option value="FINANCING">Financing / Debt</option></select><label class="sr-only" for="capital-amount">Amount</label><input id="capital-amount" name="amount_eur" type="number" min=".01" step=".000001" placeholder="Amount €" required><label class="sr-only" for="capital-date">Date and time</label><input id="capital-date" name="occurred_at" type="datetime-local" value="${journalInputDate(new Date().toISOString())}" required><label class="sr-only" for="capital-notes">Note</label><input id="capital-notes" name="notes" placeholder="Optional note"><button type="submit" class="btn btn-primary">Add Event</button></form><p class="journal-help" id="capital-event-help" aria-live="polite">${capitalHelp}</p>${getCapitalEvents().length ? `<div class="journal-events">${getCapitalEvents().map(event => `<span><strong>${escapeHtml(event.event_type)}</strong> ${journalMoney(event.amount_eur)} · ${formatLocalDate(event.occurred_at)}</span>`).join('')}</div>` : '<p class="journal-empty">No capital events recorded.</p>'}</div>
-      <div class="card"><div class="section-header"><div><div class="section-title">Trades</div><p class="subtitle">Showing up to 15 entries per page. Expand a position to see grouped rebuys and partial sells.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade No.</th><th>Opened</th><th>Status</th><th>Instrument</th><th>Quantity</th><th>Buy-in Price</th><th>Sell Price</th><th>Net P/L</th><th>Return</th><th></th></tr></thead><tbody>${renderTradeRows(getTrades())}</tbody></table></div>${renderTradePagination(getTradePagination())}</div>
-      <div class="card"><div class="section-title">Per-Instrument Analytics</div>${analytics?.stock_performance?.length ? `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Instrument</th><th>P/L</th><th>Trades</th><th>Win Rate</th><th>Average Return</th><th>Average Hold</th></tr></thead><tbody>${analytics.stock_performance.map(row => `<tr><td><strong>${escapeHtml(row.symbol)}</strong></td><td class="${journalClass(row.pnl_eur)}">${journalSigned(row.pnl_eur)}</td><td>${row.trades}</td><td>${journalPercent(row.win_rate_pct)}</td><td>${journalPercent(row.average_return_pct)}</td><td>${Number(row.average_holding_days).toFixed(1)} days</td></tr>`).join('')}</tbody></table></div>` : '<p class="journal-empty">Per-instrument analytics appear after completed trades.</p>'}</div><div class="card"><p class="journal-help" id="journal-definitions">Definitions: Net P/L = sell EUR value − buy EUR value − entry fees − exit fees. Return = net P/L ÷ (buy EUR value + entry fees). Realized metrics use closed trades only; unrealized P/L uses current monitored EUR prices for open positions. Annualized estimates need at least 30 calendar days from initial capital; volatility and Sharpe require at least 30 equity observations.</p></div>`;
+      <div class="card"><div class="section-header"><div><div class="section-title">Trades</div><p class="subtitle">Showing up to 15 entries per page. Trade records are read-only; expand a position to see grouped rebuys and partial sells.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade No.</th><th>Opened</th><th>Status</th><th>Instrument</th><th>Quantity</th><th>Buy-in Price</th><th>Sell Price</th><th>Net P/L</th><th>Return</th></tr></thead><tbody>${renderTradeRows(getTrades())}</tbody></table></div>${renderTradePagination(getTradePagination())}</div>
+      <div class="card"><div class="section-title">Per-Instrument Analytics</div>${analytics?.stock_performance?.length ? `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Instrument</th><th>P/L</th><th>Trades</th><th>Win Rate</th><th>Average Return</th><th>Average Hold</th></tr></thead><tbody>${analytics.stock_performance.map(row => `<tr><td><strong>${escapeHtml(row.symbol)}</strong></td><td class="${journalClass(row.pnl_eur)}">${journalSigned(row.pnl_eur)}</td><td>${row.trades}</td><td>${journalPercent(row.win_rate_pct)}</td><td>${journalPercent(row.average_return_pct)}</td><td>${Number(row.average_holding_days).toFixed(1)} days</td></tr>`).join('')}</tbody></table></div>` : '<p class="journal-empty">Per-instrument analytics appear after completed trades.</p>'}</div>`;
     const chartCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Equity Curve');
     const chartHeader = chartCard?.querySelector('.section-header');
     if (chartCard && chartHeader) {
@@ -374,10 +356,9 @@ function renderJournal() {
         performanceCard.innerHTML = renderPerformanceDetails(analytics);
         chartCard.insertAdjacentElement('afterend', performanceCard);
     }
-    if (!edit) collapseJournalCard(container, '#journal-trade-editor', 'Add an external / historical trade', 'Use only when the broker has no fill to import');
     collapseJournalCardByTitle(container, 'Capital Events', 'Capital & cash movements', 'Deposits, withdrawals, and financing');
-    collapseJournalCardByTitle(container, 'Per-Stock Analytics', 'Per-instrument analytics', 'Completed-trade breakdown by instrument');
-    container.querySelectorAll('[data-trade-action]').forEach(button => button.addEventListener('click', () => ({ edit: editTrade, close: closeTrade, cancel: cancelTradeEdit }[button.dataset.tradeAction])?.(button.dataset.tradeId)));
+    collapseJournalCardByTitle(container, 'Trades', 'Trades', 'Read-only trade history');
+    collapseJournalCardByTitle(container, 'Per-Instrument Analytics', 'Per-instrument analytics', 'Completed-trade breakdown by instrument');
     container.querySelectorAll('[data-trade-page]').forEach(button => button.addEventListener('click', () => {
         const page = Number(button.dataset.tradePage);
         if (Number.isInteger(page) && page > 0) { setJournalPage(page); reloadJournal(page); }
@@ -390,95 +371,23 @@ function renderJournal() {
         journalPerformanceChartType = button.dataset.journalChartType;
         renderJournal();
     }));
-    container.querySelector('#trade-form')?.addEventListener('submit', saveTrade);
     container.querySelector('#capital-event-form')?.addEventListener('submit', saveCapitalEvent);
-    if (edit) focusTradeEditor(isClosing);
     attachInteractiveLineCharts(container);
 }
 
 function queueJournalDividendEnhancements(container) {
     queueMicrotask(() => {
-        const exitFee = container.querySelector('#trade-exit-fee');
-        if (editingIntent === 'close' && exitFee?.value === '0') exitFee.value = '1';
-
-        const closeDetails = container.querySelector('#journal-trade-editor details');
-        const closeRow = closeDetails?.querySelector('.form-row');
-        if (closeRow && !closeRow.querySelector('[name="dividend_eur"]')) {
-            const edit = editingTradeId ? getTrades().find(trade => String(trade.id) === String(editingTradeId)) : null;
-            const dividends = Number.isFinite(Number(edit?.dividend_eur)) ? Number(edit.dividend_eur) : 0;
-            closeRow.insertAdjacentHTML('beforeend', `<div class="form-group"><label>Dividends received (€)</label><input name="dividend_eur" type="number" min="0" step=".000001" value="${dividends}"></div>`);
-        }
-
         const statsCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Trade Statistics');
         const metrics = statsCard?.querySelector('.journal-metrics');
         if (metrics && ![...metrics.querySelectorAll('dt')].some(term => term.textContent === 'Dividends received')) {
             metrics.insertAdjacentHTML('beforeend', `<dt>Dividends received</dt><dd class="positive">${journalSigned(getAnalytics()?.realized?.dividends_eur)}</dd>`);
         }
 
-        const help = container.querySelector('#journal-definitions');
-        if (help) help.textContent = 'Definitions: Net P/L = sell EUR value + received dividends − buy EUR value − entry fees − exit fees. Return = net P/L ÷ (buy EUR value + entry fees). Realized metrics use closed trades only; unrealized P/L uses current monitored EUR prices for open positions. Annualized estimates need at least 30 calendar days from initial capital; volatility and Sharpe require at least 30 equity observations.';
     });
 }
 
 function formDataObject(form) {
     return Object.fromEntries(new FormData(form).entries());
-}
-
-async function saveTrade(event) {
-    event.preventDefault();
-    const body = formDataObject(event.currentTarget);
-    if (!body.closed_at) {
-        delete body.exit_price;
-        delete body.exit_fx_rate;
-        delete body.exit_fee_eur;
-        delete body.dividend_eur;
-    }
-    const closing = editingIntent === 'close';
-    const creating = !editingTradeId;
-    const path = closing ? `/trades/${editingTradeId}/close` : editingTradeId ? `/trades/${editingTradeId}` : '/trades';
-    const method = closing ? 'POST' : editingTradeId ? 'PUT' : 'POST';
-    const result = await af(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (!result) return;
-    editingTradeId = null;
-    editingIntent = 'create';
-    if (creating) setJournalPage(1);
-    await reloadJournal();
-    showA(result.message, 'success');
-}
-
-function editTrade(id) {
-    const trade = getTrades().find(item => String(item.id) === String(id));
-    if (!trade) return;
-    if (trade.broker_confirmed) return showA('Broker-confirmed executions are read-only.', 'info');
-    editingTradeId = String(trade.id);
-    editingIntent = 'edit';
-    renderJournal();
-}
-
-function cancelTradeEdit() {
-    editingTradeId = null;
-    editingIntent = 'create';
-    renderJournal();
-}
-
-function closeTrade(id) {
-    const trade = getTrades().find(item => String(item.id) === String(id));
-    if (!trade || trade.is_closed) return;
-    if (trade.broker_confirmed) return showA('Broker-confirmed executions close through broker sync.', 'info');
-    editingTradeId = String(trade.id);
-    editingIntent = 'close';
-    renderJournal();
-}
-
-function focusTradeEditor(focusCloseDetails = false) {
-    const editor = document.getElementById('journal-trade-editor');
-    if (!editor) return;
-    requestAnimationFrame(() => {
-        editor.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        editor.focus({ preventScroll: true });
-        const target = focusCloseDetails ? editor.querySelector('#trade-closed') : editor.querySelector('input, select');
-        target?.focus({ preventScroll: true });
-    });
 }
 
 async function saveCapitalEvent(event) {
@@ -492,5 +401,5 @@ async function saveCapitalEvent(event) {
     showA('Capital event recorded', 'success');
 }
 
-    return { renderJournal, renderTradePagination, saveTrade, editTrade, cancelTradeEdit, closeTrade, saveCapitalEvent };
+    return { renderJournal, renderTradePagination, saveCapitalEvent };
 }

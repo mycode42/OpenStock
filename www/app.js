@@ -33,6 +33,82 @@ Object.assign(context.actions, { edit: config.es, toggle: config.ts, remove: con
 function nav(hash) { const page=pageFromHash(hash); const target=page==='dashboard'?'':`#/${page}`; if(window.location.hash!==target){window.location.hash=target;return;} loadPage(page); }
 async function loadPage(page, journalPage=state.journalPage) { const loadId=++pageLoadId; const startRevision=stockRevision; if(page!=='dashboard')dashboard.stopLivePolling(); if(page!=='config')config.stopLivePolling(); showPage(page); document.getElementById(`page-${page}`).innerHTML='<div class="loading">Loading...</div>'; if(page==='dashboard'){const data=await af('/dashboard'); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(data&&stockRevision===startRevision)replaceStocks(data.stocks); dashboard.renderDashboard(); return;} if(page==='journal'){const requestedPage=Math.max(1, Number(journalPage) || 1); const [freshStocks,freshTrades,freshEvents,freshAnalytics]=await Promise.all([af('/stocks?includeArchived=1'),af(`/trades?page=${requestedPage}&page_size=15`),af('/capital-events'),af('/analytics/dashboard')]); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks); if(freshTrades){state.trades=freshTrades.items; state.tradePagination={page:freshTrades.page,page_size:freshTrades.page,total:freshTrades.total,total_pages:freshTrades.total_pages}; state.journalPage=freshTrades.page;} if(freshEvents)state.capitalEvents=freshEvents; if(freshAnalytics)state.analytics=freshAnalytics; journal.renderJournal(); return;} const freshStocks=await af('/stocks'); if(loadId!==pageLoadId||pageFromHash()!==page)return; if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks); config.renderConfig(); }
 Object.assign(window, { ...dashboard, ...config, ...journal, nav, dt, showA });
+function enableStandalonePullToRefresh() {
+  const indicator = document.getElementById('pull-refresh-indicator');
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (!standalone || !indicator) return;
+  document.documentElement.classList.add('pwa-standalone');
+
+  const label = indicator.querySelector('.pull-refresh-label');
+  const icon = indicator.querySelector('.pull-refresh-icon');
+  const threshold = 88;
+  let gesture = null;
+
+  function hideIndicator() {
+    indicator.classList.remove('is-pulling', 'is-ready', 'is-refreshing');
+    indicator.style.removeProperty('--pull-offset');
+    indicator.setAttribute('aria-hidden', 'true');
+    label.textContent = 'Pull to refresh';
+    icon.textContent = '↓';
+  }
+
+  document.addEventListener('touchstart', event => {
+    gesture = null;
+    hideIndicator();
+    const scrollTop = document.scrollingElement?.scrollTop ?? window.scrollY;
+    if (event.touches.length !== 1 || scrollTop > 0) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const touch = event.touches[0];
+    gesture = { startX: touch.clientX, startY: touch.clientY, distance: 0 };
+  }, { passive: true });
+
+  document.addEventListener('touchmove', event => {
+    if (!gesture) return;
+    if (event.touches.length !== 1) { gesture = null; hideIndicator(); return; }
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - gesture.startX;
+    const deltaY = touch.clientY - gesture.startY;
+    const scrollTop = document.scrollingElement?.scrollTop ?? window.scrollY;
+    if (deltaY <= 0 || Math.abs(deltaX) > Math.max(12, deltaY * .65) || scrollTop > 0) {
+      gesture = null;
+      hideIndicator();
+      return;
+    }
+    if (deltaY < 10) return;
+
+    gesture.distance = deltaY;
+    indicator.style.setProperty('--pull-offset', `${Math.min(deltaY - 8, 72)}px`);
+    indicator.classList.add('is-pulling');
+    indicator.setAttribute('aria-hidden', 'false');
+    if (deltaY >= threshold) {
+      indicator.classList.add('is-ready');
+      label.textContent = 'Release to refresh';
+      icon.textContent = '↑';
+    } else {
+      indicator.classList.remove('is-ready');
+      label.textContent = 'Pull to refresh';
+      icon.textContent = '↓';
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', event => {
+    if (event.touches.length > 0) { gesture = null; hideIndicator(); return; }
+    if (!gesture) return;
+    const shouldRefresh = gesture.distance >= threshold;
+    gesture = null;
+    if (!shouldRefresh) { hideIndicator(); return; }
+    indicator.classList.remove('is-pulling', 'is-ready');
+    indicator.classList.add('is-refreshing');
+    label.textContent = 'Refreshing…';
+    icon.textContent = '↻';
+    indicator.setAttribute('aria-hidden', 'false');
+    window.location.reload();
+  }, { passive: true });
+
+  document.addEventListener('touchcancel', () => { gesture = null; hideIndicator(); }, { passive: true });
+}
+enableStandalonePullToRefresh();
 window.addEventListener('hashchange',()=>loadPage(pageFromHash()));
 document.addEventListener('click',event=>{ if(!event.target.closest('.dropdown'))document.querySelectorAll('.dropdown.open').forEach(dropdown=>dropdown.classList.remove('open')); });
 loadPage(pageFromHash());

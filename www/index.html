@@ -16,7 +16,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/openstock/favicon-192.png">
 <link rel="icon" type="image/png" sizes="256x256" href="/openstock/favicon-256.png">
 <link rel="apple-touch-icon" sizes="180x180" href="/openstock/apple-touch-icon.png">
-<link rel="stylesheet" href="/openstock/styles.css?v=1.4.0">
+<link rel="stylesheet" href="/openstock/styles.css?v=1.4.0&amp;pull-refresh=1">
 <meta name="theme-color" content="#000000">
 </head>
 <body>
@@ -25,11 +25,14 @@
 <a href="#/journal" data-page="journal">Journal</a>
 <a href="#/config" data-page="config">Configure</a>
 </nav>
+<div id="pull-refresh-indicator" class="pull-refresh-indicator" role="status" aria-live="polite" aria-hidden="true">
+<span class="pull-refresh-icon" aria-hidden="true">↓</span><span class="pull-refresh-label">Pull to refresh</span>
+</div>
 <div class="container">
 <div id="page-dashboard"></div>
 <div id="page-journal" class="hidden"></div>
 <div id="page-config" class="hidden"></div>
 </div>
-<script type="module" src="./app.js?v=1.4.0"></script>
+<script type="module" src="./app.js?v=1.4.0&amp;pull-refresh=1"></script>
 </body>
 </html>

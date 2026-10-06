@@ -75,7 +75,7 @@ test('Configure polls display-only live prices only while its page is active', (
     assert.match(app, /if\(page!=='config'\)config\.stopLivePolling\(\)/);
 });
 
-test('dashboard links to alert configuration and Journal marks broker rows read-only', () => {
+test('dashboard links to alert configuration and Journal trade rows are read-only', () => {
     const root = path.join(__dirname, '..', 'www');
     const dashboard = fs.readFileSync(path.join(root, 'modules', 'dashboard.js'), 'utf8');
     const config = fs.readFileSync(path.join(root, 'modules', 'config.js'), 'utf8');
@@ -86,8 +86,12 @@ test('dashboard links to alert configuration and Journal marks broker rows read-
     assert.match(config, /function openAlerts\(stockId\)/);
     assert.match(app, /configureAlerts: config\.openAlerts/);
     assert.match(config, /data-alert-action="add-percent"/);
-    assert.match(journal, /Broker confirmed · read only/);
-    assert.match(journal, /external activity or history the broker cannot provide/);
+    assert.doesNotMatch(journal, /Broker confirmed · read only/);
+    assert.doesNotMatch(journal, /external activity or history the broker cannot provide/);
+    assert.doesNotMatch(journal, /data-trade-action|trade-form|journal-trade-editor/);
+    assert.doesNotMatch(journal, /journal-definitions|Definitions: Net P\/L/);
+    assert.match(journal, /collapseJournalCardByTitle\(container, 'Trades'/);
+    assert.match(journal, /collapseJournalCardByTitle\(container, 'Per-Instrument Analytics'/);
     assert.match(styles, /\.history-popover\{[^}]*z-index:30;isolation:isolate;overflow:hidden;/);
     assert.match(styles, /\.dashboard-alert-link\{[^}]*z-index:0;/);
 });
@@ -120,11 +124,27 @@ test('Journal requests fifteen trades per page', () => {
 
 test('Journal displays instrument and quantity with trades without exposing trade IDs or a dividends column', () => {
     const journal = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'journal.js'), 'utf8');
-    assert.match(journal, /<th>Trade No\.<\/th><th>Opened<\/th><th>Status<\/th><th>Instrument<\/th><th>Quantity<\/th><th>Buy-in Price<\/th><th>Sell Price<\/th><th>Net P\/L<\/th><th>Return<\/th><th><\/th>/);
+    assert.match(journal, /<th>Trade No\.<\/th><th>Opened<\/th><th>Status<\/th><th>Instrument<\/th><th>Quantity<\/th><th>Buy-in Price<\/th><th>Sell Price<\/th><th>Net P\/L<\/th><th>Return<\/th>/);
     assert.doesNotMatch(journal, /<th>Trade ID<\/th>/);
     assert.doesNotMatch(journal, /dividendHeader|tradeHeaders|<th>Dividends<\/th>/);
     assert.match(journal, /trade\.trade_number/);
     assert.match(journal, /journalTradeOpenedDate\(trade\.opened_at\)/);
     assert.match(journal, /journalTradePrice\(trade\.entry_price, trade\.currency, trade\.asset_type\)/);
     assert.match(journal, /journalTradePrice\(trade\.exit_price, trade\.currency, trade\.asset_type\)/);
+});
+
+test('standalone PWA supports pull-to-refresh and refreshes its cached entry assets', () => {
+    const root = path.join(__dirname, '..', 'www');
+    const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+    const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+    const serviceWorker = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+    assert.match(app, /display-mode: standalone/);
+    assert.match(app, /touchstart/);
+    assert.match(app, /Release to refresh/);
+    assert.match(app, /window\.location\.reload\(\)/);
+    assert.match(index, /id="pull-refresh-indicator"/);
+    assert.match(styles, /\.pwa-standalone\{overscroll-behavior-y:contain\}/);
+    assert.match(serviceWorker, /app\.js\?v=1\.4\.0&pull-refresh=1/);
+    assert.match(serviceWorker, /styles\.css\?v=1\.4\.0&pull-refresh=1/);
 });
