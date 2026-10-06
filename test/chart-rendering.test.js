@@ -150,19 +150,17 @@ test('dashboard charts provide five position-matched x-axis labels on desktop', 
     }
 });
 
-test('trade buy and sell fields support crypto precision and retain six-decimal stock formatting', () => {
+test('trade price display supports crypto precision and standard stock formatting', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
-    assert.match(journal, /id="trade-entry-price" name="entry_price" type="number" min="\.000000000001" step="\.000000000001" required \$\{isClosing \? 'readonly' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.entry_price, edit\?\.asset_type === 'crypto' \? 12 : 6\)\)\}"/);
-    assert.match(journal, /id="trade-exit-price" name="exit_price" type="number" min="\.000000000001" step="\.000000000001" \$\{isClosing \? 'required' : ''\} value="\$\{escapeHtml\(journalInputNumber\(edit\?\.exit_price, edit\?\.asset_type === 'crypto' \? 12 : 6\)\)\}"/);
-    assert.match(journal, /id="trade-quantity" name="quantity" type="number" min="\.000000000001" step="\.000000000001"/);
+    assert.match(journal, /maximumFractionDigits: assetType === 'crypto' \? 12 : 2/);
+    assert.match(journal, /Number\(value\)\.toFixed\(assetType === 'crypto' \? 12 : 2\)/);
+    assert.doesNotMatch(journal, /trade-entry-price|trade-exit-price|journalInputNumber/);
 });
 
-test('journal close workflow accepts a sale quantity and preserves the open balance', () => {
+test('journal trade records are read-only in the UI', () => {
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
-    assert.match(journal, /for="trade-close-quantity">Quantity to sell/);
-    assert.match(journal, /name="close_quantity" type="number"/);
-    assert.match(journal, /Open Quantity/);
-    assert.match(journal, /unsold balance remains open/);
+    assert.match(journal, /Trade records are read-only/);
+    assert.doesNotMatch(journal, /trade-form|data-trade-action|close_quantity|trade-close-quantity/);
 });
 
 test('market closures are removed from chart spacing and render as one smooth path', async () => {
