@@ -1,6 +1,6 @@
-# EXPERIMENT: stricter_overbought
-# HYPOTHESIS: Raising the overbought threshold should filter weaker short mean-reversion signals and reserve strong bearish confidence for more extended pullbacks.
-# CHANGE: Raised RSI_OVERBOUGHT from 60 to 63
+# EXPERIMENT: lower_min_confidence
+# HYPOTHESIS: Lowering the confidence cutoff should admit a small number of borderline qualified signals, helping avoid the severe penalty for fewer than 10 trades.
+# CHANGE: Lowered MIN_CONFIDENCE from 62.0 to 58.0
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,12 +14,12 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "stricter_overbought"
+EXPERIMENT_NAME = "lower_min_confidence"
 EXPERIMENT_HYPOTHESIS = (
-    "Raising the overbought threshold should filter weaker short mean-reversion "
-    "signals and reserve strong bearish confidence for more extended pullbacks."
+    "Lowering the confidence cutoff should admit a small number of borderline "
+    "qualified signals, helping avoid the severe penalty for fewer than 10 trades."
 )
-EXPERIMENT_CHANGE = "Raised RSI_OVERBOUGHT from 60 to 63"
+EXPERIMENT_CHANGE = "Lowered MIN_CONFIDENCE from 62.0 to 58.0"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -38,7 +38,7 @@ VOLUME_STRONG_RATIO = 2.50
 STOP_PCT = 0.0105
 TARGET_MULTIPLIER = 3.8
 MAX_POSITION_SIZE_PCT = 0.15
-MIN_CONFIDENCE = 62.0
+MIN_CONFIDENCE = 58.0
 
 CONF_WEIGHT_RSI = 0.25
 CONF_WEIGHT_VWAP = 0.40
