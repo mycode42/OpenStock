@@ -44,6 +44,7 @@ def append_trades(execution_result: dict):
             entry = {
                 "timestamp": timestamp,
                 "mode": mode,
+                "trading_mode": execution_result.get("trading_mode", "unknown"),
                 "ticker": trade.get("ticker"),
                 "action": trade.get("action"),
                 "qty": trade.get("qty", 0),

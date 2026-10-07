@@ -75,18 +75,61 @@ class DipAlpaca:
     def latest_price(self, symbol: str) -> tuple[float, datetime]:
         return self.latest_prices([symbol])[symbol]
 
-    def latest_prices(self, symbols: list[str]) -> dict[str, tuple[float, datetime]]:
+    def latest_prices(
+        self,
+        symbols: list[str],
+        *,
+        stale_after_seconds: int = 60,
+    ) -> dict[str, tuple[float, datetime]]:
         trades = self._get(
             f"{DATA_BASE}/stocks/trades/latest",
             params={"symbols": ",".join(symbols), "feed": "iex"},
         ).get("trades", {})
         prices = {}
+        now = datetime.now(timezone.utc)
+        quote_fallback_symbols = []
         for symbol in symbols:
             trade = trades.get(symbol) or {}
             if not trade:
+                quote_fallback_symbols.append(symbol)
                 continue
             timestamp = datetime.fromisoformat(trade["t"].replace("Z", "+00:00"))
-            prices[symbol] = (float(trade["p"]), timestamp)
+            price = float(trade["p"])
+            if price <= 0:
+                quote_fallback_symbols.append(symbol)
+                continue
+            prices[symbol] = (price, timestamp)
+            age = (now - timestamp).total_seconds()
+            if age < 0 or age > stale_after_seconds:
+                quote_fallback_symbols.append(symbol)
+
+        if quote_fallback_symbols:
+            # IEX's latest-trade endpoint excludes some prints (including odd
+            # lots). A current quote can still provide a usable mark in that
+            # case, but the daemon's normal freshness check remains in force.
+            try:
+                quotes = self._get(
+                    f"{DATA_BASE}/stocks/quotes/latest",
+                    params={"symbols": ",".join(quote_fallback_symbols), "feed": "iex"},
+                ).get("quotes", {})
+            except Exception:
+                # Keep any trade values so fresh symbols can still be handled;
+                # stale values will be rejected by the daemon as usual.
+                quotes = {}
+
+            for symbol in quote_fallback_symbols:
+                quote = quotes.get(symbol) or {}
+                try:
+                    bid = float(quote.get("bp", 0) or 0)
+                    ask = float(quote.get("ap", 0) or 0)
+                    timestamp = datetime.fromisoformat(quote["t"].replace("Z", "+00:00"))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if bid <= 0 or ask < bid:
+                    continue
+                previous = prices.get(symbol)
+                if previous is None or timestamp > previous[1]:
+                    prices[symbol] = ((bid + ask) / 2, timestamp)
         return prices
 
     def positions(self) -> list[dict]:

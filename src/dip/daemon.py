@@ -186,7 +186,10 @@ def run_loop(*, dry_run: bool = False, max_cycles: int | None = None, broker_cli
             price_error = None
             if now_open:
                 try:
-                    prices = broker.latest_prices(symbols)
+                    prices = broker.latest_prices(
+                        symbols,
+                        stale_after_seconds=int(DIP_CONFIG["stale_data_seconds"]),
+                    )
                 except Exception as exc:
                     price_error = exc
             for symbol in symbols:
@@ -220,7 +223,8 @@ def run_loop(*, dry_run: bool = False, max_cycles: int | None = None, broker_cli
                     if price_error:
                         raise price_error
                     price, traded_at = prices[symbol]
-                    fresh = (datetime.now(traded_at.tzinfo) - traded_at).total_seconds() <= int(DIP_CONFIG["stale_data_seconds"])
+                    data_age = (datetime.now(traded_at.tzinfo) - traded_at).total_seconds()
+                    fresh = 0 <= data_age <= int(DIP_CONFIG["stale_data_seconds"])
                 except Exception as exc:
                     _log_skip(last_skip, symbol, f"market data unavailable: {exc}")
                     continue
@@ -237,6 +241,8 @@ def run_loop(*, dry_run: bool = False, max_cycles: int | None = None, broker_cli
                 )
                 if not fresh:
                     _log_skip(last_skip, symbol, "market data is stale")
+                else:
+                    last_skip.pop(symbol, None)
                 if action:
                     if action["action"] == "buy":
                         qty = action["quantity"]
@@ -267,7 +273,7 @@ def run_loop(*, dry_run: bool = False, max_cycles: int | None = None, broker_cli
                             LOG.info("[DIP] %s %s submitted as order %s; status=%s", symbol, action["action"].upper(), order.get("id", client_id), order_status)
                     except Exception as exc:
                         LOG.error("[DIP] %s order submission/reconciliation failed: %s", symbol, exc)
-                elif state.last_reason:
+                elif fresh and state.last_reason:
                     _log_skip(last_skip, symbol, state.last_reason)
             _save(engine, state_path, market_state)
             last_loop_error = None

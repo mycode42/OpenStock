@@ -29,8 +29,8 @@ def _get_headers(mode: str = None) -> dict:
     return account.headers
 
 
-# Legacy module-level headers for backward compat (uses day account)
-_HEADERS = _get_headers("day")
+# Legacy module-level headers for backward compat (defaults to Swing).
+_HEADERS = _get_headers("swing")
 
 
 def get_alpaca_account(mode: str = None) -> dict:

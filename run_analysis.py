@@ -26,6 +26,7 @@ from src.alpaca_integration import (
     execute_decisions,
     format_positions_summary,
 )
+from src.config import resolve_mode
 from src.main import run_hedge_fund
 
 
@@ -53,6 +54,12 @@ Examples:
         "--tickers", 
         type=str, 
         help="Comma-separated list of specific tickers to analyze (default: all holdings)"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["swing", "day"],
+        default=None,
+        help="Trading mode (defaults to trading_mode.json / TRADING_MODE).",
     )
     parser.add_argument(
         "--telegram", 
@@ -92,6 +99,9 @@ Examples:
     )
     
     args = parser.parse_args()
+    mode = resolve_mode(cli_mode=args.mode)
+    if mode == "auto":
+        mode = "swing"
     
     # Parse inputs
     selected_analysts = [a.strip() for a in args.analysts.split(",") if a.strip()]
@@ -99,9 +109,9 @@ Examples:
     
     try:
         # Fetch current Alpaca state
-        print("📡 Fetching Alpaca account and positions...")
-        account = get_alpaca_account()
-        positions_raw = get_alpaca_positions()
+        print(f"📡 Fetching Alpaca account and positions... [{mode.upper()}]")
+        account = get_alpaca_account(mode=mode)
+        positions_raw = get_alpaca_positions(mode=mode)
         
         if not args.telegram:
             print(f"✅ Found {len(positions_raw)} positions")
@@ -157,6 +167,7 @@ Examples:
             positions_raw=positions_raw,
             account=account,
             dry_run=not args.execute,
+            mode=mode,
         )
         
         # Format output

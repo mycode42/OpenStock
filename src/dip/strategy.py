@@ -220,6 +220,8 @@ class DipEngine:
         if not data_fresh or not market_open:
             s.last_reason = "stale market data" if not data_fresh else "market closed"
             return None
+        if s.last_reason == "stale market data":
+            s.last_reason = None
         if s.reference_price is None:
             s.last_reason = "reference price unavailable"
             return None

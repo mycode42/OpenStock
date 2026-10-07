@@ -5,7 +5,7 @@ Performance Tracker V2 — Swarm Trader daily performance with benchmark compari
 
 Tracks portfolio vs SPY and QQQ, computes rolling 21-day Sharpe ratio,
 win rate, and average win/loss per trade.  Saves daily JSON snapshots to
-snapshots/YYYY-MM-DD.json and prints a pretty summary.
+snapshots/YYYY-MM-DD.json for Swing and snapshots/day/YYYY-MM-DD.json for Day.
 
 Usage:
   poetry run python performance_tracker_v2.py --snapshot          # Record today
@@ -13,13 +13,13 @@ Usage:
   poetry run python performance_tracker_v2.py --report            # Terminal summary
   poetry run python performance_tracker_v2.py --json              # JSON output
   poetry run python performance_tracker_v2.py --days 21           # Last 21 days
+  poetry run python performance_tracker_v2.py --mode day --snapshot --force
 """
 
 import argparse
 import json
 import logging
 import math
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,6 +30,7 @@ load_dotenv(override=True)
 
 import requests
 import yfinance as yf
+from src.accounts import get_account_for_mode
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,10 +40,6 @@ logging.basicConfig(
 log = logging.getLogger("perf_v2")
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
-ALPACA_HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
 
 SNAPSHOTS_DIR = Path(__file__).parent / "snapshots"
 TRADE_JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
@@ -55,16 +52,21 @@ RISK_FREE_DAILY = RISK_FREE_RATE_ANNUAL / 252
 # Data helpers
 # ---------------------------------------------------------------------------
 
-def _alpaca_get(endpoint: str) -> dict | list:
-    r = requests.get(f"{API_BASE}/{endpoint}", headers=ALPACA_HEADERS, timeout=10)
+def _alpaca_get(endpoint: str, mode: str = "swing") -> dict | list:
+    r = requests.get(
+        f"{API_BASE}/{endpoint}",
+        headers=get_account_for_mode(mode).headers,
+        timeout=10,
+    )
     r.raise_for_status()
     return r.json()
 
 
-def get_portfolio() -> dict:
-    """Fetch current Alpaca account + positions."""
-    account = _alpaca_get("account")
-    positions_raw = _alpaca_get("positions")
+def get_portfolio(mode: str = "swing") -> dict:
+    """Fetch current Alpaca account + positions for one trading mode."""
+    alpaca_account = get_account_for_mode(mode)
+    account = _alpaca_get("account", mode=mode)
+    positions_raw = _alpaca_get("positions", mode=mode)
     equity = float(account["equity"])
     cash = float(account["cash"])
     last_equity = float(account.get("last_equity", equity))
@@ -75,6 +77,7 @@ def get_portfolio() -> dict:
         "cash": cash,
         "invested": equity - cash,
         "position_count": len(positions_raw),
+        "account_name": alpaca_account.name,
         "daily_pnl_pct": daily_pnl_pct,
         "daily_pnl": equity - last_equity,
     }
@@ -103,10 +106,16 @@ def get_benchmark_return(symbol: str, period_days: int = 1) -> float | None:
         return None
 
 
-def load_snapshots(days: int | None = None) -> list[dict]:
-    """Load all daily snapshots from snapshots/ directory, optionally filtered."""
-    SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-    files = sorted(SNAPSHOTS_DIR.glob("*.json"))
+def _snapshot_dir(mode: str) -> Path:
+    """Keep legacy root snapshots as Swing and isolate Day history."""
+    return SNAPSHOTS_DIR if mode == "swing" else SNAPSHOTS_DIR / mode
+
+
+def load_snapshots(days: int | None = None, mode: str = "swing") -> list[dict]:
+    """Load snapshots for one account/mode, optionally filtered by date."""
+    snapshot_dir = _snapshot_dir(mode)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    files = sorted(snapshot_dir.glob("*.json"))
     snapshots = []
     for f in files:
         try:
@@ -122,9 +131,10 @@ def load_snapshots(days: int | None = None) -> list[dict]:
     return snapshots
 
 
-def load_trade_journal() -> list[dict]:
-    """Load all trades from the JSONL trade journal."""
+def load_trade_journal(mode: str = "swing") -> list[dict]:
+    """Load trades tagged for one mode; legacy untagged rows stay unclassified."""
     trades = []
+    unclassified = 0
     if not TRADE_JOURNAL_PATH.exists():
         return trades
     try:
@@ -133,11 +143,22 @@ def load_trade_journal() -> list[dict]:
                 line = line.strip()
                 if line:
                     try:
-                        trades.append(json.loads(line))
+                        entry = json.loads(line)
+                        entry_mode = entry.get("trading_mode")
+                        if entry_mode is None:
+                            unclassified += 1
+                        elif entry_mode == mode:
+                            trades.append(entry)
                     except json.JSONDecodeError:
                         continue
     except Exception as e:
         log.warning(f"Could not load trade journal: {e}")
+    if unclassified:
+        log.warning(
+            "%d legacy journal entries have no trading_mode and are excluded from %s stats",
+            unclassified,
+            mode,
+        )
     return trades
 
 
@@ -269,6 +290,8 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
     return {
         "period_start": first.get("date"),
         "period_end": latest.get("date"),
+        "trading_mode": latest.get("trading_mode", "swing"),
+        "account_name": latest.get("account_name", "Swing"),
         "snapshots_count": len(snapshots),
         "starting_equity": base_equity,
         "current_equity": curr_equity,
@@ -293,11 +316,12 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
 # Snapshot
 # ---------------------------------------------------------------------------
 
-def take_snapshot(force: bool = False) -> dict | None:
-    """Record today's equity + SPY + QQQ snapshot to snapshots/YYYY-MM-DD.json."""
-    SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+def take_snapshot(force: bool = False, mode: str = "swing") -> dict | None:
+    """Record today's equity and benchmark data for a specific trading mode."""
+    snapshot_dir = _snapshot_dir(mode)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now().strftime("%Y-%m-%d")
-    snap_file = SNAPSHOTS_DIR / f"{today}.json"
+    snap_file = snapshot_dir / f"{today}.json"
 
     if snap_file.exists() and not force:
         log.info(f"Snapshot for {today} already exists. Use --force to overwrite.")
@@ -305,7 +329,7 @@ def take_snapshot(force: bool = False) -> dict | None:
             return json.load(f)
 
     try:
-        portfolio = get_portfolio()
+        portfolio = get_portfolio(mode=mode)
     except Exception as e:
         log.error(f"Failed to fetch portfolio: {e}")
         return None
@@ -338,6 +362,8 @@ def take_snapshot(force: bool = False) -> dict | None:
     snapshot = {
         "date": today,
         "timestamp": datetime.now().isoformat(),
+        "trading_mode": mode,
+        "account_name": portfolio["account_name"],
         "equity": portfolio["equity"],
         "cash": portfolio["cash"],
         "invested": portfolio["invested"],
@@ -365,14 +391,14 @@ def take_snapshot(force: bool = False) -> dict | None:
 # Output
 # ---------------------------------------------------------------------------
 
-def terminal_report(perf: dict, trade_stats: dict) -> None:
+def terminal_report(perf: dict, trade_stats: dict, mode: str = "swing") -> None:
     """Pretty-print performance summary to stdout."""
     if not perf:
         print("No performance data yet. Run --snapshot first.")
         return
 
     print(f"{'='*65}")
-    print(f"  SWARM TRADER — PERFORMANCE TRACKER")
+    print(f"  SWARM TRADER — {mode.upper()} PERFORMANCE TRACKER ({perf.get('account_name', mode.title())})")
     print(f"  {perf['period_start']} → {perf['period_end']}  ({perf['snapshots_count']} snapshots)")
     print(f"{'='*65}")
     print(f"  Starting Equity:    ${perf['starting_equity']:>13,.2f}")
@@ -441,24 +467,30 @@ def main():
     parser.add_argument("--report", action="store_true", help="Terminal performance report")
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--days", type=int, help="Limit to last N days")
+    parser.add_argument("--mode", choices=["swing", "day"], default="swing",
+                        help="Account/mode to snapshot or report (default: swing)")
     args = parser.parse_args()
 
     if args.snapshot:
-        snap = take_snapshot(force=args.force)
+        snap = take_snapshot(force=args.force, mode=args.mode)
         if snap:
-            print(f"Snapshot saved: {snap['date']} — equity=${snap['equity']:,.2f}")
+            print(
+                f"{args.mode.upper()} snapshot saved: {snap['date']} — "
+                f"equity=${snap['equity']:,.2f} "
+                f"({snap.get('account_name', args.mode.title())})"
+            )
         return
 
-    snapshots = load_snapshots(days=args.days)
-    trades = load_trade_journal()
+    snapshots = load_snapshots(days=args.days, mode=args.mode)
+    trades = load_trade_journal(mode=args.mode)
     perf = compute_performance(snapshots)
     trade_stats = compute_trade_stats(trades)
 
     if args.json:
-        output = {"performance": perf, "trade_stats": trade_stats}
+        output = {"trading_mode": args.mode, "performance": perf, "trade_stats": trade_stats}
         print(json.dumps(output, indent=2, default=str))
     elif args.report or not args.json:
-        terminal_report(perf, trade_stats)
+        terminal_report(perf, trade_stats, mode=args.mode)
 
 
 if __name__ == "__main__":

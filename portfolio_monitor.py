@@ -228,7 +228,7 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
             log.info(f"Day mode: past {flatten_time} ET — flattening all positions")
             try:
                 from execute_trades import flatten_all
-                flatten_result = flatten_all(dry_run=dry_run)
+                flatten_result = flatten_all(dry_run=dry_run, mode=mode)
                 for r in flatten_result.get("results", []):
                     actions.append({**r, "stop_type": "eod_flatten"})
             except Exception as e:

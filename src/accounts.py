@@ -9,7 +9,9 @@ Credentials are selected based on trading mode. All API helpers accept
 an optional `mode` parameter; if omitted, the current trading mode
 (from trading_mode.json) determines which account to use.
 
-If only the primary account is configured, both modes share it (backward compatible).
+Swing and Day are separate portfolios. The order/position APIs do not tag
+positions by strategy, so sharing one account would let Day's EOD flatten
+close Swing positions. Missing mode-specific credentials fail closed.
 """
 
 import os
@@ -64,6 +66,24 @@ def _load_accounts() -> None:
             api_secret=day_secret,
         )
 
+    swing = _ACCOUNTS.get("swing")
+    day = _ACCOUNTS.get("day")
+    if swing and day:
+        known_ids_match = (
+            swing.account_id != "unknown"
+            and day.account_id != "unknown"
+            and swing.account_id == day.account_id
+        )
+        credentials_match = (
+            swing.api_key == day.api_key
+            and swing.api_secret == day.api_secret
+        )
+        if known_ids_match or credentials_match:
+            raise ValueError(
+                "Swing and Day are configured with the same Alpaca account. "
+                "They must be separate because Day flatten closes every position in its account."
+            )
+
 
 def get_account_for_mode(mode: str = None) -> AlpacaAccount:
     """
@@ -84,24 +104,17 @@ def get_account_for_mode(mode: str = None) -> AlpacaAccount:
     if mode is None:
         from src.config import resolve_mode
         mode = resolve_mode()
-        if mode == "auto":
-            mode = "swing"  # safe default
 
     mode = mode.lower()
+    if mode == "auto":
+        mode = "swing"  # safe default when the agent has not selected a mode
 
     if mode in _ACCOUNTS:
         return _ACCOUNTS[mode]
 
-    # Fallback: if swing account isn't configured yet, use day account
-    if mode == "swing" and "day" in _ACCOUNTS:
-        return _ACCOUNTS["day"]
-
-    if "day" in _ACCOUNTS:
-        return _ACCOUNTS["day"]
-
     raise ValueError(
         f"No Alpaca account configured for mode '{mode}'. "
-        "Check ALPACA_API_KEY / ALPACA_SWING_API_KEY in .env"
+        "Configure the matching mode credentials in .env."
     )
 
 

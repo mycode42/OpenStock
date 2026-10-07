@@ -55,9 +55,9 @@ DATA_BASE = "https://data.alpaca.markets/v2"
 _active_mode: str = "swing"
 
 
-def _headers() -> dict:
+def _headers(mode: str = None) -> dict:
     """Get API headers for the currently active trading mode."""
-    return get_account_for_mode(_active_mode).headers
+    return get_account_for_mode(mode or _active_mode).headers
 
 from src.config import get_mode_config, DEFAULT_TARGET_MULTIPLIER
 
@@ -92,9 +92,10 @@ def get_daily_pnl(account: dict) -> float:
     return (equity - last_equity) / last_equity
 
 
-def flatten_all(dry_run: bool = False) -> dict:
+def flatten_all(dry_run: bool = False, mode: str = None) -> dict:
     """Market-sell every open position. Used for end-of-day flatten."""
-    r = requests.get(f"{API_BASE}/positions", headers=_headers(), timeout=10)
+    headers = _headers(mode)
+    r = requests.get(f"{API_BASE}/positions", headers=headers, timeout=10)
     r.raise_for_status()
     positions = r.json()
 
@@ -121,7 +122,7 @@ def flatten_all(dry_run: bool = False) -> dict:
                 "type": "market",
                 "time_in_force": "day",
             }
-            resp = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
+            resp = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
             if resp.status_code in (200, 201):
                 data = resp.json()
                 results.append({
@@ -326,7 +327,7 @@ def main():
 
     # Handle flatten command separately (works in both modes)
     if args.flatten:
-        result = flatten_all(dry_run=args.dry_run)
+        result = flatten_all(dry_run=args.dry_run, mode=mode)
         print(json.dumps(result, indent=2))
         return 0
 

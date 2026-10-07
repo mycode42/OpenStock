@@ -147,6 +147,8 @@ Examples:
 
     # Resolve mode and model
     mode = resolve_mode(cli_mode=args.mode)
+    if mode == "auto":
+        mode = "swing"  # keep the CLI's unresolved auto mode on the safe account
     mode_config = get_mode_config(mode)
     if args.model is None:
         args.model = os.getenv("LLM_MODEL") or _resolve_openclaw_model()
@@ -156,8 +158,8 @@ Examples:
 
     try:
         print(f"📡 Fetching Alpaca account and positions... [{mode.upper()} — {mode_config['label']}]")
-        account = get_alpaca_account()
-        positions_raw = get_alpaca_positions()
+        account = get_alpaca_account(mode=mode)
+        positions_raw = get_alpaca_positions(mode=mode)
 
         if not args.telegram:
             print(f"✅ Found {len(positions_raw)} positions")
