@@ -1,1 +1,1 @@
-"""Independent, rule-based Opening Dip trading mode."""
+"""Continuous, rule-based Algo strategy portfolio."""

@@ -1,4 +1,4 @@
-"""Paper-only Alpaca REST adapter dedicated to ALPACA_DIP_* credentials."""
+"""Paper-only Alpaca REST adapter dedicated to the Algo account credentials."""
 
 from __future__ import annotations
 
@@ -12,17 +12,17 @@ PAPER_BASE = "https://paper-api.alpaca.markets/v2"
 DATA_BASE = "https://data.alpaca.markets/v2"
 
 
-class DipAccountMismatchError(RuntimeError):
-    """Raised when the Dip keys resolve to a different paper account ID."""
+class AlgoAccountMismatchError(RuntimeError):
+    """Raised when the Algo keys resolve to a different paper account ID."""
 
 
-class DipAlpaca:
+class AlgoAlpaca:
     def __init__(self, session: requests.Session | None = None) -> None:
-        self.key = os.environ.get("ALPACA_DIP_API_KEY", "")
-        self.secret = os.environ.get("ALPACA_DIP_API_SECRET", "")
-        self.account_id = os.environ.get("ALPACA_DIP_ACCOUNT_ID", "")
+        self.key = os.environ.get("ALPACA_ALGO_API_KEY", "")
+        self.secret = os.environ.get("ALPACA_ALGO_API_SECRET", "")
+        self.account_id = os.environ.get("ALPACA_ALGO_ACCOUNT_ID", "")
         if not (self.key and self.secret and self.account_id):
-            raise RuntimeError("Dip requires ALPACA_DIP_API_KEY, ALPACA_DIP_API_SECRET, and ALPACA_DIP_ACCOUNT_ID")
+            raise RuntimeError("Algo requires ALPACA_ALGO_API_KEY, ALPACA_ALGO_API_SECRET, and ALPACA_ALGO_ACCOUNT_ID")
         self.session = session or requests.Session()
         self.headers = {
             "APCA-API-KEY-ID": self.key,
@@ -50,9 +50,9 @@ class DipAlpaca:
             str(account.get("id", "")).strip(),
             str(account.get("account_number", "")).strip(),
         }:
-            raise DipAccountMismatchError("Configured Dip account identifier does not match the Alpaca paper account response")
+            raise AlgoAccountMismatchError("Configured Algo account identifier does not match the Alpaca paper account response")
         if account.get("status") != "ACTIVE" or account.get("trading_blocked"):
-            raise RuntimeError("Dip Alpaca paper account is not active for trading")
+            raise RuntimeError("Algo Alpaca paper account is not active for trading")
         return account
 
     def clock(self) -> dict:
@@ -80,57 +80,42 @@ class DipAlpaca:
         symbols: list[str],
         *,
         stale_after_seconds: int = 60,
+        feed: str = "iex",
     ) -> dict[str, tuple[float, datetime]]:
-        trades = self._get(
-            f"{DATA_BASE}/stocks/trades/latest",
-            params={"symbols": ",".join(symbols), "feed": "iex"},
-        ).get("trades", {})
-        prices = {}
+        quotes = self.latest_quotes(symbols, feed=feed)
         now = datetime.now(timezone.utc)
-        quote_fallback_symbols = []
+        return {
+            symbol: (quote["price"], quote["timestamp"])
+            for symbol, quote in quotes.items()
+            if 0 <= (now - quote["timestamp"]).total_seconds() <= stale_after_seconds
+        }
+
+    def latest_quotes(self, symbols: list[str], *, feed: str = "iex") -> dict[str, dict]:
+        """Return current bid/ask marks from the requested Alpaca data feed."""
+        if not symbols:
+            return {}
+        raw = self._get(
+            f"{DATA_BASE}/stocks/quotes/latest",
+            params={"symbols": ",".join(symbols), "feed": feed},
+        ).get("quotes", {})
+        output = {}
         for symbol in symbols:
-            trade = trades.get(symbol) or {}
-            if not trade:
-                quote_fallback_symbols.append(symbol)
-                continue
-            timestamp = datetime.fromisoformat(trade["t"].replace("Z", "+00:00"))
-            price = float(trade["p"])
-            if price <= 0:
-                quote_fallback_symbols.append(symbol)
-                continue
-            prices[symbol] = (price, timestamp)
-            age = (now - timestamp).total_seconds()
-            if age < 0 or age > stale_after_seconds:
-                quote_fallback_symbols.append(symbol)
-
-        if quote_fallback_symbols:
-            # IEX's latest-trade endpoint excludes some prints (including odd
-            # lots). A current quote can still provide a usable mark in that
-            # case, but the daemon's normal freshness check remains in force.
+            quote = raw.get(symbol) or {}
             try:
-                quotes = self._get(
-                    f"{DATA_BASE}/stocks/quotes/latest",
-                    params={"symbols": ",".join(quote_fallback_symbols), "feed": "iex"},
-                ).get("quotes", {})
-            except Exception:
-                # Keep any trade values so fresh symbols can still be handled;
-                # stale values will be rejected by the daemon as usual.
-                quotes = {}
-
-            for symbol in quote_fallback_symbols:
-                quote = quotes.get(symbol) or {}
-                try:
-                    bid = float(quote.get("bp", 0) or 0)
-                    ask = float(quote.get("ap", 0) or 0)
-                    timestamp = datetime.fromisoformat(quote["t"].replace("Z", "+00:00"))
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if bid <= 0 or ask < bid:
-                    continue
-                previous = prices.get(symbol)
-                if previous is None or timestamp > previous[1]:
-                    prices[symbol] = ((bid + ask) / 2, timestamp)
-        return prices
+                bid = float(quote.get("bp", 0) or 0)
+                ask = float(quote.get("ap", 0) or 0)
+                timestamp = datetime.fromisoformat(quote["t"].replace("Z", "+00:00"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if bid <= 0 or ask < bid:
+                continue
+            output[symbol] = {
+                "price": (bid + ask) / 2,
+                "bid": bid,
+                "ask": ask,
+                "timestamp": timestamp,
+            }
+        return output
 
     def positions(self) -> list[dict]:
         return self._get(f"{PAPER_BASE}/positions")
@@ -152,13 +137,30 @@ class DipAlpaca:
 
     def submit_market_order(self, symbol: str, side: str, qty: int, client_order_id: str) -> dict:
         if side not in {"buy", "sell"} or qty <= 0:
-            raise ValueError("Invalid Dip order")
+            raise ValueError("Invalid Algo order")
         return self._post(f"{PAPER_BASE}/orders", {
             "symbol": symbol,
             "qty": str(qty),
             "side": side,
             "type": "market",
             "time_in_force": "day",
+            "client_order_id": client_order_id,
+        })
+
+    def submit_limit_order(
+        self, symbol: str, side: str, qty: int, limit_price: float,
+        client_order_id: str, *, extended_hours: bool,
+    ) -> dict:
+        if side not in {"buy", "sell"} or qty <= 0 or limit_price <= 0:
+            raise ValueError("Invalid Algo limit order")
+        return self._post(f"{PAPER_BASE}/orders", {
+            "symbol": symbol,
+            "qty": str(qty),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "day",
+            "limit_price": str(round(float(limit_price), 2)),
+            "extended_hours": bool(extended_hours),
             "client_order_id": client_order_id,
         })
 

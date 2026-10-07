@@ -1,17 +1,19 @@
 """
 Account routing for multi-account Alpaca setup.
 
-Two accounts:
+Account routes:
   - "swing" (Primary):     ALPACA_API_KEY / ALPACA_API_SECRET — multi-day holds
   - "day"   (DayTrading):  ALPACA_DAY_API_KEY / ALPACA_DAY_API_SECRET — intraday, flattens EOD
+  - "algo"  (Algo):         ALPACA_ALGO_API_KEY / ALPACA_ALGO_API_SECRET — explicit strategy portfolio route
 
 Credentials are selected based on trading mode. All API helpers accept
 an optional `mode` parameter; if omitted, the current trading mode
 (from trading_mode.json) determines which account to use.
 
-Swing and Day are separate portfolios. The order/position APIs do not tag
-positions by strategy, so sharing one account would let Day's EOD flatten
-close Swing positions. Missing mode-specific credentials fail closed.
+Swing, Day, and Algo are separate portfolios. The order/position APIs do not
+tag positions by strategy, so sharing accounts would let account-wide actions
+such as Day's EOD flatten affect other strategies. Missing mode-specific
+credentials fail closed. Algo is not selected by the Swing/Day mode resolver.
 """
 
 import os
@@ -66,23 +68,32 @@ def _load_accounts() -> None:
             api_secret=day_secret,
         )
 
-    swing = _ACCOUNTS.get("swing")
-    day = _ACCOUNTS.get("day")
-    if swing and day:
-        known_ids_match = (
-            swing.account_id != "unknown"
-            and day.account_id != "unknown"
-            and swing.account_id == day.account_id
+    # Dedicated Algo paper account.
+    algo_key = os.environ.get("ALPACA_ALGO_API_KEY", "")
+    algo_secret = os.environ.get("ALPACA_ALGO_API_SECRET", "")
+    if algo_key and algo_secret:
+        _ACCOUNTS["algo"] = AlpacaAccount(
+            name="Algo",
+            account_id=os.environ.get("ALPACA_ALGO_ACCOUNT_ID", "unknown"),
+            api_key=algo_key,
+            api_secret=algo_secret,
         )
-        credentials_match = (
-            swing.api_key == day.api_key
-            and swing.api_secret == day.api_secret
-        )
-        if known_ids_match or credentials_match:
-            raise ValueError(
-                "Swing and Day are configured with the same Alpaca account. "
-                "They must be separate because Day flatten closes every position in its account."
+
+    configured = list(_ACCOUNTS.items())
+    for index, (left_mode, left) in enumerate(configured):
+        for right_mode, right in configured[index + 1:]:
+            known_ids_match = (
+                left.account_id != "unknown"
+                and right.account_id != "unknown"
+                and left.account_id == right.account_id
             )
+            credentials_match = left.api_key == right.api_key and left.api_secret == right.api_secret
+            if known_ids_match or credentials_match:
+                raise ValueError(
+                    f"{left.name} and {right.name} are configured with the same Alpaca account. "
+                    "Trading modes must remain isolated because account-wide position actions "
+                    "can affect every strategy routed there."
+                )
 
 
 def get_account_for_mode(mode: str = None) -> AlpacaAccount:
@@ -90,7 +101,8 @@ def get_account_for_mode(mode: str = None) -> AlpacaAccount:
     Get the correct Alpaca account for the given trading mode.
 
     Args:
-        mode: "swing" or "day". If None, resolves from trading_mode.json.
+        mode: "swing", "day", or explicit "algo" service route. If None,
+              resolves from trading_mode.json (Swing/Day only).
 
     Returns:
         AlpacaAccount with credentials for the appropriate account.

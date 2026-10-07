@@ -4,7 +4,8 @@ import os
 
 # ===========================================================================
 # TRADING MODES — one source of truth per mode. All risk limits live here.
-# Set via TRADING_MODE env var ("swing" or "day") or --mode CLI flag.
+# Swing/Day use the shared TRADING_MODE resolver; Algo is an explicit
+# dedicated-account CLI/service route.
 # ===========================================================================
 MODES = {
     "swing": {
@@ -12,31 +13,31 @@ MODES = {
         "universe": {
             "core_tech": {
                 "label": "Core Technology",
-                "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "SPCX"],
+                "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "SPCX", "QCOM", "ORCL", "CSCO", "IBM", "INTC", "ADBE", "ACN", "AMAT", "TXN", "ADI", "LRCX", "KLAC", "MU", "MRVL", "APH", "SNPS", "CDNS"],
                 "max_sector_pct": 0.30,
                 "max_per_stock_pct": 0.08,
             },
             "growth": {
                 "label": "Growth",
-                "tickers": ["PLTR", "AMD", "CRM", "SNOW", "NET", "PANW"],
+                "tickers": ["PLTR", "AMD", "CRM", "SNOW", "NET", "PANW", "CRWD", "NOW", "DDOG", "SHOP", "UBER", "APP", "NFLX", "ABNB", "DASH", "TTD", "ZS", "MDB", "ARM", "CDW", "ROP", "TEAM"],
                 "max_sector_pct": 0.25,
                 "max_per_stock_pct": 0.08,
             },
             "value_dividend": {
                 "label": "Value & Dividend",
-                "tickers": ["JPM", "V", "UNH", "JNJ", "PG", "KO"],
+                "tickers": ["JPM", "V", "UNH", "JNJ", "PG", "KO", "PEP", "BAC", "LOW", "XOM", "CVX", "WMT", "COST", "HD", "MCD", "CAT", "GE", "BA", "ABBV", "LLY", "MRK", "AMGN", "TMO", "DHR", "BSX", "MA", "AXP", "GS", "MS", "C", "WFC", "TJX", "TGT", "CL", "MDLZ", "PM", "HON", "DE", "UNP", "UPS", "COP", "SLB", "EOG", "NEE", "DUK", "SO"],
                 "max_sector_pct": 0.25,
                 "max_per_stock_pct": 0.08,
             },
             "tactical": {
                 "label": "Tactical",
-                "tickers": ["COIN", "MSTR", "RKLB", "SMCI"],
+                "tickers": ["COIN", "MSTR", "RKLB", "SMCI", "IONQ", "TEM", "TSLA", "ASTS", "CRSP"],
                 "max_sector_pct": 0.15,
                 "max_per_stock_pct": 0.05,
             },
             "hedge": {
                 "label": "Hedge / Direction",
-                "tickers": ["SPY", "QQQ", "GLD", "TLT", "SPCX"],
+                "tickers": ["SPY", "QQQ", "GLD", "TLT", "SPCX", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU", "XLY", "XLB", "SMH", "VNQ", "HYG", "EFA", "EEM", "LQD", "XLRE"],
                 "max_sector_pct": 0.15,
                 "max_per_stock_pct": 0.10,
             },
@@ -62,19 +63,19 @@ MODES = {
         "universe": {
             "mega_cap": {
                 "label": "Mega-Cap Liquid",
-                "tickers": ["NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN", "SPCX"],
+                "tickers": ["NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN", "SPCX", "QCOM", "ORCL", "CSCO", "IBM", "INTC", "ADBE", "ACN", "AMAT", "TXN", "ADI", "LRCX", "KLAC", "MU", "MRVL", "APH", "SNPS", "CDNS", "NFLX", "COST", "JPM", "V", "UNH", "WMT", "HD", "XOM", "LLY"],
                 "max_sector_pct": 0.50,
                 "max_per_stock_pct": 0.15,
             },
             "momentum": {
                 "label": "Momentum",
-                "tickers": ["PLTR", "COIN", "MSTR", "RKLB", "SMCI", "IONQ", "TEM"],
+                "tickers": ["PLTR", "COIN", "MSTR", "RKLB", "SMCI", "IONQ", "TEM", "TSLA", "ASTS", "CRSP", "AMD", "CRM", "SNOW", "NET", "PANW", "CRWD", "NOW", "DDOG", "SHOP", "UBER", "APP", "JPM", "V", "UNH", "JNJ", "PG", "KO", "PEP", "BAC", "LOW", "XOM", "CVX", "WMT", "COST", "HD", "MCD", "CAT", "GE", "BA", "ABBV", "LLY", "MRK", "AMGN", "TMO", "DHR", "BSX", "MA", "AXP", "GS", "MS", "C", "WFC", "TJX", "TGT", "CL", "MDLZ", "PM", "HON", "DE", "UNP", "UPS", "COP", "SLB", "EOG", "NEE", "DUK", "SO", "NFLX", "ABNB", "DASH", "TTD", "ZS", "MDB", "ARM", "CDW", "ROP", "TEAM"],
                 "max_sector_pct": 0.35,
                 "max_per_stock_pct": 0.12,
             },
             "etf_direction": {
                 "label": "ETF Direction / Hedge",
-                "tickers": ["SPY", "QQQ", "TQQQ", "SOXL", "SPCX"],
+                "tickers": ["SPY", "QQQ", "TQQQ", "SOXL", "SPCX", "GLD", "TLT", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU", "XLY", "XLB", "SMH", "VNQ", "HYG", "EFA", "EEM", "LQD", "XLRE"],
                 "max_sector_pct": 0.30,
                 "max_per_stock_pct": 0.15,
             },
@@ -98,31 +99,86 @@ MODES = {
     },
 }
 
-# Dip mode is a separate, rule-based daemon with its own Alpaca paper account.
-# It is deliberately kept outside MODES so the Swing/Day mode resolver and its
-# existing CLI/cron behavior remain unchanged.
-DIP_CONFIG = {
-    "enabled": True,
-    "universe": ["SPCX", "IONQ", "TSLA", "TEM", "ASTS", "CRSP", "SUNB"],
-    "pre_open_minutes": 5,
-    "start": "market_open",
-    "stop": "11:30",  # America/New_York local market time
-    "reference": "previous_close",
-    "dip_percent": 1.0,
-    "confirmation_seconds": 30,
-    "target_percent": 1.5,
-    "stop_loss_percent": 1.0,
-    "reentry_enabled": True,
-    "minimum_dip_from_last_sell_percent": 0.8,
-    "max_opening_gap_percent": 3.0,
-    "max_trades_per_day": 5,
-    "max_trades_per_instrument_per_day": 2,
-    "max_position_size": 5000.0,
-    "max_total_exposure": 10000.0,
-    "max_daily_loss": None,
+# The Day Momentum bucket doubles as the broad fallback catalog for dynamic
+# selection. Keep symbols already classified as Mega-Cap or ETF Direction in
+# their original risk bucket; risk_manager uses the last category for duplicates.
+_day_universe = MODES["day"]["universe"]
+_day_fixed_symbols = {
+    ticker
+    for bucket_name, bucket in _day_universe.items()
+    if bucket_name != "momentum"
+    for ticker in bucket["tickers"]
+}
+_day_universe["momentum"]["tickers"] = [
+    ticker for ticker in dict.fromkeys(_day_universe["momentum"]["tickers"])
+    if ticker not in _day_fixed_symbols
+]
+
+STRATEGY_CONFIG = {
+    "universe_target": 50,
+    "universe_min_target": 40,
+    "universe_max_target": 60,
+    "universe_min_avg_dollar_volume_20d": 20_000_000,
+    "universe_min_price": 5.0,
+    "universe_max_price": 500.0,
+    "universe_min_clean_daily_bars": 60,
+    "universe_history_days": 180,
+    "universe_active_candidate_count": 100,
+    "universe_data_feed": "sip",
+    "universe_data_feed_fallback": "iex",
+    "universe_moderate_volatility_target_annualized": 0.35,
+    "universe_volatility_penalty": 2.5,
+    "portfolio_scan_seconds": 60,
+    "universe_retry_seconds": 300,
+    "quote_stale_seconds": 90,
+    "extended_hours_max_spread_pct": 0.02,
+    "regime_llm_advisor_enabled": False,
+    "regime_llm_default_model": "phi3:mini",
+    "regime_llm_timeout_seconds": 4,
+    "risk_per_trade_pct": 0.005,
+    "max_strategy_position_pct": 0.05,
+    "take_profit_r_multiple": 2.0,
+    "pairs_min_correlation": 0.80,
+    "pairs_entry_z": 2.0,
+}
+
+# The Algo portfolio remains outside the Swing/Day mode resolver. It reuses the
+# broad Swing risk taxonomy and retains conservative per-position and high-risk
+# tactical limits. Its higher entry throughput is offset by smaller positions
+# and the same drawdown circuit breakers as Swing.
+ALGO_PORTFOLIO_UNIVERSE = {}
+for _category, _base_bucket in MODES["swing"]["universe"].items():
+    _tickers = list(_base_bucket["tickers"])
+    ALGO_PORTFOLIO_UNIVERSE[_category] = {
+        **_base_bucket,
+        "tickers": _tickers,
+        "max_sector_pct": 0.32,
+        "max_per_stock_pct": min(float(_base_bucket["max_per_stock_pct"]), 0.05),
+    }
+ALGO_MODE_CONFIG = {
+    "label": "Autonomous Algo Portfolio",
+    "universe": ALGO_PORTFOLIO_UNIVERSE,
+    "risk": {
+        "max_position_pct": 0.05,
+        "max_sector_pct": 0.32,
+        "stop_loss_pct": 0.01,
+        "trailing_stop_pct": 0.03,
+        "daily_loss_limit": 0.02,
+        "weekly_loss_limit": 0.05,
+        "no_buy_if_down_pct": 0.02,
+        "max_trades_per_day": 40,
+        "max_open_positions": 20,
+        "min_cash_pct": 0.15,
+        "max_tactical_pct": 0.15,
+        "flatten_eod": False,
+        "allow_leveraged_etfs": False,
+    },
+}
+
+ALGO_SERVICE_CONFIG = {
     "poll_seconds": 15,
-    "stale_data_seconds": 60,
-    "state_file": "data/dip_state.json",
+    "state_file": "data/algo_state.json",
+    "lock_file": "/run/lock/swarm-trader-algo.lock",
 }
 
 
@@ -246,6 +302,8 @@ def get_mode_config(mode: str = None) -> dict:
     if mode == "auto":
         mode = "swing"  # Safe fallback when auto hasn't been resolved by agent
     mode = mode.lower()
+    if mode == "algo":
+        return ALGO_MODE_CONFIG
     if mode not in MODES:
         raise ValueError(f"Unknown mode '{mode}'. Valid: {list(MODES.keys())}")
     return MODES[mode]

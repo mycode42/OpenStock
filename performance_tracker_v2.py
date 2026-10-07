@@ -4,8 +4,8 @@
 Performance Tracker V2 — Swarm Trader daily performance with benchmark comparison.
 
 Tracks portfolio vs SPY and QQQ, computes rolling 21-day Sharpe ratio,
-win rate, and average win/loss per trade.  Saves daily JSON snapshots to
-snapshots/YYYY-MM-DD.json for Swing and snapshots/day/YYYY-MM-DD.json for Day.
+win rate, and average win/loss per trade. Saves snapshots per account: Swing
+under snapshots/, Day under snapshots/day/, and Algo under snapshots/algo/.
 
 Usage:
   poetry run python performance_tracker_v2.py --snapshot          # Record today
@@ -107,8 +107,12 @@ def get_benchmark_return(symbol: str, period_days: int = 1) -> float | None:
 
 
 def _snapshot_dir(mode: str) -> Path:
-    """Keep legacy root snapshots as Swing and isolate Day history."""
-    return SNAPSHOTS_DIR if mode == "swing" else SNAPSHOTS_DIR / mode
+    """Keep Swing's established path and isolate additional account histories."""
+    if mode == "swing":
+        return SNAPSHOTS_DIR
+    if mode == "algo":
+        return Path(__file__).parent / "data" / "snapshots" / "algo"
+    return SNAPSHOTS_DIR / mode
 
 
 def load_snapshots(days: int | None = None, mode: str = "swing") -> list[dict]:
@@ -242,6 +246,25 @@ def compute_trade_stats(trades: list[dict]) -> dict:
         "avg_loss": round(avg_loss, 2),
         "profit_factor": round(profit_factor, 2) if profit_factor else None,
     }
+
+
+def compute_strategy_stats(trades: list[dict]) -> dict[str, dict]:
+    """Summarize journal activity by pure strategy attribution."""
+    grouped: dict[str, list[dict]] = {}
+    for trade in trades:
+        strategy = trade.get("strategy") or "unspecified"
+        grouped.setdefault(strategy, []).append(trade)
+    result = {}
+    for strategy, rows in sorted(grouped.items()):
+        result[strategy] = {
+            "orders": len(rows),
+            "executed": sum(row.get("status") in ("executed", "accepted", "new", "filled", "partially_filled") for row in rows),
+            "blocked": sum(row.get("status") == "blocked" for row in rows),
+            "entries": sum(str(row.get("action", "")).lower() in ("buy", "short") for row in rows),
+            "exits": sum(str(row.get("action", "")).lower() in ("sell", "cover") for row in rows),
+            "closed_trades_with_pnl": sum(row.get("pnl") is not None for row in rows),
+        }
+    return result
 
 
 def compute_performance(snapshots: list[dict]) -> dict | None:
@@ -467,7 +490,7 @@ def main():
     parser.add_argument("--report", action="store_true", help="Terminal performance report")
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--days", type=int, help="Limit to last N days")
-    parser.add_argument("--mode", choices=["swing", "day"], default="swing",
+    parser.add_argument("--mode", choices=["swing", "day", "algo"], default="swing",
                         help="Account/mode to snapshot or report (default: swing)")
     args = parser.parse_args()
 
@@ -485,12 +508,26 @@ def main():
     trades = load_trade_journal(mode=args.mode)
     perf = compute_performance(snapshots)
     trade_stats = compute_trade_stats(trades)
+    strategy_stats = compute_strategy_stats(trades)
 
     if args.json:
-        output = {"trading_mode": args.mode, "performance": perf, "trade_stats": trade_stats}
+        output = {
+            "trading_mode": args.mode,
+            "performance": perf,
+            "trade_stats": trade_stats,
+            "strategy_stats": strategy_stats,
+        }
         print(json.dumps(output, indent=2, default=str))
     elif args.report or not args.json:
         terminal_report(perf, trade_stats, mode=args.mode)
+        if strategy_stats:
+            print("  STRATEGY ATTRIBUTION:")
+            for name, values in strategy_stats.items():
+                print(
+                    f"    {name:<28} {values['orders']:>4} orders  "
+                    f"{values['entries']} entries / {values['exits']} exits  "
+                    f"{values['blocked']} blocked"
+                )
 
 
 if __name__ == "__main__":

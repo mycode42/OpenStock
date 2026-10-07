@@ -24,7 +24,6 @@ Pipeline:
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
@@ -37,10 +36,11 @@ import requests
 SCREENER_BASE = "https://data.alpaca.markets/v1beta1/screener"
 DATA_BASE = "https://data.alpaca.markets/v2"
 
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
+from src.accounts import get_account_for_mode
+
+
+def _headers(mode: str = "swing") -> dict:
+    return get_account_for_mode(mode).headers
 
 # Core watchlist — always included regardless of scanner results.
 # These are high-liquidity names Cassius should always have eyes on.
@@ -62,12 +62,12 @@ DEFAULT_MIN_TRADES = 5000
 DEFAULT_MAX_TICKERS = 25
 
 
-def get_movers(top: int = 20) -> dict:
+def get_movers(top: int = 20, mode: str = "swing") -> dict:
     """Get top gainers and losers."""
     try:
         r = requests.get(
             f"{SCREENER_BASE}/stocks/movers",
-            headers=HEADERS,
+            headers=_headers(mode),
             params={"top": top},
             timeout=10,
         )
@@ -78,12 +78,12 @@ def get_movers(top: int = 20) -> dict:
         return {"gainers": [], "losers": []}
 
 
-def get_most_active(top: int = 50) -> list[dict]:
+def get_most_active(top: int = 50, mode: str = "swing") -> list[dict]:
     """Get most active stocks by trade count."""
     try:
         r = requests.get(
             f"{SCREENER_BASE}/stocks/most-actives",
-            headers=HEADERS,
+            headers=_headers(mode),
             params={"top": top},
             timeout=10,
         )
@@ -94,14 +94,14 @@ def get_most_active(top: int = 50) -> list[dict]:
         return []
 
 
-def get_snapshots(symbols: list[str]) -> dict:
+def get_snapshots(symbols: list[str], mode: str = "swing") -> dict:
     """Get current price snapshots for a list of symbols."""
     if not symbols:
         return {}
     try:
         r = requests.get(
             f"{DATA_BASE}/stocks/snapshots",
-            headers=HEADERS,
+            headers=_headers(mode),
             params={"symbols": ",".join(symbols[:50]), "feed": "iex"},
             timeout=15,
         )
@@ -133,6 +133,7 @@ def scan(
     min_trades: int = DEFAULT_MIN_TRADES,
     max_tickers: int = DEFAULT_MAX_TICKERS,
     include_core: bool = True,
+    mode: str = "swing",
 ) -> dict:
     """
     Run the full market scan and return filtered results.
@@ -148,7 +149,7 @@ def scan(
     discovered = {}  # symbol -> metadata
 
     # 1. Pull movers (gainers + losers)
-    movers = get_movers(top=20)
+    movers = get_movers(top=20, mode=mode)
 
     for g in movers.get("gainers", []):
         sym = g.get("symbol", "")
@@ -179,7 +180,7 @@ def scan(
             }
 
     # 2. Pull most active by trade count
-    actives = get_most_active(top=50)
+    actives = get_most_active(top=50, mode=mode)
 
     for a in actives:
         sym = a.get("symbol", "")
@@ -203,7 +204,7 @@ def scan(
     # 3. Get price snapshots for actives that don't have prices yet
     need_prices = [s for s, d in discovered.items() if "price" not in d]
     if need_prices:
-        snapshots = get_snapshots(need_prices)
+        snapshots = get_snapshots(need_prices, mode=mode)
         for sym, snap in snapshots.items():
             if sym in discovered:
                 latest = snap.get("latestTrade", snap.get("dailyBar", {}))
@@ -273,6 +274,7 @@ Pipeline:
     parser.add_argument("--min-price", type=float, default=DEFAULT_MIN_PRICE, help=f"Min stock price (default: ${DEFAULT_MIN_PRICE})")
     parser.add_argument("--min-trades", type=int, default=DEFAULT_MIN_TRADES, help=f"Min trade count for 'most active' (default: {DEFAULT_MIN_TRADES})")
     parser.add_argument("--no-core", action="store_true", help="Skip core watchlist, only show discovered")
+    parser.add_argument("--mode", choices=["swing", "day"], default="swing", help="Account route for Alpaca market data")
 
     args = parser.parse_args()
 
@@ -281,6 +283,7 @@ Pipeline:
         min_trades=args.min_trades,
         max_tickers=args.max,
         include_core=not args.no_core,
+        mode=args.mode,
     )
 
     if args.json:

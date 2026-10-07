@@ -1,5 +1,5 @@
 [Unit]
-Description=Swarm Trader Opening Dip paper-trading daemon
+Description=Swarm Trader autonomous rule-based algo portfolio daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -10,7 +10,7 @@ Group=openclaw
 WorkingDirectory=/opt/swarm-trader
 EnvironmentFile=/opt/swarm-trader/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/local/bin/poetry run python -m src.dip.daemon
+ExecStart=/usr/local/bin/poetry run python -m src.algo.daemon --mode algo
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=30
@@ -23,7 +23,7 @@ ProtectHome=read-only
 ReadWritePaths=/opt/swarm-trader/data /run/lock
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=swarm-trader-dip
+SyslogIdentifier=swarm-trader-algo
 
 [Install]
 WantedBy=multi-user.target

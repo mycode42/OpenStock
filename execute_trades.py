@@ -61,14 +61,18 @@ def _headers(mode: str = None) -> dict:
 
 from src.config import get_mode_config, DEFAULT_TARGET_MULTIPLIER
 
-# V2 risk manager — validates every BUY before execution
+# V2 risk manager — required for every non-hold order
 try:
-    from risk_manager import validate_trade as rm_validate_trade, get_portfolio_state as rm_get_portfolio_state
+    from risk_manager import (
+        validate_trade as rm_validate_trade,
+        get_portfolio_state as rm_get_portfolio_state,
+        stage_approved_trade as rm_stage_approved_trade,
+    )
     RISK_MANAGER_AVAILABLE = True
     log.info("V2 risk manager loaded")
 except ImportError:
     RISK_MANAGER_AVAILABLE = False
-    log.warning("risk_manager.py not found — falling back to legacy validation only")
+    log.error("risk_manager.py not found — all orders will be blocked")
 
 
 def get_account():
@@ -81,6 +85,30 @@ def get_positions():
     r = requests.get(f"{API_BASE}/positions", headers=_headers(), timeout=10)
     r.raise_for_status()
     return {p["symbol"]: p for p in r.json()}
+
+
+def get_latest_price(ticker: str) -> float:
+    """Fetch an Alpaca IEX trade for risk sizing when a decision omits price."""
+    response = requests.get(
+        f"{DATA_BASE}/stocks/{ticker}/trades/latest",
+        headers=_headers(),
+        params={"feed": "iex"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    trade = payload.get("trade") or (payload.get("trades") or {}).get(ticker) or {}
+    price = float(trade.get("p", 0) or 0)
+    if price <= 0:
+        raise ValueError(f"No positive latest Alpaca trade available for {ticker}")
+    try:
+        timestamp = datetime.fromisoformat(str(trade["t"]).replace("Z", "+00:00"))
+        age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Latest Alpaca trade timestamp unavailable for {ticker}") from exc
+    if age < 0 or age > 90:
+        raise ValueError(f"Latest Alpaca trade for {ticker} is stale ({age:.0f}s)")
+    return price
 
 
 def get_daily_pnl(account: dict) -> float:
@@ -148,7 +176,8 @@ def place_order(
     order_type="market",
     stop_price=None, take_profit=None,
     limit_price=None, trail_percent=None,
-    entry_price=None, stop_pct=None,
+    entry_price=None, stop_pct=None, client_order_id=None,
+    extended_hours=False,
 ):
     """Place an order. Supports market, bracket, limit, stop, oco, trailing_stop.
 
@@ -164,6 +193,37 @@ def place_order(
         trailing_stop   — trailing stop that rises with price (requires trail_percent)
     """
     side = "buy" if action in ("buy", "cover") else "sell"
+
+    # Alpaca extended sessions accept simple limit DAY orders only. Keep this
+    # branch ahead of bracket construction so strategy stop/target metadata
+    # remains software-managed and never becomes an unsupported bracket.
+    if extended_hours:
+        if _active_mode != "algo":
+            return {"success": False, "error": "Extended-hours orders are enabled only for Algo mode"}
+        if action not in {"buy", "sell"} or order_type != "limit" or limit_price is None or float(limit_price) <= 0:
+            return {"success": False, "error": "Extended-hours orders require a buy/sell limit order with a positive limit price"}
+        order = {
+            "symbol": ticker,
+            "qty": str(int(qty)),
+            "side": side,
+            "type": "limit",
+            "time_in_force": "day",
+            "limit_price": str(round(float(limit_price), 2)),
+            "extended_hours": True,
+        }
+        if client_order_id:
+            order["client_order_id"] = str(client_order_id)[:48]
+        response = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
+        if response.status_code in (200, 201):
+            data = response.json()
+            return {
+                "success": True,
+                "order_id": data.get("id"),
+                "status": data.get("status"),
+                "order_type": "limit",
+                "extended_hours": True,
+            }
+        return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
 
     # Auto-calculate bracket prices if stop_pct is provided and prices are missing
     if action in ("buy", "cover", "short") and order_type not in ("limit", "stop", "trailing_stop", "oco"):
@@ -247,6 +307,9 @@ def place_order(
             "time_in_force": "day",
         }
 
+    if client_order_id:
+        order["client_order_id"] = str(client_order_id)[:48]
+
     r = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
     if r.status_code in (200, 201):
         data = r.json()
@@ -266,6 +329,45 @@ def place_order(
     return {"success": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
 
 
+def cancel_open_orders_for_symbol(ticker: str, mode: str = None) -> dict:
+    """Cancel protective child orders before an approved strategy market exit."""
+    headers = _headers(mode)
+    response = requests.get(
+        f"{API_BASE}/orders",
+        headers=headers,
+        params={"status": "open", "limit": 500},
+        timeout=10,
+    )
+    if response.status_code != 200:
+        return {"success": False, "error": f"Could not list open orders: HTTP {response.status_code}"}
+    matched = [
+        order for order in response.json()
+        if str(order.get("symbol", "")).upper() == ticker.upper()
+        and str(order.get("side", "")).lower() == "sell"
+        and (
+            str(order.get("type", "")).lower() in {"stop", "stop_limit", "limit", "trailing_stop"}
+            or order.get("parent_order_id")
+            or str(order.get("order_class", "")).lower() in {"bracket", "oco"}
+        )
+    ]
+    cancelled = []
+    for order in matched:
+        order_id = order.get("id")
+        if not order_id:
+            return {"success": False, "error": f"Open {ticker} order has no Alpaca order id"}
+        cancel_response = requests.delete(
+            f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10,
+        )
+        if cancel_response.status_code not in (200, 202, 204, 404):
+            return {
+                "success": False,
+                "error": f"Could not cancel open {ticker} order {order_id}: HTTP {cancel_response.status_code}",
+                "cancelled": cancelled,
+            }
+        cancelled.append(order_id)
+    return {"success": True, "cancelled": cancelled}
+
+
 def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily_loss_limit=0.03, max_trade_pct=0.15):
     """Legacy position-level validation (sell/cover checks + portfolio-level circuit breaker)."""
     pos = positions.get(ticker, {})
@@ -274,6 +376,8 @@ def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily
 
     if action == "sell" and current_shares <= 0:
         return False, f"No long position in {ticker} to sell"
+    if action == "sell" and qty > current_shares:
+        return False, f"Sell quantity {qty} exceeds the {current_shares:g} shares currently held in {ticker}"
     if action == "cover" and current_shares >= 0:
         return False, f"No short position in {ticker} to cover"
 
@@ -284,7 +388,7 @@ def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily
             f"(limit {daily_loss_limit*100:.0f}%). No new entries until tomorrow."
         )
 
-    if current_price > 0:
+    if action in ("buy", "short") and current_price > 0:
         trade_value = qty * current_price
         max_value = portfolio_value * max_trade_pct
         if trade_value > max_value:
@@ -307,7 +411,7 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["swing", "day"],
+        choices=["swing", "day", "algo"],
         default=None,
         help="Trading mode (overrides TRADING_MODE env, default: swing)",
     )
@@ -324,6 +428,19 @@ def main():
 
     acct = get_account_for_mode(mode)
     log.info(f"Trading mode: {mode.upper()} — {mode_config['label']} (account: {acct.name})")
+
+    # Algo is an explicitly dedicated route. Verify its configured Alpaca
+    # account identity before any order, including account-wide flattening.
+    algo_account = None
+    if mode == "algo":
+        algo_account = get_account()
+        expected_id = str(acct.account_id or "").strip()
+        returned_ids = {
+            str(algo_account.get("id", "")).strip(),
+            str(algo_account.get("account_number", "")).strip(),
+        }
+        if not expected_id or expected_id == "unknown" or expected_id not in returned_ids:
+            raise RuntimeError("Configured Algo account identifier does not match the Alpaca account response")
 
     # Handle flatten command separately (works in both modes)
     if args.flatten:
@@ -344,13 +461,12 @@ def main():
         return 0
 
     # Get current state
-    account = get_account()
+    account = algo_account or get_account()
     positions = get_positions()
     portfolio_value = float(account.get("equity", 0))
     daily_pnl_pct = get_daily_pnl(account)
 
     daily_loss_limit = mode_risk["daily_loss_limit"]
-    max_trades = mode_risk["max_trades_per_day"]
     max_trade_pct = mode_risk["max_position_pct"]
     stop_loss_pct = mode_risk["stop_loss_pct"]
 
@@ -372,7 +488,10 @@ def main():
     results = []
     executed = 0
 
-    for trade in trades[:max_trades]:
+    # The risk manager counts and validates entries against staged portfolio
+    # state. Do not truncate this list: exits later in the batch must still be
+    # allowed after the day's entry quota is full.
+    for trade in trades:
         ticker = trade["ticker"]
         action = trade["action"].lower()
         qty = int(trade.get("qty", 0))
@@ -382,16 +501,36 @@ def main():
         take_profit = trade.get("take_profit")
         limit_price = trade.get("limit_price")
         trail_percent = trade.get("trail_percent")
+        extended_hours = bool(trade.get("extended_hours", False))
         entry_price = trade.get("entry_price")
+        strategy = trade.get("strategy", "unspecified")
+        strategy_group = trade.get("strategy_group")
+        client_order_id = trade.get("client_order_id")
 
         if action == "hold" or qty <= 0:
             results.append({"ticker": ticker, "action": action, "status": "skipped", "reason": "Hold or zero qty"})
             continue
 
-        # ── V2 Risk Manager validation (buy/short entries only) ──────────────
+        if not RISK_MANAGER_AVAILABLE:
+            reason = "V2 risk manager unavailable; order blocked"
+            log.error(reason)
+            results.append({
+                "ticker": ticker, "action": action, "qty": qty,
+                "status": "blocked", "reason": reason, "strategy": strategy,
+            })
+            continue
+
+        # ── V2 Risk Manager validation ───────────────────────────────────────
         if action in ("buy", "short") and RISK_MANAGER_AVAILABLE:
             pos = positions.get(ticker, {})
             ref_price = entry_price or limit_price or float(pos.get("current_price", 0))
+            if ref_price <= 0:
+                try:
+                    ref_price = get_latest_price(ticker)
+                    entry_price = ref_price
+                except Exception as exc:
+                    ref_price = 0
+                    log.warning("No reference price for %s; risk manager will reject entry: %s", ticker, exc)
             rm_result = rm_validate_trade(
                 ticker=ticker,
                 action=action,
@@ -407,9 +546,35 @@ def main():
                     "status": "blocked",
                     "reason": rm_result.reason,
                     "rule": rm_result.rule,
+                    "strategy": strategy,
                 })
                 continue
             log.info(f"V2 risk manager approved {action} {ticker}")
+        elif action in ("sell", "cover") and RISK_MANAGER_AVAILABLE:
+            # The central validator explicitly allows exits; route them through
+            # it too so every submitted signal uses the same policy boundary.
+            rm_result = rm_validate_trade(
+                ticker=ticker,
+                action=action,
+                qty=qty,
+                entry_price=float(entry_price or 0),
+                portfolio_state=rm_portfolio_state,
+                mode=mode,
+            )
+            if not rm_result.approved:
+                results.append({
+                    "ticker": ticker, "action": action, "qty": qty,
+                    "status": "blocked", "reason": rm_result.reason,
+                    "rule": rm_result.rule, "strategy": strategy,
+                })
+                continue
+        elif action not in ("sell", "cover"):
+            reason = f"Unsupported action '{action}'"
+            results.append({
+                "ticker": ticker, "action": action, "qty": qty,
+                "status": "blocked", "reason": reason, "strategy": strategy,
+            })
+            continue
 
         # ── Auto-calculate bracket for swing mode (mandatory stops) ──────────
         # In day mode: brackets are not required — stops managed intraday / via EOD flatten.
@@ -444,7 +609,7 @@ def main():
         )
         if not valid:
             log.warning(f"Legacy validator BLOCKED {action} {ticker}: {reason}")
-            results.append({"ticker": ticker, "action": action, "qty": qty, "status": "blocked", "reason": reason})
+            results.append({"ticker": ticker, "action": action, "qty": qty, "status": "blocked", "reason": reason, "strategy": strategy})
             continue
 
         if args.dry_run:
@@ -452,7 +617,12 @@ def main():
                 "ticker": ticker, "action": action, "qty": qty,
                 "status": "would_execute", "reasoning": reasoning,
                 "order_type": order_type,
+                "extended_hours": extended_hours,
+                "strategy": strategy,
+                "client_order_id": client_order_id,
             }
+            if strategy_group:
+                dry_entry["strategy_group"] = strategy_group
             if stop_price is not None:
                 dry_entry["stop_price"] = stop_price
             if take_profit is not None:
@@ -461,9 +631,28 @@ def main():
                 dry_entry["limit_price"] = limit_price
             if trail_percent is not None:
                 dry_entry["trail_percent"] = trail_percent
+            if trade.get("cancel_open_orders"):
+                dry_entry["cancel_open_orders"] = True
             results.append(dry_entry)
             executed += 1
+            if action == "buy" and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
+                rm_portfolio_state = rm_stage_approved_trade(
+                    rm_portfolio_state, ticker, action, qty,
+                    float(entry_price or limit_price or positions.get(ticker, {}).get("current_price", 0)),
+                    mode=mode,
+                )
         else:
+            if action == "sell" and trade.get("cancel_open_orders"):
+                cancel_result = cancel_open_orders_for_symbol(ticker, mode=mode)
+                if not cancel_result.get("success"):
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "failed", "reason": cancel_result.get("error"),
+                        "strategy": strategy, "client_order_id": client_order_id,
+                    })
+                    continue
+                if cancel_result.get("cancelled"):
+                    log.info("Cancelled %d protective order(s) for %s before strategy exit", len(cancel_result["cancelled"]), ticker)
             # Pass stop_pct only in swing mode so place_order() can auto-calc if needed
             result = place_order(
                 ticker, action, qty,
@@ -472,15 +661,25 @@ def main():
                 limit_price=limit_price, trail_percent=trail_percent,
                 entry_price=entry_price,
                 stop_pct=stop_loss_pct if mode == "swing" else None,
+                client_order_id=client_order_id,
+                extended_hours=extended_hours,
             )
             status = "executed" if result["success"] else "failed"
             results.append({
                 "ticker": ticker, "action": action, "qty": qty,
-                "status": status, "reasoning": reasoning,
+                "status": status, "reasoning": reasoning, "strategy": strategy,
+                "strategy_group": strategy_group,
+                "client_order_id": client_order_id,
                 **result,
             })
             if result["success"]:
                 executed += 1
+                if action == "buy" and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
+                    rm_portfolio_state = rm_stage_approved_trade(
+                        rm_portfolio_state, ticker, action, qty,
+                        float(entry_price or limit_price or positions.get(ticker, {}).get("current_price", 0)),
+                        mode=mode,
+                    )
 
     output = {
         "timestamp": datetime.now().isoformat(),
@@ -508,7 +707,7 @@ def main():
     # Auto-snapshot performance
     try:
         from performance_tracker_v2 import take_snapshot
-        take_snapshot()
+        take_snapshot(mode=mode)
     except Exception as e:
         print(f"⚠️ Performance snapshot failed: {e}", file=sys.stderr)
 

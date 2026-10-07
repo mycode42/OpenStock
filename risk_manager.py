@@ -8,18 +8,23 @@ Rules are non-negotiable and code-enforced; no LLM can override them.
 Usage (standalone check):
   poetry run python risk_manager.py --status
   poetry run python risk_manager.py --status --mode day
+  poetry run python risk_manager.py --status --mode algo
 
 Importable:
   from risk_manager import validate_trade, get_portfolio_state
 """
 
 import logging
+import math
 import os
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -39,6 +44,7 @@ log = logging.getLogger("risk_manager")
 from src.accounts import get_account_for_mode
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
+MARKET_TZ = ZoneInfo("America/New_York")
 
 # Leveraged ETFs — blocked in swing mode, allowed in day mode
 LEVERAGED_ETFS = {
@@ -103,23 +109,197 @@ def _api(endpoint: str, mode: str = None) -> dict | list:
     return r.json()
 
 
+def _is_market_session_date(timestamp_value: str, session_date: str) -> bool:
+    """Compare an Alpaca timestamp to a trading day in New York time."""
+    try:
+        timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(MARKET_TZ).date().isoformat() == session_date
+
+
+def _get_algo_orders_since(session_start: str, mode: str) -> list[dict]:
+    """Fetch all Algo orders since the session start using Alpaca ID cursors."""
+    orders: list[dict] = []
+    after_order_id = None
+    for _ in range(100):
+        if after_order_id:
+            endpoint = (
+                "orders?status=all&limit=500&direction=asc&after_order_id="
+                f"{quote(after_order_id, safe='')}"
+            )
+        else:
+            endpoint = f"orders?status=all&after={session_start}&limit=500&direction=asc"
+        page = _api(endpoint, mode=mode)
+        if not isinstance(page, list):
+            raise ValueError("Algo order response was not a list")
+        orders.extend(item for item in page if isinstance(item, dict))
+        if len(page) < 500:
+            return orders
+        after_order_id = str(page[-1].get("id") or "")
+        if not after_order_id:
+            raise ValueError("Algo order pagination omitted its last order ID")
+    raise RuntimeError("Algo order pagination exceeded 100 pages")
+
+
+def _count_algo_new_entries_today(
+    orders: list[dict],
+    fills: list[dict],
+    positions: dict[str, dict],
+    session_date: str,
+) -> int:
+    """Count today's filled or pending buys that opened a flat ticker.
+
+    Rebuild each ticker's start-of-session share count from current positions
+    and Alpaca fill activities, then replay fills and today's submitted buys.
+    Scale-ins do not consume the quota; a buy after a completed exit does.
+    """
+    fills_by_order: dict[str, float] = {}
+    today_fills: list[tuple[str, datetime, str, float, str]] = []
+    filled_delta: dict[str, float] = {}
+
+    for fill in fills:
+        ticker = str(fill.get("symbol", "")).upper()
+        side = str(fill.get("side", "")).lower()
+        if not ticker or side not in {"buy", "sell"}:
+            continue
+        raw_timestamp = fill.get("transaction_time") or fill.get("date")
+        if not raw_timestamp:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
+            qty = max(0.0, float(fill.get("qty", fill.get("quantity", 0)) or 0))
+        except (TypeError, ValueError):
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        if timestamp.astimezone(MARKET_TZ).date().isoformat() != session_date:
+            continue
+        if qty <= 0:
+            continue
+        order_id = str(fill.get("order_id") or fill.get("id") or "")
+        today_fills.append((ticker, timestamp, side, qty, order_id))
+        if order_id:
+            fills_by_order[order_id] = fills_by_order.get(order_id, 0.0) + qty
+        signed_qty = qty if side == "buy" else -qty
+        filled_delta[ticker] = filled_delta.get(ticker, 0.0) + signed_qty
+
+    today_buy_order_ids: set[str] = set()
+    events_by_ticker: dict[str, list[tuple[datetime, str, float, bool, str]]] = {}
+
+    for order in orders:
+        ticker = str(order.get("symbol", "")).upper()
+        side = str(order.get("side", "")).lower()
+        submitted_at = order.get("submitted_at") or order.get("created_at")
+        if not ticker or side not in {"buy", "sell"} or not submitted_at:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(submitted_at).replace("Z", "+00:00"))
+            order_qty = max(0.0, float(order.get("qty", 0) or 0))
+            reported_filled = max(0.0, float(order.get("filled_qty", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        if timestamp.astimezone(MARKET_TZ).date().isoformat() != session_date:
+            continue
+
+        order_id = str(order.get("id") or "")
+        status = str(order.get("status", "")).lower()
+        pending = status not in {
+            "canceled", "expired", "rejected", "filled", "done_for_day",
+            "replaced", "stopped", "suspended", "calculated",
+        }
+        if side == "buy":
+            filled_qty = max(fills_by_order.get(order_id, 0.0), reported_filled)
+            if filled_qty <= 0 and not pending:
+                continue
+            missing_fill_qty = max(0.0, reported_filled - fills_by_order.get(order_id, 0.0))
+            filled_delta[ticker] = filled_delta.get(ticker, 0.0) + missing_fill_qty
+            projected_qty = max(filled_qty, order_qty if pending else filled_qty)
+            events_by_ticker.setdefault(ticker, []).append((timestamp, "buy", projected_qty, True, order_id))
+            if order_id:
+                today_buy_order_ids.add(order_id)
+        elif reported_filled > fills_by_order.get(order_id, 0.0):
+            missing_fill_qty = reported_filled - fills_by_order.get(order_id, 0.0)
+            filled_delta[ticker] = filled_delta.get(ticker, 0.0) - missing_fill_qty
+            filled_at = order.get("filled_at") or order.get("updated_at") or submitted_at
+            try:
+                filled_timestamp = datetime.fromisoformat(str(filled_at).replace("Z", "+00:00"))
+                if filled_timestamp.tzinfo is None:
+                    filled_timestamp = filled_timestamp.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                filled_timestamp = timestamp
+            events_by_ticker.setdefault(ticker, []).append((filled_timestamp, "sell", missing_fill_qty, False, order_id))
+
+    # Today's buy orders are represented once at submission time above;
+    # remaining fills still adjust holdings when the order was submitted
+    # before this session (for example, a prior-day protective exit).
+    for ticker, timestamp, side, qty, order_id in today_fills:
+        if side == "buy" and order_id in today_buy_order_ids:
+            continue
+        events_by_ticker.setdefault(ticker, []).append((timestamp, side, qty, False, order_id))
+
+    entries = 0
+    for ticker, events in events_by_ticker.items():
+        current_qty = float((positions.get(ticker) or {}).get("qty", 0) or 0)
+        starting_qty = max(0.0, current_qty - filled_delta.get(ticker, 0.0))
+        running_qty = starting_qty
+        counted_order_ids: set[str] = set()
+        for _, side, qty, countable, order_id in sorted(events, key=lambda event: event[0]):
+            if side == "buy":
+                if countable and running_qty <= 0 and order_id not in counted_order_ids:
+                    entries += 1
+                    counted_order_ids.add(order_id)
+                running_qty += qty
+            else:
+                running_qty = max(0.0, running_qty - qty)
+    return entries
+
+
+def _get_algo_fill_activities(session_start: str, mode: str) -> list[dict]:
+    """Fetch every Algo fill activity since the current New York session began."""
+    activities: list[dict] = []
+    page_token = None
+    for _ in range(100):
+        endpoint = (
+            f"account/activities/FILL?after={session_start}"
+            "&direction=asc&page_size=100"
+        )
+        if page_token:
+            endpoint += f"&page_token={quote(page_token, safe='')}"
+        page = _api(endpoint, mode=mode)
+        if not isinstance(page, list):
+            raise ValueError("Algo fill activity response was not a list")
+        activities.extend(item for item in page if isinstance(item, dict))
+        if len(page) < 100:
+            return activities
+        page_token = str(page[-1].get("id") or "")
+        if not page_token:
+            raise ValueError("Algo fill activity pagination omitted its next page ID")
+    raise RuntimeError("Algo fill activity pagination exceeded 100 pages")
+
+
 def get_portfolio_state(mode: str = None) -> dict:
     """
     Fetch live portfolio state from Alpaca.
 
     Args:
-        mode: "swing" or "day". Reads TRADING_MODE env if not specified.
+        mode: "swing", "day", or the dedicated "algo" account route.
+              Reads TRADING_MODE env if not specified.
 
     Returns a dict with:
       equity, cash, cash_pct, daily_pnl_pct, weekly_pnl_pct,
       positions (symbol → position dict),
       sector_alloc (sector → $ value),
-      trade_count_today (from orders endpoint),
+      trade_count_today (all nonterminal buy orders),
+      entry_count_today (new-position buys for Algo; legacy buy count otherwise),
       open_position_count.
     """
     if mode is None:
         mode = os.environ.get("TRADING_MODE", "swing")
-
     ticker_sector, _, _, _ = _get_universe_maps(mode)
 
     account = _api("account", mode=mode)
@@ -150,18 +330,53 @@ def get_portfolio_state(mode: str = None) -> dict:
         sector = ticker_sector.get(sym, "other")
         sector_alloc[sector] = sector_alloc.get(sector, 0) + market_value
 
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    is_algo = mode == "algo"
+    now_et = datetime.now(MARKET_TZ) if is_algo else None
+    session_date = now_et.date().isoformat() if is_algo else datetime.now().strftime("%Y-%m-%d")
+    if is_algo:
+        session_start = datetime(
+            now_et.year, now_et.month, now_et.day, tzinfo=MARKET_TZ,
+        ).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        order_limit = 500
+    else:
+        session_start = f"{session_date}T00:00:00Z"
+        order_limit = 100
+
+    entry_count_today = None
+    entry_count_available = True
+    entry_count_error = None
     try:
-        orders = _api(f"orders?status=all&after={today_str}T00:00:00Z&limit=100", mode=mode)
+        order_endpoint = f"orders?status=all&after={session_start}&limit={order_limit}"
+        if is_algo:
+            order_endpoint += "&direction=asc"
+        orders = (
+            _get_algo_orders_since(session_start, mode=mode)
+            if is_algo else _api(order_endpoint, mode=mode)
+        )
         buy_orders_today = [
             o for o in orders
             if o.get("side") == "buy"
-            and o.get("submitted_at", "")[:10] == today_str
+            and (
+                _is_market_session_date(o.get("submitted_at", ""), session_date)
+                if is_algo else o.get("submitted_at", "")[:10] == session_date
+            )
             and o.get("status") not in ("canceled", "expired", "rejected")
         ]
         trade_count_today = len(buy_orders_today)
+        if is_algo:
+            fills = _get_algo_fill_activities(session_start, mode=mode)
+            entry_count_today = _count_algo_new_entries_today(
+                orders, fills, positions, session_date,
+            )
+        else:
+            entry_count_today = trade_count_today
     except Exception:
         trade_count_today = 0
+        if is_algo:
+            entry_count_available = False
+            entry_count_error = "Could not read today's Algo order history"
+        else:
+            entry_count_today = 0
 
     weekly_pnl_pct = _estimate_weekly_pnl(equity, mode=mode)
 
@@ -174,8 +389,68 @@ def get_portfolio_state(mode: str = None) -> dict:
         "positions": positions,
         "sector_alloc": sector_alloc,
         "trade_count_today": trade_count_today,
+        "entry_count_today": entry_count_today,
+        "entry_count_available": entry_count_available,
+        "entry_count_error": entry_count_error,
         "open_position_count": len([p for p in positions.values() if p["qty"] > 0]),
     }
+
+
+def stage_approved_trade(
+    portfolio_state: dict,
+    ticker: str,
+    action: str,
+    qty: int,
+    entry_price: float,
+    mode: str = None,
+) -> dict:
+    """Reserve an approved long entry before validating the next batch signal.
+
+    execute_trades.py can receive multiple strategy signals at once. Staging
+    successful or dry-run entries prevents each signal from being checked
+    against the same pre-batch cash, position, and sector totals.
+    """
+    state = deepcopy(portfolio_state)
+    if action.lower() != "buy" or qty <= 0 or entry_price <= 0:
+        return state
+    if mode is None:
+        mode = os.environ.get("TRADING_MODE", "swing")
+    ticker = ticker.upper()
+    trade_value = int(qty) * float(entry_price)
+    equity = float(state.get("equity", 0) or 0)
+    positions = state.setdefault("positions", {})
+    existing = positions.get(ticker)
+    previous_value = float((existing or {}).get("market_value", 0) or 0)
+    previous_qty = float((existing or {}).get("qty", 0) or 0)
+    positions[ticker] = {
+        **(existing or {}),
+        "symbol": ticker,
+        "qty": previous_qty + int(qty),
+        "market_value": previous_value + trade_value,
+        "current_price": float(entry_price),
+        "pct_of_equity": (previous_value + trade_value) / equity if equity else 0,
+    }
+    cash = float(state.get("cash", 0) or 0) - trade_value
+    state["cash"] = cash
+    state["cash_pct"] = cash / equity if equity else 0
+    is_new_position = existing is None or previous_qty <= 0
+    if is_new_position:
+        state["open_position_count"] = int(state.get("open_position_count", 0)) + 1
+    previous_trade_count = int(state.get("trade_count_today", 0) or 0)
+    state["trade_count_today"] = previous_trade_count + 1
+    if state.get("entry_count_available", True):
+        previous_entry_count = int(
+            state.get("entry_count_today", previous_trade_count) or 0
+        )
+        if mode != "algo" or is_new_position:
+            state["entry_count_today"] = previous_entry_count + 1
+
+    ticker_sector, _, _, _ = _get_universe_maps(mode)
+    sector = ticker_sector.get(ticker, "other")
+    if sector != "other":
+        allocation = state.setdefault("sector_alloc", {})
+        allocation[sector] = float(allocation.get(sector, 0) or 0) + trade_value
+    return state
 
 
 def _estimate_weekly_pnl(current_equity: float, mode: str = None) -> float:
@@ -185,6 +460,33 @@ def _estimate_weekly_pnl(current_equity: float, mode: str = None) -> float:
     (e.g. swing $100K vs day $150K would show a false -34% drop).
     """
     try:
+        # V2 snapshots are already isolated by account/mode. Prefer them so
+        # the weekly breaker also works for the dedicated Algo route.
+        snapshot_dir = Path(__file__).parent / "snapshots"
+        if mode == "algo":
+            snapshot_dir = Path(__file__).parent / "data" / "snapshots" / "dip"
+        elif mode and mode != "swing":
+            snapshot_dir = snapshot_dir / mode
+        if snapshot_dir.exists():
+            import json
+            cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            mode_snapshots = []
+            for snapshot_file in sorted(snapshot_dir.glob("*.json")):
+                try:
+                    with open(snapshot_file) as snapshot_handle:
+                        snapshot = json.load(snapshot_handle)
+                    if snapshot.get("date", "") >= cutoff and snapshot.get("equity"):
+                        mode_snapshots.append(snapshot)
+                except Exception:
+                    continue
+            if len(mode_snapshots) >= 2:
+                base_equity = float(mode_snapshots[0]["equity"])
+                if base_equity > 0:
+                    return (current_equity - base_equity) / base_equity
+        if mode == "algo":
+            # Never estimate Algo's breaker from a legacy shared-account file.
+            return 0.0
+
         data_path = Path(__file__).parent / "data" / "performance.json"
         if not data_path.exists():
             return 0.0
@@ -237,14 +539,14 @@ def validate_trade(
         qty:              Number of shares.
         entry_price:      Expected fill price (used for position size calc).
         portfolio_state:  Pre-fetched state dict. If None, fetches live.
-        mode:             "swing" or "day". Reads TRADING_MODE env if not specified.
+        mode:             "swing", "day", or the dedicated "algo" account route.
+                          Reads TRADING_MODE env if not specified.
 
     Returns:
         ValidationResult with approved=True/False and a reason string.
     """
     if mode is None:
         mode = os.environ.get("TRADING_MODE", "swing")
-
     mode_config = get_mode_config(mode)
     risk = mode_config["risk"]
     ticker_sector, ticker_max_pct, tactical_tickers, universe = _get_universe_maps(mode)
@@ -257,6 +559,17 @@ def validate_trade(
 
     if action not in ("buy", "short"):
         return ValidationResult(approved=False, reason=f"Unknown action '{action}'", rule="unknown_action")
+
+    try:
+        entry_price = float(entry_price)
+    except (TypeError, ValueError):
+        entry_price = 0.0
+    if qty <= 0 or not math.isfinite(entry_price) or entry_price <= 0:
+        return ValidationResult(
+            approved=False,
+            reason="Entry quantity and reference price must both be positive.",
+            rule="invalid_entry_parameters",
+        )
 
     if portfolio_state is None:
         try:
@@ -315,8 +628,30 @@ def validate_trade(
         log.warning(msg)
         return ValidationResult(approved=False, reason=msg, rule="weekly_circuit_breaker")
 
-    # ── Rule 6: Max trades per day ──────────────────────────────────────────
-    if portfolio_state["trade_count_today"] >= risk["max_trades_per_day"]:
+    existing_position = portfolio_state["positions"].get(ticker.upper())
+    is_new_position = existing_position is None or existing_position.get("qty", 0) == 0
+
+    # ── Rule 6: Max trades / new entries per day ────────────────────────────
+    if mode == "algo":
+        # Algo's quota counts only buys that open a flat ticker. Scale-ins and
+        # exits do not use entry slots; Rule 9 still caps their total size.
+        if action == "buy" and is_new_position:
+            entry_count = portfolio_state.get(
+                "entry_count_today", portfolio_state.get("trade_count_today")
+            )
+            count_available = portfolio_state.get("entry_count_available", entry_count is not None)
+            if not count_available or entry_count is None:
+                msg = "BLOCKED: Algo new-entry count unavailable; refusing an uncounted entry."
+                log.warning(msg)
+                return ValidationResult(approved=False, reason=msg, rule="entry_count_unavailable")
+            if entry_count >= risk["max_trades_per_day"]:
+                msg = (
+                    f"BLOCKED: Algo max {risk['max_trades_per_day']} new buy entries/day reached "
+                    f"({entry_count} already today)."
+                )
+                log.warning(msg)
+                return ValidationResult(approved=False, reason=msg, rule="max_trades_per_day")
+    elif portfolio_state["trade_count_today"] >= risk["max_trades_per_day"]:
         msg = (
             f"BLOCKED: Max {risk['max_trades_per_day']} trades/day reached "
             f"({portfolio_state['trade_count_today']} already today)."
@@ -325,8 +660,6 @@ def validate_trade(
         return ValidationResult(approved=False, reason=msg, rule="max_trades_per_day")
 
     # ── Rule 7: Max open positions ──────────────────────────────────────────
-    existing_position = portfolio_state["positions"].get(ticker.upper())
-    is_new_position = existing_position is None or existing_position.get("qty", 0) == 0
     if is_new_position and portfolio_state["open_position_count"] >= risk["max_open_positions"]:
         msg = (
             f"BLOCKED: Max {risk['max_open_positions']} open positions reached "
@@ -414,7 +747,6 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
     """Pretty-print current risk status to stdout."""
     if mode is None:
         mode = os.environ.get("TRADING_MODE", "swing")
-
     mode_config = get_mode_config(mode)
     risk = mode_config["risk"]
     ticker_sector, _, _, universe = _get_universe_maps(mode)
@@ -430,7 +762,15 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
     print(f"  Daily P&L:        {portfolio_state['daily_pnl_pct']*100:>+11.2f}%")
     print(f"  Weekly P&L:       {portfolio_state['weekly_pnl_pct']*100:>+11.2f}%")
     print(f"  Open Positions:  {portfolio_state['open_position_count']:>13}  / {risk['max_open_positions']} max")
-    print(f"  Trades Today:    {portfolio_state['trade_count_today']:>13}  / {risk['max_trades_per_day']} max")
+    if mode == "algo":
+        entry_count = portfolio_state.get("entry_count_today")
+        count_label = "New Entries Today"
+        count_display = "unavailable" if entry_count is None or not portfolio_state.get("entry_count_available", True) else str(entry_count)
+    else:
+        entry_count = portfolio_state["trade_count_today"]
+        count_label = "Trades Today"
+        count_display = str(entry_count)
+    print(f"  {count_label:<18}{count_display:>13}  / {risk['max_trades_per_day']} max")
     print()
 
     daily_cb = portfolio_state["daily_pnl_pct"] <= -risk["daily_loss_limit"]
@@ -465,7 +805,7 @@ if __name__ == "__main__":
     parser.add_argument("--status", action="store_true", help="Show current risk status")
     parser.add_argument(
         "--mode",
-        choices=["swing", "day"],
+        choices=["swing", "day", "algo"],
         default=None,
         help="Trading mode (overrides TRADING_MODE env, default: swing)",
     )
