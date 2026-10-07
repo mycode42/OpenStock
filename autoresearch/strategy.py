@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_min_confidence
-# HYPOTHESIS: Lowering the confidence cutoff should admit a small number of borderline qualified signals, helping avoid the severe penalty for fewer than 10 trades.
-# CHANGE: Lowered MIN_CONFIDENCE from 62.0 to 58.0
+# EXPERIMENT: smoother_macd_confirmation
+# HYPOTHESIS: A slower MACD signal line should reduce noisy momentum confirmations in choppy intraday trading and improve trade quality.
+# CHANGE: Increased MACD_SIGNAL_PERIOD from 7 to 9
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,12 +14,12 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "lower_min_confidence"
+EXPERIMENT_NAME = "smoother_macd_confirmation"
 EXPERIMENT_HYPOTHESIS = (
-    "Lowering the confidence cutoff should admit a small number of borderline "
-    "qualified signals, helping avoid the severe penalty for fewer than 10 trades."
+    "A slower MACD signal line should reduce noisy momentum confirmations in "
+    "choppy intraday trading and improve trade quality."
 )
-EXPERIMENT_CHANGE = "Lowered MIN_CONFIDENCE from 62.0 to 58.0"
+EXPERIMENT_CHANGE = "Increased MACD_SIGNAL_PERIOD from 7 to 9"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -47,7 +47,7 @@ CONF_WEIGHT_MACD = 0.15
 
 MACD_FAST = 12
 MACD_SLOW = 26
-MACD_SIGNAL_PERIOD = 7
+MACD_SIGNAL_PERIOD = 9
 
 REGIME_MULTIPLIER: dict[str, float] = {
     "trending_up": 1.00,
