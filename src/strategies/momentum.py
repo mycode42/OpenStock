@@ -1,4 +1,4 @@
-"""Price and volume confirmed momentum rules."""
+"""Price and volume confirmed momentum rules"""
 
 from __future__ import annotations
 
