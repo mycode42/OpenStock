@@ -30,10 +30,10 @@ from src.config import STRATEGY_CONFIG, get_mode_config
 from src.strategies import pairs
 from src.strategies.regime import rank_strategies
 from src.strategies.regime_advisor import apply_regime_advisory
-from src.market_data import feeds_for_session, historical_delay_seconds
+from src.market_data import feeds_for_session, historical_delay_seconds, regular_feed
 from src.strategies.registry import evaluate as evaluate_strategy
 from src.strategies.state_machine import RuleStrategyStateMachine
-from src.strategies.universe import select_universe
+from src.strategies.universe import configured_universe, select_universe
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -59,10 +59,11 @@ def _request(endpoint: str, *, mode: str, base: str = DATA_BASE, params: dict | 
 
 def _fetch_bars(
     symbols: list[str], *, mode: str, timeframe: str, start: str, end: str,
-    limit: int, feed: str = "iex",
+    limit: int, feed: str | None = None,
 ) -> dict[str, list[dict]]:
     if not symbols:
         return {}
+    feed = feed or regular_feed()
     output: dict[str, list[dict]] = {}
     for offset in range(0, len(symbols), 50):
         chunk = symbols[offset:offset + 50]
@@ -99,31 +100,12 @@ def _fetch_bars(
 
 
 def _fetch_latest_quotes(
-    symbols: list[str], *, mode: str, feed: str = "iex", errors: list[str] | None = None,
+    symbols: list[str], *, mode: str, feed: str | None = None, errors: list[str] | None = None,
 ) -> dict[str, dict]:
     if not symbols:
         return {}
+    feed = feed or regular_feed()
     output: dict[str, dict] = {}
-    if mode in {"swing", "day"} and feed == "iex":
-        # Preserve the existing Swing/Day IEX last-trade marks. Algo uses
-        # quote-first marks so its extended-hours limit prices use the BBO.
-        for offset in range(0, len(symbols), 50):
-            chunk = symbols[offset:offset + 50]
-            payload = _request(
-                "stocks/trades/latest",
-                mode=mode,
-                params={"symbols": ",".join(chunk), "feed": feed},
-            )
-            for ticker, trade in (payload.get("trades") or {}).items():
-                try:
-                    price = float(trade["p"])
-                    timestamp = datetime.fromisoformat(str(trade["t"]).replace("Z", "+00:00"))
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if math.isfinite(price) and price > 0:
-                    if timestamp.tzinfo is None:
-                        timestamp = timestamp.replace(tzinfo=timezone.utc)
-                    output[ticker] = {"price": price, "timestamp": timestamp}
     for offset in range(0, len(symbols), 50):
         chunk = symbols[offset:offset + 50]
         try:
@@ -310,18 +292,22 @@ def scan(
         raise ValueError("Algo scans require the coordinator's position owners and strategy states")
     if mode == "algo" and session_name:
         default_bar_feed, default_quote_feed = feeds_for_session(session_name)
-        # Overnight historical bars only come from BOATS. Quote feed varies by
-        # plan: Basic's indicative overnight feed versus Plus BOATS quotes.
+        # Plus uses BOATS for both overnight bars and quotes.
         data_feed = default_bar_feed if session_name == "overnight" else (data_feed or default_bar_feed)
         quote_feed = quote_feed or default_quote_feed
     else:
-        data_feed = data_feed or "iex"
+        data_feed = data_feed or regular_feed()
         quote_feed = quote_feed or data_feed
     mode_config = get_mode_config(mode)
     now = datetime.now(ET)
     today = trading_date or now.date().isoformat()
-    target = max_tickers or int(STRATEGY_CONFIG["universe_target"])
-    universe = universe_result if universe_result is not None else select_universe(mode, max_tickers=target)
+    if universe_result is not None:
+        universe = universe_result
+    elif mode == "algo":
+        target = max_tickers or int(mode_config["universe_selection"]["target"])
+        universe = select_universe(mode, max_tickers=target)
+    else:
+        universe = configured_universe(mode, max_tickers=max_tickers)
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
     excluded = {str(symbol).upper() for symbol in (excluded_symbols or set())}
     track_owners = position_owners is not None
@@ -378,6 +364,7 @@ def scan(
             start=daily_start,
             end=now_utc.isoformat(),
             limit=10000,
+            feed=data_feed,
         )
         daily_bars = {ticker: _completed_daily(bars, today) for ticker, bars in daily_bars.items()}
     except Exception as exc:
@@ -428,6 +415,7 @@ def scan(
                 start=session_open.isoformat(),
                 end=now.isoformat(),
                 limit=10000,
+                feed=data_feed,
             )
         try:
             bars_by_symbol = {

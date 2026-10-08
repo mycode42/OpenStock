@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import gc
 import json
+import math
+import os
 import statistics
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
 
-from src.algo.backtest import AlgoPortfolioBacktest, DAILY_WARMUP_DAYS
+from src.algo.backtest import (
+    AlgoPortfolioBacktest, DAILY_WARMUP_DAYS,
+    validate_research_controls, validate_strategy_filter,
+)
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
 from src.strategies.registry import validate_parameter_profile
@@ -22,6 +29,13 @@ ET = ZoneInfo("America/New_York")
 METRICS = (
     "net_return_pct", "max_drawdown_pct", "closed_trade_count", "win_rate_pct",
     "profit_factor", "daily_sharpe_annualized", "final_equity",
+    "open_position_count",
+    "entry_count", "average_entries_per_session", "median_entries_per_session",
+    "max_entries_per_session", "entry_count_by_strategy", "signal_event_count_by_strategy",
+    "candidate_setup_count", "candidate_ticker_day_count",
+    "candidate_setup_count_by_strategy", "average_candidate_ticker_days_per_session",
+    "strategy_metrics", "average_holding_minutes", "median_holding_minutes",
+    "average_calendar_holding_hours", "max_consecutive_losses", "time_in_market_pct",
 )
 
 
@@ -58,15 +72,23 @@ def _read_profiles(path: str) -> list[dict]:
     names = set()
     for item in payload:
         if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-            raise ValueError("Each profile requires a string name and parameters object")
+            raise ValueError("Each profile requires a string name")
         name = item["name"].strip()
         if not name or name in names:
             raise ValueError("Profile names must be non-empty and unique")
         names.add(name)
+        strategies = validate_strategy_filter(item.get("strategies"))
         parameters = validate_parameter_profile(item.get("parameters", {}))
-        output.append({"name": name, "parameters": parameters})
-    if not any(not profile["parameters"] for profile in output):
-        output.insert(0, {"name": "baseline", "parameters": {}})
+        controls = validate_research_controls(item.get("controls"))
+        output.append({
+            "name": name, "strategies": strategies,
+            "parameters": parameters, "controls": controls,
+        })
+    if not any(profile["name"] == "baseline" for profile in output):
+        output.insert(0, {
+            "name": "baseline", "strategies": None,
+            "parameters": {}, "controls": {},
+        })
     return output
 
 
@@ -82,13 +104,93 @@ def _selection_score(report: dict) -> float:
 
 def _run_portfolio(
     *, symbols: list[str], intraday: dict, spy_daily: list[dict], start: str, end: str,
-    feed: str, adjustment: str, capital: float, slippage_bps: float, profile: dict,
+    feed: str, adjustment: str, capital: float, slippage_bps: float,
+    profile: dict, strategies: list[str] | None, controls: dict,
 ) -> dict:
     return AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
         start=start, end=end, feed=feed, data_adjustment=adjustment,
         initial_capital=capital, slippage_bps=slippage_bps, profile=profile,
+        strategies=strategies, research_controls=controls,
     ).run()
+
+
+def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], argparse.Namespace]) -> tuple[int, dict]:
+    """Evaluate one independent fold in a worker process."""
+    index, window, symbols, profiles, spy_daily, args = payload
+    store = SQLiteBarStore(args.db)
+    intraday = store.bars(
+        symbols, feed=args.feed, timeframe="5Min",
+        start=window["train_start"], end=window["train_end"],
+        adjustment=args.adjustment,
+    )
+    train_runs = []
+    for candidate in profiles:
+        report = _run_portfolio(
+            symbols=symbols, intraday=intraday, spy_daily=spy_daily,
+            start=window["train_start"], end=window["train_end"], feed=args.feed,
+            adjustment=args.adjustment, capital=args.capital,
+            slippage_bps=args.slippage_bps, profile=candidate["parameters"],
+            strategies=candidate["strategies"], controls=candidate["controls"],
+        )
+        train_runs.append({
+            "name": candidate["name"], "parameters": candidate["parameters"],
+            "strategies": candidate["strategies"], "controls": candidate["controls"],
+            "score": round(_selection_score(report), 6), "metrics": _metrics(report),
+            "frequency_eligible": (
+                report["average_candidate_ticker_days_per_session"]
+                <= args.max_candidate_ticker_days_per_session
+            ),
+            "eligible": (
+                report["closed_trade_count"] >= args.min_train_trades
+                and report["max_drawdown_pct"] <= args.max_train_drawdown_pct
+                and report["average_candidate_ticker_days_per_session"]
+                <= args.max_candidate_ticker_days_per_session
+            ),
+        })
+        del report
+    eligible = [item for item in train_runs if item["eligible"]]
+    frequency_eligible = [item for item in train_runs if item["frequency_eligible"]]
+    baseline = next(item for item in train_runs if item["name"] == "baseline")
+    if eligible:
+        selected = max(eligible, key=lambda item: (item["score"], -item["metrics"]["max_drawdown_pct"]))
+        selected_reason = "passed training trade-count, drawdown, and candidate-frequency gates"
+    elif frequency_eligible:
+        selected = max(frequency_eligible, key=lambda item: (item["score"], -item["metrics"]["max_drawdown_pct"]))
+        selected_reason = "no profile passed all gates; best-scoring frequency-compliant profile selected"
+    else:
+        selected = baseline
+        selected_reason = "no profile met candidate-frequency target; baseline fallback"
+    del intraday
+    gc.collect()
+
+    intraday = store.bars(
+        symbols, feed=args.feed, timeframe="5Min",
+        start=window["test_start"], end=window["test_end"],
+        adjustment=args.adjustment,
+    )
+    test_report = _run_portfolio(
+        symbols=symbols, intraday=intraday, spy_daily=spy_daily,
+        start=window["test_start"], end=window["test_end"], feed=args.feed,
+        adjustment=args.adjustment, capital=args.capital,
+        slippage_bps=args.slippage_bps, profile=selected["parameters"],
+        strategies=selected["strategies"], controls=selected["controls"],
+    )
+    result = {
+        **window, "selected_profile": selected["name"],
+        "selected_parameters": selected["parameters"],
+        "selected_strategies": selected["strategies"],
+        "selected_controls": selected["controls"],
+        "selected_reason": selected_reason,
+        "training_frequency_target_met": selected["frequency_eligible"],
+        "eligible_training_profiles": len(eligible),
+        "frequency_eligible_training_profiles": len(frequency_eligible),
+        "training_candidates": train_runs,
+        "out_of_sample": _metrics(test_report),
+    }
+    del intraday, test_report
+    gc.collect()
+    return index, result
 
 
 def run_walk_forward(args) -> dict:
@@ -100,27 +202,32 @@ def run_walk_forward(args) -> dict:
         raise ValueError("End date must not be before start date")
     if args.min_train_trades < 0 or args.max_train_drawdown_pct < 0:
         raise ValueError("Training eligibility limits must be non-negative")
+    frequency_limit = getattr(args, "max_candidate_ticker_days_per_session", 3.0)
+    if not math.isfinite(frequency_limit) or frequency_limit <= 0:
+        raise ValueError("max_candidate_ticker_days_per_session must be finite and positive")
+    args.max_candidate_ticker_days_per_session = frequency_limit
 
     store = SQLiteBarStore(args.db)
-    intraday = store.bars(
-        symbols, feed=args.feed, timeframe="5Min", start=args.start, end=args.end,
-        adjustment=args.adjustment,
-    )
-    missing = [symbol for symbol in symbols if not intraday.get(symbol)]
-    if missing:
-        raise ValueError(f"No stored 5-minute {args.feed} bars for: {', '.join(missing)}")
+    coverage = store.coverage()
+    symbols_with_bars = {
+        row["symbol"] for row in coverage
+        if row["feed"] == args.feed and row["adjustment"] == args.adjustment
+        and row["timeframe"] == "5Min"
+        and row["first"][:10] <= args.end and row["last"][:10] >= args.start
+    }
+    symbols_without_bars = [symbol for symbol in symbols if symbol not in symbols_with_bars]
+    if not symbols_with_bars.intersection(symbols):
+        raise ValueError(f"No stored 5-minute {args.feed} bars for any supplied symbol")
     daily_start = (start - timedelta(days=DAILY_WARMUP_DAYS)).isoformat()
     spy_daily = store.bars(
         ["SPY"], feed=args.feed, timeframe="1Day", start=daily_start, end=args.end,
         adjustment=args.adjustment,
     ).get("SPY", [])
-
-    seed = AlgoPortfolioBacktest(
-        symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
-        start=args.start, end=args.end, feed=args.feed, data_adjustment=args.adjustment,
-        initial_capital=args.capital, slippage_bps=args.slippage_bps, profile={},
-    )
-    trading_dates = sorted({timestamp.astimezone(ET).date() for timestamp in seed._timeline()})
+    trading_dates = sorted({
+        datetime.fromisoformat(str(bar["t"]).replace("Z", "+00:00")).astimezone(ET).date()
+        for bar in spy_daily
+    })
+    trading_dates = [session for session in trading_dates if start <= session <= end]
     windows = walk_forward_windows(
         trading_dates, train_days=args.train_days,
         test_days=args.test_days, step_days=args.step_days,
@@ -131,55 +238,59 @@ def run_walk_forward(args) -> dict:
             f"found {len(trading_dates)}"
         )
     profiles = _read_profiles(args.profiles)
-    folds = []
-    for window in windows:
-        train_runs = []
-        for candidate in profiles:
-            report = _run_portfolio(
-                symbols=symbols, intraday=intraday, spy_daily=spy_daily,
-                start=window["train_start"], end=window["train_end"], feed=args.feed,
-                adjustment=args.adjustment, capital=args.capital,
-                slippage_bps=args.slippage_bps, profile=candidate["parameters"],
-            )
-            train_runs.append({
-                "name": candidate["name"], "parameters": candidate["parameters"],
-                "score": round(_selection_score(report), 6), "metrics": _metrics(report),
-                "eligible": (
-                    report["closed_trade_count"] >= args.min_train_trades
-                    and report["max_drawdown_pct"] <= args.max_train_drawdown_pct
-                ),
-            })
-        eligible = [item for item in train_runs if item["eligible"]]
-        baseline = next(item for item in train_runs if not item["parameters"])
-        selected = max(eligible, key=lambda item: (item["score"], -item["metrics"]["max_drawdown_pct"])) if eligible else baseline
-
-        test_report = _run_portfolio(
-            symbols=symbols, intraday=intraday, spy_daily=spy_daily,
-            start=window["test_start"], end=window["test_end"], feed=args.feed,
-            adjustment=args.adjustment, capital=args.capital,
-            slippage_bps=args.slippage_bps, profile=selected["parameters"],
+    workers = getattr(args, "workers", 1)
+    if workers < 1:
+        raise ValueError("workers must be at least 1")
+    workers_used = min(workers, len(windows), os.cpu_count() or workers)
+    jobs = [
+        (index, window, symbols, profiles, spy_daily, args)
+        for index, window in enumerate(windows)
+    ]
+    folds_by_index = {}
+    if workers_used == 1:
+        for job in jobs:
+            index, result = _run_fold_job(job)
+            folds_by_index[index] = result
+    else:
+        print(
+            f"Evaluating {len(jobs)} walk-forward folds with {workers_used} worker processes",
+            file=sys.stderr, flush=True,
         )
-        folds.append({
-            **window, "selected_profile": selected["name"],
-            "selected_parameters": selected["parameters"],
-            "eligible_training_profiles": len(eligible),
-            "training_candidates": train_runs,
-            "out_of_sample": _metrics(test_report),
-        })
+        with ProcessPoolExecutor(max_workers=workers_used) as executor:
+            futures = {executor.submit(_run_fold_job, job): job[0] for job in jobs}
+            for completed, future in enumerate(as_completed(futures), start=1):
+                index, result = future.result()
+                folds_by_index[index] = result
+                print(
+                    f"Completed walk-forward fold {completed}/{len(jobs)} "
+                    f"({result['test_start']}..{result['test_end']})",
+                    file=sys.stderr, flush=True,
+                )
+    folds = [folds_by_index[index] for index in range(len(windows))]
 
     test_returns = [fold["out_of_sample"]["net_return_pct"] for fold in folds]
     return {
-        "simulator": "swarm_algo_walk_forward_v1",
+        "simulator": "swarm_algo_walk_forward_v2",
         "data_tier_at_run": data_tier(), "feed": args.feed,
-        "data_adjustment": args.adjustment, "symbols": symbols,
+        "data_adjustment": args.adjustment, "worker_count": workers_used,
+        "symbols": symbols,
+        "symbols_without_bars_in_period": symbols_without_bars,
         "universe_model": "fixed supplied symbol list for every train and test window",
         "start": args.start, "end": args.end,
         "trading_session_count": len(trading_dates),
         "candidate_profile_count": len(profiles),
         "selection_rule": (
-            "Among profiles meeting minimum training trade count and maximum training drawdown, "
-            "maximize training net_return_pct - 0.5 * max_drawdown_pct; otherwise use baseline."
+            "Eligible profiles meet minimum training trade count, maximum training drawdown, and "
+            f"average candidate ticker-days <= {frequency_limit} per session. Select the eligible profile "
+            "with the highest training net_return_pct - 0.5 * max_drawdown_pct. If none pass all gates, "
+            "select the best-scoring frequency-compliant profile; otherwise fall back to baseline."
         ),
+        "candidate_frequency_target": {
+            "max_candidate_ticker_days_per_session": frequency_limit,
+            "selection_frequency_target_met_folds": sum(
+                bool(fold["training_frequency_target_met"]) for fold in folds
+            ),
+        },
         "fold_summary": {
             "count": len(folds), "positive_out_of_sample_folds": sum(value > 0 for value in test_returns),
             "mean_out_of_sample_return_pct": round(statistics.mean(test_returns), 4),
@@ -190,7 +301,8 @@ def run_walk_forward(args) -> dict:
             "Profiles are selected from a supplied, bounded candidate list; this does not generate new parameters.",
             "Each fold is replayed as a flat portfolio with fresh capital; positions and risk state do not carry across fold boundaries.",
             "Universe membership is fixed for all folds; historical point-in-time selections are not available.",
-            "LLM advice and overnight sessions are omitted; free IEX data has incomplete venue coverage.",
+            "Supplied symbols without bars in the requested period are recorded and contribute no signals; later-listed symbols can only enter from their available history.",
+            "LLM advice and overnight sessions are omitted; replay uses Plus SIP regular-session bars.",
             "This report cannot update live settings and is not a performance forecast.",
         ],
     }
@@ -202,15 +314,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--profiles", required=True, help="JSON array of named signal parameter profiles")
-    parser.add_argument("--feed", choices=["iex", "sip"], default=regular_feed())
+    parser.add_argument("--feed", choices=["sip"], default=regular_feed())
     parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default="raw")
     parser.add_argument("--train-days", type=int, default=30, help="number of prior trading sessions per fit window")
     parser.add_argument("--test-days", type=int, default=10, help="number of later trading sessions per holdout")
     parser.add_argument("--step-days", type=int, default=10, help="advance in trading sessions between holdouts")
     parser.add_argument("--min-train-trades", type=int, default=10)
     parser.add_argument("--max-train-drawdown-pct", type=float, default=10)
+    parser.add_argument(
+        "--max-candidate-ticker-days-per-session", type=float, default=3.0,
+        help="training-only frequency ceiling for unique candidate tickers per session",
+    )
     parser.add_argument("--capital", type=float, default=100_000)
     parser.add_argument("--slippage-bps", type=float, default=5)
+    parser.add_argument(
+        "--workers", type=int, default=min(6, os.cpu_count() or 1),
+        help="independent fold worker processes (default: up to 6)",
+    )
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--output")
     return parser

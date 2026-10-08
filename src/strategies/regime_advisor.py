@@ -1,8 +1,7 @@
-"""Optional local LLM tie-breaker for deterministic regime rankings.
+"""Optional OpenAI tie-breaker for deterministic regime rankings.
 
-The deterministic regime filter is authoritative. This advisor can only
-reorder strategies already marked active; it cannot activate disabled rules,
-generate a ticker signal, or call an execution component.
+The deterministic regime filter is authoritative. The advisor can only reorder
+strategies already marked active; it cannot activate rules or submit orders.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import os
 import time
 from functools import lru_cache
 
-import requests
+from openai import OpenAI, OpenAIError
 
 from src.config import STRATEGY_CONFIG
 
@@ -29,8 +28,19 @@ def _enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+@lru_cache(maxsize=4)
+def _openai_client(base_url: str, timeout_seconds: int) -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+    options = {"api_key": api_key, "timeout": timeout_seconds, "max_retries": 0}
+    if base_url:
+        options["base_url"] = base_url
+    return OpenAI(**options)
+
+
 @lru_cache(maxsize=32)
-def _ollama_suggestion(
+def _openai_suggestion(
     base_url: str,
     model: str,
     regime: str,
@@ -44,33 +54,48 @@ def _ollama_suggestion(
 ) -> tuple[list[str], str | None]:
     active = json.loads(active_json)
     ranked = json.loads(ranked_json)
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        return [], "OPENAI_API_KEY is not configured"
+
     prompt = (
-        "You are a regime-ranking advisor for a long-only, rule-based trading system. "
-        "Do not invent or enable strategies. Return only JSON with key ranking, "
-        "an ordering of the supplied active strategy names.\n"
         f"Deterministic regime: {regime}.\n"
         f"Regime reason: {reason}.\n"
         f"SPY 20-session return: {return_20d}.\n"
         f"SPY 20-session daily volatility: {volatility_20d}.\n"
         f"Deterministic strategy scores: {json.dumps(ranked, separators=(',', ':'))}.\n"
-        f"Allowed active strategies: {json.dumps(active)}.\n"
-        'Return format: {"ranking":["strategy_name", ...]}.'
+        f"Allowed active strategies: {json.dumps(active)}."
     )
-    try:
-        response = requests.post(
-            f"{base_url.rstrip('/')}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0, "num_predict": 80},
+    schema = {
+        "type": "object",
+        "properties": {
+            "ranking": {
+                "type": "array",
+                "items": {"type": "string", "enum": active},
             },
-            timeout=(1.0, max(1, timeout_seconds)),
+        },
+        "required": ["ranking"],
+        "additionalProperties": False,
+    }
+    try:
+        client = _openai_client(base_url, timeout_seconds)
+        response = client.responses.create(
+            model=model,
+            instructions=(
+                "Rank the supplied active strategies for the supplied regime. "
+                "Return each allowed strategy at most once. Do not enable any strategy."
+            ),
+            input=prompt,
+            reasoning={"effort": "none"},
+            max_output_tokens=64,
+            store=False,
+            text={"format": {
+                "type": "json_schema",
+                "name": "strategy_ranking",
+                "strict": True,
+                "schema": schema,
+            }},
         )
-        response.raise_for_status()
-        output = response.json().get("response", "")
-        parsed = json.loads(output) if isinstance(output, str) else output
+        parsed = json.loads(response.output_text)
         proposed = parsed.get("ranking", []) if isinstance(parsed, dict) else []
         if not isinstance(proposed, list):
             return [], "model response did not contain a ranking list"
@@ -81,49 +106,53 @@ def _ollama_suggestion(
         if not accepted:
             return [], "model response contained no allowed active strategy"
         return accepted + [name for name in active if name not in accepted], None
-    except (requests.RequestException, ValueError, TypeError) as exc:
-        return [], f"{type(exc).__name__}: {exc}"
+    except OpenAIError as exc:
+        # SDK error messages can include credential fragments; log only the class.
+        return [], type(exc).__name__
+    except (ValueError, TypeError, AttributeError) as exc:
+        return [], type(exc).__name__
 
 
 def apply_regime_advisory(regime: dict) -> dict:
-    """Attach an advisory order without changing the deterministic active set."""
+    """Attach an OpenAI advisory order without changing the active strategy set."""
     active = list(regime.get("active", []))
+    enabled = _enabled()
     regime["regime_advisory"] = {
-        "enabled": _enabled(),
-        "provider": "ollama",
-        "status": "disabled" if not _enabled() else "not_applicable",
+        "enabled": enabled,
+        "provider": "openai",
+        "model": os.getenv("LLM_MODEL", STRATEGY_CONFIG["regime_llm_default_model"]).strip(),
+        "status": "disabled" if not enabled else "not_applicable",
         "suggested_order": [],
         "applied_order": active,
     }
-    if not active or not _enabled():
+    if not active or not enabled:
         return regime
 
-    model = os.getenv(
-        "STRATEGY_REGIME_LLM_MODEL",
-        str(STRATEGY_CONFIG["regime_llm_default_model"]),
-    ).strip()
-    host = os.getenv("OLLAMA_HOST", "localhost")
-    base_url = os.getenv("OLLAMA_BASE_URL", f"http://{host}:11434").strip()
-    available_rankings = [
-        {"strategy": item.get("strategy"), "score": item.get("score")}
-        for item in regime.get("ranked", [])
-        if item.get("strategy") in active
-    ]
-    suggestion, error = _ollama_suggestion(
-        base_url,
-        model,
-        str(regime.get("regime", "unknown")),
-        str(regime.get("reason", "")),
-        json.dumps(active, separators=(",", ":")),
-        json.dumps(available_rankings, separators=(",", ":")),
-        regime.get("spy_return_20d"),
-        regime.get("spy_volatility_20d"),
-        int(STRATEGY_CONFIG["regime_llm_timeout_seconds"]),
-        int(time.time() // 900),
-    )
+    provider = os.getenv("LLM_PROVIDER", "OpenAI").strip().lower()
+    model = os.getenv("LLM_MODEL", STRATEGY_CONFIG["regime_llm_default_model"]).strip()
+    if provider != "openai":
+        suggestion, error = [], "LLM_PROVIDER must be OpenAI for the regime advisor"
+    else:
+        available_rankings = [
+            {"strategy": item.get("strategy"), "score": item.get("score")}
+            for item in regime.get("ranked", [])
+            if item.get("strategy") in active
+        ]
+        suggestion, error = _openai_suggestion(
+            os.getenv("OPENAI_API_BASE", "").strip(),
+            model,
+            str(regime.get("regime", "unknown")),
+            str(regime.get("reason", "")),
+            json.dumps(active, separators=(",", ":")),
+            json.dumps(available_rankings, separators=(",", ":")),
+            regime.get("spy_return_20d"),
+            regime.get("spy_volatility_20d"),
+            int(STRATEGY_CONFIG["regime_llm_timeout_seconds"]),
+            int(time.time() // 900),
+        )
     if error:
         regime["regime_advisory"].update({"status": "fallback", "error": error})
-        LOG.warning("Local regime suggestion unavailable; deterministic strategy order retained: %s", error)
+        LOG.warning("OpenAI regime suggestion unavailable; deterministic order retained: %s", error)
         return regime
 
     priority = {name: len(suggestion) - index for index, name in enumerate(suggestion)}

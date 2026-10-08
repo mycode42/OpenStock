@@ -20,10 +20,21 @@ ALGO_DEFAULT_PARAMETERS = {
 }
 
 PARAMETER_KEYS = {
-    "trend_following": {"fast_period", "slow_period"},
-    "momentum": {"lookback", "minimum_return", "minimum_volume_ratio"},
-    "mean_reversion": {"window", "band_width", "entry_rsi", "exit_rsi"},
-    "opening_range_breakout": {"opening_range_bars", "minimum_volume_ratio"},
+    "trend_following": {
+        "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct",
+    },
+    "momentum": {
+        "lookback", "minimum_return", "minimum_volume_ratio", "max_extension_pct",
+    },
+    "mean_reversion": {
+        "window", "band_width", "entry_rsi", "exit_rsi", "signal_model",
+        "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes",
+        "minimum_bounce_pct", "higher_low_bars",
+    },
+    "opening_range_breakout": {
+        "opening_range_bars", "minimum_volume_ratio", "post_range_delay_bars",
+        "breakout_buffer_pct",
+    },
 }
 
 
@@ -54,17 +65,30 @@ def validate_parameter_profile(profile: dict) -> dict:
     slow = number("trend_following", "slow_period", 21, 1, 200, integer=True)
     if fast >= slow:
         raise ValueError("trend_following periods must satisfy 1 <= fast_period < slow_period <= 200")
+    number("trend_following", "confirmation_bars", 1, 1, 10, integer=True)
+    number("trend_following", "minimum_slope_pct", 0, 0, 0.1)
     number("momentum", "lookback", 12, 1, 200, integer=True)
     number("momentum", "minimum_return", 0.015, 0, 1)
     number("momentum", "minimum_volume_ratio", 1.2, 0.1, 20)
+    number("momentum", "max_extension_pct", 0, 0, 1)
     number("mean_reversion", "window", 20, 5, 200, integer=True)
     number("mean_reversion", "band_width", 2.0, 0.1, 10)
     entry_rsi = number("mean_reversion", "entry_rsi", 30, 0, 100)
     exit_rsi = number("mean_reversion", "exit_rsi", 58, 0, 100)
     if entry_rsi > exit_rsi:
         raise ValueError("mean_reversion RSI values must satisfy 0 <= entry_rsi <= exit_rsi <= 100")
+    model = normalized.get("mean_reversion", {}).get("signal_model", "bollinger")
+    if not isinstance(model, str) or model not in {"bollinger", "opening_dip"}:
+        raise ValueError("mean_reversion signal_model must be bollinger or opening_dip")
+    number("mean_reversion", "minimum_dip_pct", 0, 0, 0.5)
+    number("mean_reversion", "minimum_volume_ratio", 1.2, 0, 20)
+    number("mean_reversion", "entry_window_minutes", 90, 5, 390, integer=True)
+    number("mean_reversion", "minimum_bounce_pct", 0.001, 0, 0.1)
+    number("mean_reversion", "higher_low_bars", 1, 0, 10, integer=True)
     number("opening_range_breakout", "opening_range_bars", 6, 1, 12, integer=True)
     number("opening_range_breakout", "minimum_volume_ratio", 1.25, 0.1, 20)
+    number("opening_range_breakout", "post_range_delay_bars", 0, 0, 12, integer=True)
+    number("opening_range_breakout", "breakout_buffer_pct", 0, 0, 0.05)
     return normalized
 
 

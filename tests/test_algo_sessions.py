@@ -17,14 +17,15 @@ def calendar(*days):
 @pytest.mark.parametrize(
     ("at", "expected", "trade_date", "bar_feed", "quote_feed"),
     [
-        ("2026-10-07T03:00:00", "overnight", "2026-10-07", "boats", "overnight"),
-        ("2026-10-07T05:00:00", "premarket", "2026-10-07", "iex", "iex"),
-        ("2026-10-07T12:00:00", "regular", "2026-10-07", "iex", "iex"),
-        ("2026-10-07T17:00:00", "after_hours", "2026-10-07", "iex", "iex"),
-        ("2026-10-06T21:00:00", "overnight", "2026-10-07", "boats", "overnight"),
+        ("2026-10-07T03:00:00", "overnight", "2026-10-07", "boats", "boats"),
+        ("2026-10-07T05:00:00", "premarket", "2026-10-07", "sip", "sip"),
+        ("2026-10-07T12:00:00", "regular", "2026-10-07", "sip", "sip"),
+        ("2026-10-07T17:00:00", "after_hours", "2026-10-07", "sip", "sip"),
+        ("2026-10-06T21:00:00", "overnight", "2026-10-07", "boats", "boats"),
     ],
 )
-def test_session_windows_cover_the_alpaca_weekday_sessions(at, expected, trade_date, bar_feed, quote_feed):
+def test_session_windows_cover_the_alpaca_weekday_sessions(monkeypatch, at, expected, trade_date, bar_feed, quote_feed):
+    monkeypatch.setenv("ALPACA_DATA_TIER", "algo_trader_plus")
     now = datetime.fromisoformat(at).replace(tzinfo=ET)
     rows = calendar("2026-10-07", "2026-10-08")
 

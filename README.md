@@ -112,7 +112,7 @@ acct.headers  # ready-to-use API headers
 
 Mean reversion, trend following, momentum, and opening-range breakout are strategy modules coordinated in one portfolio. The deterministic SPY regime filter selects which strategies may open positions. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
 
-The service scans throughout Alpaca's US equity sessions using New York time and the broker calendar. Set `ALPACA_DATA_TIER=basic` while using the free plan (the default): regular sessions use IEX, overnight history uses delayed `feed=boats`, and overnight quotes use the indicative `feed=overnight`. When Algo Trader Plus is active, set `ALPACA_DATA_TIER=algo_trader_plus`: regular sessions use SIP and overnight bars and quotes use BOATS without the Basic-plan 15-minute history delay. The tier setting changes feed selection only; account keys and execution remain paper-only. Overnight symbols must be marked `overnight_tradable`. Entries with Basic's delayed bars remain enabled, subject to freshness, spread, ownership, account, and risk checks. Extended-hours orders use simple limit DAY orders with `extended_hours=true`. Regular-session orders continue through the shared executor and risk manager. Algo's 40-entry quota follows its 20:00–20:00 ET trading session and it allows 20 open positions, subject to the configured position, sector, cash, and drawdown limits. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for plan-specific feed access.
+All three modes use the Algo Trader Plus market-data plan through the shared `ALPACA_DATA_TIER=algo_trader_plus` setting. Regular and extended sessions use SIP. Algo's overnight session uses real-time `feed=boats` for both bars and quotes, with entries enabled only for assets Alpaca marks `overnight_tradable`. The service follows Alpaca's 24/5 sessions using New York time and the broker calendar. Overnight orders remain simple limit DAY orders with `extended_hours=true`; regular-session orders continue through the shared executor and risk manager. Algo's 40-entry quota follows its 20:00–20:00 ET trading session and it allows 20 open positions, subject to configured position, sector, cash, and drawdown limits. Execution remains paper-only. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for session and feed details.
 
 Extended-hours entries have software-managed stops and targets. The coordinator attaches a broker-verified full-size OCO during the next regular session once no symbol order remains open. For positions with broker bracket or OCO protection, a competing software exit signal is deferred while the protective order remains open: Alpaca can leave a cancellation in `pending_cancel`, which may neither release the shares nor preserve the stop. The service reports the suppressed exit and reevaluates it after broker reconciliation. A stale or failed historical bar request pauses new entries but does not disable quote-driven protective checks on owned positions.
 
@@ -120,7 +120,7 @@ Extended-hours entries have software-managed stops and targets. The coordinator 
 
 `src.algo.backtest` replays the deterministic Algo regime selector, strategy rules, shared sizing, and hard risk validator over stored regular-session 5-minute bars. It fills signals no earlier than the next bar open, models adverse slippage, and reports its assumptions with every run. It is research-only and cannot submit orders.
 
-The local SQLite market store defaults to `data/algo_market.sqlite3`. Feed, adjustment, symbol, interval, and timestamp are separate keys, so Basic IEX history and later Algo Trader Plus SIP history can coexist. Fetching the same feed again updates overlapping bars; it does not mix SIP and IEX prices. The fetch command also stores 180 days of SPY daily bars for regime warmup:
+The local SQLite market store defaults to `data/algo_market.sqlite3`. Feed, adjustment, symbol, interval, and timestamp are separate keys. Historical IEX rows remain segregated from the SIP dataset; Plus research and live defaults use SIP, and fetching the same feed again updates overlapping bars. The fetch command also stores 180 days of SPY daily bars for regime warmup:
 
 ```bash
 poetry run python -m src.algo.backtest fetch --symbols AAPL,MSFT,NVDA --start 2026-07-01 --end 2026-10-01
@@ -130,13 +130,15 @@ poetry run python -m src.algo.slippage_sensitivity --symbols AAPL,MSFT,NVDA --st
 poetry run python -m src.algo.walk_forward --symbols AAPL,MSFT,NVDA --start 2026-07-01 --end 2026-10-01 --profiles autoresearch/algo-profiles.example.json --train-days 30 --test-days 10
 ```
 
-On Basic, fetch defaults to IEX; after setting `ALPACA_DATA_TIER=algo_trader_plus`, it defaults to SIP. Fetch the selected date range again after upgrading before running with SIP. Replay currently covers regular hours only. It uses a fixed supplied symbol list, does not reconstruct historical universe membership, omits LLM advice, assumes the stop executes first when both bracket legs are touched within one bar, and does not model commissions or regulatory fees. Free historical bars do not contain the live quote stream, so slippage is configurable rather than inferred from quotes. These reports are for evaluating the model and its stability, not performance forecasts.
+Replay currently covers regular hours only. It uses a fixed supplied symbol list, does not reconstruct historical universe membership, omits LLM advice, assumes the stop executes first when both bracket legs are touched within one bar, and does not model commissions or regulatory fees. Historical bars do not contain the live quote stream, so slippage is configurable rather than inferred from quotes. These reports evaluate the model and its stability; they are not performance forecasts.
 
 The slippage sensitivity runner holds the strategy profile, symbols, dates, feed, and risk limits constant while varying adverse basis-point assumptions. The walk-forward runner chooses among a small supplied candidate list on each preceding training window and evaluates the selected profile on the next non-overlapping window. Candidate profiles can change signal rules only; portfolio risk settings and live settings are never modified. Each holdout fold starts with a flat portfolio and fresh capital, so fold results measure stability rather than one continuous deployable equity curve. The current 47-symbol replay uses one recorded universe snapshot across the whole period; the dynamic selector's historical daily memberships were not persisted. A valid dynamic-universe walk-forward needs those dated snapshots. BOATS cannot be passed to these regular-session replay commands: overnight bars need a separate session calendar, entry cutoff, and overnight order/fill model first.
 
+Research controls can apply a ticker cooldown per strategy with `cooldown_minutes_by_strategy`; the legacy `cooldown_minutes` control remains global. Reports separate repeated five-minute signal observations from candidate counts deduplicated to one ticker/strategy/trading-day.
+
 An optional parameter profile can change strategy signal inputs while risk settings remain fixed. The checked-in example is `autoresearch/algo-profile.example.json`; profile values are range-checked and each report includes a hash for reproducibility. The existing research loop should use this replay and chronological walk-forward splits before any candidate is considered for paper shadowing. It must not write tuned values into live settings automatically.
 
-The Algo quote adapter uses Alpaca for both data and execution, reads `ALPACA_ALGO_*` credentials, and verifies the returned paper account ID before starting. The account route is paper-only in this service. The local regime advisor is enabled by default and can only reorder deterministic-active strategies; it has no broker access and cannot create ticker signals.
+The Algo quote adapter uses Alpaca for both data and execution, reads `ALPACA_ALGO_*` credentials, and verifies the returned paper account ID before starting. The account route is paper-only in this service. The OpenAI regime advisor uses `LLM_PROVIDER`, `LLM_MODEL`, and `OPENAI_API_KEY`; it can only reorder strategies already allowed by deterministic checks and has no broker access or ticker-signal authority.
 
 #### Algo paper account setup
 
@@ -193,9 +195,9 @@ The autonomous Algo portfolio runs continuously on the dedicated Alpaca account 
 
 Each rule family is an independent module with its own entry and exit rules. The coordinator tracks each strategy and ticker through `flat → entry_pending → open → exit_pending → cooldown` (or `quarantined` when attribution is unsafe). Its SQLite state includes stops, targets, pending broker IDs, and owner provenance. A software exit is suppressed while broker protection is active; missing broker protection is repaired through exact order and position checks during regular hours. Algo one-shot execution is removed; direct `execute_trades.py --mode algo` needs the coordinator lease.
 
-The selector reads Alpaca's active, tradable US-equity assets and intersects them with the expanded, preclassified risk catalog. Candidates need at least 60 clean completed daily bars, a $5–$500 last close, and at least $20M average daily dollar volume across the latest 20 sessions. It uses IEX on Basic and SIP on Algo Trader Plus; a SIP request failure is retried on IEX and the selected universe records that fallback. It ranks liquidity with a soft preference for moderate volatility and caps each risk theme by the existing risk-manager allocation settings. Existing strategy-owned positions remain subscribed for exits even if they fall out of the refreshed universe. If Alpaca cannot confirm tradability or provide bars, the portfolio pauses new entries rather than using an unverified fallback.
+The selector reads Alpaca's active, tradable US-equity assets and intersects them with Algo's independently maintained broad candidate catalog. It produces a separate selected list; its 50-symbol target and 40–60 bounds are configured independently from the fixed Swing and Day lists. Candidates need at least 60 clean completed daily bars, a $5–$500 last close, and at least $20M average daily dollar volume across the latest 20 sessions. It uses SIP consistently; a SIP request failure or incomplete benchmark history pauses new entries rather than silently downgrading the feed. It ranks liquidity with a soft preference for moderate volatility and caps each risk theme by the existing risk-manager allocation settings. Existing strategy-owned positions remain subscribed for exits even if they fall out of the refreshed universe.
 
-Swing and Day one-shot scans remain available for diagnostics and explicit execution. They use the same deterministic strategy modules, `execute_trades.py`, and `risk_manager.py`; `--execute` submits orders from a one-shot scan.
+Swing and Day scans use the fixed, mode-specific lists shown below. They remain available for diagnostics and explicit execution and use the same deterministic strategy modules, `execute_trades.py`, and `risk_manager.py`; `--execute` submits orders from the configured list.
 
 ```bash
 # One-shot Swing/Day diagnostics
@@ -214,7 +216,7 @@ poetry run python -m src.strategies.runner --mode day --execute
 
 The deterministic SPY filter activates trend following, momentum, mean reversion, and opening-range breakout according to regime. Strategy modules return one common signal shape and send compatible orders through the shared executor with risk-based sizing and stop/target prices. Strategy ownership and protection checks remain active regardless of which strategies the current regime selects for new entries.
 
-The selector uses the installed local Ollama `phi3:mini` model as a ranking advisor. Its output only reorders deterministic-active strategies; failures keep the deterministic ordering, and it never receives broker access or emits ticker-level signals. Set `STRATEGY_REGIME_LLM_ENABLED=false` to disable it.
+The optional regime advisor uses the OpenAI model selected by `LLM_PROVIDER` and `LLM_MODEL` with `OPENAI_API_KEY`. Its output only reorders strategies already activated by deterministic checks; failures keep the deterministic ordering, and it never receives broker access or emits ticker-level signals. Set `STRATEGY_REGIME_LLM_ENABLED=false` to disable it.
 
 Pairs analysis uses 60 daily bars, correlation, and an OLS spread z-score. It reports candidate spreads only: the existing executor cannot submit two legs atomically, so the portfolio never opens an unhedged pair. Trade journal rows include strategy attribution, and `performance_tracker_v2.py --json --mode algo` reports activity for the Algo account.
 
@@ -224,7 +226,7 @@ Position trading over days to weeks. Diversified universe with conservative risk
 
 | Parameter | Value |
 |---|---|
-| Universe | Dynamic liquid selection (up to 50 tickers from the configured risk catalog) |
+| Universe | Fixed list of 29 configured tickers; no dynamic ranking |
 | Max position | 8% of equity |
 | Max sector | 30% |
 | Stop loss | -7% hard stop |
@@ -240,11 +242,11 @@ Position trading over days to weeks. Diversified universe with conservative risk
 
 | Sector | Tickers | Max Allocation |
 |---|---|---|
-| Core Technology | NVDA, AVGO, TSM, MSFT, AAPL, GOOGL, META, AMZN, QCOM, ORCL, CSCO, IBM, INTC | 30% |
-| Growth | PLTR, AMD, CRM, SNOW, NET, PANW, CRWD, NOW, DDOG, SHOP, UBER, APP | 25% |
-| Value & Dividend | JPM, V, UNH, JNJ, PG, KO, PEP, BAC, LOW, XOM, CVX, WMT, COST, HD, MCD, CAT, GE, BA | 25% |
-| Tactical | COIN, MSTR, RKLB, SMCI, IONQ, TEM, TSLA, ASTS, CRSP | 15% |
-| Hedge | SPY, QQQ, GLD, TLT, SPCX, IWM, DIA, XLK, XLF, XLE, XLV | 15% |
+| Core Technology | NVDA, SPCX, AVGO, TSM, MSFT, AAPL, GOOGL, META, AMZN | 30% |
+| Growth | PLTR, AMD, CRM, SNOW, NET, PANW | 25% |
+| Value & Dividend | JPM, V, UNH, JNJ, PG, KO | 25% |
+| Tactical | COIN, MSTR, RKLB, SMCI | 15% |
+| Hedge | SPY, QQQ, GLD, TLT | 15% |
 
 ### Day Trading Mode
 
@@ -252,7 +254,7 @@ Intraday trading with tighter stops, larger positions, and mandatory daily flatt
 
 | Parameter | Value |
 |---|---|
-| Universe | Dynamic liquid selection (up to 50 tickers from the configured risk catalog) |
+| Universe | Fixed list of 19 configured tickers; no dynamic ranking |
 | Max position | 15% of equity |
 | Max sector | 50% |
 | Stop loss | -1.2% tight stop |
@@ -268,9 +270,9 @@ Intraday trading with tighter stops, larger positions, and mandatory daily flatt
 
 | Sector | Tickers | Max Allocation |
 |---|---|---|
-| Mega-Cap Liquid | NVDA, AVGO, TSM, AMD, MSFT, AAPL, META, GOOGL, AMZN, QCOM, ORCL, CSCO, IBM, INTC | 50% |
-| Momentum | Growth, value, and tactical names from the configured catalog | 35% |
-| ETF Direction | SPY, QQQ, TQQQ, SOXL, SPCX, GLD, TLT, IWM, DIA, XLK, XLF, XLE, XLV | 30% |
+| Mega-Cap Liquid | NVDA, SPCX, AVGO, TSM, AMD, MSFT, AAPL, META, GOOGL, AMZN | 50% |
+| Momentum | PLTR, COIN, MSTR, RKLB, SMCI | 35% |
+| ETF Direction | SPY, QQQ, TQQQ, SOXL | 30% |
 
 **Day trading features:**
 
@@ -393,7 +395,7 @@ Tracks:
 
 > Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) for paper trading research.
 
-An AI agent modifies `autoresearch/strategy.py`, runs a fast backtest, measures fitness, and keeps or reverts each candidate. The currently enabled `autoresearch-run` OpenClaw job runs **five iterations in Day mode** after market close. The command supports a `--mode swing` path, but the active job does not exercise it; the prompts and validation still emphasize Day behavior. Backtests now route through the selected Swing or Day paper account and use the configured Basic/IEX or Plus/SIP feed; cache keys and result metadata record the feed. Algo's separate strategy modules and coordinator do **not** consume AutoResearch output or change live Algo parameters automatically.
+An AI agent modifies `autoresearch/strategy.py`, runs a fast backtest, measures fitness, and keeps or reverts each candidate. The currently enabled `autoresearch-run` OpenClaw job runs **five iterations in Day mode** after market close. The command supports a `--mode swing` path, but the active job does not exercise it; the prompts and validation still emphasize Day behavior. Backtests route through the selected Swing or Day paper account and use the shared Plus SIP feed; cache keys and result metadata record the feed. Algo's separate strategy modules and coordinator do **not** consume AutoResearch output or change live Algo parameters automatically.
 
 | | Karpathy's autoresearch | Swarm Trader AutoResearch |
 |---|---|---|
@@ -443,9 +445,8 @@ The research loop is not yet suitable for adapting Algo parameters: its simulato
 |---|---|---|---|
 | Prices (OHLCV) | yfinance | swing | 15 min |
 | 5-min intraday bars | Alpaca market data API | day | none (live) |
-| Overnight completed 5-min bars | Alpaca `feed=boats` | algo | At least 15-minute historical delay |
-| Overnight bid/ask quotes | Alpaca `feed=overnight` | algo | Freshness gate: 90 seconds |
-| Regular/extended session bars and quotes | Alpaca IEX, SIP for universe where available | algo | Scan-dependent |
+| Overnight completed 5-min bars and quotes | Alpaca `feed=boats` | algo | Plus real-time feed; freshness gate: 90 seconds |
+| Regular/extended session bars and quotes | Alpaca SIP | swing, day, algo | Scan-dependent |
 | VWAP / RSI / volume | Calculated from bars | day | none |
 | Financial metrics | yfinance + SEC EDGAR XBRL | swing | 24 hrs |
 | Insider trades | SEC EDGAR Form 4 | swing | 7 days |
@@ -628,7 +629,7 @@ The four Algo report jobs cover premarket, morning, midday, and close. Report jo
 openclaw cron list --all --json
 ```
 
-The active AutoResearch run is Day-only and uses five iterations. It does not tune Algo parameters; `ALPACA_DATA_TIER` controls the data feed used by current research backtests.
+The active AutoResearch run is Day-only and uses five iterations. It does not tune Algo parameters; research backtests use the shared Plus SIP feed.
 
 ---
 

@@ -1,11 +1,4 @@
-"""Daily Alpaca universe selection constrained by the existing risk catalogs.
-
-The Alpaca asset master is broad, but risk_manager only has sector/theme caps
-for configured symbols. We therefore intersect Alpaca's active, tradable US
-equities with each mode's preclassified risk catalog, then rank that candidate
-pool using clean daily bars. The configured Swing/Day names remain the seed
-pool whenever the live most-active screen is unavailable or sparse.
-"""
+"""Fixed Swing/Day lists and the dynamically selected Algo universe."""
 
 from __future__ import annotations
 
@@ -41,6 +34,36 @@ LEVERAGE_TERMS = re.compile(
     r"\b(?:bull|bear)\s+(?:1\.5|2|3|4|5)x\b",
     re.IGNORECASE,
 )
+
+
+def configured_universe(mode: str, max_tickers: int | None = None) -> dict:
+    """Return the configured fixed Swing or Day universe without screening it dynamically."""
+    if mode not in {"swing", "day"}:
+        raise ValueError("Configured fixed universes are available for swing and day modes")
+    mode_config = get_mode_config(mode)
+    categories: dict[str, str] = {}
+    tickers: list[str] = []
+    for category, bucket in mode_config["universe"].items():
+        for raw_ticker in bucket.get("tickers", []):
+            ticker = str(raw_ticker).upper().strip()
+            if not ticker:
+                continue
+            categories[ticker] = category
+            if ticker not in tickers:
+                tickers.append(ticker)
+    if max_tickers is not None:
+        tickers = tickers[:max(1, int(max_tickers))]
+        categories = {ticker: categories[ticker] for ticker in tickers}
+    return {
+        "tickers": tickers,
+        "categories": categories,
+        "candidate_count": len(tickers),
+        "screened_count": len(tickers),
+        "selected_count": len(tickers),
+        "target_count": len(tickers),
+        "selection_source": "configured_fixed_universe",
+        "dynamic": False,
+    }
 
 
 def _catalog(mode: str) -> tuple[dict, dict[str, str], list[str]]:
@@ -285,20 +308,23 @@ def _theme_quotas(mode_config: dict, max_tickers: int) -> dict[str, int]:
     return quotas
 
 
-def select_universe(mode: str, max_tickers: int = 50) -> dict:
-    """Select up to 60 risk-catalog symbols after Alpaca and bar filters.
+def select_universe(mode: str, max_tickers: int | None = None) -> dict:
+    """Select Algo symbols dynamically from its independent risk catalog.
 
-    The continuous daemon refreshes this at pre-open and retries an empty
-    selection on the configured retry cadence. Configured mode tickers remain
-    the seed candidates when Alpaca's most-active screen is unavailable; every
-    candidate still has to pass the same tradability, price, dollar-volume,
-    and history rules. The default target is 50, with no hard-filter bypass to
-    reach the reported 40-symbol minimum.
+    Swing and Day use configured_fixed_universe; only Algo runs the daily
+    Alpaca asset/liquidity selection. Hard filters are never bypassed to reach
+    Algo's reported minimum.
     """
-    if mode not in {"swing", "day", "algo"}:
-        raise ValueError("Dynamic strategy universe supports swing, day, and algo portfolio modes")
-    max_tickers = max(1, min(int(max_tickers), int(STRATEGY_CONFIG["universe_max_target"])))
+    if mode != "algo":
+        raise ValueError("Dynamic universe selection is reserved for Algo mode")
     mode_config, category_by_symbol, catalog_symbols = _catalog(mode)
+    selection_config = mode_config.get("universe_selection", {})
+    maximum_target = int(selection_config.get("maximum_target", 60))
+    minimum_target = int(selection_config.get("minimum_target", 40))
+    max_tickers = max(1, min(
+        int(max_tickers or selection_config.get("target", 50)),
+        maximum_target,
+    ))
     today = datetime.now(ET).date().isoformat()
 
     # Alpaca's most-actives endpoint supplies today's dynamic candidates. The
@@ -370,28 +396,11 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
         now_utc - timedelta(days=int(STRATEGY_CONFIG["universe_history_days"]))
     ).date().isoformat()
     requested_feed = regular_feed()
-    actual_feed = requested_feed
-    feed_fallback_reason = None
     try:
         bar_payload = _fetch_daily_bars(
             allowed, mode=mode, start=bar_start, end=now_utc.isoformat(), feed=requested_feed,
         )
-    except (requests.RequestException, ValueError) as primary_error:
-        fallback_feed = "iex" if requested_feed == "sip" else ""
-        if not fallback_feed or fallback_feed == requested_feed:
-            exc = primary_error
-            bar_payload = None
-        else:
-            try:
-                bar_payload = _fetch_daily_bars(
-                    allowed, mode=mode, start=bar_start, end=now_utc.isoformat(), feed=fallback_feed,
-                )
-                actual_feed = fallback_feed
-                feed_fallback_reason = str(primary_error)
-            except (requests.RequestException, ValueError) as fallback_error:
-                exc = fallback_error
-                bar_payload = None
-    if bar_payload is None:
+    except (requests.RequestException, ValueError) as exc:
         return {
             "tickers": [],
             "categories": {},
@@ -410,21 +419,6 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
     rejected: dict[str, str] = dict(metadata_rejected)
     eligible = []
     market_sessions = [bar["date"] for bar in _clean_daily_bars(bar_payload.get("SPY", []), today=today)]
-    minimum_history = int(STRATEGY_CONFIG["universe_min_clean_daily_bars"])
-    fallback_feed = "iex" if requested_feed == "sip" else ""
-    if len(market_sessions) < minimum_history and fallback_feed and actual_feed != fallback_feed:
-        try:
-            bar_payload = _fetch_daily_bars(
-                allowed, mode=mode, start=bar_start, end=now_utc.isoformat(), feed=fallback_feed,
-            )
-            actual_feed = fallback_feed
-            feed_fallback_reason = "primary feed returned fewer than 60 clean completed SPY bars"
-            market_sessions = [
-                bar["date"]
-                for bar in _clean_daily_bars(bar_payload.get("SPY", []), today=today)
-            ]
-        except (requests.RequestException, ValueError) as fallback_error:
-            feed_fallback_reason = str(fallback_error)
     if len(market_sessions) < int(STRATEGY_CONFIG["universe_min_clean_daily_bars"]):
         return {
             "tickers": [],
@@ -494,8 +488,8 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
         "screened_count": len(eligible),
         "selected_count": len(selected_symbols),
         "target_count": max_tickers,
-        "minimum_target": int(STRATEGY_CONFIG["universe_min_target"]),
-        "minimum_target_met": len(selected_symbols) >= int(STRATEGY_CONFIG["universe_min_target"]),
+        "minimum_target": minimum_target,
+        "minimum_target_met": len(selected_symbols) >= minimum_target,
         "active_screen_count": len(active_symbols),
         "fallback_seed_count": len(catalog_symbols) - len(active_symbols),
         "fallback_used": len(selected_symbols) < max_tickers or any(item["source"] == "risk_catalog_seed" for item in selected),
@@ -514,9 +508,8 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
             "last_completed_close_min": STRATEGY_CONFIG["universe_min_price"],
             "last_completed_close_max": STRATEGY_CONFIG["universe_max_price"],
             "minimum_clean_completed_daily_bars": STRATEGY_CONFIG["universe_min_clean_daily_bars"],
-            "bar_feed": actual_feed,
+            "bar_feed": requested_feed,
             "requested_bar_feed": requested_feed,
-            "bar_feed_fallback_reason": feed_fallback_reason,
             "leveraged_etfs": "excluded except existing configured Day-mode allowances",
         },
         "theme_selection_quotas": _theme_quotas(mode_config, max_tickers),

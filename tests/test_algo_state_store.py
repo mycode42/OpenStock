@@ -355,7 +355,7 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
     monkeypatch.setattr(daemon, "execute_strategy_trades", fake_execute)
     window = SimpleNamespace(
         name="regular", trade_date="2026-10-08", extended_hours=False,
-        bar_feed="iex", quote_feed="iex",
+        bar_feed="sip", quote_feed="sip",
     )
     daemon._scan_strategy_portfolio(portfolio, window=window)
 
@@ -410,7 +410,7 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
 
     window = SimpleNamespace(
         name="regular", trade_date="2026-10-08", extended_hours=False,
-        bar_feed="iex", quote_feed="iex",
+        bar_feed="sip", quote_feed="sip",
     )
     monkeypatch.setattr(daemon, "_state_path", lambda: snapshot)
     monkeypatch.setattr(daemon, "get_trading_window", lambda now, calendar: window)

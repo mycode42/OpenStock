@@ -1,0 +1,65 @@
+[
+  {
+    "name": "baseline",
+    "strategies": [
+      "trend_following"
+    ],
+    "parameters": {}
+  },
+  {
+    "name": "9_21_confirm_2",
+    "strategies": [
+      "trend_following"
+    ],
+    "parameters": {
+      "trend_following": {
+        "fast_period": 9,
+        "slow_period": 21,
+        "confirmation_bars": 2,
+        "minimum_slope_pct": 0.001
+      }
+    }
+  },
+  {
+    "name": "9_21_confirm_3",
+    "strategies": [
+      "trend_following"
+    ],
+    "parameters": {
+      "trend_following": {
+        "fast_period": 9,
+        "slow_period": 21,
+        "confirmation_bars": 3,
+        "minimum_slope_pct": 0.002
+      }
+    }
+  },
+  {
+    "name": "12_26_confirm_2",
+    "strategies": [
+      "trend_following"
+    ],
+    "parameters": {
+      "trend_following": {
+        "fast_period": 12,
+        "slow_period": 26,
+        "confirmation_bars": 2,
+        "minimum_slope_pct": 0.001
+      }
+    }
+  },
+  {
+    "name": "20_50_confirm_3",
+    "strategies": [
+      "trend_following"
+    ],
+    "parameters": {
+      "trend_following": {
+        "fast_period": 20,
+        "slow_period": 50,
+        "confirmation_bars": 3,
+        "minimum_slope_pct": 0.002
+      }
+    }
+  }
+]

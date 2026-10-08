@@ -93,7 +93,7 @@ class SQLiteBarStore:
         feed: str,
         timeframe: str,
         adjustment: str = "raw",
-        data_tier: str = "basic",
+        data_tier: str = "algo_trader_plus",
         requested_start: str = "",
         requested_end: str = "",
     ) -> int:

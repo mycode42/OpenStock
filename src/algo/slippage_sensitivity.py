@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", required=True)
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
-    parser.add_argument("--feed", choices=["iex", "sip"], default=regular_feed())
+    parser.add_argument("--feed", choices=["sip"], default=regular_feed())
     parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default="raw")
     parser.add_argument("--capital", type=float, default=100_000)
     parser.add_argument("--slippage-grid", default="0,2,5,10,20")

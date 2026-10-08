@@ -82,9 +82,9 @@ class AlgoAlpaca:
         symbols: list[str],
         *,
         stale_after_seconds: int = 60,
-        feed: str = "iex",
+        feed: str | None = None,
     ) -> dict[str, tuple[float, datetime]]:
-        quotes = self.latest_quotes(symbols, feed=feed)
+        quotes = self.latest_quotes(symbols, feed=feed or regular_feed())
         now = datetime.now(timezone.utc)
         return {
             symbol: (quote["price"], quote["timestamp"])
@@ -92,10 +92,11 @@ class AlgoAlpaca:
             if 0 <= (now - quote["timestamp"]).total_seconds() <= stale_after_seconds
         }
 
-    def latest_quotes(self, symbols: list[str], *, feed: str = "iex") -> dict[str, dict]:
+    def latest_quotes(self, symbols: list[str], *, feed: str | None = None) -> dict[str, dict]:
         """Return current bid/ask marks from the requested Alpaca data feed."""
         if not symbols:
             return {}
+        feed = feed or regular_feed()
         raw = self._get(
             f"{DATA_BASE}/stocks/quotes/latest",
             params={"symbols": ",".join(symbols), "feed": feed},

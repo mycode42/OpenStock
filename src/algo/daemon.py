@@ -21,7 +21,7 @@ from src.algo.protection_recovery import recover_broker_protection
 from src.algo.reconciliation import reconcile_startup
 from src.algo.sessions import ET, get_trading_window, next_session_start
 from src.algo.state_store import AlgoStateStore, StateStoreError
-from src.config import ALGO_SERVICE_CONFIG, STRATEGY_CONFIG
+from src.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG, STRATEGY_CONFIG
 from src.strategies.runner import execute_trades as execute_strategy_trades
 from src.strategies.runner import scan as scan_strategy_portfolio
 from src.strategies.state_machine import RuleStrategyStateMachine
@@ -417,13 +417,15 @@ def run_loop(
                     try:
                         portfolio["universe"] = select_universe(
                             "algo",
-                            max_tickers=int(STRATEGY_CONFIG["universe_target"]),
+                            max_tickers=int(ALGO_MODE_CONFIG["universe_selection"]["target"]),
                         )
                         portfolio["universe"]["selection_date"] = session_day
                         LOG.info(
                             "[ALGO] Universe refreshed: %d/%d tickers",
                             portfolio["universe"].get("selected_count", 0),
-                            portfolio["universe"].get("target_count", STRATEGY_CONFIG["universe_target"]),
+                            portfolio["universe"].get(
+                                "target_count", ALGO_MODE_CONFIG["universe_selection"]["target"]
+                            ),
                         )
                     except Exception as exc:
                         portfolio["universe"] = {

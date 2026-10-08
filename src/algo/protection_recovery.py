@@ -14,6 +14,7 @@ from typing import Callable
 
 from src.algo.incidents import record_incident, resolve_incident
 from src.algo.protection import recovery_oco_order
+from src.market_data import regular_feed
 
 
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
@@ -122,7 +123,7 @@ def _lookup_matches(order: dict, symbol: str, recovery: dict) -> bool:
 
 
 def _fresh_inside_quote(broker, symbol: str, stop: Decimal, target: Decimal, now: datetime) -> Decimal | None:
-    quote = broker.latest_quotes([symbol], feed="iex").get(symbol)
+    quote = broker.latest_quotes([symbol], feed=regular_feed()).get(symbol)
     if not isinstance(quote, dict):
         return None
     age = _age_seconds(now, quote.get("timestamp"))

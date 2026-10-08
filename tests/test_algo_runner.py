@@ -38,17 +38,57 @@ def _mock_common(monkeypatch, *, positions=None, orders=None):
     monkeypatch.setattr(runner.pairs, "candidates", lambda *args, **kwargs: [])
 
 
-def test_overnight_scan_separates_delayed_boats_bars_from_live_quotes(monkeypatch):
+def test_swing_and_day_use_their_fixed_configured_universes():
+    swing = strategy_universe.configured_universe("swing")
+    day = strategy_universe.configured_universe("day")
+
+    assert swing["tickers"] == [
+        "NVDA", "SPCX", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN",
+        "PLTR", "AMD", "CRM", "SNOW", "NET", "PANW",
+        "JPM", "V", "UNH", "JNJ", "PG", "KO",
+        "COIN", "MSTR", "RKLB", "SMCI", "SPY", "QQQ", "GLD", "TLT",
+    ]
+    assert day["tickers"] == [
+        "NVDA", "SPCX", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN",
+        "PLTR", "COIN", "MSTR", "RKLB", "SMCI", "SPY", "QQQ", "TQQQ", "SOXL",
+    ]
+    assert swing["dynamic"] is False
+    assert day["dynamic"] is False
+    assert swing["categories"]["SPCX"] == "core_tech"
+    assert day["categories"]["SOXL"] == "etf_direction"
+
+
+@pytest.mark.parametrize("mode", ["swing", "day"])
+def test_swing_and_day_scans_do_not_call_dynamic_selector(monkeypatch, mode):
+    _mock_common(monkeypatch)
+    monkeypatch.setattr(
+        runner, "select_universe",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dynamic selector called")),
+    )
+    monkeypatch.setattr(runner, "_fetch_bars", lambda *args, **kwargs: {})
+    monkeypatch.setattr(runner, "_fetch_latest_quotes", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        runner, "rank_strategies",
+        lambda bars, mode: {"regime": "range_bound", "reason": "test", "ranked": [], "active": []},
+    )
+
+    result = runner.scan(mode=mode)
+
+    assert result["universe"]["selection_source"] == "configured_fixed_universe"
+    assert result["universe"]["dynamic"] is False
+
+
+def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     _mock_common(monkeypatch)
     monkeypatch.setattr(runner, "feeds_for_session", lambda session: ("boats", "boats"))
-    monkeypatch.setattr(runner, "historical_delay_seconds", lambda feed, session: 905)
+    monkeypatch.setattr(runner, "historical_delay_seconds", lambda feed, session: 0)
     bar_calls = []
     quote_feeds = []
 
-    def fetch_bars(symbols, *, mode, timeframe, start, end, limit, feed="iex"):
+    def fetch_bars(symbols, *, mode, timeframe, start, end, limit, feed="sip"):
         bar_calls.append({"timeframe": timeframe, "start": start, "end": end, "feed": feed})
         if timeframe == "5Min":
-            return {"AAPL": [{"t": "2026-10-08T00:35:00Z", "c": 100, "h": 101, "l": 99, "v": 1000}]}
+            return {"AAPL": [{"t": "2026-10-08T00:55:00Z", "c": 100, "h": 101, "l": 99, "v": 1000}]}
         return {"SPY": [{"t": "2026-10-07T20:00:00Z", "c": 100}]}
 
     def fetch_quotes(symbols, *, mode, feed, errors=None):
@@ -74,9 +114,9 @@ def test_overnight_scan_separates_delayed_boats_bars_from_live_quotes(monkeypatc
 
     intraday = next(call for call in bar_calls if call["timeframe"] == "5Min")
     assert intraday["feed"] == "boats"
-    assert datetime.fromisoformat(intraday["end"]) <= FROZEN_NOW - timedelta(minutes=15)
+    assert datetime.fromisoformat(intraday["end"]) <= FROZEN_NOW
     assert quote_feeds == ["boats"]
-    assert result["data_status"]["historical_delay_seconds"] >= 900
+    assert result["data_status"]["historical_delay_seconds"] == 0
     assert result["data_status"]["historical_bars"] == "ok"
     assert result["entries_paused"] is False
 
