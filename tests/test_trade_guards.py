@@ -203,6 +203,7 @@ def test_failed_order_history_blocks_swing_and_day_entries(monkeypatch):
     monkeypatch.setattr(risk_manager, "_get_algo_orders_since", broken_history)
     monkeypatch.setattr(risk_manager, "_get_open_orders", lambda mode: [])
     monkeypatch.setattr(risk_manager, "_estimate_weekly_pnl", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(risk_manager, "get_account_for_mode", lambda mode: SimpleNamespace(account_id=f"paper-{mode}"))
     monkeypatch.setattr(risk_manager, "get_day_schedule", lambda **kwargs: SimpleNamespace(
         entries_allowed=lambda now: True, opens_at=datetime.now(ET) - timedelta(minutes=5),
     ))

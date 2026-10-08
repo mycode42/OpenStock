@@ -413,6 +413,9 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
         bar_feed="sip", quote_feed="sip",
     )
     monkeypatch.setattr(daemon, "_state_path", lambda: snapshot)
+    # A process may start while host monotonic uptime is still below the scan
+    # interval. The initial scan must not depend on machine uptime.
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: 0.0)
     monkeypatch.setattr(daemon, "get_trading_window", lambda now, calendar: window)
     monkeypatch.setattr(daemon, "select_universe", lambda *args, **kwargs: {"tickers": ["AAPL"], "selected_count": 1, "target_count": 1})
     monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **kwargs: {

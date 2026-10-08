@@ -230,10 +230,10 @@ def run_loop(
     store.activate_coordinator(coordinator_token, coordinator_pid)
     os.environ["SWARM_ALGO_COORDINATOR_TOKEN"] = coordinator_token
     cycle = 0
-    last_scan_monotonic = 0.0
-    last_universe_attempt_monotonic = 0.0
-    last_reconciliation_monotonic = 0.0
-    last_recovery_monotonic = 0.0
+    last_scan_monotonic: float | None = None
+    last_universe_attempt_monotonic: float | None = None
+    last_reconciliation_monotonic: float | None = None
+    last_recovery_monotonic: float | None = None
     last_window_name: str | None = None
     startup_verified = False
     last_loop_error: str | None = None
@@ -256,7 +256,7 @@ def run_loop(
                     continue
 
                 if window.name != last_window_name:
-                    last_reconciliation_monotonic = 0.0
+                    last_reconciliation_monotonic = None
                     last_window_name = window.name
 
                 account = broker.account()  # validates that Algo keys identify the configured account
@@ -271,7 +271,7 @@ def run_loop(
                 portfolio["account_id"] = broker_account_id
                 retry_seconds = max(15, int(STRATEGY_CONFIG.get("universe_retry_seconds", 300)))
                 if (
-                    last_reconciliation_monotonic == 0
+                    last_reconciliation_monotonic is None
                     or time.monotonic() - last_reconciliation_monotonic >= retry_seconds
                 ):
                     try:
@@ -365,7 +365,7 @@ def run_loop(
                     not dry_run
                     and window.name == "regular"
                     and (portfolio.get("startup_reconciliation") or {}).get("unprotected_positions")
-                    and (last_recovery_monotonic == 0 or time.monotonic() - last_recovery_monotonic >= 60)
+                    and (last_recovery_monotonic is None or time.monotonic() - last_recovery_monotonic >= 60)
                 ):
                     last_recovery_monotonic = time.monotonic()
                     try:
@@ -383,7 +383,7 @@ def run_loop(
                             LOG.error("[ALGO] Broker stop repair degraded: %s", "; ".join(recovery["errors"]))
                         if recovery.get("verified"):
                             startup_verified = False
-                            last_reconciliation_monotonic = 0.0
+                            last_reconciliation_monotonic = None
                     except Exception as exc:
                         reason = f"broker stop repair unavailable: {type(exc).__name__}: {exc}"
                         portfolio["protection_recovery_status"] = {
@@ -409,7 +409,7 @@ def run_loop(
                 universe = portfolio.get("universe") or {}
                 universe_due = universe.get("selection_date") != session_day or not universe.get("tickers")
                 universe_retry_due = (
-                    last_universe_attempt_monotonic == 0
+                    last_universe_attempt_monotonic is None
                     or time.monotonic() - last_universe_attempt_monotonic >= retry_seconds
                 )
                 if universe_due and universe_retry_due:
@@ -429,7 +429,7 @@ def run_loop(
                         LOG.exception("[ALGO] Universe refresh failed; new entries paused")
 
                 scan_interval = int(STRATEGY_CONFIG["portfolio_scan_seconds"])
-                if time.monotonic() - last_scan_monotonic >= scan_interval:
+                if last_scan_monotonic is None or time.monotonic() - last_scan_monotonic >= scan_interval:
                     prior_regime = (portfolio.get("market_regime") or {}).get("regime")
                     market_state = window.name.upper()
                     save_before_execution = lambda: store.save(market_state, portfolio)
@@ -463,7 +463,7 @@ def run_loop(
                             for state in by_symbol.values()
                         ):
                             startup_verified = False
-                            last_reconciliation_monotonic = 0.0
+                            last_reconciliation_monotonic = None
                     except Exception as exc:
                         portfolio["active_strategies"] = []
                         portfolio["entries_paused"] = True
