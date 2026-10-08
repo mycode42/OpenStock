@@ -1,6 +1,6 @@
-# EXPERIMENT: boost_moderate_volume_score
-# HYPOTHESIS: Giving moderate participation a slightly stronger confidence contribution may qualify otherwise-valid signals without lowering the global confidence cutoff.
-# CHANGE: Increased the confidence score for volume ratios from 0.80x to below VOLUME_CONFIRM_RATIO from 40 to 55
+# EXPERIMENT: lower_confidence_cutoff
+# HYPOTHESIS: Lowering the confidence cutoff should admit additional qualified signals and reduce the severe fitness penalty from fewer than 10 trades.
+# CHANGE: Reduced MIN_CONFIDENCE from 58.0 to 54.0
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,15 +14,12 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "boost_moderate_volume_score"
+EXPERIMENT_NAME = "lower_confidence_cutoff"
 EXPERIMENT_HYPOTHESIS = (
-    "Giving moderate participation a slightly stronger confidence contribution "
-    "may qualify otherwise-valid signals without lowering the global confidence cutoff."
+    "Lowering the confidence cutoff should admit additional qualified signals "
+    "and reduce the severe fitness penalty from fewer than 10 trades."
 )
-EXPERIMENT_CHANGE = (
-    "Increased the confidence score for volume ratios from 0.80x to below "
-    "VOLUME_CONFIRM_RATIO from 40 to 55"
-)
+EXPERIMENT_CHANGE = "Reduced MIN_CONFIDENCE from 58.0 to 54.0"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -41,7 +38,7 @@ VOLUME_STRONG_RATIO = 2.50
 STOP_PCT = 0.0105
 TARGET_MULTIPLIER = 3.8
 MAX_POSITION_SIZE_PCT = 0.15
-MIN_CONFIDENCE = 58.0
+MIN_CONFIDENCE = 54.0
 
 CONF_WEIGHT_RSI = 0.25
 CONF_WEIGHT_VWAP = 0.40
