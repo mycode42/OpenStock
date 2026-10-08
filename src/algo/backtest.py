@@ -16,7 +16,7 @@ import statistics
 import sys
 from collections import Counter, defaultdict
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -42,6 +42,9 @@ from src.strategies.multi_factor.config import MultiFactorConfig
 from src.strategies.multi_factor.diagnostics import information_coefficient, turnover
 from src.strategies.multi_factor.features import aggregate_intraday_bars
 from src.strategies.multi_factor.signals import SignalGenerator
+from src.strategies.satellite_overlay import (
+    CORE_STRATEGIES, SatelliteOverlayConfig, apply_satellite_confirmations,
+)
 
 
 ET = ZoneInfo("America/New_York")
@@ -129,6 +132,7 @@ class Position:
     take_profit: float
     signal_at: str
     bars_held: int = 0
+    satellite_confirmations: list[str] = field(default_factory=list)
 
 
 class AlgoPortfolioBacktest:
@@ -173,12 +177,20 @@ class AlgoPortfolioBacktest:
         self.risk = get_mode_config("algo")["risk"]
         self.profile = validate_parameter_profile(profile or {})
         self.strategy_filter = validate_strategy_filter(strategies)
+        self.satellite_config = SatelliteOverlayConfig.from_dict(self.profile.get("satellite_overlay"))
         self.research_controls = validate_research_controls(research_controls)
         self.event_calendar = event_calendar or EventCalendar()
         self.event_config = EventStrategyConfig.from_dict(self.profile.get("event_driven"))
+        self.event_satellite_enabled = (
+            self.event_config.enabled and self.satellite_config.event_driven_enabled
+            and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
+        )
         self.event_signal_generator = EventSignalGenerator(self.event_calendar, self.event_config)
         self.event_strategy_state: dict = {}
-        self.multi_factor_enabled = self.strategy_filter is None or "multi_factor" in self.strategy_filter
+        self.multi_factor_enabled = (
+            self.satellite_config.multi_factor_enabled
+            and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
+        )
         self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(self.profile.get("multi_factor")))
         all_daily_bars = aggregate_intraday_bars(intraday_bars)
         self.previous_closes_by_day: dict[tuple[str, date], float] = {}
@@ -197,6 +209,9 @@ class AlgoPortfolioBacktest:
         self.last_multi_factor_rebalance_key: str | None = None
         self.multi_factor_snapshots: list[dict] = []
         self.multi_factor_rebalance_diagnostics: list[dict] = []
+        self.latest_multi_factor_signals: dict[str, dict] = {}
+        self.satellite_confirmation_candidates: Counter[str] = Counter()
+        self.satellite_confirmed_entries: Counter[str] = Counter()
         self.positions: dict[str, Position] = {}
         self.pending_entries: dict[str, dict] = {}
         self.pending_exits: dict[str, dict] = {}
@@ -341,6 +356,7 @@ class AlgoPortfolioBacktest:
             "pnl": round(pnl, 2),
             "return_pct": round(price / position.entry_price - 1, 6),
             "holding_minutes": max(BAR_MINUTES, position.bars_held * BAR_MINUTES),
+            "satellite_confirmations": list(position.satellite_confirmations),
         })
 
     def _check_brackets(self, ticker: str, bar: dict, timestamp: datetime) -> None:
@@ -382,6 +398,7 @@ class AlgoPortfolioBacktest:
                 entry_price=fill_price, entry_at=timestamp.isoformat(),
                 stop_price=order["stop_price"], take_profit=order["take_profit"],
                 signal_at=order["signal_at"], bars_held=0,
+                satellite_confirmations=list(order.get("satellite_confirmations", [])),
             )
 
     def _fill_pending_exits(self, bars: dict[str, dict], timestamp: datetime) -> None:
@@ -456,10 +473,6 @@ class AlgoPortfolioBacktest:
                 continue
             day_key = session.isoformat()
             self.signal_events_by_strategy[(day_key, "multi_factor")] += 1
-            if item.action == "buy":
-                self.candidate_ticker_days.add((day_key, item.ticker))
-                self.candidate_strategy_ticker_days.add((day_key, item.ticker, "multi_factor"))
-                self.candidate_setups_by_strategy[(day_key, "multi_factor")] += 1
         return {
             item.ticker: item.to_dict() for item in signals
             if item.action in {"buy", "sell"}
@@ -518,7 +531,7 @@ class AlgoPortfolioBacktest:
                 continue
         completed.sort(key=self._timestamp)
         return rank_strategies(
-            completed, mode="algo", event_enabled=self.event_config.enabled,
+            completed, mode="algo", event_enabled=self.event_satellite_enabled,
             event_disable_in_volatile=self.event_config.disable_in_volatile,
         )
 
@@ -527,28 +540,18 @@ class AlgoPortfolioBacktest:
 
     def _signal_for(
         self, ticker: str, history: list[dict], active: list[str], ranked: dict,
-        timestamp: datetime,
+        timestamp: datetime, factor_signal: dict | None = None,
     ) -> dict | None:
         options = []
         for strategy in active:
             if self.strategy_filter is not None and strategy not in self.strategy_filter:
                 continue
-            if strategy == "multi_factor":
+            if strategy not in CORE_STRATEGIES:
                 continue
             try:
-                if strategy == "event_driven":
-                    signal = self.event_signal_generator.generate(
-                        ticker, history,
-                        as_of=timestamp + timedelta(minutes=BAR_MINUTES),
-                        universe=set(self.symbols),
-                        regime=str(self._current_regime.get("regime", "unknown")),
-                        previous_close=self._previous_close(ticker, timestamp.astimezone(ET).date()),
-                        strategy_state=self.event_strategy_state,
-                    )
-                else:
-                    signal = evaluate_rule_signal(
-                        strategy, ticker, history, parameters=self.profile.get(strategy),
-                    )
+                signal = evaluate_rule_signal(
+                    strategy, ticker, history, parameters=self.profile.get(strategy),
+                )
             except Exception as exc:
                 self.rejections[f"signal_error:{strategy}:{type(exc).__name__}"] += 1
                 continue
@@ -566,7 +569,34 @@ class AlgoPortfolioBacktest:
             options.append(item)
         if not options:
             return None
-        return max(options, key=lambda item: (item["rank_score"], item["strength"]))
+        chosen = max(options, key=lambda item: (item["rank_score"], item["strength"]))
+        event_signal = None
+        if (
+            self.event_satellite_enabled
+            and "event_driven" in active
+            and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
+        ):
+            try:
+                event = self.event_signal_generator.generate(
+                    ticker, history,
+                    as_of=timestamp + timedelta(minutes=BAR_MINUTES),
+                    universe=set(self.symbols),
+                    regime=str(self._current_regime.get("regime", "unknown")),
+                    previous_close=self._previous_close(ticker, timestamp.astimezone(ET).date()),
+                    strategy_state=self.event_strategy_state,
+                )
+                event_signal = event.to_dict() if event is not None else None
+            except Exception as exc:
+                self.rejections[f"signal_error:event_driven:{type(exc).__name__}"] += 1
+        chosen = apply_satellite_confirmations(
+            chosen,
+            factor_signal=(factor_signal if "multi_factor" in active else None),
+            event_signal=event_signal,
+            config=self.satellite_config,
+        )
+        for satellite in chosen.get("satellite_confirmations", []):
+            self.satellite_confirmation_candidates[satellite] += 1
+        return chosen
 
     def _queue_signal(self, ticker: str, signal: dict, bar: dict, timestamp: datetime) -> None:
         if ticker in self.positions or ticker in self.pending_entries:
@@ -640,10 +670,13 @@ class AlgoPortfolioBacktest:
             "stop_price": float(sized["stop_price"]),
             "take_profit": float(sized["take_profit"]),
             "signal_at": signal_at,
+            "satellite_confirmations": list(signal.get("satellite_confirmations", [])),
         }
-        if strategy == "event_driven":
+        for satellite in signal.get("satellite_confirmations", []):
+            self.satellite_confirmed_entries[satellite] += 1
+        if signal.get("event_confirmation"):
             self.event_signal_generator.record_proposal(
-                signal, as_of=timestamp + timedelta(minutes=BAR_MINUTES),
+                signal["event_confirmation"], as_of=timestamp + timedelta(minutes=BAR_MINUTES),
                 strategy_state=self.event_strategy_state,
             )
         self.entry_counts[self.day_key] += 1
@@ -681,6 +714,14 @@ class AlgoPortfolioBacktest:
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
                 factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
+                if factor_diagnostics is not None:
+                    self.latest_multi_factor_signals = (
+                        {
+                            ticker: signal for ticker, signal in factor_signals_for_day.items()
+                            if signal.get("action") in {"buy", "hold"}
+                        }
+                        if factor_diagnostics.get("minimum_universe_met") else {}
+                    )
                 last_day = trading_day
             self._start_periods(trading_day)
             self._fill_pending_entries(bars, timestamp)
@@ -706,15 +747,20 @@ class AlgoPortfolioBacktest:
                 if ticker in self.positions or ticker in self.pending_entries:
                     continue
                 factor_signal = factor_signals_for_day.get(ticker) if factor_signals_date == trading_day else None
-                if (
-                    factor_signal and factor_signal["action"] == "buy"
-                    and "multi_factor" in regime.get("active", [])
-                ):
-                    factor_signal["rank_score"] = float(factor_signal.get("score", 0))
-                    candidates.append((ticker, bar, factor_signal))
+                if factor_signal and factor_signal.get("action") == "sell":
+                    # Preserve exit management for any legacy Multi Factor
+                    # position; new entries are owned by a core rule.
+                    self._queue_exit_signal(ticker, factor_signal, bar, timestamp)
                     factor_signals_for_day.pop(ticker, None)
                 history = self.histories[(ticker, trading_day)]
-                signal = self._signal_for(ticker, history, regime.get("active", []), ranked, timestamp)
+                factor_support = (
+                    self.latest_multi_factor_signals.get(ticker)
+                    if "multi_factor" in regime.get("active", []) else None
+                )
+                signal = self._signal_for(
+                    ticker, history, regime.get("active", []), ranked, timestamp,
+                    factor_signal=factor_support,
+                )
                 if signal:
                     candidates.append((ticker, bar, signal))
 
@@ -804,7 +850,19 @@ class AlgoPortfolioBacktest:
             })
         merged_profile = deepcopy(ALGO_DEFAULT_PARAMETERS)
         for strategy, values in self.profile.items():
-            merged_profile[strategy].update(values)
+            if strategy == "satellite_overlay":
+                merged_profile[strategy] = values
+            else:
+                merged_profile[strategy].update(values)
+        merged_profile.setdefault("satellite_overlay", self.satellite_config.to_dict())
+        event_diagnostics = self.event_signal_generator.diagnostics(
+            event_times[-1] + timedelta(minutes=BAR_MINUTES),
+        )
+        # The research CSV intentionally contains future rows relative to an
+        # earlier replay window, so freshness of the whole snapshot is not a
+        # meaningful historical diagnostic.
+        event_diagnostics.pop("freshness", None)
+        event_diagnostics["calendar_mode"] = "historical_point_in_time"
         return {
             "simulator": "swarm_algo_portfolio_research_v2",
             "feed": self.feed,
@@ -847,9 +905,14 @@ class AlgoPortfolioBacktest:
                 len(self.candidate_ticker_days) / session_count, 3
             ) if session_count else 0,
             "strategy_metrics": strategy_metrics,
-            "event_strategy_diagnostics": self.event_signal_generator.diagnostics(
-                event_times[-1] + timedelta(minutes=BAR_MINUTES),
-            ),
+            "event_strategy_diagnostics": {
+                **event_diagnostics,
+                "enabled": self.event_satellite_enabled,
+                "configured_enabled": self.event_config.enabled,
+                "satellite_enabled": self.satellite_config.event_driven_enabled,
+            },
+            "satellite_confirmation_candidates": dict(self.satellite_confirmation_candidates),
+            "satellite_confirmed_entries": dict(self.satellite_confirmed_entries),
             "average_holding_minutes": round(statistics.mean(closed_holds), 2) if closed_holds else None,
             "median_holding_minutes": round(statistics.median(closed_holds), 2) if closed_holds else None,
             "average_calendar_holding_hours": round(statistics.mean(

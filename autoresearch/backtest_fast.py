@@ -4,7 +4,7 @@ backtest_fast.py — Deterministic backtester for strategy.py.
 
 Supports two modes:
   --mode day   (default) — 5-min bars, intraday simulation, flatten at 3:45 PM
-  --mode swing           — daily bars, multi-day holding, SWING_UNIVERSE tickers
+  --mode swing           — daily bars and multi-day holding on the configured Swing universe
 
 Usage:
     poetry run python autoresearch/backtest_fast.py
@@ -31,12 +31,16 @@ from typing import Any
 import requests
 from dotenv import load_dotenv
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from src.strategies.universe import configured_universe
+
 load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).parent.parent
 AUTORESEARCH_DIR = Path(__file__).parent
 DATA_CACHE_DIR = AUTORESEARCH_DIR / "data_cache"
 DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,21 +60,9 @@ CIRCUIT_BREAKER_LOSS_PCT = 0.03 # Stop new entries when daily loss >= 3%
 FLATTEN_TIME = "15:45"          # Force-close all positions at this ET time
 MAX_CONCURRENT_POSITIONS = 5    # Max simultaneous open positions
 
-# Day trading universe (mirrors src/config.py DAY_TRADE_UNIVERSE)
-DAY_TRADE_TICKERS = [
-    "NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN",
-    "PLTR", "COIN", "MSTR", "RKLB",
-    "SPY", "QQQ",
-]
-
-# Swing trading universe (mirrors src/config.py SWING_UNIVERSE)
-SWING_TICKERS = [
-    "NVDA", "AVGO", "SMCI", "TSM",         # AI Infrastructure
-    "TQQQ", "SOXL", "UPRO",                 # Leveraged ETFs
-    "PLTR", "MSTR", "COIN", "RKLB",         # Momentum
-    "IONQ", "RGTI", "SOUN", "LUNR",         # Moonshots
-    "SPY",                                   # Broad market reference
-]
+# AutoResearch reads the same fixed membership as the live mode configs.
+DAY_TRADE_TICKERS = configured_universe("day")["tickers"]
+SWING_TICKERS = configured_universe("swing")["tickers"]
 
 
 # ---------------------------------------------------------------------------

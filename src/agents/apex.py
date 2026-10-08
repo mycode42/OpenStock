@@ -18,7 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
 from typing_extensions import Literal
 
-from src.config import DAY_TRADE_UNIVERSE, DEFAULT_STOP_PCT, DEFAULT_TARGET_MULTIPLIER
+from src.config import DEFAULT_STOP_PCT, DEFAULT_TARGET_MULTIPLIER, get_mode_config
 from src.graph.state import AgentState, show_agent_reasoning
 from src.utils.llm import call_llm
 from src.utils.progress import progress
@@ -43,7 +43,7 @@ class ApexSignal(BaseModel):
 
 def _get_ticker_category(ticker: str) -> tuple[str | None, dict | None]:
     """Return (category_key, category_dict) for a ticker in the day trade universe."""
-    for cat_key, cat_data in DAY_TRADE_UNIVERSE.items():
+    for cat_key, cat_data in get_mode_config("day")["universe"].items():
         if ticker in cat_data["tickers"]:
             return cat_key, cat_data
     return None, None

@@ -392,7 +392,13 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
 
 def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_path, monkeypatch):
     snapshot = tmp_path / "algo_state.json"
-    _legacy(snapshot, empty_portfolio())
+    legacy_portfolio = empty_portfolio()
+    legacy_portfolio["universe"] = {
+        "tickers": ["NVDA", "SPCX", "TSLA"],
+        "selection_date": "2026-10-08",
+        "overnight_tradable_tickers": ["NVDA", "SPCX"],
+    }
+    _legacy(snapshot, legacy_portfolio)
     (tmp_path / "trade_journal.jsonl").write_text("")
 
     class FakeBroker:
@@ -417,7 +423,7 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
     # interval. The initial scan must not depend on machine uptime.
     monkeypatch.setattr(daemon.time, "monotonic", lambda: 0.0)
     monkeypatch.setattr(daemon, "get_trading_window", lambda now, calendar: window)
-    monkeypatch.setattr(daemon, "select_universe", lambda *args, **kwargs: {"tickers": ["AAPL"], "selected_count": 1, "target_count": 1})
+    monkeypatch.setattr(daemon, "load_algo_universe", lambda: {"tickers": ["AAPL"]})
     monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **kwargs: {
         "market_regime": {"regime": "trending_up", "active": ["momentum"]},
         "signals": [], "trades": [], "scan_errors": [], "entries_paused": False,
@@ -431,6 +437,7 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
     market_state, portfolio = store.read()
     assert market_state == "REGULAR"
     assert portfolio["account_id"] == "paper-algo"
+    assert portfolio["universe"]["tickers"] == ["AAPL"]
     assert portfolio["startup_reconciliation"]["status"] == "verified"
     assert portfolio["entries_paused"] is False
     assert portfolio["last_scan_status"] == "ok"

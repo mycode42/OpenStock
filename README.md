@@ -78,7 +78,7 @@ Swing, Day, and Algo operate on their configured Alpaca accounts. Algo has one c
 |---|---|---|
 | `swing` | Primary account | Multi-day holds, conservative risk |
 | `day` | Day trading account | Intraday only, flattens EOD |
-| `algo` | Dedicated Algo account | Continuous strategy portfolio (mean reversion, trend, momentum, ORB/breakout, and multi-factor; pairs remain analysis-only) |
+| `algo` | Dedicated Algo account | Continuous six-strategy portfolio: four core rules with Multi Factor and Event Driven as confirmation satellites; pairs remain analysis-only |
 
 Credentials are configured in `.env`:
 
@@ -110,7 +110,7 @@ acct.headers  # ready-to-use API headers
 
 ### Autonomous Algo Portfolio
 
-Mean reversion, trend following, momentum, opening-range breakout, and a cross-sectional multi-factor strategy are modules coordinated in one portfolio. The deterministic SPY regime filter selects which strategies may open positions. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
+Mean reversion, trend following, momentum, and opening-range breakout are the four core entry rules. The deterministic SPY regime filter chooses which core rules may propose entries. Multi Factor and Event Driven run as satellites: they can confirm an aligned core entry, raise its priority, and modestly increase its risk budget, but cannot open a position or become its owner. Every resulting proposal still passes the regular Algo risk validation and position caps. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
 
 All three modes use the Algo Trader Plus market-data plan through the shared `ALPACA_DATA_TIER=algo_trader_plus` setting. Regular and extended sessions use SIP. Algo's overnight intraday signal bars and quotes use real-time `feed=boats`, with entries enabled only for assets Alpaca marks `overnight_tradable`; daily regime and factor history remains on SIP. The service follows Alpaca's 24/5 sessions using New York time and the broker calendar. Overnight orders remain simple limit DAY orders with `extended_hours=true`; regular-session orders continue through the shared executor and risk manager. Algo's 40-entry quota follows its 20:00–20:00 ET trading session and it allows 20 open positions, subject to configured position, sector, cash, and drawdown limits. Execution remains paper-only. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for session and feed details.
 
@@ -120,7 +120,15 @@ Extended-hours entries have software-managed stops and targets. The coordinator 
 
 `src.algo.backtest` replays the deterministic Algo regime selector, strategy rules, shared sizing, and hard risk validator over stored regular-session 5-minute bars. It fills signals no earlier than the next bar open, models adverse slippage, and reports its assumptions with every run. It is research-only and cannot submit orders.
 
-`src.algo.auto_research` is a separate weekday research job for Algo. It uses the fixed 22-symbol Algo universe, incrementally refreshes Plus SIP split-adjusted bars, evaluates a small frozen set of strategy profiles with chronological walk-forward windows, and fits non-negative Ridge factor weights from 21-session forward labels. Development samples choose the Ridge penalty; an expanding prequential pass purges labels that reach the prediction date. Full walk-forward artifacts and dated candidate reports are stored under `data/research/algo-auto/`. The job never edits live settings, reloads the service, or submits orders. Its Telegram report is a review request: a candidate requires your explicit approval before any live-system change.
+`src.algo.auto_research` is a separate weekday research job for Algo. It uses the fixed 22-symbol Algo universe, refreshes Plus SIP split-adjusted bars, fits non-negative Ridge factor weights from purged 21-session forward labels, and runs chronological walk-forward profiles for the four core rules plus Multi Factor and Event Driven confirmation overlays. The profile set compares a core-only baseline, bounded core-rule variants, each satellite separately, and both satellites together. A training profile with an enabled satellite must produce at least three confirmed entries per training fold to pass the sample gate. The job also compares a four-rule portfolio against the six-strategy portfolio on 2024–2025 and the available 2026 forward period. The job never edits live settings, reloads the service, or submits orders. Its Telegram report is a review request: a candidate requires your explicit approval before any live-system change.
+
+Historical scheduled-event inputs are rebuilt into `data/research/algo-auto/event-calendar-historical.csv`: issuer earnings dates use SEC EDGAR 8-K Item 2.02 filing acceptance times (ETFs are excluded), while CPI/NFP and FOMC dates use official BLS and Federal Reserve archives. Macro reactions become visible no earlier than their scheduled release, and all reaction windows align to stored regular-session bars. This is a conservative historical reaction ledger, not an intraday news feed; event profiles are skipped and reported if a valid full-range calendar cannot be built or reused. Historical fixed-universe membership remains a survivorship limitation.
+
+Rebuild the event history against the locally stored SIP bars with:
+
+```bash
+poetry run python -m src.algo.historical_events --start 2016-01-01
+```
 
 ```bash
 # Small local smoke run; scheduled execution also refreshes recent Plus SIP bars.
@@ -139,13 +147,13 @@ poetry run python -m src.algo.walk_forward --symbols AAPL,MSFT,NVDA --start 2026
 
 Replay currently covers regular hours only. It uses a fixed supplied symbol list, does not reconstruct historical universe membership, omits LLM advice, assumes the stop executes first when both bracket legs are touched within one bar, and does not model commissions or regulatory fees. Historical bars do not contain the live quote stream, so slippage is configurable rather than inferred from quotes. These reports evaluate the model and its stability; they are not performance forecasts.
 
-#### Cross-sectional multi-factor strategy
+#### Multi Factor confirmation satellite
 
-The Algo-only `src.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It selects up to five long targets and emits sell proposals when an owned factor position leaves the target set. The current risk manager is long-only, so the strategy does not create shorts.
+The Algo-only `src.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It selects up to five long targets for research diagnostics. In the live six-strategy portfolio, a current-period long target confirms a matching core-rule entry; it cannot open or own a position. The current risk manager is long-only, so the strategy does not create shorts. Factor-only backtest runs report ranking and IC diagnostics without creating standalone positions.
 
 Features use completed daily bars through the prior session. Live settings are centralized in `ALGO_DEFAULT_PARAMETERS["multi_factor"]`; research profiles can override the validated fields without changing live settings. The simulator aggregates stored regular-session 5-minute bars and fetches 260 calendar days of warmup by default, extending it for longer configured horizons. The fixed universe supplied to a backtest must contain enough names with the required history to meet `min_universe` (20 by default). Value is disabled by default; if enabled, it requires earnings-yield observations with an `available_at` timestamp, and observations published after the rebalance cutoff are ignored. No price-only value proxy is substituted.
 
-For example, fetch data with warmup and replay only this strategy:
+For example, fetch data with warmup and inspect factor ranking/IC diagnostics:
 
 ```bash
 poetry run python -m src.algo.backtest fetch --symbols AAPL,MSFT,NVDA,AMZN,GOOGL,META,AVGO,TSM,AMD,PLTR,CRM,ORCL,JPM,V,UNH,JNJ,PG,KO,SPY,QQQ --start 2021-01-01 --end 2025-12-31
@@ -153,11 +161,16 @@ poetry run python -m src.algo.backtest run --symbols AAPL,MSFT,NVDA,AMZN,GOOGL,M
 poetry run python -m src.algo.walk_forward --symbols AAPL,MSFT,NVDA,AMZN,GOOGL,META,AVGO,TSM,AMD,PLTR,CRM,ORCL,JPM,V,UNH,JNJ,PG,KO,SPY,QQQ --start 2021-01-01 --end 2025-12-31 --profiles autoresearch/multi-factor-profiles.example.json --train-days 252 --test-days 63 --step-days 63
 ```
 
-Each target is a typed `MultiFactorSignal` with `score`, `rank`, `direction`, and `target_weight`. The coordinator converts it into the standard trade proposal and sends it through the existing risk path:
+Each target is a typed `MultiFactorSignal` with `score`, `rank`, `direction`, and `target_weight`. The live coordinator attaches aligned factor evidence to a core rule proposal, then uses the existing sizing and risk path:
 
 ```python
+confirmed_signal = apply_satellite_confirmations(
+    core_rule_signal,
+    factor_signal=factor_signal.to_dict(),
+    event_signal=event_signal.to_dict() if event_signal else None,
+)
 proposal = _make_trade(
-    signal.to_dict(), reference_price, account_equity, {},
+    confirmed_signal, reference_price, account_equity, {},
     get_mode_config("algo")["risk"],
 )
 if proposal is not None:
@@ -331,7 +344,7 @@ Intraday trading with tighter stops, larger positions, and mandatory daily flatt
 - **VWAP** — volume-weighted average price
 - **RSI(14)** on 5-min timeframe
 - **Volume ratio** — today's volume vs 20-day average
-- **Dynamic market scanner** (`scan_market.py`) — discovers today's movers
+- **Fixed per-mode universes** — live Swing, Day, and Algo scans use their separate configured lists.
 - **Market regime detection** — trending, range-bound, or volatile
 - **Verified opening cleanup** — repeated `execute_trades.py --mode day --flatten` runs before the first Day agent report. A successful check verifies zero broker positions and open orders and writes an account-bound `data/day_recovery.json` receipt for that New York date. New Day buys require today's receipt.
 - **Calendar-aware flatten** — `execute_trades.py --mode day --flatten-if-due` uses Alpaca's exchange calendar. The deadline is the earlier of 3:45 PM ET or 15 minutes before an early close; new entries stop 15 minutes before that deadline. The command cancels orders, closes residual positions, and succeeds only after verifying zero positions and open orders.
@@ -586,11 +599,8 @@ poetry run python rebalance.py --mode swing
 ### Run (Day Trading Mode)
 
 ```bash
-# Scan for opportunities
-TICKERS=$(poetry run python scan_market.py --max 25)
-
-# Gather intraday data
-poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/data.json
+# Gather intraday data for holdings and the fixed Day universe
+poetry run python gather_data.py --mode day --include-universe --output /tmp/data.json
 
 # Verify and clear residual Day exposure before new Day buys
 poetry run python execute_trades.py --mode day --flatten
@@ -680,7 +690,7 @@ The four Algo report jobs cover premarket, morning, midday, and close. Report jo
 openclaw cron list --all --json
 ```
 
-The active AutoResearch run is Day-only and uses five iterations. It does not tune Algo parameters; research backtests use the shared Plus SIP feed.
+The legacy `autoresearch-run` loop remains Day-only and uses five LLM-driven iterations. Algo has a separate fixed-candidate research pipeline and report; neither job changes live settings automatically.
 
 ---
 
@@ -702,7 +712,6 @@ Account-aware scripts should be run with an explicit `--mode`; each supported mo
 | `check_portfolio.py` | Quick portfolio overview | `--mode`, `--telegram`, `--json` |
 | `check_moves.py` | Universe pulse check | `--mode` |
 | `rebalance.py` | Sell non-universe positions | `--mode`, `--execute` |
-| `scan_market.py` | Dynamic ticker discovery | `--max N`, `--min-price`, `--json` |
 | `trade_alerts.py` | Anomaly detection | `--check`, `--mode`, `--telegram` |
 | `trade_journal.py` | Trade history + stats | `--show`, `--stats`, `--ticker` |
 | `intel_exchange.py` | Peer signal sharing via A2A | `--mode`, `--dry-run`, `--json` |
@@ -720,7 +729,6 @@ swarm-trader/
 ├── performance_tracker_v2.py  # Daily snapshots, Sharpe ratio, benchmarking
 ├── execute_trades.py          # Trade executor with risk validation
 ├── gather_data.py             # Market data gatherer (swing + day modes)
-├── scan_market.py             # Dynamic market scanner
 ├── check_portfolio.py         # Quick Alpaca portfolio check
 ├── check_moves.py             # Universe pulse check
 ├── rebalance.py               # Sell positions outside active universe

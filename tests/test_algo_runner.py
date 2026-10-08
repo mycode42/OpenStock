@@ -53,8 +53,6 @@ def test_swing_and_day_use_their_fixed_configured_universes():
         "NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN",
         "PLTR", "TQQQ", "COIN", "SPY", "QQQ",
     ]
-    assert swing["dynamic"] is False
-    assert day["dynamic"] is False
     assert swing["categories"]["COIN"] == "tactical"
     assert day["categories"]["TQQQ"] == "momentum"
     assert {
@@ -95,7 +93,6 @@ def test_algo_uses_the_configured_22_symbol_universe():
         "SPY", "QQQ", "GLD", "TLT",
         "PLTR", "CRM", "PANW",
     ]
-    assert algo["dynamic"] is False
     assert algo["categories"]["PLTR"] == "tactical"
     assert algo["categories"]["SPY"] == "hedge"
     assert "universe_selection" not in ALGO_MODE_CONFIG
@@ -105,11 +102,11 @@ def test_algo_uses_the_configured_22_symbol_universe():
 
 
 @pytest.mark.parametrize("mode", ["swing", "day"])
-def test_swing_and_day_scans_do_not_call_dynamic_selector(monkeypatch, mode):
+def test_swing_and_day_scans_use_only_their_configured_universe(monkeypatch, mode):
     _mock_common(monkeypatch)
     monkeypatch.setattr(
-        runner, "select_universe",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dynamic selector called")),
+        runner, "load_algo_universe",
+        lambda: (_ for _ in ()).throw(AssertionError("Algo universe loader called")),
     )
     monkeypatch.setattr(runner, "_fetch_bars", lambda *args, **kwargs: {})
     monkeypatch.setattr(runner, "_fetch_latest_quotes", lambda *args, **kwargs: {})
@@ -120,8 +117,7 @@ def test_swing_and_day_scans_do_not_call_dynamic_selector(monkeypatch, mode):
 
     result = runner.scan(mode=mode)
 
-    assert result["universe"]["selection_source"] == "configured_fixed_universe"
-    assert result["universe"]["dynamic"] is False
+    assert result["universe"]["tickers"] == strategy_universe.configured_universe(mode)["tickers"]
 
 
 def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
@@ -297,7 +293,7 @@ def test_historical_bar_fetch_follows_pagination(monkeypatch):
     assert calls[1]["page_token"] == "next"
 
 
-def test_algo_universe_is_not_truncated_and_keeps_overnight_asset_flags(monkeypatch):
+def test_algo_universe_keeps_fixed_membership_and_overnight_asset_flags(monkeypatch):
     fixed = strategy_universe.configured_universe("algo")["tickers"]
     monkeypatch.setattr(
         strategy_universe, "_fetch_active_assets",
@@ -307,11 +303,11 @@ def test_algo_universe_is_not_truncated_and_keeps_overnight_asset_flags(monkeypa
         },
     )
 
-    result = strategy_universe.select_universe("algo", max_tickers=1)
+    result = strategy_universe.load_algo_universe()
 
     assert result["tickers"] == fixed
     assert result["overnight_tradable_tickers"] == ["NVDA", "SPY"]
-    assert result["selection_source"] == "configured_fixed_universe"
+    assert not {"dynamic", "selection_source", "selected_count", "target_count"}.intersection(result)
 
 
 def test_one_shot_algo_cli_is_removed(monkeypatch):

@@ -22,7 +22,9 @@ from src.algo.backtest import (
 )
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
+from src.strategies.event_driven import EventCalendar, EventStrategyConfig
 from src.strategies.registry import validate_parameter_profile
+from src.strategies.satellite_overlay import SatelliteOverlayConfig
 
 
 ET = ZoneInfo("America/New_York")
@@ -36,7 +38,8 @@ METRICS = (
     "candidate_setup_count_by_strategy", "average_candidate_ticker_days_per_session",
     "strategy_metrics", "average_holding_minutes", "median_holding_minutes",
     "average_calendar_holding_hours", "max_consecutive_losses", "time_in_market_pct",
-    "multi_factor_diagnostics",
+    "multi_factor_diagnostics", "event_strategy_diagnostics", "satellite_confirmation_candidates",
+    "satellite_confirmed_entries",
 )
 
 
@@ -103,16 +106,30 @@ def _selection_score(report: dict) -> float:
     return float(report["net_return_pct"]) - 0.5 * float(report["max_drawdown_pct"])
 
 
+def _enabled_satellites(profile: dict) -> set[str]:
+    overlay = SatelliteOverlayConfig.from_dict(profile["parameters"].get("satellite_overlay"))
+    event_config = EventStrategyConfig.from_dict(profile["parameters"].get("event_driven"))
+    selected = profile["strategies"]
+    includes = lambda name: selected is None or name in selected
+    enabled = set()
+    if overlay.multi_factor_enabled and includes("multi_factor"):
+        enabled.add("multi_factor")
+    if overlay.event_driven_enabled and event_config.enabled and includes("event_driven"):
+        enabled.add("event_driven")
+    return enabled
+
+
 def _run_portfolio(
     *, symbols: list[str], intraday: dict, spy_daily: list[dict], start: str, end: str,
     feed: str, adjustment: str, capital: float, slippage_bps: float,
     profile: dict, strategies: list[str] | None, controls: dict,
+    event_calendar: EventCalendar | None = None,
 ) -> dict:
     return AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
         start=start, end=end, feed=feed, data_adjustment=adjustment,
         initial_capital=capital, slippage_bps=slippage_bps, profile=profile,
-        strategies=strategies, research_controls=controls,
+        strategies=strategies, research_controls=controls, event_calendar=event_calendar,
     ).run()
 
 
@@ -120,6 +137,7 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
     """Evaluate one independent fold in a worker process."""
     index, window, symbols, profiles, spy_daily, args = payload
     store = SQLiteBarStore(args.db)
+    event_calendar = EventCalendar.from_csv(args.event_calendar) if getattr(args, "event_calendar", None) else None
     warmup_days = max((
         multi_factor_warmup_days(profile["parameters"])
         for profile in profiles
@@ -141,11 +159,20 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
             adjustment=args.adjustment, capital=args.capital,
             slippage_bps=args.slippage_bps, profile=candidate["parameters"],
             strategies=candidate["strategies"], controls=candidate["controls"],
+            event_calendar=event_calendar,
+        )
+        enabled_satellites = _enabled_satellites(candidate)
+        confirmed_entries = report.get("satellite_confirmed_entries", {})
+        satellite_sample_eligible = all(
+            int(confirmed_entries.get(name, 0)) >= getattr(args, "min_satellite_confirmed_entries", 3)
+            for name in enabled_satellites
         )
         train_runs.append({
             "name": candidate["name"], "parameters": candidate["parameters"],
             "strategies": candidate["strategies"], "controls": candidate["controls"],
             "score": round(_selection_score(report), 6), "metrics": _metrics(report),
+            "enabled_satellites": sorted(enabled_satellites),
+            "satellite_sample_eligible": satellite_sample_eligible,
             "frequency_eligible": (
                 report["average_candidate_ticker_days_per_session"]
                 <= args.max_candidate_ticker_days_per_session
@@ -155,21 +182,25 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
                 and report["max_drawdown_pct"] <= args.max_train_drawdown_pct
                 and report["average_candidate_ticker_days_per_session"]
                 <= args.max_candidate_ticker_days_per_session
+                and satellite_sample_eligible
             ),
         })
         del report
     eligible = [item for item in train_runs if item["eligible"]]
-    frequency_eligible = [item for item in train_runs if item["frequency_eligible"]]
+    sample_and_frequency_eligible = [
+        item for item in train_runs
+        if item["frequency_eligible"] and item["satellite_sample_eligible"]
+    ]
     baseline = next(item for item in train_runs if item["name"] == "baseline")
     if eligible:
         selected = max(eligible, key=lambda item: (item["score"], -item["metrics"]["max_drawdown_pct"]))
-        selected_reason = "passed training trade-count, drawdown, and candidate-frequency gates"
-    elif frequency_eligible:
-        selected = max(frequency_eligible, key=lambda item: (item["score"], -item["metrics"]["max_drawdown_pct"]))
-        selected_reason = "no profile passed all gates; best-scoring frequency-compliant profile selected"
+        selected_reason = "passed training trade-count, drawdown, candidate-frequency, and satellite-sample gates"
+    elif sample_and_frequency_eligible:
+        selected = max(sample_and_frequency_eligible, key=lambda item: (item["score"], -item["metrics"]["max_drawdown_pct"]))
+        selected_reason = "no profile passed all gates; best-scoring sample- and frequency-compliant profile selected"
     else:
         selected = baseline
-        selected_reason = "no profile met candidate-frequency target; baseline fallback"
+        selected_reason = "no profile met sample and candidate-frequency targets; baseline fallback"
     del intraday
     gc.collect()
 
@@ -187,6 +218,7 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
         adjustment=args.adjustment, capital=args.capital,
         slippage_bps=args.slippage_bps, profile=selected["parameters"],
         strategies=selected["strategies"], controls=selected["controls"],
+        event_calendar=event_calendar,
     )
     result = {
         **window, "selected_profile": selected["name"],
@@ -196,7 +228,8 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
         "selected_reason": selected_reason,
         "training_frequency_target_met": selected["frequency_eligible"],
         "eligible_training_profiles": len(eligible),
-        "frequency_eligible_training_profiles": len(frequency_eligible),
+        "frequency_eligible_training_profiles": sum(item["frequency_eligible"] for item in train_runs),
+        "satellite_sample_eligible_training_profiles": sum(item["satellite_sample_eligible"] for item in train_runs),
         "training_candidates": train_runs,
         "out_of_sample": _metrics(test_report),
     }
@@ -214,12 +247,30 @@ def run_walk_forward(args) -> dict:
         raise ValueError("End date must not be before start date")
     if args.min_train_trades < 0 or args.max_train_drawdown_pct < 0:
         raise ValueError("Training eligibility limits must be non-negative")
+    min_satellite_samples = getattr(args, "min_satellite_confirmed_entries", 3)
+    if isinstance(min_satellite_samples, bool) or min_satellite_samples < 0:
+        raise ValueError("min_satellite_confirmed_entries must be non-negative")
+    args.min_satellite_confirmed_entries = min_satellite_samples
     frequency_limit = getattr(args, "max_candidate_ticker_days_per_session", 3.0)
     if not math.isfinite(frequency_limit) or frequency_limit <= 0:
         raise ValueError("max_candidate_ticker_days_per_session must be finite and positive")
     args.max_candidate_ticker_days_per_session = frequency_limit
 
     profiles = _read_profiles(args.profiles)
+    event_profiles = []
+    for profile in profiles:
+        overlay = SatelliteOverlayConfig.from_dict(profile["parameters"].get("satellite_overlay"))
+        event_config = EventStrategyConfig.from_dict(profile["parameters"].get("event_driven"))
+        selected = profile["strategies"]
+        event_selected = selected is None or "event_driven" in selected
+        if event_selected and overlay.event_driven_enabled and event_config.enabled:
+            event_profiles.append(profile["name"])
+    event_calendar = EventCalendar.from_csv(args.event_calendar) if getattr(args, "event_calendar", None) else None
+    if event_profiles and event_calendar is None:
+        raise ValueError(
+            "Event Driven overlay profiles require --event-calendar: "
+            + ", ".join(event_profiles)
+        )
     needs_factor_adjustment = any(
         profile["strategies"] is None or "multi_factor" in profile["strategies"]
         for profile in profiles
@@ -302,14 +353,21 @@ def run_walk_forward(args) -> dict:
         ), default=0),
         "trading_session_count": len(trading_dates),
         "candidate_profile_count": len(profiles),
+        "event_calendar": {
+            "path": str(Path(args.event_calendar).resolve()) if getattr(args, "event_calendar", None) else None,
+            **(event_calendar.diagnostics() if event_calendar else {"loaded_events": 0}),
+            "event_enabled_profiles": event_profiles,
+        },
         "selection_rule": (
             "Eligible profiles meet minimum training trade count, maximum training drawdown, and "
-            f"average candidate ticker-days <= {frequency_limit} per session. Select the eligible profile "
-            "with the highest training net_return_pct - 0.5 * max_drawdown_pct. If none pass all gates, "
-            "select the best-scoring frequency-compliant profile; otherwise fall back to baseline."
+            f"average candidate ticker-days <= {frequency_limit} per session, plus at least "
+            f"{min_satellite_samples} confirmed entries for each enabled satellite. Select the eligible "
+            "profile with the highest training net_return_pct - 0.5 * max_drawdown_pct. If none pass all "
+            "gates, select the best-scoring sample- and frequency-compliant profile; otherwise fall back to baseline."
         ),
         "candidate_frequency_target": {
             "max_candidate_ticker_days_per_session": frequency_limit,
+            "minimum_confirmed_entries_per_enabled_satellite": min_satellite_samples,
             "selection_frequency_target_met_folds": sum(
                 bool(fold["training_frequency_target_met"]) for fold in folds
             ),
@@ -337,6 +395,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--profiles", required=True, help="JSON array of named signal parameter profiles")
+    parser.add_argument("--event-calendar", help="point-in-time historical event calendar CSV for Event Driven overlay profiles")
     parser.add_argument("--feed", choices=["sip"], default=regular_feed())
     parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default=None)
     parser.add_argument("--train-days", type=int, default=30, help="number of prior trading sessions per fit window")
@@ -344,6 +403,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-days", type=int, default=10, help="advance in trading sessions between holdouts")
     parser.add_argument("--min-train-trades", type=int, default=10)
     parser.add_argument("--max-train-drawdown-pct", type=float, default=10)
+    parser.add_argument(
+        "--min-satellite-confirmed-entries", type=int, default=3,
+        help="minimum training confirmations required for every enabled satellite",
+    )
     parser.add_argument(
         "--max-candidate-ticker-days-per-session", type=float, default=3.0,
         help="training-only frequency ceiling for unique candidate tickers per session",

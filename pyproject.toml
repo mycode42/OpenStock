@@ -14,8 +14,7 @@ packages = [
     { include = "app", from = "." }
 ]
 include = [
-    { path = "risk_manager.py", format = ["sdist", "wheel"] },
-    { path = "scan_market.py", format = ["sdist", "wheel"] }
+    { path = "risk_manager.py", format = ["sdist", "wheel"] }
 ]
 
 [tool.poetry.dependencies]

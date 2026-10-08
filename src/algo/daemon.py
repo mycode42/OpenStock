@@ -25,7 +25,7 @@ from src.config import ALGO_SERVICE_CONFIG, STRATEGY_CONFIG
 from src.strategies.runner import execute_trades as execute_strategy_trades
 from src.strategies.runner import scan as scan_strategy_portfolio
 from src.strategies.state_machine import RuleStrategyStateMachine
-from src.strategies.universe import select_universe
+from src.strategies.universe import configured_universe, load_algo_universe
 
 
 LOG = logging.getLogger("swarm_trader.algo")
@@ -407,7 +407,11 @@ def run_loop(
                     }
 
                 universe = portfolio.get("universe") or {}
-                universe_due = universe.get("selection_date") != session_day or not universe.get("tickers")
+                fixed_tickers = configured_universe("algo")["tickers"]
+                universe_due = (
+                    universe.get("selection_date") != session_day
+                    or universe.get("tickers") != fixed_tickers
+                )
                 universe_retry_due = (
                     last_universe_attempt_monotonic is None
                     or time.monotonic() - last_universe_attempt_monotonic >= retry_seconds
@@ -415,11 +419,11 @@ def run_loop(
                 if universe_due and universe_retry_due:
                     last_universe_attempt_monotonic = time.monotonic()
                     try:
-                        portfolio["universe"] = select_universe("algo")
+                        portfolio["universe"] = load_algo_universe()
                         portfolio["universe"]["selection_date"] = session_day
                         LOG.info(
                             "[ALGO] Fixed universe loaded: %d tickers",
-                            portfolio["universe"].get("selected_count", 0),
+                            len(portfolio["universe"].get("tickers", [])),
                         )
                     except Exception as exc:
                         portfolio["universe"] = {

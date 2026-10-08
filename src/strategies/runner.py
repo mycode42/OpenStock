@@ -36,8 +36,11 @@ from src.strategies.registry import ALGO_DEFAULT_PARAMETERS, RULE_MODULES, evalu
 from src.strategies.rule_pipeline import evaluate_rule_signal
 from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
 from src.strategies.state_machine import RuleStrategyStateMachine
-from src.strategies.universe import configured_universe, select_universe
+from src.strategies.universe import configured_universe, load_algo_universe
 from src.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
+from src.strategies.satellite_overlay import (
+    CORE_STRATEGIES, SatelliteOverlayConfig, apply_satellite_confirmations,
+)
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -231,7 +234,13 @@ def _make_trade(signal: dict, price: float, equity: float, position: dict, mode_
     stop_pct = float(signal.get("stop_pct") or mode_risk["stop_loss_pct"])
     if equity <= 0 or price <= 0 or stop_pct <= 0:
         return None
-    risk_dollars = equity * float(STRATEGY_CONFIG["risk_per_trade_pct"])
+    try:
+        risk_multiplier = float(signal.get("risk_multiplier", 1.0))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(risk_multiplier) or not 1.0 <= risk_multiplier <= 1.5:
+        return None
+    risk_dollars = equity * float(STRATEGY_CONFIG["risk_per_trade_pct"]) * risk_multiplier
     max_position_pct = min(
         float(STRATEGY_CONFIG["max_strategy_position_pct"]),
         float(mode_risk["max_position_pct"]),
@@ -300,6 +309,32 @@ def _multi_factor_rebalance_signals(
     }, diagnostics
 
 
+def _multi_factor_satellite_signals(
+    strategy_states: dict,
+    selected_symbols: list[str],
+    session: date,
+) -> dict[str, dict]:
+    """Read this period's factor targets as confirmation evidence only."""
+    generator = SignalGenerator(MultiFactorConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor")))
+    period = generator.rebalance_key(session)
+    by_symbol = strategy_states.get("multi_factor", {})
+    output = {}
+    for ticker in selected_symbols:
+        state = by_symbol.get(ticker, {})
+        if state.get("last_rebalance_period") != period or state.get("desired_direction") != "long":
+            continue
+        output[ticker] = {
+            "ticker": ticker,
+            "strategy": "multi_factor",
+            "action": "buy",
+            "direction": "long",
+            "rank": state.get("factor_rank"),
+            "score": state.get("factor_score"),
+            "reason": "current-period cross-sectional factor target",
+        }
+    return output
+
+
 def execute_trades(trades: list[dict], *, mode: str, dry_run: bool = False) -> dict:
     repo_root = Path(__file__).resolve().parents[2]
     command = [sys.executable, str(repo_root / "execute_trades.py"), "--mode", mode]
@@ -325,7 +360,6 @@ def execute_trades(trades: list[dict], *, mode: str, dry_run: bool = False) -> d
 def scan(
     mode: str = "swing",
     *,
-    max_tickers: int | None = None,
     universe_result: dict | None = None,
     excluded_symbols: set[str] | None = None,
     position_owners: dict[str, str] | None = None,
@@ -355,11 +389,13 @@ def scan(
     if universe_result is not None:
         universe = universe_result
     elif mode == "algo":
-        universe = select_universe(mode)
+        universe = load_algo_universe()
     else:
-        universe = configured_universe(mode, max_tickers=max_tickers)
+        universe = configured_universe(mode)
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
     event_config = EventStrategyConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("event_driven"))
+    satellite_config = SatelliteOverlayConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("satellite_overlay"))
+    event_satellite_enabled = event_config.enabled and satellite_config.event_driven_enabled
     excluded = {str(symbol).upper() for symbol in (excluded_symbols or set())}
     track_owners = position_owners is not None
     owner_map = position_owners if position_owners is not None else {}
@@ -403,7 +439,7 @@ def scan(
     ))
     # SPY is part of the fixed Algo universe and remains available to macro
     # event signals; ordinary strategies still use their configured symbols.
-    if mode == "algo" and event_config.enabled and "SPY" not in strategy_symbols:
+    if mode == "algo" and event_satellite_enabled and "SPY" not in strategy_symbols:
         strategy_symbols.append("SPY")
     symbols_for_bars = list(dict.fromkeys(strategy_symbols + PAIR_DATA_SYMBOLS + ["SPY"]))
 
@@ -526,7 +562,7 @@ def scan(
     event_calendar_diagnostics = EventCalendar().diagnostics()
     event_strategy_available = False
     event_calendar_status = "disabled_by_config"
-    if mode == "algo" and event_config.enabled:
+    if mode == "algo" and event_satellite_enabled:
         default_calendar = Path(__file__).resolve().parents[2] / "data" / "event_calendar.csv"
         calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
         try:
@@ -547,7 +583,7 @@ def scan(
             event_calendar_status = "unavailable"
             scan_errors.append(f"event strategy calendar unavailable: {type(exc).__name__}: {exc}")
     try:
-        if mode == "algo" and event_config.enabled:
+        if mode == "algo" and event_satellite_enabled:
             regime = rank_strategies(
                 daily_bars.get("SPY", []), mode=mode, event_enabled=event_strategy_available,
                 event_disable_in_volatile=event_config.disable_in_volatile,
@@ -611,7 +647,10 @@ def scan(
     )
     multi_factor_signals: dict[str, MultiFactorSignal] = {}
     multi_factor_diagnostics = None
-    if mode == "algo" and fresh_quote_symbols.intersection(strategy_symbols):
+    if (
+        mode == "algo" and satellite_config.multi_factor_enabled
+        and fresh_quote_symbols.intersection(strategy_symbols)
+    ):
         try:
             multi_factor_signals, multi_factor_diagnostics = _multi_factor_rebalance_signals(
                 strategy_states, daily_bars, selected_symbols, owner_map, date.fromisoformat(today),
@@ -622,7 +661,15 @@ def scan(
         entry["strategy"]: entry.get("selection_score", entry["score"])
         for entry in regime.get("ranked", [])
     }
+    factor_confirmation_signals = (
+        _multi_factor_satellite_signals(
+            strategy_states, selected_symbols, date.fromisoformat(today),
+        )
+        if mode == "algo" and satellite_config.multi_factor_enabled
+        else {}
+    )
     generated = []
+    satellite_confirmation_counts = {"multi_factor": 0, "event_driven": 0}
 
     for ticker in strategy_symbols:
         position = positions.get(ticker, {})
@@ -634,9 +681,13 @@ def scan(
             # On the continuous shared account, don't let a newly active
             # strategy take over a holding whose entry strategy is unknown.
             continue
-        candidates = [owner] if owner else regime.get("active", [])
-        if mode == "algo" and ticker not in selected_symbols and owner is None:
-            candidates = [name for name in candidates if name == "event_driven"]
+        candidates = [owner] if owner else [
+            name for name in regime.get("active", []) if name in CORE_STRATEGIES
+        ]
+        # Keep sell management for legacy satellite-owned holdings, but new
+        # Multi Factor and Event Driven entries are confirmations only.
+        if owner in {"multi_factor", "event_driven"}:
+            candidates = [owner]
         protective_state = (strategy_states or {}).get(owner, {}).get(ticker, {}) if owner else {}
         quote = latest_quotes.get(ticker)
         if owner and position_qty > 0 and quote:
@@ -731,6 +782,43 @@ def scan(
             ):
                 continue
             options.append(item)
+
+        factor_confirmation = None
+        if "multi_factor" in regime.get("active", []):
+            factor_confirmation = factor_confirmation_signals.get(ticker)
+
+        event_confirmation = None
+        if (
+            mode == "algo" and event_satellite_enabled and event_generator is not None
+            and session_name in {None, "regular"} and symbol_bars
+            and "event_driven" in regime.get("active", [])
+        ):
+            try:
+                signal_as_of = datetime.fromisoformat(
+                    str(symbol_bars[-1]["t"]).replace("Z", "+00:00"),
+                ) + timedelta(minutes=5)
+                previous_close = float(daily_bars[ticker][-1]["c"]) if daily_bars.get(ticker) else None
+                event_signal = event_generator.generate(
+                    ticker, symbol_bars, as_of=signal_as_of,
+                    universe=set(selected_symbols) | ({"SPY"} if ticker == "SPY" else set()),
+                    regime=str(regime.get("regime", "unknown")),
+                    previous_close=previous_close,
+                    strategy_state=strategy_states.setdefault("event_driven", {}),
+                )
+                event_confirmation = event_signal.to_dict() if event_signal is not None else None
+            except (KeyError, TypeError, ValueError) as exc:
+                scan_errors.append(f"event strategy signal {ticker}: {type(exc).__name__}: {exc}")
+
+        if mode == "algo" and options:
+            options = [
+                apply_satellite_confirmations(
+                    item,
+                    factor_signal=factor_confirmation,
+                    event_signal=event_confirmation,
+                    config=satellite_config,
+                )
+                for item in options
+            ]
         if not options:
             continue
         # One action per ticker per scan prevents conflicting strategy orders.
@@ -815,13 +903,13 @@ def scan(
             trade["signal_bar_time"] = item.get("signal_bar_time")
             if item.get("event_id"):
                 trade["event_id"] = item["event_id"]
-            if item.get("strategy") == "event_driven" and event_generator is not None:
+            if item.get("event_confirmation") and event_generator is not None:
                 try:
                     signal_time = datetime.fromisoformat(
                         str(item.get("signal_bar_time") or quote_time.isoformat()).replace("Z", "+00:00"),
                     ) + timedelta(minutes=5)
                     event_generator.record_proposal(
-                        item, as_of=signal_time,
+                        item["event_confirmation"], as_of=signal_time,
                         strategy_state=strategy_states.setdefault("event_driven", {}),
                     )
                 except (TypeError, ValueError):
@@ -831,6 +919,9 @@ def scan(
             if trade["action"] == "sell" and protective_exit:
                 trade["cancel_open_orders"] = True
             trades.append(trade)
+            for satellite in item.get("satellite_confirmations", []):
+                if satellite in satellite_confirmation_counts:
+                    satellite_confirmation_counts[satellite] += 1
             item["entry_price"] = price
             item["qty"] = trade["qty"]
         else:
@@ -866,6 +957,7 @@ def scan(
         "universe": universe,
         "market_regime": regime,
         "multi_factor_diagnostics": multi_factor_diagnostics,
+        "satellite_confirmation_counts": satellite_confirmation_counts,
         "event_strategy_diagnostics": (
             event_generator.diagnostics(datetime.now(timezone.utc))
             if event_generator is not None else {
@@ -911,14 +1003,13 @@ def scan(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan the configured universe with rule-based strategies")
     parser.add_argument("--mode", choices=["swing", "day"], default="swing")
-    parser.add_argument("--max-tickers", type=int, default=None)
     parser.add_argument("--execute", action="store_true", help="Submit generated trades through execute_trades.py")
     parser.add_argument("--dry-run", action="store_true", help="Validate generated trades without sending orders")
     args = parser.parse_args()
     if args.dry_run and not args.execute:
         parser.error("--dry-run requires --execute")
 
-    result = scan(args.mode, max_tickers=args.max_tickers)
+    result = scan(args.mode)
     if args.execute and result["trades"]:
         result["execution"] = execute_trades(result["trades"], mode=args.mode, dry_run=args.dry_run)
     elif args.execute:

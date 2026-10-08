@@ -190,7 +190,7 @@ def test_factor_diagnostics_calculate_spearman_ic_and_target_turnover():
     assert turnover({"AAA", "BBB"}, {"BBB", "CCC"}) == 0.5
 
 
-def test_live_rebalance_uses_dynamic_universe_and_persists_weekly_key():
+def test_live_rebalance_ranks_cross_sectional_input_and_persists_weekly_key():
     symbols = [f"S{index:02d}" for index in range(20)]
     daily_bars = {
         symbol: _daily_closes(symbol, growth=(index + 1) * 0.0005)

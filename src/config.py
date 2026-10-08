@@ -301,45 +301,6 @@ def get_mode_config(mode: str = None) -> dict:
 
 
 # ===========================================================================
-# Backward-compat aliases — DO NOT USE IN NEW CODE
-# ===========================================================================
-
-# V2 universe (swing mode) — use get_mode_config("swing")["universe"] in new code
-UNIVERSE_V2 = MODES["swing"]["universe"]
-ALL_V2_TICKERS = [t for cat in UNIVERSE_V2.values() for t in cat["tickers"]]
-
-# Day trading universe — use get_mode_config("day")["universe"] in new code
-DAY_TRADE_UNIVERSE = MODES["day"]["universe"]
-ALL_DAY_TRADE_TICKERS = [t for cat in DAY_TRADE_UNIVERSE.values() for t in cat["tickers"]]
-
-# V1 swing universe (legacy — has leveraged ETFs and moonshots; kept for compat only)
-SWING_UNIVERSE = {
-    "ai_infra": {
-        "label": "AI Infrastructure",
-        "tickers": ["NVDA", "AVGO", "SMCI", "TSM"],
-        "target_pct": 0.40,
-    },
-    "leveraged_etfs": {
-        "label": "Leveraged ETFs",
-        "tickers": ["TQQQ", "SOXL", "UPRO"],
-        "target_pct": 0.25,
-    },
-    "momentum": {
-        "label": "Momentum Plays",
-        "tickers": ["PLTR", "MSTR", "COIN", "RKLB"],
-        "target_pct": 0.20,
-    },
-    "moonshots": {
-        "label": "Moonshots",
-        "tickers": ["IONQ", "RGTI", "SOUN", "LUNR"],
-        "target_pct": 0.15,
-    },
-}
-UNIVERSE = SWING_UNIVERSE           # backward-compat alias
-ALL_UNIVERSE_TICKERS = [t for cat in SWING_UNIVERSE.values() for t in cat["tickers"]]
-UNIVERSE_SIMPLE = {key: cat["tickers"] for key, cat in SWING_UNIVERSE.items()}
-
-# ===========================================================================
 # DEPRECATED global risk constants — use get_mode_config(mode)["risk"] instead
 # ===========================================================================
 MAX_POSITION_PCT            = 0.08   # DEPRECATED

@@ -968,7 +968,7 @@ poetry run python gather_data.py --mode day --include-universe
 poetry run python run_hedge_fund.py --analysts market_regime,apex --tickers NVDA,AAPL,META,SPY
 ```
 
-The two modes share the same codebase. Swing mode still works exactly as before — `UNIVERSE`, `ALL_UNIVERSE_TICKERS`, and `UNIVERSE_SIMPLE` are all backward-compatible aliases for `SWING_UNIVERSE`.
+Swing, Day, and Algo each use their own fixed ticker groups from `src/config.py`; those groups are the source of truth for live scans and research.
 
 ---
 

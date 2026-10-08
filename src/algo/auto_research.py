@@ -16,11 +16,17 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 from zoneinfo import ZoneInfo
 
-from src.algo.backtest import AlgoPortfolioBacktest, _regular_session_bars, multi_factor_warmup_days
+from src.algo.backtest import (
+    DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, _regular_session_bars,
+    multi_factor_warmup_days,
+)
 from src.algo.factor_research import train_factor_model
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
+from src.strategies.event_driven import EventCalendar
+from src.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.market_data import data_tier, regular_feed
 from src.strategies.multi_factor.features import aggregate_intraday_bars
 from src.strategies.universe import configured_universe
@@ -49,7 +55,6 @@ def load_algo_universe() -> tuple[list[str], dict]:
         raise ValueError("Configured Algo universe is empty")
     return symbols, {
         "universe_source": "configured_fixed",
-        "universe_dynamic": False,
     }
 
 
@@ -182,7 +187,8 @@ def _summarize_backtest(report: dict) -> dict:
     keys = (
         "start", "end", "net_return_pct", "max_drawdown_pct", "closed_trade_count",
         "entry_count", "average_entries_per_session", "time_in_market_pct",
-        "multi_factor_diagnostics",
+        "entry_count_by_strategy", "satellite_confirmed_entries",
+        "event_strategy_diagnostics", "multi_factor_diagnostics",
     )
     return {key: report.get(key) for key in keys}
 
@@ -197,7 +203,16 @@ def _summarize_walk_forward(report: dict, *, artifact: Path) -> dict:
     for candidate in latest.get("training_candidates", []):
         metrics = candidate.get("metrics", {})
         parameters = candidate.get("parameters", {})
-        target_strategy = next(iter(parameters), None) if len(parameters) == 1 else None
+        target_strategy = next((
+            name for name in parameters
+            if name in {"mean_reversion", "momentum", "opening_range_breakout", "trend_following"}
+        ), None)
+        satellites = candidate.get("enabled_satellites", [])
+        candidate_component = target_strategy or (
+            satellites[0] if len(satellites) == 1
+            else "combined_satellites" if len(satellites) > 1
+            else "core_baseline"
+        )
         latest_candidates.append({
             "name": candidate.get("name"), "eligible": candidate.get("eligible"),
             "score": candidate.get("score"),
@@ -206,6 +221,11 @@ def _summarize_walk_forward(report: dict, *, artifact: Path) -> dict:
             "training_drawdown_pct": metrics.get("max_drawdown_pct"),
             "training_closed_trades": metrics.get("closed_trade_count"),
             "candidate_ticker_days_per_session": metrics.get("average_candidate_ticker_days_per_session"),
+            "enabled_satellites": candidate.get("enabled_satellites", []),
+            "candidate_component": candidate_component,
+            "satellite_sample_eligible": candidate.get("satellite_sample_eligible"),
+            "satellite_confirmed_entries": metrics.get("satellite_confirmed_entries", {}),
+            "out_of_sample_metrics": fold.get("out_of_sample") if candidate.get("name") == fold.get("selected_profile") else None,
             "target_strategy": target_strategy,
             "target_strategy_training_metrics": (
                 metrics.get("strategy_metrics", {}).get(target_strategy)
@@ -243,8 +263,13 @@ def _summarize_walk_forward(report: dict, *, artifact: Path) -> dict:
         "start": report.get("start"), "end": report.get("end"),
         "feed": report.get("feed"), "adjustment": report.get("data_adjustment"),
         "symbols": report.get("symbols"), "worker_count": report.get("worker_count"),
+        "event_calendar": report.get("event_calendar"),
+        "candidate_profile_count": report.get("candidate_profile_count"),
         "fold_summary": report.get("fold_summary"),
         "selected_profile_fold_counts": dict(selected_counts),
+        "satellite_sample_gate": report.get("candidate_frequency_target", {}).get(
+            "minimum_confirmed_entries_per_enabled_satellite"
+        ),
         "latest_training_selection": {
             "train_start": latest.get("train_start"), "train_end": latest.get("train_end"),
             "test_start": latest.get("test_start"), "test_end": latest.get("test_end"),
@@ -258,6 +283,127 @@ def _summarize_walk_forward(report: dict, *, artifact: Path) -> dict:
         },
         "limitations": report.get("limitations", []),
     }
+
+
+def _combined_portfolio_replay(
+    store: SQLiteBarStore,
+    *,
+    symbols: list[str],
+    start: date,
+    end: date,
+    event_calendar: EventCalendar | None,
+) -> dict:
+    """Compare the four core rules with the six-strategy confirmation portfolio."""
+    if end < start:
+        raise ValueError("combined replay end must not be before start")
+    warmup_days = multi_factor_warmup_days({})
+    bars_start = (start - timedelta(days=warmup_days)).isoformat()
+    intraday = store.bars(
+        symbols, feed=FEED, timeframe="5Min", start=bars_start,
+        end=end.isoformat(), adjustment=ADJUSTMENT,
+    )
+    spy = store.bars(
+        ["SPY"], feed=FEED, timeframe="1Day",
+        start=(start - timedelta(days=DAILY_WARMUP_DAYS)).isoformat(),
+        end=end.isoformat(), adjustment=ADJUSTMENT,
+    ).get("SPY", [])
+    core = ["mean_reversion", "momentum", "opening_range_breakout", "trend_following"]
+    all_six = [*core, "multi_factor", "event_driven"]
+    results = {}
+    variants = {
+        "four_core_rules": (core, {"satellite_overlay": {
+            "multi_factor_enabled": False, "event_driven_enabled": False,
+        }}),
+        "six_strategy_satellite_portfolio": (all_six, {"satellite_overlay": {
+            "multi_factor_enabled": True,
+            "event_driven_enabled": event_calendar is not None,
+        }, "event_driven": {"enabled": event_calendar is not None}}),
+    }
+    for name, (strategies, profile) in variants.items():
+        report = AlgoPortfolioBacktest(
+            symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy,
+            start=start.isoformat(), end=end.isoformat(), feed=FEED,
+            data_adjustment=ADJUSTMENT, slippage_bps=5, profile=profile,
+            strategies=strategies, event_calendar=event_calendar,
+        ).run()
+        results[name] = _summarize_backtest(report)
+    del intraday, spy
+    return {
+        "start": start.isoformat(), "end": end.isoformat(),
+        "event_calendar_available": event_calendar is not None,
+        "results": results,
+        "comparison_note": (
+            "The six-strategy variant keeps the four core rules as entry owners; Multi Factor and Event Driven only confirm and amplify aligned core entries."
+        ),
+    }
+
+
+def _prepare_event_calendar(
+    *, start: date, end: date, db: str, output_dir: Path,
+) -> tuple[EventCalendar | None, dict]:
+    from src.algo.historical_events import build_historical_event_calendar
+
+    calendar_path = output_dir / "event-calendar-historical.csv"
+    metadata_path = output_dir / "event-calendar-historical.json"
+    try:
+        report = build_historical_event_calendar(
+            start=start, end=end, db=db, output=calendar_path,
+        )
+        _atomic_json(metadata_path, report)
+        return EventCalendar.from_csv(calendar_path), report
+    except Exception as exc:
+        # A previously built calendar is safe to reuse only if it covers this
+        # exact research interval; otherwise event profiles are omitted below.
+        try:
+            previous = json.loads(metadata_path.read_text())
+            if (
+                calendar_path.is_file()
+                and date.fromisoformat(previous["range_start"]) <= start
+                and date.fromisoformat(previous["range_end"]) >= end
+            ):
+                calendar = EventCalendar.from_csv(calendar_path)
+                return calendar, {
+                    **previous,
+                    "status": "reused_cached_calendar_after_source_error",
+                    "source_error": f"{type(exc).__name__}: {exc}",
+                }
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        return None, {
+            "status": "unavailable",
+            "range_start": start.isoformat(), "range_end": end.isoformat(),
+            "calendar_path": str(calendar_path.resolve()),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
+def _profiles_without_event_overlay(source: str | Path) -> tuple[Path, Path | None, list[str]]:
+    """Return a temporary profile set retaining core and factor research."""
+    path = Path(source)
+    profiles = json.loads(path.read_text())
+    retained = []
+    omitted = []
+    for profile in profiles:
+        overlay = SatelliteOverlayConfig.from_dict(profile.get("parameters", {}).get("satellite_overlay"))
+        if overlay.event_driven_enabled:
+            omitted.append(profile["name"])
+        else:
+            retained.append(profile)
+    if not omitted:
+        return path, None, []
+    if not any(profile.get("name") == "baseline" for profile in retained):
+        raise ValueError("Cannot omit event profiles because no baseline profile remains")
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix="algo-profiles-no-events-",
+        suffix=".json", dir=path.parent, delete=False,
+    )
+    temporary = Path(handle.name)
+    try:
+        json.dump(retained, handle, indent=2)
+        handle.write("\n")
+    finally:
+        handle.close()
+    return temporary, temporary, omitted
 
 
 def _factor_portfolio_replay(
@@ -317,11 +463,20 @@ def run_daily_research(args) -> dict:
             f"is {latest_age_days} calendar days old"
         )
 
+    output_dir = Path(args.output_dir)
+    if args.factor_only:
+        event_calendar, event_calendar_report = None, {"status": "not_requested_factor_only_run"}
+    else:
+        event_calendar, event_calendar_report = _prepare_event_calendar(
+            start=start, end=end, db=str(args.db), output_dir=output_dir,
+        )
+
     history = _load_daily_history(
         store, covered_symbols, start=start.isoformat(), end=end.isoformat(),
     )
     factor_report = train_factor_model(history, min_universe=MIN_COVERED_UNIVERSE)
     factor_replays = {}
+    combined_replays = {}
     if not args.factor_only:
         equal_weights = {name: 0.25 for name in factor_report["factor_names"]}
         frozen_weights = factor_report["frozen_2016_2023_weights"]
@@ -353,25 +508,51 @@ def run_daily_research(args) -> dict:
                     ),
                 }
 
+        if date(2024, 1, 1) <= end:
+            combined_end = min(end, date(2025, 12, 31))
+            combined_replays["fixed_2024_2025_holdout"] = _combined_portfolio_replay(
+                store, symbols=covered_symbols, start=date(2024, 1, 1),
+                end=combined_end, event_calendar=event_calendar,
+            )
+        if date(2026, 1, 1) <= end:
+            combined_replays["forward_2026"] = _combined_portfolio_replay(
+                store, symbols=covered_symbols, start=date(2026, 1, 1),
+                end=end, event_calendar=event_calendar,
+            )
+
     walk_forward = None
+    omitted_event_profiles: list[str] = []
     if not args.factor_only:
         from src.algo.walk_forward import build_parser as build_walk_forward_parser, run_walk_forward
 
         wf_output = Path(args.output_dir) / f"{datetime.now(ET).date().isoformat()}-walk-forward.json"
-        wf_args = build_walk_forward_parser().parse_args([
-            "--symbols", ",".join(covered_symbols),
-            "--start", start.isoformat(), "--end", end.isoformat(),
-            "--profiles", str(Path(args.profiles).resolve()),
-            "--feed", FEED, "--adjustment", ADJUSTMENT,
-            "--train-days", "756", "--test-days", "63", "--step-days", "63",
-            "--min-train-trades", "10", "--max-train-drawdown-pct", "12",
-            "--max-candidate-ticker-days-per-session", "3",
-            "--workers", str(args.workers), "--db", str(args.db),
-        ])
-        full_walk_forward = run_walk_forward(wf_args)
-        wf_output.parent.mkdir(parents=True, exist_ok=True)
-        wf_output.write_text(json.dumps(full_walk_forward, indent=2, sort_keys=True, default=str))
-        walk_forward = _summarize_walk_forward(full_walk_forward, artifact=wf_output)
+        profiles_path, temporary_profiles, omitted_event_profiles = (
+            (Path(args.profiles).resolve(), None, [])
+            if event_calendar is not None
+            else _profiles_without_event_overlay(args.profiles)
+        )
+        try:
+            wf_argv = [
+                "--symbols", ",".join(covered_symbols),
+                "--start", start.isoformat(), "--end", end.isoformat(),
+                "--profiles", str(profiles_path),
+                "--feed", FEED, "--adjustment", ADJUSTMENT,
+                "--train-days", "756", "--test-days", "63", "--step-days", "63",
+                "--min-train-trades", "10", "--max-train-drawdown-pct", "12",
+                "--min-satellite-confirmed-entries", "3",
+                "--max-candidate-ticker-days-per-session", "3",
+                "--workers", str(args.workers), "--db", str(args.db),
+            ]
+            if event_calendar is not None:
+                wf_argv.extend(["--event-calendar", str(Path(event_calendar_report["calendar_path"]).resolve())])
+            wf_args = build_walk_forward_parser().parse_args(wf_argv)
+            full_walk_forward = run_walk_forward(wf_args)
+            wf_output.parent.mkdir(parents=True, exist_ok=True)
+            wf_output.write_text(json.dumps(full_walk_forward, indent=2, sort_keys=True, default=str))
+            walk_forward = _summarize_walk_forward(full_walk_forward, artifact=wf_output)
+        finally:
+            if temporary_profiles is not None:
+                temporary_profiles.unlink(missing_ok=True)
 
     adaptive_ic = factor_report["adaptive_prequential_ic"].get("mean_spearman_ic")
     equal_ic = factor_report["adaptive_equal_weight_ic"].get("mean_spearman_ic")
@@ -402,7 +583,10 @@ def run_daily_research(args) -> dict:
         },
         "factor_model": factor_report,
         "factor_portfolio_holdouts": factor_replays,
+        "historical_event_calendar": event_calendar_report,
+        "combined_portfolio_replays": combined_replays,
         "rule_strategy_walk_forward": walk_forward,
+        "walk_forward_profiles_omitted_due_to_event_data": omitted_event_profiles,
         "recommendation": {
             "rule_strategy_proposal": (
                 "Review the latest training-selected profile and its chronological holdout record."
@@ -414,7 +598,19 @@ def run_daily_research(args) -> dict:
                 if factor_review == "prequential_ic_passed_for_human_review"
                 else "Do not advance current_candidate_weights; the prequential IC gate was not met."
             ),
+            "event_driven_status": (
+                "historical_calendar_used_in_overlay_walk_forward_and_combined_replay"
+                if event_calendar is not None
+                else "historical_calendar_unavailable; event-enabled profiles were skipped"
+            ),
+            "combined_portfolio_review": (
+                "Compare the fixed 2024-2025 and forward 2026 four-core vs satellite portfolio replay metrics; these are research evidence only."
+                if combined_replays else "No combined portfolio replay window was available."
+            ),
             "takeover_requires_human_confirmation": True,
+            "satellite_strategy_policy": (
+                "Multi Factor and Event Driven are confirmation overlays only; they cannot open standalone positions."
+            ),
         },
         "limitations": [
             "The current selected Algo universe is held fixed over the historical replay; this has survivorship bias.",

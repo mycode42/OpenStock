@@ -5,9 +5,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.algo.backtest import AlgoPortfolioBacktest
+import src.algo.backtest as backtest_module
 from src.algo.state_store import empty_portfolio, validate_portfolio
 from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig, ScheduledEvent
 from src.strategies.registry import validate_parameter_profile
+from src.strategies.signals import Signal
 
 
 ET = ZoneInfo("America/New_York")
@@ -136,7 +138,7 @@ def test_event_profile_validates_limits_and_flags():
         validate_parameter_profile({"event_driven": {"max_entries_per_week": 8}})
 
 
-def test_event_calendar_replay_uses_risk_manager_and_only_next_bar_fill():
+def test_event_satellite_confirms_a_core_entry_through_risk_manager(monkeypatch):
     day = date(2025, 9, 5)
     event = _event(day=day)
     prior_day_bar = {
@@ -156,18 +158,61 @@ def test_event_calendar_replay_uses_risk_manager_and_only_next_bar_fill():
         for index, session in enumerate(daily_days)
     ]
     profile = {"event_driven": {"enabled": True}}
+    monkeypatch.setattr(
+        backtest_module, "evaluate_rule_signal",
+        lambda strategy, ticker, history, parameters=None: (
+            Signal(ticker, "buy", "momentum", "test core setup", 0.7)
+            if strategy == "momentum" and len(history) == 4 else None
+        ),
+    )
+    validate_calls = []
+    real_validate = backtest_module.validate_trade
+    monkeypatch.setattr(
+        backtest_module, "validate_trade",
+        lambda **kwargs: validate_calls.append(kwargs) or real_validate(**kwargs),
+    )
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
         start=day.isoformat(), end=day.isoformat(), feed="sip", data_adjustment="raw",
-        profile=profile, strategies=["event_driven"], event_calendar=EventCalendar([event]),
+        profile=profile, strategies=["momentum", "event_driven"], event_calendar=EventCalendar([event]),
     )
 
     report = replay.run()
 
     assert report["entry_count"] == 1
-    assert report["entry_count_by_strategy"]["event_driven"] == 1
+    assert report["entry_count_by_strategy"]["momentum"] == 1
+    assert report["satellite_confirmed_entries"] == {"event_driven": 1}
+    assert len(validate_calls) == 1
+    assert validate_calls[0]["mode"] == "algo"
     trade = report["open_positions"][0]
     assert trade["ticker"] == "AAPL"
-    assert trade["strategy"] == "event_driven"
+    assert trade["strategy"] == "momentum"
     assert trade["entry_at"] == _at(day, 9, 50).astimezone(timezone.utc).isoformat()
     assert report["event_strategy_diagnostics"]["signals"] == 1
+
+
+def test_event_driven_cannot_open_a_position_without_a_core_rule():
+    day = date(2025, 9, 5)
+    event = _event(day=day)
+    bars = [*_reaction_bars(day)]
+    daily_days = []
+    cursor = day - timedelta(days=1)
+    while len(daily_days) < 25:
+        if cursor.weekday() < 5:
+            daily_days.append(cursor)
+        cursor -= timedelta(days=1)
+    daily_days.reverse()
+    spy_daily = [
+        {"t": f"{session.isoformat()}T20:00:00Z", "c": 100 + index * 0.2}
+        for index, session in enumerate(daily_days)
+    ]
+    replay = AlgoPortfolioBacktest(
+        symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
+        start=day.isoformat(), end=day.isoformat(), feed="sip", data_adjustment="raw",
+        profile={"event_driven": {"enabled": True}}, strategies=["event_driven"],
+        event_calendar=EventCalendar([event]),
+    )
+
+    report = replay.run()
+
+    assert report["entry_count"] == 0

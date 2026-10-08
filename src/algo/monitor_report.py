@@ -325,7 +325,7 @@ def build_report() -> dict:
         },
         "universe": {
             "selected": len(symbols),
-            "target": universe.get("target_count"),
+            "target": len(symbols),
             "selection_date": universe.get("selection_date"),
             "comparison_available": bool(previous),
             "tickers": symbols,

@@ -1,7 +1,7 @@
 """Mordecai Agent — Disciplined growth analyst, mode-aware, contrarian edge.
 
 Investment Philosophy (V2 — Rules-Based, Mode-Aware):
-- Universe pulled dynamically from the active trading mode config
+- Universe sourced from the active trading mode config
 - Swing mode: Core Tech, Growth, Value/Dividend, Tactical, Hedge sectors
 - Day mode: Mega-Cap, Momentum, ETF Direction sectors
 - CONTRARIAN: High consensus = red flag. Think independently.

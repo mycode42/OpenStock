@@ -96,7 +96,7 @@ These are hard constraints that always apply regardless of mode:
 
 **Swing mode only:**
 - Positions may be held overnight and across multiple days
-- Use SWING_UNIVERSE tickers (includes leveraged ETFs, moonshots)
+- Use the fixed Swing list from `get_mode_config("swing")["universe"]`; do not add names from the Day or Algo universes.
 - No intraday time-of-day filters
 
 ## What You Can Change in strategy.py

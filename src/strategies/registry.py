@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.strategies import mean_reversion, momentum, opening_range_breakout, trend_following
 from src.strategies.event_driven.config import EventStrategyConfig
 from src.strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
+from src.strategies.satellite_overlay import SatelliteOverlayConfig
 
 
 RULE_MODULES = {
@@ -48,6 +49,7 @@ PARAMETER_KEYS = {
         "reversal_lookback", "factor_weights", "long_only",
     },
     "event_driven": set(EVENT_DEFAULT_CONFIG),
+    "satellite_overlay": set(SatelliteOverlayConfig.__dataclass_fields__),
 }
 
 
@@ -68,6 +70,9 @@ def validate_parameter_profile(profile: dict) -> dict:
             continue
         if strategy == "event_driven":
             normalized[strategy] = EventStrategyConfig.from_dict(values).to_dict()
+            continue
+        if strategy == "satellite_overlay":
+            normalized[strategy] = SatelliteOverlayConfig.from_dict(values).to_dict()
             continue
         normalized[strategy] = dict(values)
 
