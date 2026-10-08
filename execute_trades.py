@@ -28,11 +28,20 @@ Usage:
 """
 
 import argparse
+import fcntl
+import hashlib
 import json
 import logging
+import math
 import os
 import sys
+import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -46,10 +55,14 @@ logging.basicConfig(
 )
 log = logging.getLogger("execute_trades")
 
-from src.accounts import get_account_for_mode
+from src.accounts import get_account_for_mode, verify_account_for_mode
+from src.day_recovery import day_recovery_confirmed, record_day_recovery
+from src.market_calendar import get_day_schedule
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
 DATA_BASE = "https://data.alpaca.markets/v2"
+MARKET_TZ = ZoneInfo("America/New_York")
+LOCK_DIR = Path(__file__).parent / "data" / "locks"
 
 # Module-level mode — set once in main(), used by helpers
 _active_mode: str = "swing"
@@ -59,7 +72,7 @@ def _headers(mode: str = None) -> dict:
     """Get API headers for the currently active trading mode."""
     return get_account_for_mode(mode or _active_mode).headers
 
-from src.config import get_mode_config, DEFAULT_TARGET_MULTIPLIER
+from src.config import ALGO_SERVICE_CONFIG, get_mode_config, DEFAULT_TARGET_MULTIPLIER
 
 # V2 risk manager — required for every non-hold order
 try:
@@ -111,6 +124,29 @@ def get_latest_price(ticker: str) -> float:
     return price
 
 
+def get_latest_ask(ticker: str, *, mode: str) -> float:
+    """Require a fresh broker-data ask before sizing a live market buy."""
+    response = requests.get(
+        f"{DATA_BASE}/stocks/{ticker}/quotes/latest",
+        headers=_headers(mode),
+        params={"feed": "iex"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    quote = (response.json() or {}).get("quote") or {}
+    try:
+        ask = float(quote["ap"])
+        timestamp = datetime.fromisoformat(str(quote["t"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Latest Alpaca ask unavailable for {ticker}") from exc
+    if not math.isfinite(ask) or ask <= 0 or timestamp.tzinfo is None:
+        raise ValueError(f"Latest Alpaca ask invalid for {ticker}")
+    age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+    if age < 0 or age > 90:
+        raise ValueError(f"Latest Alpaca ask for {ticker} is stale ({age:.0f}s)")
+    return ask
+
+
 def get_daily_pnl(account: dict) -> float:
     """Return today's P&L as a fraction of starting equity (negative = loss)."""
     equity = float(account.get("equity", 0))
@@ -120,55 +156,492 @@ def get_daily_pnl(account: dict) -> float:
     return (equity - last_equity) / last_equity
 
 
-def flatten_all(dry_run: bool = False, mode: str = None) -> dict:
-    """Market-sell every open position. Used for end-of-day flatten."""
-    headers = _headers(mode)
-    r = requests.get(f"{API_BASE}/positions", headers=headers, timeout=10)
-    r.raise_for_status()
-    positions = r.json()
+@contextmanager
+def account_execution_lock(mode: str, timeout_seconds: float = 10.0):
+    """Serialize validation, order submission, and flattening per account."""
+    LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(LOCK_DIR / f"{mode}.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    os.fchmod(fd, 0o600)
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Could not acquire {mode} account execution lock")
+                time.sleep(0.1)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
-    if not positions:
-        return {"status": "nothing_to_flatten", "positions_closed": 0}
 
-    results = []
-    for pos in positions:
-        symbol = pos["symbol"]
-        qty = int(float(pos.get("qty", 0)))
-        if qty == 0:
-            continue
+def _list_open_orders(headers: dict) -> list[dict]:
+    """Read every open account order, including pending entries and stop legs."""
+    orders: list[dict] = []
+    cursor = None
+    for _ in range(100):
+        params = {"status": "open", "limit": 500, "direction": "asc"}
+        if cursor:
+            params["after_order_id"] = cursor
+        response = requests.get(f"{API_BASE}/orders", headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+        page = response.json()
+        if not isinstance(page, list):
+            raise ValueError("Alpaca open orders response was not a list")
+        orders.extend(page)
+        if len(page) < 500:
+            return orders
+        cursor = str(page[-1].get("id") or "")
+        if not cursor:
+            raise ValueError("Alpaca open order page omitted its cursor")
+    raise RuntimeError("Alpaca open order list exceeded 100 pages")
 
-        side = "sell" if qty > 0 else "buy"
-        abs_qty = abs(qty)
 
-        if dry_run:
-            results.append({"ticker": symbol, "side": side, "qty": abs_qty, "status": "would_flatten"})
-        else:
-            order = {
-                "symbol": symbol,
-                "qty": str(abs_qty),
-                "side": side,
-                "type": "market",
-                "time_in_force": "day",
-            }
-            resp = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
-            if resp.status_code in (200, 201):
-                data = resp.json()
-                results.append({
-                    "ticker": symbol, "side": side, "qty": abs_qty,
-                    "status": "flattened", "order_id": data.get("id"),
-                })
+def _list_positions(headers: dict) -> list[dict]:
+    response = requests.get(f"{API_BASE}/positions", headers=headers, timeout=10)
+    response.raise_for_status()
+    positions = response.json()
+    if not isinstance(positions, list):
+        raise ValueError("Alpaca positions response was not a list")
+    return positions
+
+
+def _open_order_ids(orders: list[dict]) -> list[str]:
+    ids = []
+    for order in orders:
+        order_id = str(order.get("id") or "")
+        if not order_id:
+            raise ValueError("Alpaca open order has no ID")
+        ids.append(order_id)
+    return ids
+
+
+def _cancel_orders(headers: dict, orders: list[dict]) -> tuple[list[str], list[str]]:
+    cancelled, errors = [], []
+    for order_id in _open_order_ids(orders):
+        try:
+            response = requests.delete(f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10)
+            # 404/422 can mean an order filled or finished during cancellation.
+            # A fresh open-order query below decides whether it is truly gone.
+            if response.status_code in (200, 202, 204, 404, 422):
+                cancelled.append(order_id)
             else:
-                results.append({
-                    "ticker": symbol, "side": side, "qty": abs_qty,
-                    "status": "failed", "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
-                })
+                errors.append(f"Cancel {order_id}: HTTP {response.status_code}")
+        except requests.RequestException as exc:
+            errors.append(f"Cancel {order_id}: {exc}")
+    return cancelled, errors
 
-    return {
-        "timestamp": datetime.now().isoformat(),
-        "mode": "dry_run" if dry_run else "live",
-        "positions_closed": len(results),
-        "results": results,
+
+def _position_qty(position: dict) -> Decimal:
+    try:
+        quantity = Decimal(str(position.get("qty", "0")))
+    except InvalidOperation as exc:
+        raise ValueError(f"Invalid position quantity for {position.get('symbol')}") from exc
+    if not quantity.is_finite():
+        raise ValueError(f"Nonfinite position quantity for {position.get('symbol')}")
+    return quantity
+
+
+def _submit_flatten_order(headers: dict, position: dict) -> dict:
+    symbol = str(position["symbol"]).upper()
+    quantity = _position_qty(position)
+    if not quantity:
+        raise ValueError(f"Cannot flatten zero-quantity {symbol} position")
+    client_order_id = f"flat-{uuid.uuid4().hex}"
+    order = {
+        "symbol": symbol,
+        "qty": str(abs(quantity)),
+        "side": "sell" if quantity > 0 else "buy",
+        "type": "market",
+        "time_in_force": "day",
+        "client_order_id": client_order_id,
     }
+    try:
+        response = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
+    except requests.RequestException as exc:
+        # Do not retry an ambiguous POST: it may have reached Alpaca.
+        return {"ticker": symbol, "status": "failed", "client_order_id": client_order_id,
+                "error": f"Close submission outcome unknown: {exc}"}
+    if response.status_code not in (200, 201):
+        return {"ticker": symbol, "status": "failed", "client_order_id": client_order_id,
+                "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+    data = response.json()
+    if not data.get("id"):
+        return {"ticker": symbol, "status": "failed", "client_order_id": client_order_id,
+                "error": "Close order response omitted its Alpaca ID"}
+    return {
+        "ticker": symbol,
+        "side": order["side"],
+        "qty": order["qty"],
+        "status": "submitted",
+        "submission_status": "submitted",
+        "broker_status": data.get("status"),
+        "order_id": data["id"],
+        "client_order_id": client_order_id,
+    }
+
+
+def _get_order_status(headers: dict, order_id: str) -> str:
+    response = requests.get(f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10)
+    response.raise_for_status()
+    return str(response.json().get("status") or "").lower()
+
+
+def _lookup_client_order(headers: dict, client_order_id: str) -> dict | None:
+    response = requests.get(
+        f"{API_BASE}/orders:by_client_order_id",
+        headers=headers,
+        params={"client_order_id": client_order_id},
+        timeout=10,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict):
+        raise ValueError("Alpaca client order lookup returned invalid data")
+    return data
+
+
+def _get_nested_order(headers: dict, order_id: str) -> dict:
+    response = requests.get(
+        f"{API_BASE}/orders/{order_id}",
+        headers=headers,
+        params={"nested": "true"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict) or str(data.get("id") or "") != str(order_id):
+        raise ValueError("Exact nested Alpaca order lookup returned a different order")
+    return data
+
+
+def _prices_equal(left: object, right: object) -> bool:
+    try:
+        a, b = Decimal(str(left)), Decimal(str(right))
+        return a.is_finite() and b.is_finite() and a == b
+    except (InvalidOperation, TypeError, ValueError):
+        return False
+
+
+def _replay_matches_order(order: dict, broker: dict, headers: dict) -> bool:
+    """Check every material instruction before accepting an idempotent replay."""
+    if (
+        broker.get("client_order_id") != order.get("client_order_id")
+        or str(broker.get("time_in_force") or "").lower() != str(order.get("time_in_force") or "").lower()
+    ):
+        return False
+    if "extended_hours" in order and broker.get("extended_hours") is not order["extended_hours"]:
+        return False
+    for field in ("stop_price", "trail_percent"):
+        if field in order and not _prices_equal(broker.get(field), order[field]):
+            return False
+
+    order_class = str(order.get("order_class") or "simple").lower()
+    if order_class not in {"bracket", "oco"}:
+        return True
+    nested = _get_nested_order(headers, str(broker["id"]))
+    if (
+        str(nested.get("order_class") or "").lower() != order_class
+        or str(nested.get("symbol") or "").upper() != str(order["symbol"]).upper()
+        or str(nested.get("side") or "").lower() != str(order["side"]).lower()
+    ):
+        return False
+    stop_requested = (order.get("stop_loss") or {}).get("stop_price")
+    target_requested = (order.get("take_profit") or {}).get("limit_price")
+    legs = nested.get("legs") or []
+    if not isinstance(legs, list):
+        return False
+    if order_class == "oco":
+        return (
+            _prices_equal(nested.get("limit_price"), target_requested)
+            and len(legs) == 1
+            and isinstance(legs[0], dict)
+            and str(legs[0].get("type") or "").lower() in {"stop", "stop_limit"}
+            and _prices_equal(legs[0].get("stop_price"), stop_requested)
+        )
+    stops = [
+        leg for leg in legs
+        if isinstance(leg, dict) and str(leg.get("type") or "").lower() in {"stop", "stop_limit"}
+    ]
+    targets = [
+        leg for leg in legs
+        if isinstance(leg, dict) and str(leg.get("type") or "").lower() == "limit"
+    ]
+    return (
+        len(stops) == 1 and len(targets) == 1
+        and _prices_equal(stops[0].get("stop_price"), stop_requested)
+        and _prices_equal(targets[0].get("limit_price"), target_requested)
+    )
+
+
+def _submit_broker_order(order: dict, order_type: str, mode: str | None = None) -> dict:
+    """Submit once and use the client ID to resolve duplicate/ambiguous POSTs."""
+    mode = mode or _active_mode
+    if mode == "algo":
+        _verify_algo_execution_lease()
+    headers = _headers(mode)
+    client_order_id = order.get("client_order_id")
+    replayed = False
+    try:
+        response = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
+    except requests.RequestException as exc:
+        if not client_order_id:
+            return {"success": False, "error": f"Submission outcome unknown: {exc}"}
+        try:
+            data = _lookup_client_order(headers, client_order_id)
+        except (requests.RequestException, ValueError) as lookup_exc:
+            return {"success": False, "error": f"Submission outcome unknown; lookup failed: {lookup_exc}"}
+        if data is None:
+            return {"success": False, "error": f"Submission outcome unknown; retry the same client order ID: {exc}"}
+        replayed = True
+    else:
+        if response.status_code in (200, 201):
+            try:
+                data = response.json()
+            except ValueError as exc:
+                if not client_order_id:
+                    return {"success": False, "error": f"Submission outcome unknown: {exc}"}
+                try:
+                    data = _lookup_client_order(headers, client_order_id)
+                except (requests.RequestException, ValueError) as lookup_exc:
+                    return {"success": False, "error": f"Submission outcome unknown; lookup failed: {lookup_exc}"}
+                if data is None:
+                    return {"success": False, "error": "Submission outcome unknown; broker lookup found no order"}
+                replayed = True
+        elif client_order_id and response.status_code in (409, 422):
+            try:
+                data = _lookup_client_order(headers, client_order_id)
+            except (requests.RequestException, ValueError) as exc:
+                return {"success": False, "error": f"Duplicate lookup failed: {exc}"}
+            if data is None:
+                return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+            replayed = True
+        else:
+            return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+
+    if not isinstance(data, dict) or not data.get("id"):
+        return {"success": False, "error": "Alpaca order response omitted its ID"}
+    try:
+        identity_matches = (
+            str(data.get("symbol", "")).upper() == str(order["symbol"]).upper()
+            and str(data.get("side", "")).lower() == str(order["side"]).lower()
+            and Decimal(str(data.get("qty") or 0)) == Decimal(str(order["qty"]))
+            and str(data.get("type", "")).lower() == str(order["type"]).lower()
+            and str(data.get("order_class") or "simple").lower() == str(order.get("order_class") or "simple").lower()
+            and (
+                order.get("limit_price") is None
+                or Decimal(str(data.get("limit_price") or 0)) == Decimal(str(order["limit_price"]))
+            )
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        identity_matches = False
+    if not identity_matches:
+        return {
+            "success": False, "order_id": data["id"], "broker_status": data.get("status"),
+            "error": "Client order ID belongs to a different or unverifiable broker order",
+        }
+    if replayed:
+        try:
+            replay_matches = _replay_matches_order(order, data, headers)
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            return {
+                "success": False, "order_id": data["id"], "broker_status": data.get("status"),
+                "error": f"Could not verify replayed broker order instructions: {exc}",
+            }
+        if not replay_matches:
+            return {
+                "success": False, "order_id": data["id"], "broker_status": data.get("status"),
+                "error": "Client order ID belongs to different broker order instructions",
+            }
+    broker_status = str(data.get("status") or "").lower()
+    if not broker_status:
+        return {"success": False, "error": "Alpaca order response omitted its status"}
+    result = {
+        "success": broker_status not in {"rejected", "canceled", "expired"},
+        "order_id": data["id"],
+        "broker_status": broker_status,
+        "order_type": order_type,
+        "filled_qty": data.get("filled_qty"),
+        "filled_avg_price": data.get("filled_avg_price"),
+        "filled_at": data.get("filled_at"),
+        "idempotent_replay": replayed,
+    }
+    if not result["success"]:
+        result["error"] = f"Broker order is {broker_status}; use a new decision ID if retrying intentionally"
+    return result
+
+
+def _verify_algo_execution_lease() -> None:
+    """Permit Algo writes only from the currently leased coordinator process."""
+    from src.algo.state_store import AlgoStateStore
+
+    state_path = Path(ALGO_SERVICE_CONFIG["state_file"])
+    if not state_path.is_absolute():
+        state_path = Path(__file__).parent / state_path
+    token = os.environ.get("SWARM_ALGO_COORDINATOR_TOKEN")
+    if not AlgoStateStore(state_path).verify_coordinator_token(token, os.getppid()):
+        raise PermissionError("Live Algo orders require the active coordinator lease")
+
+
+def _flatten_all_unlocked(
+    dry_run: bool = False,
+    mode: str = "day",
+    poll_attempts: int = 10,
+    poll_interval: float = 1.0,
+) -> dict:
+    """Cancel all account orders, close residual positions, verify both are gone.
+
+    Must be called while holding the account execution lock. If a close POST
+    has an ambiguous result, this run only reconciles; the next scheduled run
+    can retry after reading fresh broker state.
+    """
+    headers = _headers(mode)
+    results: list[dict] = []
+    errors: list[str] = []
+    cancelled_ids: list[str] = []
+    positions: list[dict] = []
+    open_orders: list[dict] = []
+    initial_count = 0
+
+    def report(status: str) -> dict:
+        remaining = []
+        for position in positions:
+            try:
+                quantity = _position_qty(position)
+            except ValueError:
+                quantity = "invalid"
+            if quantity != 0:
+                remaining.append({"ticker": str(position.get("symbol") or ""), "qty": str(quantity)})
+        open_ids = [str(order.get("id") or "unknown") for order in open_orders]
+        verified_flat = not remaining and not open_ids and status in ("flattened", "already_flat")
+        recovery_recorded = False
+        if verified_flat and mode == "day" and not dry_run:
+            try:
+                record_day_recovery(get_account_for_mode("day").account_id)
+                recovery_recorded = True
+            except Exception as exc:
+                errors.append(f"Could not persist Day recovery receipt: {exc}")
+        return {
+            "timestamp": datetime.now(MARKET_TZ).isoformat(),
+            "trading_mode": mode,
+            "mode": "dry_run" if dry_run else "live",
+            "status": status,
+            "success": verified_flat and (mode != "day" or recovery_recorded),
+            "verified_flat": verified_flat,
+            "day_recovery_recorded": recovery_recorded,
+            "positions_closed": max(0, initial_count - len(remaining)),
+            "positions_remaining": remaining,
+            "open_orders_remaining": open_ids,
+            "orders_cancelled": cancelled_ids,
+            "results": results,
+            "errors": errors,
+        }
+
+    try:
+        if not dry_run:
+            if mode == "algo":
+                _verify_algo_execution_lease()
+            verify_account_for_mode(mode)
+        positions = _list_positions(headers)
+        open_orders = _list_open_orders(headers)
+        initial_count = sum(_position_qty(p) != 0 for p in positions)
+        if dry_run:
+            results.extend({
+                "ticker": p["symbol"],
+                "side": "sell" if _position_qty(p) > 0 else "buy",
+                "qty": str(abs(_position_qty(p))),
+                "status": "would_flatten",
+            } for p in positions if _position_qty(p) != 0)
+            return report("dry_run")
+
+        if mode == "day" and any(_position_qty(p) != 0 for p in positions):
+            # The guard also runs after the bell. A Day holding cannot be
+            # market-closed then, so keep its existing stop/order protection
+            # intact and alert. Checking only after cancellation would strip
+            # that protection while leaving the holding overnight.
+            risk = get_mode_config(mode)["risk"]
+            schedule = get_day_schedule(
+                flatten_by=risk.get("flatten_by", "15:45"),
+                flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
+                entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
+            )
+            if schedule is None or not schedule.market_open(datetime.now(MARKET_TZ)):
+                errors.append("Day market is closed; existing position orders were left intact")
+                return report("failed")
+
+        # Open buys can create a new position after liquidation; protective
+        # sell legs can block a close. Cancel every order in this dedicated
+        # mode account, then wait for broker reconciliation before closing.
+        for attempt in range(poll_attempts):
+            if not open_orders:
+                break
+            cancelled, cancel_errors = _cancel_orders(headers, open_orders)
+            cancelled_ids.extend(cancelled)
+            errors.extend(cancel_errors)
+            if attempt + 1 < poll_attempts:
+                time.sleep(poll_interval)
+            open_orders = _list_open_orders(headers)
+        if open_orders:
+            errors.append("Open orders remained after cancellation retries")
+            positions = _list_positions(headers)
+            return report("failed")
+
+        # Cancellations can fill during the race, so read positions again.
+        positions = _list_positions(headers)
+        if not any(_position_qty(p) != 0 for p in positions):
+            return report("already_flat" if initial_count == 0 else "flattened")
+
+        if mode == "day":
+            risk = get_mode_config(mode)["risk"]
+            schedule = get_day_schedule(
+                flatten_by=risk.get("flatten_by", "15:45"),
+                flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
+                entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
+            )
+            if schedule is None or not schedule.market_open(datetime.now(MARKET_TZ)):
+                errors.append("Day market is closed; a market close cannot be verified before the bell")
+                return report("failed")
+
+        for position in positions:
+            if _position_qty(position) != 0:
+                results.append(_submit_flatten_order(headers, position))
+
+        for attempt in range(poll_attempts):
+            if attempt:
+                time.sleep(poll_interval)
+            positions = _list_positions(headers)
+            open_orders = _list_open_orders(headers)
+            if not any(_position_qty(p) != 0 for p in positions) and not open_orders:
+                return report("flattened")
+            for result in results:
+                order_id = result.get("order_id")
+                if order_id:
+                    try:
+                        result["broker_status"] = _get_order_status(headers, order_id)
+                    except requests.RequestException as exc:
+                        errors.append(f"Could not confirm close order {order_id}: {exc}")
+        errors.append("Broker did not confirm zero positions and zero open orders")
+        return report("failed")
+    except (requests.RequestException, ValueError, KeyError, TimeoutError) as exc:
+        errors.append(str(exc))
+        return report("failed")
+
+
+def flatten_all(
+    dry_run: bool = False,
+    mode: str = None,
+    poll_attempts: int = 10,
+    poll_interval: float = 1.0,
+) -> dict:
+    """Idempotent account-wide liquidation for a dedicated trading mode."""
+    mode = mode or _active_mode
+    with account_execution_lock(mode):
+        return _flatten_all_unlocked(dry_run, mode, poll_attempts, poll_interval)
 
 
 def place_order(
@@ -192,6 +665,49 @@ def place_order(
         oco             — exit-only: stop + take-profit on existing position (requires stop_price + take_profit)
         trailing_stop   — trailing stop that rises with price (requires trail_percent)
     """
+    if action not in {"buy", "sell", "short", "cover"}:
+        return {"success": False, "error": f"Unsupported trade action: {action}"}
+    if order_type not in {"market", "limit", "bracket", "stop", "oco", "trailing_stop"}:
+        return {"success": False, "error": f"Unsupported order type: {order_type}"}
+    if action == "short":
+        return {"success": False, "error": "New short entries are disabled"}
+    if action == "cover" and order_type not in {"market", "limit"}:
+        return {"success": False, "error": "Cover exits support market or limit orders only"}
+    if order_type == "oco" and action != "sell":
+        return {"success": False, "error": "OCO protection requires a position-reducing sell"}
+    if action != "buy" and (
+        order_type == "bracket"
+        or (stop_price is not None and take_profit is not None and order_type != "oco")
+    ):
+        return {"success": False, "error": "Entry brackets require a buy; use OCO for an existing long position"}
+    if order_type == "market" and limit_price is not None:
+        return {"success": False, "error": "Market orders cannot include a limit price"}
+    if order_type in {"stop", "trailing_stop"} and (
+        take_profit is not None or limit_price is not None
+        or (order_type == "stop" and trail_percent is not None)
+        or (order_type == "trailing_stop" and stop_price is not None)
+    ):
+        return {"success": False, "error": "Stop and trailing-stop orders cannot include bracket or limit fields"}
+    if order_type == "oco" and (limit_price is not None or trail_percent is not None):
+        return {"success": False, "error": "OCO take-profit and stop prices must use their dedicated fields"}
+    if _active_mode == "day" and action == "buy":
+        try:
+            risk = get_mode_config("day")["risk"]
+            schedule = get_day_schedule(
+                flatten_by=risk.get("flatten_by", "15:45"),
+                flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
+                entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
+            )
+        except Exception as exc:
+            return {"success": False, "error": f"Day calendar unavailable: {exc}"}
+        if schedule is None or not schedule.entries_allowed(datetime.now(MARKET_TZ)):
+            return {"success": False, "error": "Day entry cutoff has passed or market is closed"}
+        if not day_recovery_confirmed(
+            get_account_for_mode("day").account_id,
+            session_open_at=schedule.opens_at,
+        ):
+            return {"success": False, "error": "Today's Day opening cleanup has not verified a flat account"}
+
     side = "buy" if action in ("buy", "cover") else "sell"
 
     # Alpaca extended sessions accept simple limit DAY orders only. Keep this
@@ -213,53 +729,84 @@ def place_order(
         }
         if client_order_id:
             order["client_order_id"] = str(client_order_id)[:48]
-        response = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
-        if response.status_code in (200, 201):
-            data = response.json()
-            return {
-                "success": True,
-                "order_id": data.get("id"),
-                "status": data.get("status"),
-                "order_type": "limit",
-                "extended_hours": True,
-            }
-        return {"success": False, "error": f"HTTP {response.status_code}: {response.text[:200]}"}
+        return {**_submit_broker_order(order, "limit"), "extended_hours": True}
+
+    if _active_mode == "algo" and order_type == "oco":
+        # A replacement OCO is a new claim on the entire live holding.
+        # Verify the broker position and all symbol orders immediately before
+        # its POST, while the canonical executor holds the account lock.
+        try:
+            schedule = get_day_schedule(flatten_by="15:45", mode="algo")
+            if schedule is None or not schedule.market_open(datetime.now(MARKET_TZ)):
+                return {"success": False, "error": "Algo OCO repair requires regular market hours"}
+            headers = _headers("algo")
+            matches = [
+                row for row in _list_positions(headers)
+                if str(row.get("symbol", "")).upper() == str(ticker).upper()
+            ]
+            if len(matches) != 1 or _position_qty(matches[0]) != Decimal(str(qty)):
+                return {"success": False, "error": "Algo OCO repair quantity no longer matches the broker holding"}
+            open_symbol_orders = [
+                row for row in _list_open_orders(headers)
+                if str(row.get("symbol", "")).upper() == str(ticker).upper()
+            ]
+            if open_symbol_orders:
+                return {"success": False, "error": "Algo OCO repair found an open broker order for this symbol"}
+        except (requests.RequestException, ValueError, InvalidOperation) as exc:
+            return {"success": False, "error": f"Algo OCO repair preflight unavailable: {exc}"}
 
     # Auto-calculate bracket prices if stop_pct is provided and prices are missing
-    if action in ("buy", "cover", "short") and order_type not in ("limit", "stop", "trailing_stop", "oco"):
+    if action == "buy" and order_type not in ("limit", "stop", "trailing_stop", "oco"):
         ref_price = entry_price or limit_price or 0
         if ref_price > 0 and stop_pct is not None:
             if stop_price is None:
-                if action in ("buy", "cover"):
-                    stop_price = round(ref_price * (1 - stop_pct), 2)
-                else:  # short
-                    stop_price = round(ref_price * (1 + stop_pct), 2)
+                stop_price = round(ref_price * (1 - stop_pct), 2)
             if take_profit is None and stop_price is not None:
                 stop_dist = abs(ref_price - float(stop_price))
-                if action in ("buy", "cover"):
-                    take_profit = round(ref_price + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
-                else:
-                    take_profit = round(ref_price - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
+                take_profit = round(ref_price + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
 
-    if action == "short":
-        side = "sell"
+    if order_type in {"market", "limit", "bracket"}:
+        if (stop_price is None) != (take_profit is None):
+            return {"success": False, "error": "Entry protection requires both a stop and a take-profit price"}
+        if trail_percent is not None:
+            return {"success": False, "error": "Entry bracket orders cannot include a trailing-stop field"}
 
-    use_bracket = (
+    required_fields = {
+        "bracket": (stop_price, take_profit),
+        "oco": (stop_price, take_profit),
+        "limit": (limit_price,),
+        "stop": (stop_price,),
+        "trailing_stop": (trail_percent,),
+    }
+    if order_type in required_fields and any(value is None for value in required_fields[order_type]):
+        return {"success": False, "error": f"{order_type} order is missing a required price"}
+
+    use_bracket = action == "buy" and order_type in {"market", "limit", "bracket"} and (
         order_type == "bracket"
-        or (stop_price is not None and take_profit is not None and order_type not in ("oco",))
+        or (stop_price is not None and take_profit is not None)
     )
 
     if use_bracket:
+        entry_limit = limit_price is not None
+        if entry_limit:
+            try:
+                numeric_limit = float(limit_price)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "Bracket entry limit price must be positive and finite"}
+            if not math.isfinite(numeric_limit) or numeric_limit <= 0:
+                return {"success": False, "error": "Bracket entry limit price must be positive and finite"}
         order = {
             "symbol": ticker,
             "qty": str(int(qty)),
             "side": side,
-            "type": "market",
+            "type": "limit" if entry_limit else "market",
             "time_in_force": "gtc",
             "order_class": "bracket",
             "stop_loss": {"stop_price": str(round(float(stop_price), 2))},
             "take_profit": {"limit_price": str(round(float(take_profit), 2))},
         }
+        if entry_limit:
+            order["limit_price"] = str(round(float(limit_price), 2))
     elif order_type == "oco" and stop_price is not None and take_profit is not None:
         order = {
             "symbol": ticker,
@@ -310,62 +857,72 @@ def place_order(
     if client_order_id:
         order["client_order_id"] = str(client_order_id)[:48]
 
-    r = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
-    if r.status_code in (200, 201):
-        data = r.json()
-        result = {
-            "success": True,
-            "order_id": data.get("id"),
-            "status": data.get("status"),
-            "order_type": order_type,
-        }
-        if use_bracket:
-            result["order_class"] = "bracket"
-            result["stop_price"] = stop_price
-            result["take_profit"] = take_profit
-        elif order_type == "oco":
-            result["order_class"] = "oco"
-        return result
-    return {"success": False, "error": f"HTTP {r.status_code}: {r.text[:200]}"}
+    result = _submit_broker_order(order, order_type)
+    if use_bracket:
+        result["order_class"] = "bracket"
+        result["stop_price"] = stop_price
+        result["take_profit"] = take_profit
+    elif order_type == "oco":
+        result["order_class"] = "oco"
+    return result
 
 
 def cancel_open_orders_for_symbol(ticker: str, mode: str = None) -> dict:
-    """Cancel protective child orders before an approved strategy market exit."""
+    """Cancel and confirm all symbol orders before a strategy market exit."""
+    mode = mode or _active_mode
     headers = _headers(mode)
-    response = requests.get(
-        f"{API_BASE}/orders",
-        headers=headers,
-        params={"status": "open", "limit": 500},
-        timeout=10,
-    )
-    if response.status_code != 200:
-        return {"success": False, "error": f"Could not list open orders: HTTP {response.status_code}"}
-    matched = [
-        order for order in response.json()
-        if str(order.get("symbol", "")).upper() == ticker.upper()
-        and str(order.get("side", "")).lower() == "sell"
-        and (
-            str(order.get("type", "")).lower() in {"stop", "stop_limit", "limit", "trailing_stop"}
-            or order.get("parent_order_id")
-            or str(order.get("order_class", "")).lower() in {"bracket", "oco"}
-        )
-    ]
-    cancelled = []
-    for order in matched:
-        order_id = order.get("id")
-        if not order_id:
-            return {"success": False, "error": f"Open {ticker} order has no Alpaca order id"}
-        cancel_response = requests.delete(
-            f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10,
-        )
-        if cancel_response.status_code not in (200, 202, 204, 404):
-            return {
-                "success": False,
-                "error": f"Could not cancel open {ticker} order {order_id}: HTTP {cancel_response.status_code}",
-                "cancelled": cancelled,
-            }
-        cancelled.append(order_id)
-    return {"success": True, "cancelled": cancelled}
+    cancelled: list[str] = []
+    errors: list[str] = []
+    last_matched: list[dict] = []
+    try:
+        for attempt in range(6):
+            matched = [
+                order for order in _list_open_orders(headers)
+                if str(order.get("symbol", "")).upper() == ticker.upper()
+            ]
+            if not matched:
+                return {"success": True, "cancelled": cancelled}
+            last_matched = matched
+            if mode == "algo" and any(
+                str(order.get("side", "")).lower() == "sell"
+                and (
+                    str(order.get("type", "")).lower() in {"stop", "stop_limit", "trailing_stop"}
+                    or str(order.get("order_class", "")).lower() in {"bracket", "oco"}
+                    or order.get("parent_order_id")
+                )
+                for order in matched
+            ):
+                return {
+                    "success": False,
+                    "error": (
+                        f"Cannot cancel {ticker} broker protective orders for a software exit: "
+                        f"{[(order.get('id'), order.get('status')) for order in matched]}"
+                    ),
+                    "cancelled": cancelled,
+                }
+            # Alpaca may hold a routed order in pending_cancel until its
+            # venue acknowledges it. More DELETEs cannot complete that state.
+            to_cancel = [
+                order for order in matched
+                if str(order.get("status", "")).lower() != "pending_cancel"
+            ]
+            if to_cancel:
+                latest_cancelled, latest_errors = _cancel_orders(headers, to_cancel)
+                cancelled.extend(latest_cancelled)
+                errors.extend(latest_errors)
+            if attempt < 5:
+                time.sleep(0.5)
+        return {
+            "success": False,
+            "error": (
+                f"Open {ticker} orders remained after cancellation: "
+                f"{[(order.get('id'), order.get('status')) for order in last_matched]}; "
+                f"cancel errors: {errors}"
+            ),
+            "cancelled": cancelled,
+        }
+    except (requests.RequestException, ValueError) as exc:
+        return {"success": False, "error": str(exc), "cancelled": cancelled}
 
 
 def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily_loss_limit=0.03, max_trade_pct=0.15):
@@ -380,6 +937,10 @@ def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily
         return False, f"Sell quantity {qty} exceeds the {current_shares:g} shares currently held in {ticker}"
     if action == "cover" and current_shares >= 0:
         return False, f"No short position in {ticker} to cover"
+    if action == "cover" and qty > abs(current_shares):
+        return False, f"Cover quantity {qty} exceeds the {abs(current_shares):g} short shares in {ticker}"
+    if action == "short":
+        return False, "New short entries are disabled"
 
     daily_pnl_pct = 0.0  # circuit breaker is now handled by V2 risk manager
     if action in ("buy", "short") and daily_pnl_pct <= -daily_loss_limit:
@@ -410,6 +971,11 @@ def main():
         help="Market-sell all open positions (end-of-day flatten). Ignores --file.",
     )
     parser.add_argument(
+        "--flatten-if-due",
+        action="store_true",
+        help="Day guard: flatten at the broker-calendar deadline, otherwise no-op.",
+    )
+    parser.add_argument(
         "--mode",
         choices=["swing", "day", "algo"],
         default=None,
@@ -419,6 +985,15 @@ def main():
 
     # Resolve mode: CLI flag > env var > default
     mode = args.mode or os.environ.get("TRADING_MODE", "swing")
+    if args.flatten_if_due and mode != "day":
+        parser.error("--flatten-if-due requires --mode day")
+    if args.flatten and args.flatten_if_due:
+        parser.error("Choose --flatten or --flatten-if-due")
+    with account_execution_lock(mode):
+        return _run_main(args, mode)
+
+
+def _run_main(args: argparse.Namespace, mode: str) -> int:
     mode_config = get_mode_config(mode)
     mode_risk = mode_config["risk"]
 
@@ -429,24 +1004,43 @@ def main():
     acct = get_account_for_mode(mode)
     log.info(f"Trading mode: {mode.upper()} — {mode_config['label']} (account: {acct.name})")
 
-    # Algo is an explicitly dedicated route. Verify its configured Alpaca
-    # account identity before any order, including account-wide flattening.
-    algo_account = None
-    if mode == "algo":
-        algo_account = get_account()
-        expected_id = str(acct.account_id or "").strip()
-        returned_ids = {
-            str(algo_account.get("id", "")).strip(),
-            str(algo_account.get("account_number", "")).strip(),
-        }
-        if not expected_id or expected_id == "unknown" or expected_id not in returned_ids:
-            raise RuntimeError("Configured Algo account identifier does not match the Alpaca account response")
+    # Confirm the credentials resolve to the configured, active paper account
+    # before any live order. Keep the broker payload for the risk snapshot.
+    broker_account = None
+    if not args.dry_run:
+        if mode == "algo":
+            _verify_algo_execution_lease()
+        _, broker_account = verify_account_for_mode(mode)
+
+    if args.flatten_if_due:
+        try:
+            schedule = get_day_schedule(
+                flatten_by=mode_risk.get("flatten_by", "15:45"),
+                flatten_lead_minutes=mode_risk.get("flatten_lead_minutes", 15),
+                entry_cutoff_minutes=mode_risk.get("entry_cutoff_minutes", 15),
+            )
+            if schedule is not None and not schedule.flatten_due(datetime.now(MARKET_TZ)):
+                result = {
+                    "timestamp": datetime.now(MARKET_TZ).isoformat(),
+                    "trading_mode": mode,
+                    "status": "not_due",
+                    "flatten_at": schedule.flatten_at.isoformat(),
+                    "success": True,
+                }
+                print(json.dumps(result, indent=2))
+                return 0
+        except Exception as exc:
+            print(json.dumps({"trading_mode": mode, "status": "failed", "errors": [f"Day calendar unavailable: {exc}"]}, indent=2))
+            return 2
+        result = _flatten_all_unlocked(dry_run=args.dry_run, mode=mode)
+        print(json.dumps(result, indent=2))
+        return 0 if args.dry_run or result["success"] else 2
 
     # Handle flatten command separately (works in both modes)
     if args.flatten:
-        result = flatten_all(dry_run=args.dry_run, mode=mode)
+        result = _flatten_all_unlocked(dry_run=args.dry_run, mode=mode)
         print(json.dumps(result, indent=2))
-        return 0
+        return 0 if args.dry_run or result["success"] else 2
 
     # Read decisions
     if args.file:
@@ -459,9 +1053,13 @@ def main():
     if not trades:
         print(json.dumps({"status": "no_trades", "message": "No trades to execute"}))
         return 0
+    decision_id = decisions.get("decision_id") or decisions.get("timestamp") or hashlib.sha256(
+        json.dumps(decisions, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    decision_digest = hashlib.sha256(str(decision_id).encode("utf-8")).hexdigest()[:16]
 
     # Get current state
-    account = algo_account or get_account()
+    account = broker_account or get_account()
     positions = get_positions()
     portfolio_value = float(account.get("equity", 0))
     daily_pnl_pct = get_daily_pnl(account)
@@ -486,12 +1084,14 @@ def main():
             log.warning(f"Could not pre-fetch V2 portfolio state: {e}. Will validate per-trade.")
 
     results = []
-    executed = 0
+    submitted_count = 0
+    would_execute_count = 0
+    seen_client_order_ids: set[str] = set()
 
     # The risk manager counts and validates entries against staged portfolio
     # state. Do not truncate this list: exits later in the batch must still be
     # allowed after the day's entry quota is full.
-    for trade in trades:
+    for trade_index, trade in enumerate(trades):
         ticker = trade["ticker"]
         action = trade["action"].lower()
         qty = int(trade.get("qty", 0))
@@ -505,7 +1105,19 @@ def main():
         entry_price = trade.get("entry_price")
         strategy = trade.get("strategy", "unspecified")
         strategy_group = trade.get("strategy_group")
-        client_order_id = trade.get("client_order_id")
+        client_order_id = str(trade.get("client_order_id") or (
+            f"sw-{mode[:2]}-{datetime.now(MARKET_TZ).date():%Y%m%d}-{trade_index}-{decision_digest}"
+        ))[:48]
+
+        if client_order_id in seen_client_order_ids:
+            results.append({
+                "ticker": ticker, "action": action, "qty": qty,
+                "status": "blocked", "reason": "Duplicate client order ID in decision batch",
+                "rule": "duplicate_client_order_id", "strategy": strategy,
+                "client_order_id": client_order_id,
+            })
+            continue
+        seen_client_order_ids.add(client_order_id)
 
         if action == "hold" or qty <= 0:
             results.append({"ticker": ticker, "action": action, "status": "skipped", "reason": "Hold or zero qty"})
@@ -523,14 +1135,55 @@ def main():
         # ── V2 Risk Manager validation ───────────────────────────────────────
         if action in ("buy", "short") and RISK_MANAGER_AVAILABLE:
             pos = positions.get(ticker, {})
-            ref_price = entry_price or limit_price or float(pos.get("current_price", 0))
-            if ref_price <= 0:
+            try:
+                hinted_price = float(entry_price or 0)
+            except (TypeError, ValueError):
+                hinted_price = 0.0
+            if not math.isfinite(hinted_price) or hinted_price <= 0:
+                hinted_price = 0.0
+            try:
+                limit_reference = float(limit_price or 0)
+            except (TypeError, ValueError):
+                limit_reference = 0.0
+            if not math.isfinite(limit_reference) or limit_reference <= 0:
+                limit_reference = 0.0
+            has_buy_limit = order_type == "limit" or (
+                order_type == "bracket" and limit_price is not None
+            )
+            if not args.dry_run and action == "buy" and has_buy_limit:
+                # A buy limit caps the actual fill price. Use that ceiling
+                # even when the signal supplies a much lower stale mark.
+                if limit_reference <= 0:
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "blocked", "reason": "Live buy limit price is missing or invalid",
+                        "rule": "invalid_buy_limit", "strategy": strategy,
+                    })
+                    continue
+                ref_price = max(hinted_price, limit_reference)
+                entry_price = limit_reference
+            elif not args.dry_run and action == "buy":
                 try:
-                    ref_price = get_latest_price(ticker)
-                    entry_price = ref_price
+                    live_ask = get_latest_ask(ticker, mode=mode)
                 except Exception as exc:
-                    ref_price = 0
-                    log.warning("No reference price for %s; risk manager will reject entry: %s", ticker, exc)
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "blocked", "reason": f"Fresh broker ask unavailable: {exc}",
+                        "rule": "fresh_ask_unavailable", "strategy": strategy,
+                    })
+                    continue
+                ref_price = max(hinted_price, live_ask)
+                entry_price = ref_price
+            else:
+                ref_price = max(
+                    hinted_price, limit_reference, float(pos.get("current_price", 0) or 0),
+                )
+                if ref_price <= 0:
+                    try:
+                        ref_price = get_latest_price(ticker)
+                    except Exception as exc:
+                        ref_price = 0.0
+                        log.warning("No reference price for %s: %s", ticker, exc)
             rm_result = rm_validate_trade(
                 ticker=ticker,
                 action=action,
@@ -634,15 +1287,17 @@ def main():
             if trade.get("cancel_open_orders"):
                 dry_entry["cancel_open_orders"] = True
             results.append(dry_entry)
-            executed += 1
+            would_execute_count += 1
             if action == "buy" and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
                 rm_portfolio_state = rm_stage_approved_trade(
                     rm_portfolio_state, ticker, action, qty,
-                    float(entry_price or limit_price or positions.get(ticker, {}).get("current_price", 0)),
+                    float(ref_price),
                     mode=mode,
                 )
         else:
-            if action == "sell" and trade.get("cancel_open_orders"):
+            if action in {"sell", "cover"} and (
+                trade.get("cancel_open_orders") or order_type in {"market", "limit"}
+            ):
                 cancel_result = cancel_open_orders_for_symbol(ticker, mode=mode)
                 if not cancel_result.get("success"):
                     results.append({
@@ -652,7 +1307,30 @@ def main():
                     })
                     continue
                 if cancel_result.get("cancelled"):
-                    log.info("Cancelled %d protective order(s) for %s before strategy exit", len(cancel_result["cancelled"]), ticker)
+                    log.info("Cancelled %d open order(s) for %s before strategy exit", len(cancel_result["cancelled"]), ticker)
+                # An order may fill while being cancelled. Never use the
+                # earlier position quantity to submit a reducing order.
+                try:
+                    positions = get_positions()
+                except Exception as exc:
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "failed", "reason": f"Could not reconcile exit position: {exc}",
+                        "strategy": strategy, "client_order_id": client_order_id,
+                    })
+                    continue
+                valid, reason = validate_trade_legacy(
+                    ticker, action, qty, positions, portfolio_value,
+                    daily_loss_limit=daily_loss_limit,
+                    max_trade_pct=max_trade_pct,
+                )
+                if not valid:
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "blocked", "reason": reason,
+                        "strategy": strategy, "client_order_id": client_order_id,
+                    })
+                    continue
             # Pass stop_pct only in swing mode so place_order() can auto-calc if needed
             result = place_order(
                 ticker, action, qty,
@@ -664,31 +1342,45 @@ def main():
                 client_order_id=client_order_id,
                 extended_hours=extended_hours,
             )
-            status = "executed" if result["success"] else "failed"
+            status = "submitted" if result["success"] else "failed"
             results.append({
                 "ticker": ticker, "action": action, "qty": qty,
-                "status": status, "reasoning": reasoning, "strategy": strategy,
+                "status": status, "submission_status": status,
+                "reasoning": reasoning, "strategy": strategy,
                 "strategy_group": strategy_group,
                 "client_order_id": client_order_id,
                 **result,
             })
             if result["success"]:
-                executed += 1
-                if action == "buy" and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
+                if not result.get("idempotent_replay"):
+                    submitted_count += 1
+                if action == "buy" and not result.get("idempotent_replay") and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
                     rm_portfolio_state = rm_stage_approved_trade(
                         rm_portfolio_state, ticker, action, qty,
-                        float(entry_price or limit_price or positions.get(ticker, {}).get("current_price", 0)),
+                        float(ref_price),
                         mode=mode,
                     )
+
+    for row in results:
+        row.setdefault("submission_status", row.get("status"))
+        row.setdefault("broker_status", None)
 
     output = {
         "timestamp": datetime.now().isoformat(),
         "trading_mode": mode,
+        "account_id": (
+            str(broker_account.get("id") or broker_account.get("account_number") or "")
+            if broker_account else None
+        ),
         "mode": "dry_run" if args.dry_run else "live",
         "daily_pnl_pct": round(daily_pnl_pct * 100, 2),
         "circuit_breaker_active": daily_pnl_pct <= -daily_loss_limit,
         "total_trades": len(trades),
-        "executed": executed,
+        "submitted": submitted_count,
+        "filled_at_submission": sum(
+            r.get("broker_status") == "filled" for r in results
+        ),
+        "would_execute": would_execute_count,
         "blocked": len([r for r in results if r.get("status") == "blocked"]),
         "results": results,
     }
@@ -703,13 +1395,6 @@ def main():
             print(f"📓 Logged {logged} trades to journal", file=sys.stderr)
         except Exception as e:
             print(f"⚠️ Journal logging failed: {e}", file=sys.stderr)
-
-    # Auto-snapshot performance
-    try:
-        from performance_tracker_v2 import take_snapshot
-        take_snapshot(mode=mode)
-    except Exception as e:
-        print(f"⚠️ Performance snapshot failed: {e}", file=sys.stderr)
 
     return 0
 

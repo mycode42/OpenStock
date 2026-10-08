@@ -1,16 +1,24 @@
-[tool.poetry]
+[project]
 name = "swarm-trader"
-version = "1.0.0"
-description = "An AI-powered hedge fund that uses multiple agents to make trading decisions"
-authors = ["Your Name <your.email@example.com>"]
+version = "1.5.0"
+description = "Paper-trading strategy portfolios and research tools"
+authors = [{ name = "Swarm Trader maintainers" }]
 readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11,<4.0"
+dynamic = ["dependencies"]
+
+[tool.poetry]
 packages = [
     { include = "src", from = "." },
     { include = "app", from = "." }
 ]
+include = [
+    { path = "risk_manager.py", format = ["sdist", "wheel"] },
+    { path = "scan_market.py", format = ["sdist", "wheel"] }
+]
 
 [tool.poetry.dependencies]
-python = "^3.11"
 langchain = "^0.3.7"
 langchain-anthropic = "0.3.5"
 langchain-groq = "0.2.3"
@@ -57,5 +65,5 @@ include = '\.pyi?$'
 profile = "black"
 force_alphabetical_sort_within_sections = true
 
-[tool.poetry.scripts]
+[project.scripts]
 backtester = "src.backtesting.cli:main"

@@ -94,6 +94,8 @@ MODES = {
             "max_tactical_pct": 1.0,        # no tactical cap (all positions are tactical)
             "flatten_eod": True,            # MUST flatten by 3:45 PM ET
             "flatten_by": "15:45",
+            "flatten_lead_minutes": 15,    # move earlier on early-close sessions
+            "entry_cutoff_minutes": 15,    # leave time to cancel and verify exits
             "allow_leveraged_etfs": True,   # OK intraday only
         },
     },
@@ -124,17 +126,16 @@ STRATEGY_CONFIG = {
     "universe_min_clean_daily_bars": 60,
     "universe_history_days": 180,
     "universe_active_candidate_count": 100,
-    "universe_data_feed": "sip",
-    "universe_data_feed_fallback": "iex",
     "universe_moderate_volatility_target_annualized": 0.35,
     "universe_volatility_penalty": 2.5,
     "portfolio_scan_seconds": 60,
     "universe_retry_seconds": 300,
     "quote_stale_seconds": 90,
     "extended_hours_max_spread_pct": 0.02,
-    "regime_llm_advisor_enabled": False,
+    "overnight_entries_enabled": True,
+    "regime_llm_advisor_enabled": True,
     "regime_llm_default_model": "phi3:mini",
-    "regime_llm_timeout_seconds": 4,
+    "regime_llm_timeout_seconds": 10,
     "risk_per_trade_pct": 0.005,
     "max_strategy_position_pct": 0.05,
     "take_profit_r_multiple": 2.0,

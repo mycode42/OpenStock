@@ -26,6 +26,7 @@ ENV/
 
 # Environment Variables
 .env
+/MEMORY.md
 
 # IDE
 .idea/
@@ -46,6 +47,7 @@ Thumbs.db
 
 # Txt files
 *.txt
+!ops/openclaw_prompts/*.txt
 
 # PDF files
 *.pdf

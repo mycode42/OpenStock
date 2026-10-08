@@ -15,23 +15,25 @@ def calendar(*days):
 
 
 @pytest.mark.parametrize(
-    ("at", "expected", "trade_date", "feed"),
+    ("at", "expected", "trade_date", "bar_feed", "quote_feed"),
     [
-        ("2026-10-07T03:00:00", "overnight", "2026-10-07", "overnight"),
-        ("2026-10-07T05:00:00", "premarket", "2026-10-07", "iex"),
-        ("2026-10-07T12:00:00", "regular", "2026-10-07", "iex"),
-        ("2026-10-07T17:00:00", "after_hours", "2026-10-07", "iex"),
-        ("2026-10-06T21:00:00", "overnight", "2026-10-07", "overnight"),
+        ("2026-10-07T03:00:00", "overnight", "2026-10-07", "boats", "overnight"),
+        ("2026-10-07T05:00:00", "premarket", "2026-10-07", "iex", "iex"),
+        ("2026-10-07T12:00:00", "regular", "2026-10-07", "iex", "iex"),
+        ("2026-10-07T17:00:00", "after_hours", "2026-10-07", "iex", "iex"),
+        ("2026-10-06T21:00:00", "overnight", "2026-10-07", "boats", "overnight"),
     ],
 )
-def test_session_windows_cover_the_alpaca_weekday_sessions(at, expected, trade_date, feed):
+def test_session_windows_cover_the_alpaca_weekday_sessions(at, expected, trade_date, bar_feed, quote_feed):
     now = datetime.fromisoformat(at).replace(tzinfo=ET)
     rows = calendar("2026-10-07", "2026-10-08")
 
     result = get_trading_window(now, rows)
 
     assert result is not None
-    assert (result.name, result.trade_date, result.feed) == (expected, trade_date, feed)
+    assert (result.name, result.trade_date, result.bar_feed, result.quote_feed) == (
+        expected, trade_date, bar_feed, quote_feed,
+    )
     assert result.extended_hours is (expected != "regular")
 
 
@@ -73,13 +75,18 @@ def test_extended_hours_executor_sends_plain_limit_day_order(monkeypatch):
 
         @staticmethod
         def json():
-            return {"id": "order-1", "status": "accepted"}
+            return {
+                "id": "order-1", "status": "accepted", "symbol": "AAPL",
+                "side": "buy", "qty": "3", "type": "limit",
+                "order_class": "simple", "limit_price": "225.1",
+            }
 
     def fake_post(url, *, headers, json, timeout):
         submitted.update(json)
         return Response()
 
     monkeypatch.setattr(execute_trades, "_active_mode", "algo")
+    monkeypatch.setattr(execute_trades, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execute_trades, "_headers", lambda *_: {})
     monkeypatch.setattr(execute_trades.requests, "post", fake_post)
 

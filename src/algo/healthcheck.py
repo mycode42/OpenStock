@@ -1,0 +1,503 @@
+"""Read-only, deterministic health check for the continuous Algo service.
+
+The check uses the SQLite coordinator as its state source and verifies current
+exposure against the dedicated Algo paper account. It never submits orders or
+modifies coordinator state. OpenClaw can alert on its nonzero exit status.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import subprocess
+from datetime import datetime, time, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from src.algo.alpaca import AlgoAlpaca
+from src.algo.protection import verified_recovery_oco
+from src.algo.reconciliation import OPEN_ORDER_STATUSES
+from src.algo.sessions import ET, TradingWindow, get_trading_window
+from src.algo.state_store import AlgoStateStore, StateStoreError
+from src.config import ALGO_SERVICE_CONFIG, STRATEGY_CONFIG
+
+
+ROOT = Path(__file__).resolve().parents[2]
+STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
+SERVICE = "swarm-trader-algo.service"
+WARMUP_GRACE_SECONDS = {"premarket": 10 * 60, "regular": 10 * 60, "overnight": 25 * 60}
+WARMUP_PAUSE_REASONS = frozenset({
+    "waiting for completed intraday historical bars",
+    "no completed intraday historical bars are available yet",
+    "the Algo universe has no recent completed signal bars",
+    "historical bar scan is warming_up",
+})
+EMPTY_EXTENDED_DATA_REASONS = WARMUP_PAUSE_REASONS | {
+    "the Algo universe has no fresh quotes",
+}
+
+
+def _problem(code: str, detail: str) -> dict[str, str]:
+    return {"code": code, "detail": detail[:240]}
+
+
+def _systemd_active() -> bool | None:
+    try:
+        return subprocess.run(
+            ["systemctl", "is-active", "--quiet", SERVICE],
+            check=False,
+            timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # Existing JSON snapshots may have an ET timestamp without an offset.
+    return parsed.replace(tzinfo=ET) if parsed.tzinfo is None else parsed
+
+
+def _session_start(window: TradingWindow) -> datetime:
+    trade_day = window.regular_open.date()
+    if window.name == "overnight":
+        return datetime.combine(trade_day - timedelta(days=1), time(20), tzinfo=ET)
+    if window.name == "premarket":
+        return datetime.combine(trade_day, time(4), tzinfo=ET)
+    if window.name == "after_hours":
+        return window.regular_close
+    return window.regular_open
+
+
+def _positive(value: object) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0
+
+
+def _quantity(value: object) -> Decimal | None:
+    try:
+        number = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def _exact_nested_orders(
+    broker: AlgoAlpaca, nested_orders: list[dict], positions: dict[str, dict], portfolio: dict,
+) -> tuple[list[dict], list[str]]:
+    """Replace capped history rows with exact nested reads for live holdings."""
+    owners = portfolio.get("position_owners") or {}
+    states = portfolio.get("strategy_states") or {}
+    symbols_by_id: dict[str, set[str]] = {}
+    for symbol in sorted(positions):
+        owner = owners.get(symbol)
+        if not owner:
+            continue
+        state = (states.get(owner) or {}).get(symbol) or {}
+        recovery = state.get("protection_recovery") or {}
+        order_ids = [state.get("entry_order_id")]
+        if isinstance(recovery, dict):
+            order_ids.append(recovery.get("order_id"))
+        for raw_id in order_ids:
+            if raw_id:
+                symbols_by_id.setdefault(str(raw_id), set()).add(symbol)
+
+    # A failed exact read must never fall back to a stale or incomplete row
+    # from the broker's capped history page.
+    exact_ids = set(symbols_by_id)
+    verified = [
+        order for order in nested_orders
+        if not isinstance(order, dict) or str(order.get("id") or "") not in exact_ids
+    ]
+    errors: list[str] = []
+    for order_id, symbols in sorted(symbols_by_id.items()):
+        if len(symbols) != 1:
+            errors.append(f"Persisted broker order {order_id} belongs to multiple live symbols")
+            continue
+        symbol = next(iter(symbols))
+        try:
+            order = broker.order(order_id, nested=True)
+            if not isinstance(order, dict) or str(order.get("id") or "") != order_id:
+                raise ValueError("exact lookup returned an incorrect order ID")
+            if str(order.get("symbol") or "").upper() != symbol:
+                raise ValueError("exact lookup returned an incorrect symbol")
+        except Exception as exc:
+            errors.append(f"{symbol} order {order_id}: {type(exc).__name__}: {exc}")
+            continue
+        verified.append(order)
+    return verified, errors
+
+
+def _expected_data_warmup(
+    window: TradingWindow, session_age: int | None, portfolio: dict, pause_reasons: list[str],
+) -> bool:
+    """Suppress only the normal first incomplete 5-minute bar interval."""
+    grace = WARMUP_GRACE_SECONDS.get(window.name)
+    data_status = portfolio.get("data_status") or {}
+    return bool(
+        grace is not None
+        and session_age is not None
+        and 0 <= session_age <= grace
+        and isinstance(data_status, dict)
+        and data_status.get("historical_bars") == "warming_up"
+        and not portfolio.get("scan_errors")
+        and pause_reasons
+        and all(reason in WARMUP_PAUSE_REASONS for reason in pause_reasons)
+    )
+
+
+def _expected_empty_extended_data(
+    window: TradingWindow, portfolio: dict, positions: dict[str, dict] | None,
+    open_orders: list[dict] | None, pause_reasons: list[str],
+) -> bool:
+    """No exposure and no free-feed quotes is a paused session, not a fault."""
+    data_status = portfolio.get("data_status") or {}
+    active_states = any(
+        state.get("phase") in {"entry_pending", "open", "exit_pending"}
+        for by_symbol in (portfolio.get("strategy_states") or {}).values()
+        for state in by_symbol.values()
+    )
+    return bool(
+        window.name in {"premarket", "after_hours"}
+        and positions == {}
+        and open_orders == []
+        and not portfolio.get("position_owners")
+        and not active_states
+        and (portfolio.get("startup_reconciliation") or {}).get("status") == "verified"
+        and portfolio.get("last_scan_status") == "degraded"
+        and isinstance(data_status, dict)
+        and data_status.get("historical_bars") == "warming_up"
+        and data_status.get("quotes") == "unavailable"
+        and not portfolio.get("scan_errors")
+        and pause_reasons
+        and all(reason in EMPTY_EXTENDED_DATA_REASONS for reason in pause_reasons)
+    )
+
+
+def _bracket_stop_gaps(
+    positions: dict[str, dict], owners: dict[str, str], states: dict,
+    nested_orders: list[dict], *, regular_session: bool,
+) -> tuple[list[str], list[str], list[str], int]:
+    """Check bracket stops and regular-session simple-entry OCO protection."""
+    by_id = {
+        str(order["id"]): order for order in nested_orders
+        if isinstance(order, dict) and order.get("id")
+    }
+    gaps: list[str] = []
+    unknown: list[str] = []
+    pending_cancel: set[str] = set()
+    checked = 0
+    for symbol, position in positions.items():
+        owner = owners.get(symbol)
+        if not owner:
+            continue
+        state = (states.get(owner) or {}).get(symbol) or {}
+        entry_id = state.get("entry_order_id")
+        parent = by_id.get(str(entry_id)) if entry_id else None
+        if parent is None:
+            unknown.append(symbol)
+            continue
+        order_class = str(parent.get("order_class") or "simple").lower()
+        position_qty = _quantity(position.get("qty"))
+        if order_class == "simple":
+            if regular_session and (
+                position_qty is None
+                or not verified_recovery_oco(nested_orders, state, position_qty)
+            ):
+                gaps.append(symbol)
+            continue
+        if order_class != "bracket":
+            gaps.append(symbol)
+            continue
+        checked += 1
+        active_stops = []
+        for leg in parent.get("legs") or []:
+            if not isinstance(leg, dict):
+                continue
+            if (
+                str(leg.get("side", "")).lower() == "sell"
+                and str(leg.get("status", "")).lower() == "pending_cancel"
+            ):
+                pending_cancel.add(f"{symbol}:{str(leg.get('type') or 'unknown').lower()}")
+            if (
+                str(leg.get("side", "")).lower() != "sell"
+                or str(leg.get("type", "")).lower() not in {"stop", "stop_limit", "trailing_stop"}
+                or str(leg.get("status", "")).lower() not in OPEN_ORDER_STATUSES
+            ):
+                continue
+            qty = _quantity(leg.get("qty"))
+            filled = _quantity(leg.get("filled_qty") or 0)
+            if qty is not None and filled is not None and qty >= filled:
+                active_stops.append(qty - filled)
+        bracket_stop_covers_position = (
+            position_qty is not None
+            and len(active_stops) == 1
+            and active_stops[0] == position_qty
+        )
+        replacement_oco_covers_position = (
+            not bracket_stop_covers_position
+            and position_qty is not None
+            and verified_recovery_oco(nested_orders, state, position_qty)
+        )
+        if not bracket_stop_covers_position and not replacement_oco_covers_position:
+            gaps.append(symbol)
+    return sorted(gaps), sorted(unknown), sorted(pending_cancel), checked
+
+
+def build_report(
+    *,
+    now: datetime | None = None,
+    store: AlgoStateStore | None = None,
+    broker: AlgoAlpaca | None = None,
+    service_active: bool | None = None,
+) -> dict:
+    """Return a compact report without changing broker or local state."""
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("Health check requires a timezone-aware clock")
+    now_et = now.astimezone(ET)
+    problems: list[dict[str, str]] = []
+    service_active = _systemd_active() if service_active is None else service_active
+    if service_active is None:
+        problems.append(_problem("service_status_unavailable", "Cannot determine Algo systemd service status"))
+    elif not service_active:
+        problems.append(_problem("service_inactive", "Algo systemd service is inactive"))
+
+    market_state = "UNKNOWN"
+    portfolio: dict = {}
+    state_available = False
+    try:
+        market_state, portfolio = (store or AlgoStateStore(STATE_PATH)).read()
+        state_available = True
+    except (StateStoreError, OSError, ValueError) as exc:
+        problems.append(_problem("sqlite_state_unavailable", f"Cannot read authoritative Algo SQLite state: {exc}"))
+    if market_state in {"CONFIG_ERROR", "DEGRADED", "STATE_ERROR"}:
+        problems.append(_problem("coordinator_degraded", f"Persisted Algo coordinator state is {market_state}"))
+    incident = portfolio.get("execution_incident") or {}
+    incident_status = incident.get("status") if isinstance(incident, dict) else None
+    if state_available and incident_status == "open":
+        detail = incident.get("reason") or incident.get("detail") or incident.get("error") or "broker reconciliation has not cleared it"
+        problems.append(_problem("execution_incident_open", f"Algo execution incident remains open: {detail}"))
+    recovery = portfolio.get("protection_recovery_status") or {}
+    recovery_status = recovery.get("status") if isinstance(recovery, dict) else None
+    recovery_errors = recovery.get("errors") if isinstance(recovery, dict) else None
+    if state_available and recovery_status in {"error", "degraded"} and recovery_errors:
+        if isinstance(recovery_errors, list):
+            detail = "; ".join(str(item) for item in recovery_errors[:2])
+        else:
+            detail = str(recovery_errors)
+        problems.append(_problem("protection_recovery_degraded", f"Algo broker protection repair is {recovery_status}: {detail}"))
+
+    account_available = False
+    window: TradingWindow | None = None
+    calendar_available = False
+    positions: dict[str, dict] | None = None
+    open_orders: list[dict] | None = None
+    nested_orders: list[dict] | None = None
+    try:
+        broker = broker or AlgoAlpaca()
+        broker_account = broker.account()  # Binds these credentials to the configured Algo account.
+        account_available = True
+        persisted_account_id = portfolio.get("account_id") if state_available else None
+        broker_account_id = str(broker_account.get("id") or broker_account.get("account_number") or "")
+        if persisted_account_id and persisted_account_id != broker_account_id:
+            problems.append(_problem(
+                "account_state_mismatch",
+                "Persisted Algo strategy state belongs to a different paper account",
+            ))
+    except Exception as exc:
+        problems.append(_problem("broker_account_unavailable", f"Algo paper account verification failed: {type(exc).__name__}: {exc}"))
+
+    if account_available:
+        try:
+            calendar = broker.calendar(
+                (now_et.date() - timedelta(days=2)).isoformat(),
+                (now_et.date() + timedelta(days=2)).isoformat(),
+            )
+            if not isinstance(calendar, list):
+                raise ValueError("Broker calendar is not a list")
+            window = get_trading_window(now_et, calendar)
+            calendar_available = True
+        except Exception as exc:
+            problems.append(_problem("calendar_unavailable", f"Cannot determine current Algo market session: {type(exc).__name__}: {exc}"))
+
+        try:
+            raw_positions = broker.positions()
+            if not isinstance(raw_positions, list):
+                raise ValueError("Broker positions are not a list")
+            positions = {}
+            for item in raw_positions:
+                if not isinstance(item, dict):
+                    raise ValueError("Broker positions include a malformed row")
+                symbol = str(item.get("symbol") or "").upper()
+                if not symbol or symbol in positions:
+                    raise ValueError("Broker positions include a duplicate or unnamed symbol")
+                positions[symbol] = item
+        except Exception as exc:
+            problems.append(_problem("positions_unavailable", f"Cannot verify Algo broker positions: {type(exc).__name__}: {exc}"))
+
+        if positions == {}:
+            try:
+                open_orders = broker.orders("open")
+                if not isinstance(open_orders, list):
+                    raise ValueError("Broker open order list is malformed")
+                if open_orders:
+                    problems.append(_problem(
+                        "open_orders_without_positions",
+                        "Algo account has open broker orders but no positions",
+                    ))
+            except Exception as exc:
+                problems.append(_problem("orders_unavailable", f"Cannot verify Algo open orders: {type(exc).__name__}: {exc}"))
+
+        if positions:
+            try:
+                nested_orders = broker.orders("all", nested=True)
+                if not isinstance(nested_orders, list):
+                    raise ValueError("Broker order history is not a list")
+            except Exception as exc:
+                problems.append(_problem("orders_unavailable", f"Cannot verify Algo broker stop orders: {type(exc).__name__}: {exc}"))
+            else:
+                if state_available:
+                    try:
+                        nested_orders, lookup_errors = _exact_nested_orders(
+                            broker, nested_orders, positions, portfolio,
+                        )
+                    except Exception as exc:
+                        nested_orders = None
+                        problems.append(_problem("orders_unavailable", f"Cannot verify exact nested Algo orders: {type(exc).__name__}: {exc}"))
+                    else:
+                        for detail in lookup_errors:
+                            problems.append(_problem("orders_unavailable", f"Cannot verify exact nested Algo order: {detail}"))
+
+    scan_at = _timestamp(portfolio.get("last_scan_at")) if state_available else None
+    raw_scan_age = int((now - scan_at).total_seconds()) if scan_at else None
+    scan_age = max(0, raw_scan_age) if raw_scan_age is not None else None
+    scan_limit = max(180, 3 * int(STRATEGY_CONFIG["portfolio_scan_seconds"]))
+    active_window = calendar_available and window is not None
+    session_age = int((now_et - _session_start(window)).total_seconds()) if active_window else None
+    scan_status = portfolio.get("last_scan_status") if state_available else None
+    pause_reasons = [str(reason) for reason in portfolio.get("entry_pause_reasons") or []]
+    expected_idle_data = False
+    if state_available and portfolio.get("last_scan_at") and scan_at is None:
+        problems.append(_problem("scan_timestamp_invalid", "Persisted Algo scan timestamp is invalid"))
+    if raw_scan_age is not None and raw_scan_age < -scan_limit:
+        problems.append(_problem("scan_timestamp_future", "Persisted Algo scan timestamp is in the future"))
+    if active_window and state_available:
+        # Let a new session begin before treating the previous session's scan
+        # and pause reason as a current fault.
+        startup_grace_passed = session_age is not None and session_age > scan_limit
+        scanned_this_window = scan_at is not None and scan_at.astimezone(ET) >= _session_start(window)
+        expected_warmup = bool(
+            scanned_this_window and scan_status == "degraded"
+            and _expected_data_warmup(window, session_age, portfolio, pause_reasons)
+        )
+        expected_idle_data = bool(
+            scanned_this_window
+            and _expected_empty_extended_data(window, portfolio, positions, open_orders, pause_reasons)
+        )
+        if (scan_age is None or scan_age > scan_limit) and startup_grace_passed:
+            problems.append(_problem("scan_stale", f"Algo scan age exceeds {scan_limit}s in the {window.name} session"))
+        if (startup_grace_passed or scanned_this_window) and scan_status in {"degraded", "error"} and not (expected_warmup or expected_idle_data):
+            problems.append(_problem("scan_degraded", f"Last Algo scan status is {scan_status}"))
+        if (startup_grace_passed or scanned_this_window) and portfolio.get("entries_paused") and not (expected_warmup or expected_idle_data):
+            detail = "; ".join(pause_reasons) or "entry pause has no recorded reason"
+            problems.append(_problem("entries_paused", f"Algo entries are paused: {detail}"))
+
+    unowned: list[str] = []
+    unsupported_positions: list[str] = []
+    unproven_positions: list[str] = []
+    software_stop_gaps: list[str] = []
+    broker_stop_gaps: list[str] = []
+    broker_stop_unknown: list[str] = []
+    pending_cancel_exits: list[str] = []
+    brackets_checked = 0
+    if positions is not None:
+        unsupported_positions = sorted(
+            symbol for symbol, position in positions.items()
+            if (quantity := _quantity(position.get("qty"))) is None or quantity <= 0
+        )
+        if unsupported_positions:
+            problems.append(_problem("unsupported_positions", "Algo account has non-long or invalid broker positions: " + ", ".join(unsupported_positions)))
+    if positions is not None and state_available:
+        owners = portfolio.get("position_owners") or {}
+        states = portfolio.get("strategy_states") or {}
+        unowned = sorted(set(positions) - set(owners))
+        if unowned:
+            problems.append(_problem("unowned_positions", "Broker positions have no persisted Algo owner: " + ", ".join(unowned)))
+        unproven_positions = sorted(
+            symbol for symbol in positions
+            if symbol in owners
+            and not (states.get(owners[symbol]) or {}).get(symbol, {}).get("entry_order_id")
+        )
+        if unproven_positions:
+            problems.append(_problem("entry_provenance_missing", "Owned broker positions lack an exact persisted entry order ID: " + ", ".join(unproven_positions)))
+        software_stop_gaps = sorted(
+            symbol for symbol in positions
+            if symbol in owners and not _positive((states.get(owners[symbol]) or {}).get(symbol, {}).get("stop_price"))
+        )
+        if software_stop_gaps:
+            problems.append(_problem("software_stops_missing", "Owned positions have no valid software stop: " + ", ".join(software_stop_gaps)))
+        if nested_orders is not None:
+            broker_stop_gaps, broker_stop_unknown, pending_cancel_exits, brackets_checked = _bracket_stop_gaps(
+                positions, owners, states, nested_orders,
+                regular_session=window is not None and window.name == "regular",
+            )
+            if broker_stop_gaps:
+                problems.append(_problem("broker_bracket_stops_missing", "Known entries lack an active full-size broker stop: " + ", ".join(broker_stop_gaps)))
+            if pending_cancel_exits:
+                problems.append(_problem("broker_exit_pending_cancel", "Bracket exit legs remain pending cancellation: " + ", ".join(pending_cancel_exits)))
+        startup = portfolio.get("startup_reconciliation") or {}
+        if positions and startup.get("status") in {"degraded", "error"}:
+            problems.append(_problem("startup_reconciliation_degraded", "Broker attribution or protection did not verify at coordinator startup"))
+
+    return {
+        "checked_at": now.isoformat(),
+        "ok": not problems,
+        "service_active": service_active,
+        "market_session": window.name if window else "closed" if calendar_available else "unknown",
+        "market_state": market_state,
+        "sqlite_state_available": state_available,
+        "last_scan_at": portfolio.get("last_scan_at") if state_available else None,
+        "last_scan_age_seconds": scan_age,
+        "scan_freshness_limit_seconds": scan_limit,
+        "last_scan_status": scan_status,
+        "market_data_idle": expected_idle_data,
+        "entries_paused": portfolio.get("entries_paused") if state_available else None,
+        "entry_pause_reasons": pause_reasons,
+        "execution_incident_status": incident_status,
+        "protection_recovery_status": recovery_status,
+        "broker_position_count": len(positions) if positions is not None else None,
+        "unsupported_positions": unsupported_positions,
+        "unowned_positions": unowned,
+        "entry_provenance_missing": unproven_positions,
+        "software_stops_missing": software_stop_gaps,
+        "bracket_entries_checked": brackets_checked,
+        "broker_bracket_stops_missing": broker_stop_gaps,
+        "broker_pending_cancel_exits": pending_cancel_exits,
+        "broker_stop_coverage_unknown": broker_stop_unknown,
+        "problems": problems,
+    }
+
+
+def main() -> None:
+    load_dotenv(ROOT / ".env", override=True)
+    try:
+        report = build_report()
+    except Exception as exc:
+        report = {"ok": False, "problems": [_problem("healthcheck_failed", f"Health check failed: {type(exc).__name__}: {exc}")]}
+    print(json.dumps(report, separators=(",", ":"), sort_keys=True, default=str))
+    raise SystemExit(0 if report["ok"] else 1)
+
+
+if __name__ == "__main__":
+    main()

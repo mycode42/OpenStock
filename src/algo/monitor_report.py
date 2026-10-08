@@ -18,6 +18,7 @@ load_dotenv(ROOT / ".env", override=True)
 
 from risk_manager import get_portfolio_state  # noqa: E402
 from src.algo.alpaca import AlgoAlpaca  # noqa: E402
+from src.algo.state_store import AlgoStateStore, StateStoreError  # noqa: E402
 from src.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG  # noqa: E402
 
 
@@ -90,25 +91,34 @@ def _trade_updates(
     previous_statuses: dict,
     *,
     today: str,
+    account_id: str | None,
 ) -> tuple[list[dict], dict[str, str]]:
+    if not account_id:
+        return [], {}
     if cursor is None or cursor < 0 or cursor > line_count:
         new_rows = [
             row for row in rows
             if str(row.get("timestamp", ""))[:10] == today
             and row.get("trading_mode") in ALGO_JOURNAL_MODES
+            and row.get("account_id") == account_id
         ]
     else:
         # Journal rows are append-only. Row growth includes old modes, then we
         # filter by Algo's account route below.
         new_rows = []
         for row_index, row in enumerate(rows):
-            if row_index >= cursor and row.get("trading_mode") in ALGO_JOURNAL_MODES:
+            if (
+                row_index >= cursor
+                and row.get("trading_mode") in ALGO_JOURNAL_MODES
+                and row.get("account_id") == account_id
+            ):
                 new_rows.append(row)
 
     order_map = {str(order.get("id")): order for order in alpaca_orders if order.get("id")}
     journal_ids = {
         str(row.get("order_id")) for row in rows
-        if row.get("trading_mode") in ALGO_JOURNAL_MODES and row.get("order_id")
+        if row.get("trading_mode") in ALGO_JOURNAL_MODES
+        and row.get("account_id") == account_id and row.get("order_id")
     }
     current_statuses = {
         order_id: str(order.get("status", "unknown"))
@@ -142,7 +152,11 @@ def _trade_updates(
         if prior is None or prior == status or order_id in included_order_ids:
             continue
         order = order_map[order_id]
-        matching = next((row for row in rows if str(row.get("order_id") or "") == order_id), {})
+        matching = next((
+            row for row in rows
+            if row.get("account_id") == account_id
+            and str(row.get("order_id") or "") == order_id
+        ), {})
         updates.append({
             "timestamp": order.get("updated_at") or order.get("submitted_at"),
             "ticker": order.get("symbol") or matching.get("ticker"),
@@ -163,7 +177,12 @@ def _trade_updates(
 def build_report() -> dict:
     now = datetime.now(timezone.utc)
     today = now.astimezone(ET).date().isoformat()
-    persisted = _read_json(STATE_PATH)
+    data_errors = []
+    try:
+        persisted = AlgoStateStore(STATE_PATH).read_status()
+    except StateStoreError as exc:
+        persisted = {"market_state": "STATE_ERROR", "strategy_portfolio": {}}
+        data_errors.append(f"Algo coordinator state: {exc}")
     portfolio = persisted.get("strategy_portfolio") or {}
     previous = _read_json(SNAPSHOT_PATH)
     universe = portfolio.get("universe") or {}
@@ -172,19 +191,27 @@ def build_report() -> dict:
 
     account_state = {}
     broker = None
-    data_errors = []
+    broker_account_id: str | None = None
     alpaca_orders: list[dict] = []
     latest_prices = {}
     try:
         broker = AlgoAlpaca()
-        broker.account()  # validate that the Algo credentials still identify this account
+        verified_account = broker.account()  # validate that the Algo credentials still identify this account
+        broker_account_id = str(verified_account.get("id") or verified_account.get("account_number") or "")
+        if not broker_account_id:
+            raise ValueError("Alpaca account response omitted its ID")
         account_state = get_portfolio_state(mode="algo")
+        if account_state.get("account_id") != broker_account_id:
+            raise ValueError("Algo risk snapshot belongs to a different broker account")
         alpaca_orders = broker.orders("all")
         quote_symbols = sorted(set(symbols) | set(account_state.get("positions", {})))
         if quote_symbols:
             latest_prices = broker.latest_prices(quote_symbols, stale_after_seconds=72 * 60 * 60)
     except Exception as exc:
         data_errors.append(f"Algo account data: {type(exc).__name__}: {exc}")
+
+    if not broker_account_id or previous.get("account_id") != broker_account_id:
+        previous = {}
 
     lines, journal = _journal_rows(ROOT / "data" / "trade_journal.jsonl")
     old_statuses = previous.get("order_statuses") or {}
@@ -195,6 +222,7 @@ def build_report() -> dict:
         alpaca_orders,
         old_statuses,
         today=today,
+        account_id=broker_account_id,
     )
 
     previous_prices = previous.get("prices") or {}
@@ -238,7 +266,8 @@ def build_report() -> dict:
     risk = ALGO_MODE_CONFIG["risk"]
     if account_state:
         daily_pnl_pct = float(account_state.get("daily_pnl_pct", 0) or 0)
-        weekly_pnl_pct = float(account_state.get("weekly_pnl_pct", 0) or 0)
+        raw_weekly_pnl = account_state.get("weekly_pnl_pct")
+        weekly_pnl_pct = float(raw_weekly_pnl) if raw_weekly_pnl is not None else None
         risk_summary = {
             "entry_orders_today": account_state.get("entry_count_today"),
             "entry_order_cap": risk["max_trades_per_day"],
@@ -249,20 +278,25 @@ def build_report() -> dict:
             "max_open_positions": risk["max_open_positions"],
             "cash_pct": round(float(account_state.get("cash_pct", 0) or 0) * 100, 2),
             "daily_pnl_pct": round(daily_pnl_pct * 100, 2),
-            "weekly_pnl_pct": round(weekly_pnl_pct * 100, 2),
+            "weekly_pnl_pct": round(weekly_pnl_pct * 100, 2) if weekly_pnl_pct is not None else None,
+            "weekly_baseline_available": weekly_pnl_pct is not None,
             "daily_loss_breaker": daily_pnl_pct <= -float(risk["daily_loss_limit"]),
             "no_buy_breaker": daily_pnl_pct <= -float(risk["no_buy_if_down_pct"]),
-            "weekly_loss_breaker": weekly_pnl_pct <= -float(risk["weekly_loss_limit"]),
+            "weekly_loss_breaker": (
+                weekly_pnl_pct <= -float(risk["weekly_loss_limit"])
+                if weekly_pnl_pct is not None else None
+            ),
         }
     else:
         risk_summary = {"error": "unavailable"}
 
     active_units = ["swarm-trader-algo.service"] if _systemd_active("swarm-trader-algo.service") else []
     last_scan_at = portfolio.get("last_scan_at")
+    last_successful_scan_at = portfolio.get("last_successful_scan_at") or last_scan_at
     scan_age_seconds = None
-    if last_scan_at:
+    if last_successful_scan_at:
         try:
-            last_scan = datetime.fromisoformat(str(last_scan_at))
+            last_scan = datetime.fromisoformat(str(last_successful_scan_at))
             if last_scan.tzinfo is None:
                 last_scan = last_scan.replace(tzinfo=ET)
             scan_age_seconds = max(0, int((now - last_scan.astimezone(timezone.utc)).total_seconds()))
@@ -270,7 +304,7 @@ def build_report() -> dict:
             data_errors.append("Strategy scan timestamp is invalid")
     market_state = persisted.get("market_state")
     scan_is_stale = market_state in {"OVERNIGHT", "PREMARKET", "REGULAR", "AFTER_HOURS"} and (
-        scan_age_seconds is None or scan_age_seconds > 180
+        scan_age_seconds is None or scan_age_seconds > 180 or portfolio.get("last_scan_status") in {"degraded", "error"}
     )
     report = {
         "reported_at": now.isoformat(),
@@ -281,8 +315,13 @@ def build_report() -> dict:
             "persisted_mode": portfolio.get("runtime_mode", "unknown"),
             "market_state": market_state,
             "last_strategy_scan_at": last_scan_at,
+            "last_successful_scan_at": last_successful_scan_at,
+            "last_scan_status": portfolio.get("last_scan_status", "unknown"),
             "strategy_scan_age_seconds": scan_age_seconds,
             "strategy_scan_stale": scan_is_stale,
+            "entries_paused": portfolio.get("entries_paused", True),
+            "entry_pause_reasons": portfolio.get("entry_pause_reasons") or [],
+            "scan_errors": portfolio.get("scan_errors") or [],
         },
         "universe": {
             "selected": len(symbols),
@@ -297,6 +336,9 @@ def build_report() -> dict:
         "regime": portfolio.get("market_regime") or {"regime": "unknown", "active": []},
         "active_strategies": portfolio.get("active_strategies", []),
         "strategy_lifecycle": _strategy_summary(portfolio.get("strategy_states") or {}),
+        "startup_reconciliation": portfolio.get("startup_reconciliation") or {},
+        "unowned_positions": portfolio.get("unowned_positions") or [],
+        "data_status": portfolio.get("data_status") or {},
         "positions": positions,
         "risk": risk_summary,
         "orders_since_previous_report": trade_updates,
@@ -306,6 +348,7 @@ def build_report() -> dict:
 
     next_snapshot = {
         "reported_at": now.isoformat(),
+        "account_id": broker_account_id,
         "universe_tickers": symbols,
         "prices": prices,
         "position_prices": {

@@ -123,6 +123,28 @@ def test_algo_order_timestamps_use_new_york_session_date():
     )
 
 
+def test_algo_overnight_quota_keeps_sunday_and_monday_in_one_session():
+    trade_date = "2026-10-12"
+    assert risk_manager._is_in_algo_session("2026-10-12T00:30:00Z", trade_date)
+    assert risk_manager._is_in_algo_session("2026-10-12T04:30:00Z", trade_date)
+    assert not risk_manager._is_in_algo_session("2026-10-11T00:30:00Z", trade_date)
+    orders = [
+        _order("sunday-entry", "buy", "filled", 10, "2026-10-12T00:30:00Z", 10),
+        _order("monday-reentry", "buy", "filled", 5, "2026-10-12T04:30:00Z", 5),
+    ]
+    fills = [
+        {"id": "fill-1", "order_id": "sunday-entry", "symbol": "AAPL", "side": "buy",
+         "qty": "10", "transaction_time": "2026-10-12T00:31:00Z"},
+        {"id": "fill-2", "order_id": "sunday-exit", "symbol": "AAPL", "side": "sell",
+         "qty": "10", "transaction_time": "2026-10-12T02:00:00Z"},
+        {"id": "fill-3", "order_id": "monday-reentry", "symbol": "AAPL", "side": "buy",
+         "qty": "5", "transaction_time": "2026-10-12T04:31:00Z"},
+    ]
+    assert risk_manager._count_algo_new_entries_today(
+        orders, fills, {"AAPL": {"qty": 5}}, trade_date,
+    ) == 2
+
+
 def test_algo_order_history_uses_cursor_when_first_page_is_full(monkeypatch):
     first_page = [{"id": f"order-{index}"} for index in range(500)]
     calls = []

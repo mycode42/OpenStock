@@ -21,10 +21,10 @@ Alerts:
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,16 +32,11 @@ load_dotenv()
 import requests
 
 from src.config import get_mode_config, resolve_mode
+from src.accounts import verify_account_for_mode
+from performance_tracker_v2 import load_snapshots
 
 ALERTS_LOG = Path(__file__).parent / "data" / "alerts.jsonl"
-PERF_DATA = Path(__file__).parent / "data" / "performance.json"
 JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
-
-API_BASE = "https://paper-api.alpaca.markets/v2"
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
 
 # Drawdown alert threshold (not in mode config — applies to both modes)
 MAX_DRAWDOWN_PCT = 10.0
@@ -49,13 +44,15 @@ MAX_DRAWDOWN_PCT = 10.0
 MAX_TRADE_SIZE_PCT = 10.0
 
 
-def get_portfolio():
-    try:
-        account = requests.get(f"{API_BASE}/account", headers=HEADERS, timeout=10).json()
-        positions = requests.get(f"{API_BASE}/positions", headers=HEADERS, timeout=10).json()
-        return account, positions
-    except Exception:
-        return None, None
+def get_portfolio(mode: str = "swing"):
+    account_route, account = verify_account_for_mode(mode)
+    response = requests.get(
+        f"{account_route.base_url}/positions",
+        headers=account_route.headers,
+        timeout=10,
+    )
+    response.raise_for_status()
+    return account, response.json()
 
 
 def check_concentration(account, positions, mode: str = "swing"):
@@ -134,20 +131,21 @@ def check_cash(account, mode: str = "swing"):
     return []
 
 
-def check_drawdown():
-    """Check drawdown from peak equity."""
-    if not PERF_DATA.exists():
-        return []
-
-    with open(PERF_DATA) as f:
-        data = json.load(f)
-
-    snapshots = data.get("snapshots", [])
+def check_drawdown(mode: str = "swing", account_id: str | None = None):
+    """Check drawdown from the selected account's equity snapshots."""
+    if account_id is None:
+        _, broker = verify_account_for_mode(mode)
+        account_id = str(broker.get("id") or broker.get("account_number") or "")
+    if not account_id:
+        raise ValueError("Broker account ID is unavailable for drawdown check")
+    snapshots = load_snapshots(mode=mode, account_id=account_id)
     if len(snapshots) < 2:
         return []
 
-    peak = max(s["equity"] for s in snapshots)
-    current = snapshots[-1]["equity"]
+    peak = max(float(s["equity"]) for s in snapshots)
+    current = float(snapshots[-1]["equity"])
+    if peak <= 0:
+        return []
     drawdown = (peak - current) / peak * 100
 
     if drawdown > MAX_DRAWDOWN_PCT:
@@ -163,21 +161,31 @@ def check_drawdown():
     return []
 
 
-def check_trading_frequency(mode: str = "swing"):
+def check_trading_frequency(mode: str = "swing", account_id: str | None = None):
     """Check if too many trades in a single day against mode's max_trades_per_day."""
     if not JOURNAL_PATH.exists():
         return []
 
     risk = get_mode_config(mode)["risk"]
+    if account_id is None:
+        _, broker = verify_account_for_mode(mode)
+        account_id = str(broker.get("id") or broker.get("account_number") or "")
+    if not account_id:
+        raise ValueError("Broker account ID is unavailable for frequency check")
     max_daily_trades = risk["max_trades_per_day"]
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     count = 0
     with open(JOURNAL_PATH) as f:
         for line in f:
             try:
                 entry = json.loads(line.strip())
-                if entry.get("timestamp", "")[:10] == today and entry.get("status") == "executed":
+                if (
+                    entry.get("timestamp", "")[:10] == today
+                    and entry.get("trading_mode") == mode
+                    and entry.get("account_id") == account_id
+                    and entry.get("status") in ("submitted", "executed", "accepted", "new", "pending_new", "filled", "partially_filled")
+                ):
                     count += 1
             except json.JSONDecodeError:
                 continue
@@ -201,10 +209,7 @@ def audit_decisions(decisions_file, mode: str = "swing"):
         with open(decisions_file) as f:
             decisions = json.load(f)
 
-    account, positions = get_portfolio()
-    if not account:
-        print("⚠️ Could not fetch portfolio for audit")
-        return []
+    account, positions = get_portfolio(mode=mode)
 
     equity = float(account.get("equity", 0))
     alerts = []
@@ -235,12 +240,13 @@ def audit_decisions(decisions_file, mode: str = "swing"):
     return alerts
 
 
-def log_alerts(alerts):
+def log_alerts(alerts, mode: str = "swing"):
     """Append alerts to persistent log."""
     ALERTS_LOG.parent.mkdir(parents=True, exist_ok=True)
     with open(ALERTS_LOG, "a") as f:
         for alert in alerts:
             alert["timestamp"] = datetime.now().isoformat()
+            alert["trading_mode"] = mode
             f.write(json.dumps(alert) + "\n")
 
 
@@ -254,24 +260,29 @@ def main():
     args = parser.parse_args()
 
     mode = resolve_mode(cli_mode=args.mode)
-    risk = get_mode_config(mode)["risk"]
+    if mode == "auto":
+        mode = "swing"
     alerts = []
 
-    if args.audit:
-        alerts = audit_decisions(args.audit, mode=mode)
-    elif args.check:
-        account, positions = get_portfolio()
-        if account and positions:
+    try:
+        if args.audit:
+            alerts = audit_decisions(args.audit, mode=mode)
+        elif args.check:
+            account, positions = get_portfolio(mode=mode)
             alerts.extend(check_concentration(account, positions, mode=mode))
             alerts.extend(check_cash(account, mode=mode))
-        alerts.extend(check_drawdown())
-        alerts.extend(check_trading_frequency(mode=mode))
-    else:
-        parser.print_help()
-        return
+            account_id = str(account.get("id") or account.get("account_number") or "")
+            alerts.extend(check_drawdown(mode=mode, account_id=account_id))
+            alerts.extend(check_trading_frequency(mode=mode, account_id=account_id))
+        else:
+            parser.print_help()
+            return 0
+    except (requests.RequestException, ValueError, KeyError, OSError) as exc:
+        print(f"Could not complete {mode.upper()} alert check: {exc}", file=sys.stderr)
+        return 1
 
     if alerts:
-        log_alerts(alerts)
+        log_alerts(alerts, mode=mode)
 
         if args.telegram:
             critical = [a for a in alerts if a.get("level") == "critical"]
@@ -294,7 +305,8 @@ def main():
             print(f"✅ No alerts — all within {mode.upper()} mode thresholds")
         else:
             print(f"✅ All clear — no alerts triggered ({mode.upper()} mode)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

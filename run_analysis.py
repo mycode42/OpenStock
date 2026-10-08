@@ -13,8 +13,11 @@ Usage:
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before any imports that need credentials
@@ -23,11 +26,53 @@ from src.alpaca_integration import (
     get_alpaca_account,
     get_alpaca_positions,
     convert_to_portfolio,
-    execute_decisions,
     format_positions_summary,
 )
 from src.config import resolve_mode
 from src.main import run_hedge_fund
+
+
+def _execute_via_canonical_executor(decisions: dict, mode: str, dry_run: bool) -> list[dict]:
+    """Route legacy analysis decisions through the sole order writer."""
+    from run_hedge_fund import _decisions_to_trades
+
+    payload = _decisions_to_trades(decisions)
+    if not payload["trades"]:
+        return []
+    repo_root = Path(__file__).parent
+    command = [sys.executable, str(repo_root / "execute_trades.py"), "--mode", mode]
+    if dry_run:
+        command.append("--dry-run")
+    completed = subprocess.run(
+        command,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+        timeout=90,
+        check=False,
+    )
+    if completed.stderr:
+        print(completed.stderr, file=sys.stderr, end="")
+    if completed.returncode != 0:
+        raise RuntimeError(f"Canonical executor exited {completed.returncode}: {completed.stderr[-500:]}")
+    try:
+        output = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Canonical executor returned invalid JSON") from exc
+    rows = output.get("results")
+    if not isinstance(rows, list):
+        raise RuntimeError("Canonical executor returned no result list")
+    return [
+        {
+            **row,
+            "success": row.get("status") in {"submitted", "would_execute"},
+            "dry_run": row.get("status") == "would_execute",
+            "skipped": row.get("status") == "skipped",
+            "reason": row.get("reason") or row.get("error") or row.get("status", ""),
+        }
+        for row in rows
+    ]
 
 
 def main():
@@ -162,12 +207,8 @@ Examples:
             return 1
             
         # Execute or preview trades
-        trade_results = execute_decisions(
-            decisions=decisions,
-            positions_raw=positions_raw,
-            account=account,
-            dry_run=not args.execute,
-            mode=mode,
+        trade_results = _execute_via_canonical_executor(
+            decisions, mode=mode, dry_run=not args.execute,
         )
         
         # Format output
@@ -175,6 +216,8 @@ Examples:
             output_telegram_summary(decisions, trade_results, args.execute)
         else:
             output_detailed_summary(decisions, analyst_signals, trade_results, args.execute)
+        if args.execute and any(row.get("status") == "failed" for row in trade_results):
+            return 2
             
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -222,7 +265,7 @@ def output_detailed_summary(decisions, analyst_signals, trade_results, executed)
                 print(f"✅ {ticker}: WOULD {action.upper()} {qty} shares (DRY RUN)")
             else:
                 order_id = result.get("order_id", "")
-                print(f"✅ {ticker}: {action.upper()} {qty} shares (Order: {order_id})")
+                print(f"✅ {ticker}: {action.upper()} {qty} shares submitted (Order: {order_id})")
         else:
             failed_trades += 1
             reason = result.get("reason", "Unknown error")
@@ -234,7 +277,7 @@ def output_detailed_summary(decisions, analyst_signals, trade_results, executed)
 def output_telegram_summary(decisions, trade_results, executed):
     """Output Telegram-friendly summary (no markdown tables)."""
     print("🤖 Swarm Trader AI Hedge Fund Analysis")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
+    print(f"⏰ {datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %H:%M %Z')}")
     print()
     
     # Count signals
@@ -272,7 +315,7 @@ def output_telegram_summary(decisions, trade_results, executed):
     failed_count = len([r for r in trade_results if not r.get("success") and not r.get("skipped")])
     
     if executed:
-        print(f"\n✅ Executed: {executed_count} trades, {failed_count} failed")
+        print(f"\n✅ Submitted: {executed_count} orders, {failed_count} failed")
     else:
         print(f"\n🧪 DRY RUN: {executed_count} trades would execute, {failed_count} blocked by safety rails")
 

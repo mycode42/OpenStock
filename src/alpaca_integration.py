@@ -1,23 +1,16 @@
-"""Alpaca paper trading integration for the AI hedge fund.
+"""Read-only Alpaca paper integration and legacy decision previews.
 
-Fetches positions, converts to portfolio format, and executes trades.
-Trade validation is delegated to risk_manager.py (V2 hard rules) — no
-parallel safety rail logic lives here.
-
-Helper functions (get_account, get_positions, etc.) are always safe to call.
-execute_decisions() routes buy/short orders through risk_manager.validate_trade()
-before placing.
+Broker mutations use execute_trades.py, which owns account verification,
+locking, risk validation, and Algo coordinator authorization.
 
 Multi-account support: all functions accept an optional `mode` parameter.
 When provided, credentials are routed to the correct account (day vs swing).
 When omitted, the current trading mode (from trading_mode.json) is used.
 """
 
-import os
 import requests
-from datetime import datetime
 
-from src.accounts import get_account_for_mode, AlpacaAccount
+from src.accounts import get_account_for_mode
 
 # Always paper trading - never use live endpoint
 ALPACA_BASE_URL = "https://paper-api.alpaca.markets/v2"
@@ -27,10 +20,6 @@ def _get_headers(mode: str = None) -> dict:
     """Get API headers for the appropriate account based on trading mode."""
     account = get_account_for_mode(mode)
     return account.headers
-
-
-# Legacy module-level headers for backward compat (defaults to Swing).
-_HEADERS = _get_headers("swing")
 
 
 def get_alpaca_account(mode: str = None) -> dict:
@@ -129,89 +118,14 @@ def get_daily_pnl(account: dict) -> float:
     return (equity - last_equity) / last_equity
 
 
-def _place_alpaca_order(ticker: str, action: str, qty: int, mode: str = None) -> dict:
-    """Place a market order via Alpaca API."""
-    headers = _get_headers(mode)
-    side = "buy" if action in ("buy", "cover") else "sell"
-    order_data = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": side,
-        "type": "market",
-        "time_in_force": "day",
-    }
-    resp = requests.post(
-        f"{ALPACA_BASE_URL}/orders",
-        headers=headers,
-        json=order_data,
-        timeout=10,
-    )
-    if resp.status_code in (200, 201):
-        order = resp.json()
-        return {
-            "success": True,
-            "order_id": order.get("id"),
-            "status": order.get("status"),
-        }
-    return {
-        "success": False,
-        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
-    }
+def _place_alpaca_order(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
-def _place_bracket_order(
-    ticker: str,
-    action: str,
-    qty: int,
-    stop_price: float,
-    take_profit_price: float,
-    mode: str = None,
-) -> dict:
-    """Place a bracket order via Alpaca API (entry + stop-loss + take-profit as one atomic order).
-
-    Args:
-        ticker: Stock symbol
-        action: "buy" or "sell"
-        qty: Number of shares
-        stop_price: Stop-loss trigger price
-        take_profit_price: Take-profit limit price
-        mode: Trading mode for account routing
-
-    Returns:
-        Dict with success, order_id, status, or reason on failure
-    """
-    headers = _get_headers(mode)
-    side = "buy" if action in ("buy", "cover") else "sell"
-    order_data = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": side,
-        "type": "market",
-        "time_in_force": "gtc",
-        "order_class": "bracket",
-        "stop_loss": {"stop_price": str(round(stop_price, 2))},
-        "take_profit": {"limit_price": str(round(take_profit_price, 2))},
-    }
-    resp = requests.post(
-        f"{ALPACA_BASE_URL}/orders",
-        headers=headers,
-        json=order_data,
-        timeout=10,
-    )
-    if resp.status_code in (200, 201):
-        order = resp.json()
-        return {
-            "success": True,
-            "order_id": order.get("id"),
-            "status": order.get("status"),
-            "order_class": "bracket",
-            "stop_price": stop_price,
-            "take_profit_price": take_profit_price,
-        }
-    return {
-        "success": False,
-        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
-    }
+def _place_bracket_order(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
 def flatten_positions(
@@ -220,18 +134,19 @@ def flatten_positions(
     tickers: list[str] | None = None,
     mode: str = None,
 ) -> list[dict]:
-    """Market-sell all open positions (end-of-day flatten).
+    """Preview a flatten from a supplied snapshot.
 
     Args:
         positions_raw: Raw Alpaca positions list
-        dry_run: If True, show what would be sold without placing orders
+        dry_run: Must be True. Use execute_trades.py --flatten to trade.
         tickers: If provided, only flatten these tickers. Default: all positions.
         mode: Trading mode for account routing.
 
     Returns:
         List of result dicts per position flattened
     """
-    headers = _get_headers(mode)
+    if not dry_run:
+        raise RuntimeError("Legacy flatten route is disabled; use execute_trades.py --flatten")
     results = []
     for pos in positions_raw:
         symbol = pos["symbol"]
@@ -245,48 +160,14 @@ def flatten_positions(
         side = "sell" if qty > 0 else "buy"  # longs → sell, shorts → buy to cover
         abs_qty = abs(qty)
 
-        if dry_run:
-            results.append({
-                "ticker": symbol,
-                "action": "flatten",
-                "qty": abs_qty,
-                "side": side,
-                "success": True,
-                "dry_run": True,
-            })
-        else:
-            order_data = {
-                "symbol": symbol,
-                "qty": str(abs_qty),
-                "side": side,
-                "type": "market",
-                "time_in_force": "day",
-            }
-            resp = requests.post(
-                f"{ALPACA_BASE_URL}/orders",
-                headers=headers,
-                json=order_data,
-                timeout=10,
-            )
-            if resp.status_code in (200, 201):
-                order = resp.json()
-                results.append({
-                    "ticker": symbol,
-                    "action": "flatten",
-                    "qty": abs_qty,
-                    "side": side,
-                    "success": True,
-                    "order_id": order.get("id"),
-                    "status": order.get("status"),
-                })
-            else:
-                results.append({
-                    "ticker": symbol,
-                    "action": "flatten",
-                    "qty": abs_qty,
-                    "success": False,
-                    "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
-                })
+        results.append({
+            "ticker": symbol,
+            "action": "flatten",
+            "qty": abs_qty,
+            "side": side,
+            "success": True,
+            "dry_run": True,
+        })
 
     return results
 
@@ -298,7 +179,7 @@ def execute_decisions(
     dry_run: bool = True,
     mode: str = None,
 ) -> list[dict]:
-    """Execute trading decisions with V2 risk validation.
+    """Preview trading decisions with V2 risk validation.
 
     Validation for buy/short orders is delegated to risk_manager.validate_trade().
     No internal safety rail logic — risk_manager is the single source of truth.
@@ -309,12 +190,14 @@ def execute_decisions(
                    If stop_price and take_profit are both provided, a bracket order is placed.
         positions_raw: Raw Alpaca positions list
         account: Raw Alpaca account dict
-        dry_run: If True, validate but don't actually place orders
+        dry_run: Must be True. Use execute_trades.py to place orders.
         mode: Trading mode ("swing" or "day"). Resolved from env if not specified.
 
     Returns:
         List of result dicts with success/failure info per ticker
     """
+    if not dry_run:
+        raise RuntimeError("Legacy decision execution is disabled; use execute_trades.py")
     from src.config import resolve_mode
     if mode is None:
         mode = resolve_mode()
@@ -410,27 +293,6 @@ def execute_decisions(
             elif order_type == "trailing_stop" and trail_percent is not None:
                 dry_result["trail_percent"] = trail_percent
             results.append(dry_result)
-        else:
-            if use_bracket:
-                order_result = _place_bracket_order(ticker, action, qty, float(stop_price), float(take_profit), mode=mode)
-            elif order_type == "oco" and stop_price is not None and take_profit is not None:
-                order_result = _place_oco_order(ticker, action, qty, float(stop_price), float(take_profit), mode=mode)
-            elif order_type == "limit" and limit_price is not None:
-                order_result = _place_limit_order(ticker, action, qty, float(limit_price), mode=mode)
-            elif order_type == "stop" and stop_price is not None:
-                order_result = _place_stop_order(ticker, action, qty, float(stop_price), mode=mode)
-            elif order_type == "trailing_stop" and trail_percent is not None:
-                order_result = _place_trailing_stop(ticker, action, qty, float(trail_percent), mode=mode)
-            else:
-                order_result = _place_alpaca_order(ticker, action, qty, mode=mode)
-            results.append({
-                "ticker": ticker,
-                "action": action,
-                "qty": qty,
-                "confidence": confidence,
-                **order_result,
-            })
-
     return results
 
 
@@ -468,182 +330,34 @@ def get_order(order_id: str, mode: str = None) -> dict:
     return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
 
 
-def cancel_order(order_id: str, mode: str = None) -> dict:
-    """Cancel a single open order by ID.
-
-    Returns:
-        {"success": True/False, "order_id": ..., "reason": ...}
-    """
-    headers = _get_headers(mode)
-    resp = requests.delete(f"{ALPACA_BASE_URL}/orders/{order_id}", headers=headers, timeout=10)
-    if resp.status_code in (200, 204):
-        return {"success": True, "order_id": order_id}
-    return {
-        "success": False,
-        "order_id": order_id,
-        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
-    }
+def cancel_order(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
-def cancel_all_orders(mode: str = None) -> dict:
-    """Cancel all open orders.
-
-    Returns:
-        {"success": True/False, "cancelled_count": int}
-    """
-    headers = _get_headers(mode)
-    resp = requests.delete(f"{ALPACA_BASE_URL}/orders", headers=headers, timeout=10)
-    if resp.status_code in (200, 207):
-        cancelled = resp.json() if resp.text else []
-        return {"success": True, "cancelled_count": len(cancelled) if isinstance(cancelled, list) else 0}
-    return {
-        "success": False,
-        "cancelled_count": 0,
-        "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}",
-    }
+def cancel_all_orders(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
-def _place_limit_order(
-    ticker: str,
-    action: str,
-    qty: int,
-    limit_price: float,
-    time_in_force: str = "day",
-    mode: str = None,
-) -> dict:
-    """Place a limit order via Alpaca API."""
-    headers = _get_headers(mode)
-    side = "buy" if action in ("buy", "cover") else "sell"
-    order_data = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": side,
-        "type": "limit",
-        "time_in_force": time_in_force,
-        "limit_price": str(round(limit_price, 2)),
-    }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
-    if resp.status_code in (200, 201):
-        order = resp.json()
-        return {
-            "success": True,
-            "order_id": order.get("id"),
-            "status": order.get("status"),
-            "order_type": "limit",
-            "limit_price": limit_price,
-        }
-    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+def _place_limit_order(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
-def _place_stop_order(
-    ticker: str,
-    action: str,
-    qty: int,
-    stop_price: float,
-    time_in_force: str = "gtc",
-    mode: str = None,
-) -> dict:
-    """Place a standalone stop order via Alpaca API.
-
-    Use this for stop-losses on EXISTING positions (not as part of a bracket entry).
-    """
-    headers = _get_headers(mode)
-    side = "buy" if action in ("buy", "cover") else "sell"
-    order_data = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": side,
-        "type": "stop",
-        "time_in_force": time_in_force,
-        "stop_price": str(round(stop_price, 2)),
-    }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
-    if resp.status_code in (200, 201):
-        order = resp.json()
-        return {
-            "success": True,
-            "order_id": order.get("id"),
-            "status": order.get("status"),
-            "order_type": "stop",
-            "stop_price": stop_price,
-        }
-    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+def _place_stop_order(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
-def _place_trailing_stop(
-    ticker: str,
-    action: str,
-    qty: int,
-    trail_percent: float,
-    time_in_force: str = "gtc",
-    mode: str = None,
-) -> dict:
-    """Place a trailing stop order via Alpaca API.
-
-    Args:
-        trail_percent: Percentage trail (e.g. 2.0 = 2% trailing stop)
-        mode: Trading mode for account routing.
-    """
-    headers = _get_headers(mode)
-    side = "buy" if action in ("buy", "cover") else "sell"
-    order_data = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": side,
-        "type": "trailing_stop",
-        "time_in_force": time_in_force,
-        "trail_percent": str(round(trail_percent, 2)),
-    }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
-    if resp.status_code in (200, 201):
-        order = resp.json()
-        return {
-            "success": True,
-            "order_id": order.get("id"),
-            "status": order.get("status"),
-            "order_type": "trailing_stop",
-            "trail_percent": trail_percent,
-        }
-    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+def _place_trailing_stop(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
-def _place_oco_order(
-    ticker: str,
-    action: str,
-    qty: int,
-    stop_price: float,
-    take_profit_price: float,
-    mode: str = None,
-) -> dict:
-    """Place an OCO (One-Cancels-Other) order via Alpaca API.
-
-    Use for managing exits on ALREADY HELD positions — no new entry leg.
-    Different from bracket: bracket = entry + exits; OCO = just exits.
-    """
-    headers = _get_headers(mode)
-    side = "buy" if action in ("buy", "cover") else "sell"
-    order_data = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": side,
-        "type": "limit",
-        "time_in_force": "gtc",
-        "order_class": "oco",
-        "stop_loss": {"stop_price": str(round(stop_price, 2))},
-        "take_profit": {"limit_price": str(round(take_profit_price, 2))},
-    }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=headers, json=order_data, timeout=10)
-    if resp.status_code in (200, 201):
-        order = resp.json()
-        return {
-            "success": True,
-            "order_id": order.get("id"),
-            "status": order.get("status"),
-            "order_class": "oco",
-            "stop_price": stop_price,
-            "take_profit_price": take_profit_price,
-        }
-    return {"success": False, "reason": f"Alpaca API error {resp.status_code}: {resp.text[:200]}"}
+def _place_oco_order(*args, **kwargs) -> dict:
+    """Legacy direct broker mutation is disabled."""
+    raise RuntimeError("Legacy broker mutation is disabled; use execute_trades.py")
 
 
 def format_positions_summary(positions_raw: list[dict], account: dict) -> str:

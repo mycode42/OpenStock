@@ -12,9 +12,9 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -22,18 +22,17 @@ load_dotenv(override=True)
 import requests
 
 from src.config import get_mode_config, resolve_mode
+from src.accounts import get_account_for_mode, verify_account_for_mode
 
-API_BASE = "https://paper-api.alpaca.markets/v2"
-HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
-
-
-def api(endpoint):
-    r = requests.get(f"{API_BASE}/{endpoint}", headers=HEADERS)
+def api(endpoint: str, mode: str):
+    account = get_account_for_mode(mode)
+    r = requests.get(f"{account.base_url}/{endpoint}", headers=account.headers, timeout=10)
     r.raise_for_status()
     return r.json()
+
+
+def market_timestamp() -> str:
+    return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def main():
@@ -42,9 +41,15 @@ def main():
                         help="Trading mode (default: resolved from trading_mode.json / env)")
     parser.add_argument("--telegram", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--monitor", action="store_true", help="Also record a snapshot and run alert checks")
     args = parser.parse_args()
 
+    if args.monitor and args.json:
+        parser.error("--monitor cannot be combined with --json")
+
     mode = resolve_mode(cli_mode=args.mode)
+    if mode == "auto":
+        mode = "swing"
     mode_config = get_mode_config(mode)
     universe = mode_config["universe"]
 
@@ -52,8 +57,12 @@ def main():
     category_map = {cat_key: cat_data["tickers"] for cat_key, cat_data in universe.items()}
     all_universe = {t for tickers in category_map.values() for t in tickers}
 
-    account = api("account")
-    positions = api("positions")
+    try:
+        _, account = verify_account_for_mode(mode)
+        positions = api("positions", mode)
+    except (requests.RequestException, ValueError) as exc:
+        print(f"Could not fetch verified {mode.upper()} account: {exc}", file=sys.stderr)
+        return 1
 
     equity = float(account["equity"])
     cash = float(account["cash"])
@@ -105,9 +114,9 @@ def main():
             "positions": pos_data,
             "big_movers": [p["symbol"] for p in big_movers],
             "out_of_universe": [p["symbol"] for p in out_of_universe],
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(ZoneInfo("America/New_York")).isoformat(),
         }, indent=2))
-        return
+        return 0
 
     if args.telegram:
         output_telegram(mode, mode_config, equity, cash, daily_pl, daily_pl_pct,
@@ -116,15 +125,19 @@ def main():
         output_terminal(mode, mode_config, equity, cash, daily_pl, daily_pl_pct,
                         pos_data, big_movers, out_of_universe)
 
+    if args.monitor:
+        run_monitoring(mode)
+    return 0
+
 
 def output_telegram(mode, mode_config, equity, cash, daily_pl, daily_pl_pct,
                     positions, big_movers, out_of_universe, category_map):
     pl_emoji = "📈" if daily_pl >= 0 else "📉"
     print(f"💰 Apex Fund — Portfolio Check [{mode.upper()}]")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
+    print(f"⏰ {market_timestamp()}")
     print()
     print(f"Portfolio: ${equity:,.2f}")
-    print(f"Cash: ${cash:,.2f} ({cash/equity*100:.1f}%)")
+    print(f"Cash: ${cash:,.2f} ({cash/equity*100 if equity else 0:.1f}%)")
     print(f"{pl_emoji} Daily P/L: ${daily_pl:+,.2f} ({daily_pl_pct:+.2f}%)")
     print()
 
@@ -169,10 +182,10 @@ def output_terminal(mode, mode_config, equity, cash, daily_pl, daily_pl_pct,
                     positions, big_movers, out_of_universe):
     print(f"{'='*60}")
     print(f"  APEX FUND — PORTFOLIO CHECK  [{mode.upper()} — {mode_config['label']}]")
-    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
+    print(f"  {market_timestamp()}")
     print(f"{'='*60}")
     print(f"  Equity:   ${equity:>12,.2f}")
-    print(f"  Cash:     ${cash:>12,.2f}  ({cash/equity*100:.1f}%)")
+    print(f"  Cash:     ${cash:>12,.2f}  ({cash/equity*100 if equity else 0:.1f}%)")
     print(f"  Daily P/L: ${daily_pl:>+11,.2f}  ({daily_pl_pct:+.2f}%)")
     print(f"{'='*60}")
     print()
@@ -200,23 +213,22 @@ def output_terminal(mode, mode_config, equity, cash, daily_pl, daily_pl_pct,
     print()
 
 
-def run_monitoring():
+def run_monitoring(mode: str):
     """Run performance snapshot + alert checks after portfolio check."""
     try:
         from performance_tracker_v2 import take_snapshot
-        take_snapshot()
+        take_snapshot(mode=mode)
     except Exception as e:
         print(f"⚠️ Performance snapshot failed: {e}", file=sys.stderr)
 
     try:
         from trade_alerts import check_concentration, check_cash, check_drawdown, check_trading_frequency, log_alerts, get_portfolio as alerts_get_portfolio
-        account, positions = alerts_get_portfolio()
+        account, positions = alerts_get_portfolio(mode=mode)
         alerts = []
-        if account and positions:
-            alerts.extend(check_concentration(account, positions))
-            alerts.extend(check_cash(account))
-        alerts.extend(check_drawdown())
-        alerts.extend(check_trading_frequency())
+        alerts.extend(check_concentration(account, positions, mode=mode))
+        alerts.extend(check_cash(account, mode=mode))
+        alerts.extend(check_drawdown(mode=mode))
+        alerts.extend(check_trading_frequency(mode=mode))
         if alerts:
             log_alerts(alerts)
             print("\n🚨 ALERTS:")
@@ -227,6 +239,4 @@ def run_monitoring():
 
 
 if __name__ == "__main__":
-    result = main()
-    run_monitoring()
-    sys.exit(result or 0)
+    sys.exit(main())

@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from src.market_data import regular_feed
+
 
 PAPER_BASE = "https://paper-api.alpaca.markets/v2"
 DATA_BASE = "https://data.alpaca.markets/v2"
@@ -65,7 +67,7 @@ class AlgoAlpaca:
         start = (datetime.fromisoformat(session_day) - timedelta(days=12)).date().isoformat()
         bars = self._get(
             f"{DATA_BASE}/stocks/{symbol}/bars",
-            params={"timeframe": "1Day", "start": start, "end": session_day, "limit": 20, "feed": "iex"},
+            params={"timeframe": "1Day", "start": start, "end": session_day, "limit": 20, "feed": regular_feed()},
         ).get("bars", [])
         eligible = [b for b in bars if str(b.get("t", ""))[:10] < session_day]
         if not eligible:
@@ -120,8 +122,13 @@ class AlgoAlpaca:
     def positions(self) -> list[dict]:
         return self._get(f"{PAPER_BASE}/positions")
 
-    def orders(self, status: str = "open") -> list[dict]:
-        return self._get(f"{PAPER_BASE}/orders", params={"status": status, "limit": 500})
+    def orders(self, status: str = "open", *, nested: bool = False, symbols: str | None = None) -> list[dict]:
+        params = {"status": status, "limit": 500}
+        if nested:
+            params["nested"] = "true"
+        if symbols:
+            params["symbols"] = symbols
+        return self._get(f"{PAPER_BASE}/orders", params=params)
 
     def order_by_client_id(self, client_order_id: str) -> dict | None:
         response = self.session.get(
@@ -164,8 +171,9 @@ class AlgoAlpaca:
             "client_order_id": client_order_id,
         })
 
-    def order(self, order_id: str) -> dict:
-        return self._get(f"{PAPER_BASE}/orders/{order_id}")
+    def order(self, order_id: str, *, nested: bool = False) -> dict:
+        url = f"{PAPER_BASE}/orders/{order_id}"
+        return self._get(url, params={"nested": "true"}) if nested else self._get(url)
 
     @staticmethod
     def current_utc() -> datetime:

@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import os
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -46,10 +45,8 @@ DATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 # Alpaca API
 # ---------------------------------------------------------------------------
 DATA_BASE = "https://data.alpaca.markets/v2"
-ALPACA_HEADERS = {
-    "APCA-API-KEY-ID": os.environ.get("ALPACA_API_KEY", ""),
-    "APCA-API-SECRET-KEY": os.environ.get("ALPACA_API_SECRET", ""),
-}
+ALPACA_HEADERS: dict[str, str] = {}
+DATA_FEED = "iex"
 
 # ---------------------------------------------------------------------------
 # Simulation constants (not in strategy.py — backtest-level)
@@ -100,7 +97,7 @@ def fetch_5min_bars(ticker: str, date_str: str) -> list[dict]:
     Fetch all 5-min bars for `ticker` on `date_str` (market hours only).
     Results are cached to DATA_CACHE_DIR/bars5m_{ticker}_{date_str}.json.
     """
-    cache_path = DATA_CACHE_DIR / f"bars5m_{ticker}_{date_str}.json"
+    cache_path = DATA_CACHE_DIR / f"bars5m_{DATA_FEED}_{ticker}_{date_str}.json"
     if cache_path.exists():
         with open(cache_path) as f:
             return json.load(f)
@@ -111,7 +108,7 @@ def fetch_5min_bars(ticker: str, date_str: str) -> list[dict]:
         "start": f"{date_str}T09:30:00-04:00",
         "end": f"{date_str}T16:00:00-04:00",
         "limit": 100,
-        "feed": "iex",
+        "feed": DATA_FEED,
         "sort": "asc",
     }
 
@@ -140,7 +137,7 @@ def fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> list[dict]:
     Fetch daily bars for volume / prev-close lookback.
     Cached per ticker (whole range).
     """
-    cache_path = DATA_CACHE_DIR / f"daily_{ticker}_{start_date}_{end_date}.json"
+    cache_path = DATA_CACHE_DIR / f"daily_{DATA_FEED}_{ticker}_{start_date}_{end_date}.json"
     if cache_path.exists():
         with open(cache_path) as f:
             return json.load(f)
@@ -151,7 +148,7 @@ def fetch_daily_bars(ticker: str, start_date: str, end_date: str) -> list[dict]:
         "start": start_date,
         "end": end_date,
         "limit": 250,
-        "feed": "iex",
+        "feed": DATA_FEED,
         "sort": "asc",
     }
 
@@ -1148,6 +1145,7 @@ def run_swing_backtest(
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    global ALPACA_HEADERS, DATA_FEED
     parser = argparse.ArgumentParser(
         description="Fast deterministic backtester for autoresearch/strategy.py"
     )
@@ -1176,6 +1174,21 @@ def main() -> int:
         help="Suppress progress output to stderr",
     )
     args = parser.parse_args()
+
+    # Use the same isolated account route and market-data tier as the strategy
+    # being researched. Include the feed in cache names so Basic/IEX data can
+    # never be reused as Plus/SIP history after an upgrade.
+    try:
+        from src.accounts import get_account_for_mode
+        from src.market_data import data_tier, regular_feed
+
+        account_mode = "swing" if args.mode == "swing" else "day"
+        account = get_account_for_mode(account_mode)
+        ALPACA_HEADERS = account.headers
+        DATA_FEED = regular_feed()
+    except Exception as exc:
+        print(json.dumps({**_empty_metrics(), "error": f"Market-data configuration failed: {exc}"}))
+        return 1
 
     # Default days depends on mode
     if args.days is None:
@@ -1213,6 +1226,7 @@ def main() -> int:
     if not args.quiet:
         tradeable = [t for t in tickers if t not in ("SPY", "QQQ")]
         print(f"[backtest] Mode: {args.mode}", file=sys.stderr)
+        print(f"[backtest] Data feed: {DATA_FEED}", file=sys.stderr)
         print(f"[backtest] Tickers: {', '.join(tradeable)}", file=sys.stderr)
         print(f"[backtest] Days: {trading_days[0]} → {trading_days[-1]}", file=sys.stderr)
         print(f"[backtest] Capital: ${args.capital:,.0f}", file=sys.stderr)
@@ -1233,6 +1247,12 @@ def main() -> int:
             strategy_module=strategy_module,
             quiet=args.quiet,
         )
+
+    metrics["data_source"] = {
+        "account_mode": account_mode,
+        "tier": data_tier(),
+        "feed": DATA_FEED,
+    }
 
     # Output JSON to stdout (for evolve.py to parse)
     print(json.dumps(metrics, indent=2))

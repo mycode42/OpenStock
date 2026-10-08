@@ -19,6 +19,7 @@ import requests
 
 from src.accounts import get_account_for_mode
 from src.config import STRATEGY_CONFIG, get_mode_config
+from src.market_data import regular_feed
 from scan_market import get_most_active
 from risk_manager import LEVERAGED_ETFS
 
@@ -368,7 +369,7 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
     bar_start = (
         now_utc - timedelta(days=int(STRATEGY_CONFIG["universe_history_days"]))
     ).date().isoformat()
-    requested_feed = str(STRATEGY_CONFIG["universe_data_feed"])
+    requested_feed = regular_feed()
     actual_feed = requested_feed
     feed_fallback_reason = None
     try:
@@ -376,7 +377,7 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
             allowed, mode=mode, start=bar_start, end=now_utc.isoformat(), feed=requested_feed,
         )
     except (requests.RequestException, ValueError) as primary_error:
-        fallback_feed = str(STRATEGY_CONFIG.get("universe_data_feed_fallback", ""))
+        fallback_feed = "iex" if requested_feed == "sip" else ""
         if not fallback_feed or fallback_feed == requested_feed:
             exc = primary_error
             bar_payload = None
@@ -410,7 +411,7 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
     eligible = []
     market_sessions = [bar["date"] for bar in _clean_daily_bars(bar_payload.get("SPY", []), today=today)]
     minimum_history = int(STRATEGY_CONFIG["universe_min_clean_daily_bars"])
-    fallback_feed = str(STRATEGY_CONFIG.get("universe_data_feed_fallback", ""))
+    fallback_feed = "iex" if requested_feed == "sip" else ""
     if len(market_sessions) < minimum_history and fallback_feed and actual_feed != fallback_feed:
         try:
             bar_payload = _fetch_daily_bars(
@@ -483,8 +484,10 @@ def select_universe(mode: str, max_tickers: int = 50) -> dict:
     return {
         "tickers": selected_symbols,
         "categories": {item["symbol"]: item["category"] for item in selected},
+        # An owned holding may drop out of today's selected set. Keep its
+        # broker-verified overnight eligibility available for protective exits.
         "overnight_tradable_tickers": sorted(
-            ticker for ticker in selected_symbols if _overnight_tradable(assets.get(ticker))
+            ticker for ticker in allowed if _overnight_tradable(assets.get(ticker))
         ),
         "candidate_count": len(catalog_symbols),
         "tradable_candidate_count": len(allowed),

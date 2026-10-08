@@ -13,49 +13,108 @@ Usage:
 """
 
 import argparse
-import json
-import os
+import hashlib
 import sys
 import requests
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from dotenv import load_dotenv
+from zoneinfo import ZoneInfo
 
 load_dotenv()
 
 from src.config import get_mode_config, resolve_mode
+from src.accounts import AlpacaAccount, verify_account_for_mode
+from execute_trades import account_execution_lock, _list_open_orders, _submit_broker_order
+from src.market_calendar import get_day_schedule
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
-ALPACA_API_SECRET = os.getenv("ALPACA_API_SECRET", "")
-ALPACA_BASE_URL = "https://paper-api.alpaca.markets/v2"
+ET = ZoneInfo("America/New_York")
 
-if not ALPACA_API_KEY or not ALPACA_API_SECRET:
-    raise EnvironmentError("ALPACA_API_KEY and ALPACA_API_SECRET must be set in .env")
-
-HEADERS = {
-    "APCA-API-KEY-ID": ALPACA_API_KEY,
-    "APCA-API-SECRET-KEY": ALPACA_API_SECRET,
-    "Content-Type": "application/json",
-}
-
-
-def get_positions():
-    resp = requests.get(f"{ALPACA_BASE_URL}/positions", headers=HEADERS, timeout=10)
+def get_positions(account: AlpacaAccount):
+    resp = requests.get(f"{account.base_url}/positions", headers=account.headers, timeout=10)
     resp.raise_for_status()
-    return {p["symbol"]: p for p in resp.json()}
+    positions = resp.json()
+    if not isinstance(positions, list):
+        raise ValueError("Alpaca positions response was not a list")
+    result = {}
+    for position in positions:
+        if not isinstance(position, dict) or not isinstance(position.get("symbol"), str):
+            raise ValueError("Alpaca position omitted its symbol")
+        symbol = position["symbol"].upper()
+        if not symbol or symbol in result:
+            raise ValueError("Alpaca positions response contained an empty or duplicate symbol")
+        result[symbol] = position
+    return result
 
 
-def place_sell_order(ticker, qty):
-    order = {
-        "symbol": ticker,
-        "qty": str(qty),
-        "side": "sell",
-        "type": "market",
-        "time_in_force": "day",
-    }
-    resp = requests.post(f"{ALPACA_BASE_URL}/orders", headers=HEADERS, json=order, timeout=10)
-    if resp.status_code in (200, 201):
-        return resp.status_code, resp.json()
-    return resp.status_code, resp.text
+def get_open_order_symbols(account: AlpacaAccount) -> set[str]:
+    """Return symbols with any open broker order, across every result page."""
+    symbols = set()
+    for order in _list_open_orders(account.headers):
+        if not isinstance(order, dict) or not isinstance(order.get("symbol"), str):
+            raise ValueError("Open Alpaca order omitted its symbol")
+        symbol = order["symbol"].upper()
+        if not symbol:
+            raise ValueError("Open Alpaca order had an empty symbol")
+        symbols.add(symbol)
+        legs = order.get("legs") or []
+        if not isinstance(legs, list):
+            raise ValueError("Open Alpaca order had malformed legs")
+        for leg in legs:
+            if not isinstance(leg, dict):
+                raise ValueError("Open Alpaca order had a malformed leg")
+            if leg.get("symbol"):
+                symbols.add(str(leg["symbol"]).upper())
+    return symbols
+
+
+def _long_quantity(position: dict) -> Decimal:
+    try:
+        quantity = Decimal(str(position.get("qty", "0")))
+    except (InvalidOperation, TypeError) as exc:
+        raise ValueError(f"Invalid quantity for {position.get('symbol')}") from exc
+    if not quantity.is_finite():
+        raise ValueError(f"Nonfinite quantity for {position.get('symbol')}")
+    return quantity
+
+
+def _client_order_id(mode: str, account_id: str, ticker: str, qty: Decimal) -> str:
+    """Reuse the same broker ID for a repeated same-day rebalance intent."""
+    session_day = datetime.now(ET).date().isoformat()
+    intent = f"{mode}:{account_id}:{session_day}:{ticker}:{qty}"
+    digest = hashlib.sha256(intent.encode("utf-8")).hexdigest()[:36]
+    return f"rebalance-{digest}"
+
+
+def place_sell_order(mode: str, ticker: str, expected_qty: Decimal) -> dict:
+    """Recheck the account and exact holding under the account write lock."""
+    try:
+        with account_execution_lock(mode):
+            if mode == "day":
+                schedule = get_day_schedule(flatten_by="15:45", mode="day")
+                if schedule is None or not schedule.market_open(datetime.now(ET)):
+                    return {"success": False, "error": "Day rebalance requires regular market hours"}
+            account, _ = verify_account_for_mode(mode)
+            position = get_positions(account).get(ticker)
+            if position is None:
+                return {"success": False, "error": "Position is no longer held; preview again"}
+            live_qty = _long_quantity(position)
+            if live_qty <= 0 or live_qty != expected_qty:
+                return {"success": False, "error": "Position quantity changed; preview again"}
+            if ticker in get_open_order_symbols(account):
+                return {"success": False, "error": "Open order exists for this symbol; resolve it before rebalancing"}
+            client_order_id = _client_order_id(mode, account.account_id, ticker, live_qty)
+            order = {
+                "symbol": ticker,
+                "qty": str(live_qty),
+                "side": "sell",
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": client_order_id,
+            }
+            return _submit_broker_order(order, "market", mode=mode)
+    except (requests.RequestException, ValueError, RuntimeError, TimeoutError, TypeError) as exc:
+        return {"success": False, "error": f"Rebalance preflight unavailable: {exc}"}
 
 
 def main():
@@ -74,6 +133,8 @@ def main():
     args = parser.parse_args()
 
     mode = resolve_mode(cli_mode=args.mode)
+    if mode == "auto":
+        mode = "swing"
     mode_config = get_mode_config(mode)
     mode_label = mode_config["label"]
     universe = mode_config["universe"]
@@ -94,7 +155,12 @@ def main():
     print(f"{'='*60}")
     print()
 
-    positions = get_positions()
+    try:
+        account, _ = verify_account_for_mode(mode)
+        positions = get_positions(account)
+    except (requests.RequestException, ValueError, RuntimeError) as exc:
+        print(f"❌ Cannot verify {mode.upper()} account for rebalance: {exc}", file=sys.stderr)
+        return 1
 
     # Find positions outside the active universe
     out_of_universe = {
@@ -112,34 +178,41 @@ def main():
     results = []
 
     for ticker, pos in sorted(out_of_universe.items()):
-        total_shares = int(float(pos.get("qty", 0)))
+        raw_qty = str(pos.get("qty", "0"))
+        try:
+            total_shares = _long_quantity(pos)
+        except ValueError as exc:
+            print(f"  ❌ {ticker}: {exc}")
+            results.append({"ticker": ticker, "qty": raw_qty, "success": False, "error": str(exc)})
+            continue
         current_price = float(pos.get("current_price", 0))
         market_value = float(pos.get("market_value", 0))
         unrealized_pl = float(pos.get("unrealized_pl", 0))
 
         if total_shares <= 0:
-            print(f"  ⏭️  {ticker}: Zero shares, skipping")
+            print(f"  ⏭️  {ticker}: No long shares to sell, skipping")
             continue
 
         pl_sign = "+" if unrealized_pl >= 0 else ""
         print(
-            f"  📉 {ticker}: {total_shares} shares @ ${current_price:,.2f}"
+            f"  📉 {ticker}: {raw_qty} shares @ ${current_price:,.2f}"
             f" = ${market_value:,.2f} ({pl_sign}${unrealized_pl:,.2f} P&L)"
         )
 
         if dry_run:
-            print(f"     → DRY RUN: would sell all {total_shares} shares")
-            results.append({"ticker": ticker, "qty": total_shares, "success": True, "dry_run": True})
+            print(f"     → DRY RUN: would sell all {raw_qty} shares")
+            results.append({"ticker": ticker, "qty": raw_qty, "success": True, "dry_run": True})
         else:
-            status_code, response = place_sell_order(ticker, total_shares)
-            if status_code in (200, 201):
-                order_id = response.get("id", "?")
-                order_status = response.get("status", "?")
+            response = place_sell_order(mode, ticker, total_shares)
+            if response.get("success"):
+                order_id = response.get("order_id", "?")
+                order_status = response.get("broker_status", "?")
                 print(f"     → ✅ Order placed! ID: {order_id} | Status: {order_status}")
-                results.append({"ticker": ticker, "qty": total_shares, "success": True, "order_id": order_id})
+                results.append({"ticker": ticker, "qty": raw_qty, "success": True, "order_id": order_id})
             else:
-                print(f"     → ❌ Order failed: {response}")
-                results.append({"ticker": ticker, "qty": total_shares, "success": False, "error": str(response)})
+                error = response.get("error", "Unknown broker error")
+                print(f"     → ❌ Order failed: {error}")
+                results.append({"ticker": ticker, "qty": raw_qty, "success": False, "error": str(error)})
 
         print()
 
@@ -157,7 +230,7 @@ def main():
             print(f"Capital will be freed at next market fill.")
     print("=" * 60)
 
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

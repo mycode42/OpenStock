@@ -19,6 +19,8 @@ credentials fail closed. Algo is not selected by the Swing/Day mode resolver.
 import os
 from dataclasses import dataclass
 
+import requests
+
 
 @dataclass
 class AlpacaAccount:
@@ -135,6 +137,34 @@ def get_all_accounts() -> dict[str, AlpacaAccount]:
     if not _ACCOUNTS:
         _load_accounts()
     return dict(_ACCOUNTS)
+
+
+def verify_account_for_mode(mode: str) -> tuple[AlpacaAccount, dict]:
+    """Verify an explicit route against Alpaca before a mode places orders.
+
+    Credential configuration alone cannot prove which paper account Alpaca
+    accepted. Refuse trading if the returned account does not match the
+    configured account ID, or if Alpaca reports that trading is unavailable.
+    """
+    configured = get_account_for_mode(mode)
+    if not configured.account_id or configured.account_id == "unknown":
+        raise ValueError(f"{mode} account ID is not configured")
+
+    response = requests.get(
+        f"{configured.base_url}/account",
+        headers=configured.headers,
+        timeout=10,
+    )
+    response.raise_for_status()
+    broker = response.json()
+    broker_ids = {str(broker.get(key)) for key in ("id", "account_number") if broker.get(key)}
+    if configured.account_id not in broker_ids:
+        raise ValueError(f"{mode} credentials resolve to a different Alpaca account")
+    if str(broker.get("status", "")).upper() != "ACTIVE":
+        raise ValueError(f"{mode} Alpaca account is not active")
+    if broker.get("trading_blocked"):
+        raise ValueError(f"{mode} Alpaca account is trading blocked")
+    return configured, broker
 
 
 # Auto-load on import

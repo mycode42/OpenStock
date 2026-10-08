@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from src.market_data import feeds_for_session
+
 
 ET = ZoneInfo("America/New_York")
 
@@ -15,9 +17,15 @@ class TradingWindow:
     name: str
     trade_date: str
     extended_hours: bool
-    feed: str
+    bar_feed: str
+    quote_feed: str
     regular_open: datetime
     regular_close: datetime
+
+    @property
+    def feed(self) -> str:
+        """Historical feed alias for callers not yet using the split feeds."""
+        return self.bar_feed
 
 
 def _at(day: date, value: str) -> datetime:
@@ -40,10 +48,14 @@ def get_trading_window(now: datetime, calendar: list[dict]) -> TradingWindow | N
     if local_time >= time(20, 0):
         trade_day = local_day + timedelta(days=1)
         row = rows.get(trade_day.isoformat())
-        if row and trade_day == local_day + timedelta(days=1):
+        if row:
             regular_open = _at(trade_day, row["open"])
             regular_close = _at(trade_day, row["close"])
-            return TradingWindow("overnight", trade_day.isoformat(), True, "overnight", regular_open, regular_close)
+            bar_feed, quote_feed = feeds_for_session("overnight")
+            return TradingWindow(
+                "overnight", trade_day.isoformat(), True, bar_feed, quote_feed,
+                regular_open, regular_close,
+            )
         return None
 
     row = rows.get(local_day.isoformat())
@@ -56,13 +68,20 @@ def get_trading_window(now: datetime, calendar: list[dict]) -> TradingWindow | N
 
     if now < premarket_open:
         # This is the tail of the prior evening's overnight session.
-        return TradingWindow("overnight", local_day.isoformat(), True, "overnight", regular_open, regular_close)
+        bar_feed, quote_feed = feeds_for_session("overnight")
+        return TradingWindow(
+            "overnight", local_day.isoformat(), True, bar_feed, quote_feed,
+            regular_open, regular_close,
+        )
     if premarket_open <= now < regular_open:
-        return TradingWindow("premarket", local_day.isoformat(), True, "iex", regular_open, regular_close)
+        bar_feed, quote_feed = feeds_for_session("premarket")
+        return TradingWindow("premarket", local_day.isoformat(), True, bar_feed, quote_feed, regular_open, regular_close)
     if regular_open <= now < regular_close:
-        return TradingWindow("regular", local_day.isoformat(), False, "iex", regular_open, regular_close)
+        bar_feed, quote_feed = feeds_for_session("regular")
+        return TradingWindow("regular", local_day.isoformat(), False, bar_feed, quote_feed, regular_open, regular_close)
     if regular_close <= now < afterhours_close:
-        return TradingWindow("after_hours", local_day.isoformat(), True, "iex", regular_open, regular_close)
+        bar_feed, quote_feed = feeds_for_session("after_hours")
+        return TradingWindow("after_hours", local_day.isoformat(), True, bar_feed, quote_feed, regular_open, regular_close)
     return None
 
 

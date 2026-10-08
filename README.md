@@ -1,12 +1,12 @@
-# Swarm Trader
+# Swarm Trader V1.5
 
-Multi-agent AI trading system with two LLM-driven trading modes (Swing and Day) plus a continuous, pure rule-based Algo strategy portfolio. Analyst agents analyze stocks in Swing/Day; the Algo service selects deterministic strategy modules from its market regime. Trades execute on Alpaca paper trading through the shared **code-enforced risk management layer**.
+Multi-agent AI trading system with separate Swing, Day, and Algo paper accounts. Analyst agents analyze stocks in Swing and Day. One continuous Algo coordinator selects strategy modules with a deterministic SPY regime check and manages their persisted lifecycles. All three routes use the shared **code-enforced risk management layer**.
 
 **Multi-provider LLM support** — 13 providers: OpenAI, Anthropic, Google, DeepSeek, Groq, Ollama, xAI, OpenRouter, Azure OpenAI, GigaChat, Alibaba, Meta, Mistral.
 
 **Zero paid data APIs required.** Hybrid data layer uses SEC EDGAR + yfinance. Works fully free out of the box.
 
-> Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), extended with dual-mode trading, code-enforced risk management, free data sources, Alpaca execution, custom agents, and autonomous strategy evolution.
+> Built on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), extended with separate trading routes, code-enforced risk management, free data sources, Alpaca execution, custom agents, and strategy research.
 
 ---
 
@@ -17,25 +17,25 @@ Multi-agent AI trading system with two LLM-driven trading modes (Swing and Day) 
 | LLM providers | Single provider | **13 providers (Ollama, OpenAI, Anthropic, Google, etc.)** |
 | Financial data | financialdatasets.ai ($200/mo) | **Hybrid: SEC EDGAR + yfinance (free)** |
 | Trade execution | Simulated only | **Alpaca paper trading — market, limit, bracket, OCO, trailing stop** |
-| Trading modes | Single mode | **Swing + Day agent modes and a dedicated Algo strategy portfolio** |
+| Trading routes | Single mode | **Swing + Day agent modes and a dedicated Algo strategy portfolio** |
 | Risk management | Basic | **Code-enforced risk manager — hard stops, circuit breakers, position limits** |
-| Mode steering | N/A | **`trading_mode.json` — agent decides or human overrides** |
+| Mode steering | N/A | **`trading_mode.json` steers Swing/Day; Algo has its own coordinator** |
 | Performance tracking | None | **Daily snapshots, SPY/QQQ comparison, Sharpe ratio** |
-| Short selling | Not supported | **Full short selling support** |
+| Short positions | Not supported | **Existing short positions can be covered; new short entries are disabled** |
 | Analyst agents | 12 built-in | **20 agents (12 + apex + market regime + 6 data/quant)** |
 | Custom agents | Not supported | **Create your own analyst agents** |
 | Automation | Manual runs | **Scheduled OpenClaw agent pipeline** |
-| Strategy evolution | None | **AutoResearch loop — AI evolves strategy.py overnight** |
+| Strategy research | None | **AutoResearch loop for Day strategy experiments; Algo parameters are not auto-adapted** |
 
 ---
 
-## Dual-Mode Architecture
+## Three Trading Routes
 
-The system operates in two modes with separately configured Alpaca accounts. Account-aware scripts accept `--mode swing|day` and use the matching credentials; see the CLI reference for each script's flags. Swing and Day positions are not tagged by strategy inside Alpaca. Do not point both active cron families at the same account: Day's EOD flatten operates on every position in its selected account, including any Swing positions there.
+Swing and Day are agent-driven routes. Algo runs as a separate continuous service. Account-aware scripts accept `--mode swing|day|algo` where supported and use the matching credentials. Swing and Day positions are not tagged by strategy inside Alpaca. Keep their accounts separate: Day's daily flatten closes every position and order in its selected account.
 
 ### Mode Selection
 
-The agent autonomously picks its mode each morning, or a human can override:
+The Swing/Day route can be set by a CLI flag or the steering file. The Algo coordinator does not use this resolver:
 
 ```
 Priority order:
@@ -43,7 +43,7 @@ Priority order:
   2. override in trading_mode.json (human steering with optional expiry)
   3. mode field in trading_mode.json (auto / swing / day)
   4. TRADING_MODE env var          (fallback)
-  5. Default: swing               (safe baseline)
+  5. Default: swing
 ```
 
 **`trading_mode.json`** — the steering file:
@@ -60,7 +60,7 @@ Priority order:
 }
 ```
 
-When `mode` is `"auto"`, the agent checks VIX, pre-market gaps, and the economic calendar at market open and picks the appropriate mode. Humans can override anytime:
+The `auto_rules` text in this file is guidance, not an implemented VIX/gap decision engine. In `run_hedge_fund.py` and `run_analysis.py`, unresolved `auto` currently falls back to Swing. OpenClaw jobs pass explicit Swing or Day modes. A human can override the steering file:
 
 ```python
 # Human override: day mode for 4 hours
@@ -72,7 +72,7 @@ set_mode("day", reason="FOMC day", updated_by="human", override=True, override_h
 
 ### Multi-Account Routing
 
-Swing and Day operate on their configured Alpaca accounts. Algo is a separate account route for the continuous autonomous strategy portfolio. All Algo strategy families use the same portfolio state machine and submit through `execute_trades.py --mode algo` and the code-enforced 11-rule `risk_manager.py`.
+Swing, Day, and Algo operate on their configured Alpaca accounts. Algo has one coordinator and persisted lifecycle records for each strategy and ticker. Its coordinator submits orders through `execute_trades.py --mode algo` and the code-enforced 11-rule `risk_manager.py`; direct Algo execution without the active coordinator lease is rejected.
 
 | Mode | Account | Purpose |
 |---|---|---|
@@ -86,10 +86,12 @@ Credentials are configured in `.env`:
 # Primary / Swing account (required)
 ALPACA_API_KEY=your_swing_key
 ALPACA_API_SECRET=your_swing_secret
+ALPACA_ACCOUNT_ID=your_swing_paper_account_id
 
 # Day trading account (required for Day mode; must be a separate account)
 ALPACA_DAY_API_KEY=your_day_key
 ALPACA_DAY_API_SECRET=your_day_secret
+ALPACA_DAY_ACCOUNT_ID=your_day_paper_account_id
 
 # Dedicated Algo paper account (required for the Algo service)
 ALPACA_ALGO_API_KEY=your_algo_paper_key
@@ -97,7 +99,7 @@ ALPACA_ALGO_API_SECRET=your_algo_paper_secret
 ALPACA_ALGO_ACCOUNT_ID=your_algo_paper_account_id
 ```
 
-Account routing is handled by `src/accounts.py`. Account-aware scripts use the credentials selected by `--mode`; if that mode's credentials are missing, they stop with an error instead of falling back to another account. Configure separate Swing, Day, and Algo Alpaca accounts before enabling their jobs or service. Day's end-of-day flatten closes every position in its selected account.
+Account routing is handled by `src/accounts.py`. Account-aware scripts use the credentials selected by `--mode`; missing credentials or a broker account ID mismatch stop live operations instead of falling back to another account. Configure separate Swing, Day, and Algo Alpaca accounts before enabling their jobs or service. Day's daily flatten closes every position in its selected account.
 
 ```python
 from src.accounts import get_account_for_mode
@@ -108,11 +110,33 @@ acct.headers  # ready-to-use API headers
 
 ### Autonomous Algo Portfolio
 
-Mean reversion, trend following, momentum, and opening-range breakout are equal strategy modules in one persistent portfolio state machine. The deterministic SPY regime filter selects which strategies may open positions. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. The strategy state and ownership map live in `data/algo_state.json`.
+Mean reversion, trend following, momentum, and opening-range breakout are strategy modules coordinated in one portfolio. The deterministic SPY regime filter selects which strategies may open positions. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
 
-The service scans throughout Alpaca's weekday US trading sessions using New York time and the broker calendar. It covers overnight (20:00–04:00 ET), premarket (04:00–09:30 ET), regular hours, and after-hours (regular close–20:00 ET). Overnight symbols must be marked `overnight_tradable`. Extended-hours entries and exits use fresh quotes and simple limit DAY orders with `extended_hours=true`; positions keep their strategy stop/target in persisted state and are monitored by the running service. Regular-session orders continue through the shared executor and risk manager. The portfolio allows 40 new buy entries per New York day and 20 open positions, with the configured position, sector, cash, and drawdown limits.
+The service scans throughout Alpaca's US equity sessions using New York time and the broker calendar. Set `ALPACA_DATA_TIER=basic` while using the free plan (the default): regular sessions use IEX, overnight history uses delayed `feed=boats`, and overnight quotes use the indicative `feed=overnight`. When Algo Trader Plus is active, set `ALPACA_DATA_TIER=algo_trader_plus`: regular sessions use SIP and overnight bars and quotes use BOATS without the Basic-plan 15-minute history delay. The tier setting changes feed selection only; account keys and execution remain paper-only. Overnight symbols must be marked `overnight_tradable`. Entries with Basic's delayed bars remain enabled, subject to freshness, spread, ownership, account, and risk checks. Extended-hours orders use simple limit DAY orders with `extended_hours=true`. Regular-session orders continue through the shared executor and risk manager. Algo's 40-entry quota follows its 20:00–20:00 ET trading session and it allows 20 open positions, subject to the configured position, sector, cash, and drawdown limits. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for plan-specific feed access.
 
-The Algo quote adapter uses Alpaca for both data and execution, reads `ALPACA_ALGO_*` credentials, and verifies the returned paper account ID before starting. The account route is paper-only in this service. The regime advisor is optional and can only reorder deterministic-active strategies; it has no broker access and cannot create ticker signals.
+Extended-hours entries have software-managed stops and targets. The coordinator attaches a broker-verified full-size OCO during the next regular session once no symbol order remains open. For positions with broker bracket or OCO protection, a competing software exit signal is deferred while the protective order remains open: Alpaca can leave a cancellation in `pending_cancel`, which may neither release the shares nor preserve the stop. The service reports the suppressed exit and reevaluates it after broker reconciliation. A stale or failed historical bar request pauses new entries but does not disable quote-driven protective checks on owned positions.
+
+#### Algo portfolio replay
+
+`src.algo.backtest` replays the deterministic Algo regime selector, strategy rules, shared sizing, and hard risk validator over stored regular-session 5-minute bars. It fills signals no earlier than the next bar open, models adverse slippage, and reports its assumptions with every run. It is research-only and cannot submit orders.
+
+The local SQLite market store defaults to `data/algo_market.sqlite3`. Feed, adjustment, symbol, interval, and timestamp are separate keys, so Basic IEX history and later Algo Trader Plus SIP history can coexist. Fetching the same feed again updates overlapping bars; it does not mix SIP and IEX prices. The fetch command also stores 180 days of SPY daily bars for regime warmup:
+
+```bash
+poetry run python -m src.algo.backtest fetch --symbols AAPL,MSFT,NVDA --start 2026-07-01 --end 2026-10-01
+poetry run python -m src.algo.backtest coverage
+poetry run python -m src.algo.backtest run --symbols AAPL,MSFT,NVDA --start 2026-07-01 --end 2026-10-01 --output reports/algo-replay.json
+poetry run python -m src.algo.slippage_sensitivity --symbols AAPL,MSFT,NVDA --start 2026-07-01 --end 2026-10-01 --slippage-grid 0,2,5,10,20
+poetry run python -m src.algo.walk_forward --symbols AAPL,MSFT,NVDA --start 2026-07-01 --end 2026-10-01 --profiles autoresearch/algo-profiles.example.json --train-days 30 --test-days 10
+```
+
+On Basic, fetch defaults to IEX; after setting `ALPACA_DATA_TIER=algo_trader_plus`, it defaults to SIP. Fetch the selected date range again after upgrading before running with SIP. Replay currently covers regular hours only. It uses a fixed supplied symbol list, does not reconstruct historical universe membership, omits LLM advice, assumes the stop executes first when both bracket legs are touched within one bar, and does not model commissions or regulatory fees. Free historical bars do not contain the live quote stream, so slippage is configurable rather than inferred from quotes. These reports are for evaluating the model and its stability, not performance forecasts.
+
+The slippage sensitivity runner holds the strategy profile, symbols, dates, feed, and risk limits constant while varying adverse basis-point assumptions. The walk-forward runner chooses among a small supplied candidate list on each preceding training window and evaluates the selected profile on the next non-overlapping window. Candidate profiles can change signal rules only; portfolio risk settings and live settings are never modified. Each holdout fold starts with a flat portfolio and fresh capital, so fold results measure stability rather than one continuous deployable equity curve. The current 47-symbol replay uses one recorded universe snapshot across the whole period; the dynamic selector's historical daily memberships were not persisted. A valid dynamic-universe walk-forward needs those dated snapshots. BOATS cannot be passed to these regular-session replay commands: overnight bars need a separate session calendar, entry cutoff, and overnight order/fill model first.
+
+An optional parameter profile can change strategy signal inputs while risk settings remain fixed. The checked-in example is `autoresearch/algo-profile.example.json`; profile values are range-checked and each report includes a hash for reproducibility. The existing research loop should use this replay and chronological walk-forward splits before any candidate is considered for paper shadowing. It must not write tuned values into live settings automatically.
+
+The Algo quote adapter uses Alpaca for both data and execution, reads `ALPACA_ALGO_*` credentials, and verifies the returned paper account ID before starting. The account route is paper-only in this service. The local regime advisor is enabled by default and can only reorder deterministic-active strategies; it has no broker access and cannot create ticker signals.
 
 #### Algo paper account setup
 
@@ -125,6 +149,14 @@ ALPACA_ALGO_ACCOUNT_ID=your_algo_paper_account_id
 ```
 
 The daemon requires all three values and fails closed if the API reports a different account. `ALPACA_ALGO_ACCOUNT_ID` may match the API response's UUID `id` or its `account_number`. A mismatch stops the service cleanly; correct the identifier or use the keys belonging to the intended paper account, then restart. Reserve this account for the Algo portfolio: existing positions in subscribed symbols can be managed by their owning strategy. Keep `.env` private.
+
+After creating a new Algo paper account, stop the service, configure that account's new keys and ID, and verify it is active with zero positions and order history. Archive both `data/algo_state.sqlite3` and `data/algo_state.json` before restarting; the JSON file would otherwise migrate old ownership into a new database. Keep the old journal and snapshots as audit history. Capture the new account's opening weekly loss baseline once while it is still unused:
+
+```bash
+poetry run python -m src.account_baseline --mode algo
+```
+
+The command checks the broker account, age, equity, cash, positions, and order history and will not move an existing baseline. The coordinator binds its state to the broker account ID on first run and refuses a later mismatch. Current-account performance reports exclude snapshots and journal entries from previous paper accounts.
 
 #### Service installation and operation
 
@@ -142,7 +174,7 @@ sudo systemctl restart swarm-trader-algo.service
 sudo journalctl -u swarm-trader-algo.service -f
 ```
 
-Inspect the persisted state with `poetry run python -m src.algo.daemon --status`. The daemon uses an exclusive process lock, atomically saves state, and assigns deterministic client order IDs before submission. On restart it reconciles its strategy ownership and pending orders against Alpaca positions and open orders. Order fills, including partial fills and terminal rejections/cancellations, drive state transitions; submission is never treated as an immediate fill. Extended-hours positions are software-managed by the continuously running service because Alpaca does not support bracket orders in those sessions.
+Inspect the persisted state with `poetry run python -m src.algo.daemon --status`. The daemon uses an exclusive process lock and a SQLite coordinator lease, commits state transactionally, then writes the JSON compatibility snapshot atomically. On startup it reconciles broker positions, nested orders, exact Algo journal entries, and persisted entry IDs before assigning an owner. Ambiguous ownership, missing verified stops, and inconsistent state pause new entries for review. Order fills, including partial fills and terminal rejections/cancellations, drive lifecycle transitions; submission is never treated as an immediate fill. Extended-hours positions are software-managed by the continuously running service because Alpaca does not support bracket orders in those sessions.
 
 ### Recommended: Separate Trading Agents
 
@@ -151,22 +183,22 @@ For best results, run a **dedicated agent per account** rather than one agent sw
 | Agent | Role | Account | Schedule |
 |---|---|---|---|
 | Swing agent | Multi-day positions, sector rotation | Primary | 3 weekday jobs: 9:30 AM, 12 PM, 3 PM ET |
-| Day agent | Intraday scalps, flat by close | Day trading | 5 weekday jobs: 9:30 AM, 10 AM, 12 PM, 2:30 PM, 3:45 PM ET |
+| Day agent | Intraday scalps, flat by close | Day trading | 5 weekday reports: 9:35 AM, 10 AM, 12 PM, 2:30 PM, 3:45 PM ET |
 
-This provides account and P&L isolation. Each entry still uses the shared code-enforced risk manager, with its configured limits. See [Automation with OpenClaw](#automation-with-openclaw) for cron setup.
+This provides account and P&L isolation. Each entry still uses the shared code-enforced risk manager, with its configured limits. The Day opening cleanup, deadline guard, Algo health check, and close snapshots are separate command jobs. See [Automation with OpenClaw](#automation-with-openclaw).
 
-### Pure Rule-Based Strategy Runner
+### Algo Strategy Runner
 
-The autonomous algo portfolio runs continuously on the dedicated Algo Alpaca account. Start it with `python -m src.algo.daemon --mode algo`. It refreshes the qualified universe once per session and scans the selected strategies every 60 seconds. Deterministic SPY regime ranking controls new entries; every open position remains owned and managed by its strategy state machine.
+The autonomous Algo portfolio runs continuously on the dedicated Alpaca account through `poetry run python -m src.algo.daemon --mode algo`, normally under systemd. It refreshes the qualified universe once per session and scans selected strategies every 60 seconds. Deterministic SPY regime ranking controls new entries; every open position remains owned and managed by its persisted strategy lifecycle, even when that strategy is inactive for new entries.
 
-Each rule family is an independent module with its own entry/exit rules. The universal portfolio state machine tracks each strategy/ticker through `flat → entry_pending → open → exit_pending → cooldown`, reconciles transitions against Alpaca positions and orders, and persists its stop/target and ownership data in `data/algo_state.json`. Strategy ownership keeps one family responsible for managing each position; rule-based exits cancel protective children through the shared executor before submitting a risk-validated exit.
+Each rule family is an independent module with its own entry and exit rules. The coordinator tracks each strategy and ticker through `flat → entry_pending → open → exit_pending → cooldown` (or `quarantined` when attribution is unsafe). Its SQLite state includes stops, targets, pending broker IDs, and owner provenance. A software exit is suppressed while broker protection is active; missing broker protection is repaired through exact order and position checks during regular hours. Algo one-shot execution is removed; direct `execute_trades.py --mode algo` needs the coordinator lease.
 
-The selector reads Alpaca's active, tradable US-equity assets and intersects them with the expanded, preclassified risk catalog. Candidates need at least 60 clean completed daily bars, a $5–$500 last close, and at least $20M average daily dollar volume across the latest 20 sessions. It requests SIP bars for consolidated volume and falls back to IEX if SIP is unavailable; this feed choice is configurable in `STRATEGY_CONFIG`. It ranks liquidity with a soft preference for moderate volatility and caps each risk theme by the existing risk-manager allocation settings. Existing strategy-owned positions remain subscribed for exits even if they fall out of the refreshed universe. If Alpaca cannot confirm tradability or provide bars, the portfolio pauses new entries rather than using an unverified fallback.
+The selector reads Alpaca's active, tradable US-equity assets and intersects them with the expanded, preclassified risk catalog. Candidates need at least 60 clean completed daily bars, a $5–$500 last close, and at least $20M average daily dollar volume across the latest 20 sessions. It uses IEX on Basic and SIP on Algo Trader Plus; a SIP request failure is retried on IEX and the selected universe records that fallback. It ranks liquidity with a soft preference for moderate volatility and caps each risk theme by the existing risk-manager allocation settings. Existing strategy-owned positions remain subscribed for exits even if they fall out of the refreshed universe. If Alpaca cannot confirm tradability or provide bars, the portfolio pauses new entries rather than using an unverified fallback.
 
-The Swing and Day one-shot scans remain available for their existing account routes and scheduled jobs. They use the same deterministic strategy modules, `execute_trades.py`, and `risk_manager.py`; `--execute` submits orders from a one-shot scan.
+Swing and Day one-shot scans remain available for diagnostics and explicit execution. They use the same deterministic strategy modules, `execute_trades.py`, and `risk_manager.py`; `--execute` submits orders from a one-shot scan.
 
 ```bash
-# One-shot Swing/Day diagnostics (existing scheduled routes)
+# One-shot Swing/Day diagnostics
 poetry run python -m src.strategies.runner --mode swing
 poetry run python -m src.strategies.runner --mode day
 
@@ -180,9 +212,9 @@ poetry run python -m src.algo.daemon --mode algo
 poetry run python -m src.strategies.runner --mode day --execute
 ```
 
-The deterministic SPY filter activates trend following, momentum, mean reversion, and opening-range breakout according to regime. Strategy modules return one common signal shape and send compatible orders through the shared executor with risk-based sizing and stop/target prices. Strategy ownership and software-managed protections remain active regardless of which strategies the current regime selects for new entries.
+The deterministic SPY filter activates trend following, momentum, mean reversion, and opening-range breakout according to regime. Strategy modules return one common signal shape and send compatible orders through the shared executor with risk-based sizing and stop/target prices. Strategy ownership and protection checks remain active regardless of which strategies the current regime selects for new entries.
 
-The selector can also use a local Ollama model as a ranking advisor. Set `STRATEGY_REGIME_LLM_ENABLED=true` and `STRATEGY_REGIME_LLM_MODEL=phi3:mini` to enable it. Its output only reorders deterministic-active strategies; failures keep the deterministic ordering, and it never receives broker access or emits ticker-level signals. It is disabled by default.
+The selector uses the installed local Ollama `phi3:mini` model as a ranking advisor. Its output only reorders deterministic-active strategies; failures keep the deterministic ordering, and it never receives broker access or emits ticker-level signals. Set `STRATEGY_REGIME_LLM_ENABLED=false` to disable it.
 
 Pairs analysis uses 60 daily bars, correlation, and an OLS spread z-score. It reports candidate spreads only: the existing executor cannot submit two legs atomically, so the portfolio never opens an unhedged pair. Trade journal rows include strategy attribution, and `performance_tracker_v2.py --json --mode algo` reports activity for the Algo account.
 
@@ -216,7 +248,7 @@ Position trading over days to weeks. Diversified universe with conservative risk
 
 ### Day Trading Mode
 
-Intraday trading with tighter stops, larger positions, and mandatory end-of-day flatten.
+Intraday trading with tighter stops, larger positions, and mandatory daily flatten. Flatten is needed because this route promises intraday exposure and an account-wide clean start each trading day.
 
 | Parameter | Value |
 |---|---|
@@ -229,7 +261,7 @@ Intraday trading with tighter stops, larger positions, and mandatory end-of-day 
 | Max positions | 8 |
 | Cash reserve | Min 10% |
 | Leveraged ETFs | ✅ Allowed (intraday only) |
-| Overnight holds | ❌ Flattens by 3:45 PM ET |
+| Overnight holds | ❌ Flattens by 3:45 PM ET on a regular session; earlier on early closes |
 | Circuit breaker | -3% daily, -8% weekly |
 
 **Day universe:**
@@ -241,13 +273,16 @@ Intraday trading with tighter stops, larger positions, and mandatory end-of-day 
 | ETF Direction | SPY, QQQ, TQQQ, SOXL, SPCX, GLD, TLT, IWM, DIA, XLK, XLF, XLE, XLV | 30% |
 
 **Day trading features:**
+
 - **5-min intraday bars** from Alpaca market data API
 - **VWAP** — volume-weighted average price
 - **RSI(14)** on 5-min timeframe
 - **Volume ratio** — today's volume vs 20-day average
 - **Dynamic market scanner** (`scan_market.py`) — discovers today's movers
 - **Market regime detection** — trending, range-bound, or volatile
-- **Mandatory EOD flatten** — `portfolio_monitor.py` auto-sells all positions after 3:45 PM ET
+- **Verified opening cleanup** — repeated `execute_trades.py --mode day --flatten` runs before the first Day agent report. A successful check verifies zero broker positions and open orders and writes an account-bound `data/day_recovery.json` receipt for that New York date. New Day buys require today's receipt.
+- **Calendar-aware flatten** — `execute_trades.py --mode day --flatten-if-due` uses Alpaca's exchange calendar. The deadline is the earlier of 3:45 PM ET or 15 minutes before an early close; new entries stop 15 minutes before that deadline. The command cancels orders, closes residual positions, and succeeds only after verifying zero positions and open orders.
+- **Close snapshot** — after the broker's actual close, `performance_tracker_v2.py --mode day --snapshot --force --snapshot-kind close` records a marked baseline for later drawdown checks.
 
 ### Algo Portfolio Risk Mode
 
@@ -271,24 +306,18 @@ Position count and entry throughput rise together, while individual size stays a
 
 ## Architecture
 
-![Swarm Trader Architecture](docs/architecture.png)
-
 ```
-trading_mode.json        →  Agent picks swing or day mode
-    ↓
-Market Scanner + Portfolio State
-    ↓
-Data Agents (6 quant) + LLM Analysts (13 personalities) + Market Regime
-    ↓
-Portfolio Manager (aggregates signals, sizes positions)
-    ↓
-risk_manager.py          →  Code-enforced validation (rejects rule violations)
-    ↓
-execute_trades.py        →  Alpaca bracket orders with mandatory stops
-    ↓
-portfolio_monitor.py     →  Auto-sells stops, compares to SPY
-    ↓
-performance_tracker_v2.py →  Daily snapshots, Sharpe ratio, alpha tracking
+Swing/Day agents + explicit mode       Algo daemon + deterministic SPY regime
+        │                                    │  optional local ranking advice
+        │                                    ├── per-strategy SQLite lifecycle
+        │                                    └── broker/journal reconciliation
+        └──────────────────┬─────────────────┘
+                           ↓
+             Account verification + risk_manager.py
+                           ↓
+            execute_trades.py → separate Alpaca paper accounts
+                           ↓
+     Broker order/fill reconciliation + close snapshots + reports
 ```
 
 ---
@@ -313,13 +342,15 @@ The risk manager (`risk_manager.py`) enforces **11 hard rules** that no agent ca
 | 10 | Max sector allocation | 30% | 50% | 32% per configured bucket |
 | 11 | Tactical/high-risk cap | 3% total | No cap | 15% total |
 
-### Mandatory Stop Losses
+### Stop Losses
 
-Every buy order automatically gets a bracket order with a stop loss:
-- **Swing:** -7% hard stop from entry + 15% trailing stop from peak
-- **Day:** -1.2% hard stop + 3% trailing stop from intraday high
+The configured defaults are:
 
-`portfolio_monitor.py` continuously checks all positions against stops and auto-sells anything that breaches.
+- **Swing:** -7% hard stop from entry + 15% trailing stop from peak.
+- **Day:** -1.2% hard stop + 3% trailing stop from intraday high.
+- **Algo:** strategy stop/target where supplied, with 1% hard-stop and 3% trailing defaults.
+
+Regular-session entries with stop and target levels use broker brackets. Extended-hours Algo orders cannot use those brackets, so the coordinator monitors persisted software levels using fresh quotes. `portfolio_monitor.py` checks Swing and Day positions when invoked by their jobs; do not assume it runs continuously.
 
 ### Status Check
 
@@ -333,36 +364,40 @@ poetry run python risk_manager.py --status --mode day
 
 ## Performance Tracking
 
-`performance_tracker_v2.py` tracks daily performance against SPY and QQQ benchmarks.
+`performance_tracker_v2.py` tracks each account's equity against SPY and QQQ benchmarks. Use an explicit `--mode` so the report reads the intended paper account.
 
 ```bash
-# Take today's snapshot
-poetry run python performance_tracker_v2.py --snapshot
+# Record a close baseline after Alpaca's actual market close
+poetry run python performance_tracker_v2.py --mode swing --snapshot --force --snapshot-kind close
 
 # View performance report
-poetry run python performance_tracker_v2.py --report
+poetry run python performance_tracker_v2.py --mode swing --report
 
 # JSON output for automation
-poetry run python performance_tracker_v2.py --report --json
+poetry run python performance_tracker_v2.py --mode algo --json
+
+# Optional read-only gross realized P&L from broker FILL activities
+poetry run python performance_tracker_v2.py --mode algo --json --fill-report
 ```
 
 Tracks:
-- Daily equity snapshots saved to `snapshots/YYYY-MM-DD.json`
-- SPY and QQQ comparison (daily alpha)
-- Rolling 21-day Sharpe ratio
-- Win rate, average win/loss, profit factor (from trade journal)
+
+- Mode-specific daily equity snapshots: Swing in `snapshots/`, Day in `snapshots/day/`, and Algo in `data/snapshots/algo/`.
+- Broker-calendar-verified `snapshot_kind=close` baselines, SPY and QQQ comparison, and rolling 21-day Sharpe ratio.
+- Journal submissions separately from broker-confirmed fills; a submitted order is not counted as an execution.
+- Optional FIFO gross realized P&L from all available broker FILL activity pages. Attribution requires exact mode-tagged journal order IDs or verified bracket child links. Missing buy basis, mismatched broker inventory, or uncertain attribution is reported rather than guessed; incomplete basis makes the command exit nonzero. Fees, dividends, transfers, splits, and tax-lot accounting are outside this report.
 
 ---
 
 ## AutoResearch — Strategy Evolution Lab
 
-> Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) — Andrej Karpathy's autonomous AI research framework. We applied the same loop to trading strategy evolution.
+> Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) for paper trading research.
 
-An AI agent modifies `strategy.py` (pure Python — indicators, thresholds, signal logic), runs a fast backtest, measures fitness, keeps or reverts. ~50 experiments per overnight run.
+An AI agent modifies `autoresearch/strategy.py`, runs a fast backtest, measures fitness, and keeps or reverts each candidate. The currently enabled `autoresearch-run` OpenClaw job runs **five iterations in Day mode** after market close. The command supports a `--mode swing` path, but the active job does not exercise it; the prompts and validation still emphasize Day behavior. Backtests now route through the selected Swing or Day paper account and use the configured Basic/IEX or Plus/SIP feed; cache keys and result metadata record the feed. Algo's separate strategy modules and coordinator do **not** consume AutoResearch output or change live Algo parameters automatically.
 
 | | Karpathy's autoresearch | Swarm Trader AutoResearch |
 |---|---|---|
-| What evolves | `train.py` (PyTorch training) | `strategy.py` (intraday trading rules) |
+| What evolves | `train.py` (PyTorch training) | `autoresearch/strategy.py` (currently Day-oriented rules) |
 | Metric | `val_bpb` (validation loss) | Fitness = Sharpe×0.35 + Sortino×0.25 + Return%×0.20 + WinRate×0.10 + ProfitFactor×0.10 |
 | Budget | 5-min GPU training run | Fast backtest on cached 5-min bars (~30s) |
 | Agent | Claude Code | Claude Code (pinned to Sonnet) |
@@ -376,8 +411,8 @@ poetry run python autoresearch/backtest_fast.py --days 10
 # Run baseline backtest
 poetry run python autoresearch/backtest_fast.py
 
-# Kick off evolution (25 iterations)
-poetry run python autoresearch/evolve.py --iterations 25
+# Run a small manual Day research batch
+poetry run python autoresearch/evolve.py --mode day --iterations 5
 
 # Review results
 poetry run python autoresearch/analyze.py
@@ -396,12 +431,9 @@ poetry run python autoresearch/analyze.py
 
 ### From Research to Production
 
-AutoResearch and live trading are **intentionally decoupled** — no auto-bridge. This is a safety feature.
+`src/agents/autoresearch_agent.py` is a deterministic analyst bridge that imports the evolved strategy into the Swing/Day committee when selected. **`run_hedge_fund.py` selects it by default, even with `--mode swing`**, so Day-oriented evolved signals can influence Swing decisions unless `--analysts` excludes it. `run_analysis.py` excludes it from its default analyst list. The current OpenClaw trading prompts do not explicitly invoke either CLI. The bridge hardcodes Day context, approximates Eastern time as UTC-4, and caches its import for the process lifetime; an already running process does not hot reload a new experiment. It is not part of the Algo scanner. Research results should be reviewed before using this analyst for paper decisions; the current backtest is a short research screen, not a validated promotion gate.
 
-1. Review `experiments/log.jsonl` — see what improved fitness
-2. Decide if the finding is real alpha or overfitting
-3. Manually update `src/config.py` or agent prompts
-4. Monitor live performance after the change
+The research loop is not yet suitable for adapting Algo parameters: its simulator forces positions flat daily and evaluates a different single-strategy signal, while the Algo portfolio holds positions across sessions and coordinates multiple strategy state machines. Feed and account routing are prepared, but results must not be treated as Algo candidates until a portfolio-aware simulator covers BOATS timing, overnight spreads, broker orders, and per-strategy risk checks. Any future candidates should use separate validation periods and require review before promotion.
 
 ---
 
@@ -411,10 +443,14 @@ AutoResearch and live trading are **intentionally decoupled** — no auto-bridge
 |---|---|---|---|
 | Prices (OHLCV) | yfinance | swing | 15 min |
 | 5-min intraday bars | Alpaca market data API | day | none (live) |
+| Overnight completed 5-min bars | Alpaca `feed=boats` | algo | At least 15-minute historical delay |
+| Overnight bid/ask quotes | Alpaca `feed=overnight` | algo | Freshness gate: 90 seconds |
+| Regular/extended session bars and quotes | Alpaca IEX, SIP for universe where available | algo | Scan-dependent |
 | VWAP / RSI / volume | Calculated from bars | day | none |
 | Financial metrics | yfinance + SEC EDGAR XBRL | swing | 24 hrs |
 | Insider trades | SEC EDGAR Form 4 | swing | 7 days |
 | Company news | yfinance news feed | both | 15 min |
+| Broker fills | Alpaca account activities | reporting | Paginated when requested |
 
 ---
 
@@ -425,7 +461,7 @@ AutoResearch and live trading are **intentionally decoupled** — no auto-bridge
 - Python 3.11+
 - [Poetry](https://python-poetry.org/)
 - [Alpaca](https://app.alpaca.markets) paper trading account (free)
-- At least one LLM provider configured
+- An LLM provider for Swing/Day analyst runs; the deterministic Algo service does not require one
 
 ### Setup
 
@@ -443,11 +479,17 @@ Edit `.env`:
 # Required — Alpaca paper trading (primary / swing account)
 ALPACA_API_KEY=your_key_here
 ALPACA_API_SECRET=your_secret_here
+ALPACA_ACCOUNT_ID=your_swing_paper_account_id
 
-# Optional — Separate day trading account
-# If set, day mode trades on this account. If not, both modes share the primary.
+# Required for Day mode — a separate paper account
 ALPACA_DAY_API_KEY=your_day_key_here
 ALPACA_DAY_API_SECRET=your_day_secret_here
+ALPACA_DAY_ACCOUNT_ID=your_day_paper_account_id
+
+# Required for the continuous Algo service — a third paper account
+ALPACA_ALGO_API_KEY=your_algo_key_here
+ALPACA_ALGO_API_SECRET=your_algo_secret_here
+ALPACA_ALGO_ACCOUNT_ID=your_algo_paper_account_id
 
 # LLM provider (at least one)
 OPENAI_API_KEY=
@@ -456,8 +498,8 @@ GOOGLE_API_KEY=
 GROQ_API_KEY=
 DEEPSEEK_API_KEY=
 
-# Optional — trading mode (default: swing)
-TRADING_MODE=auto
+# Optional Swing/Day fallback if trading_mode.json is absent
+TRADING_MODE=swing
 ```
 
 ### Verify
@@ -485,7 +527,7 @@ poetry run python check_portfolio.py --mode swing
 # Preview stop monitoring without placing sells
 poetry run python portfolio_monitor.py --mode swing --dry-run
 
-# Rebalance — sell anything outside the swing universe
+# Preview sales for positions outside the swing universe
 poetry run python rebalance.py --mode swing
 ```
 
@@ -498,12 +540,15 @@ TICKERS=$(poetry run python scan_market.py --max 25)
 # Gather intraday data
 poetry run python gather_data.py --mode day --tickers $TICKERS --output /tmp/data.json
 
-# Execute trades
+# Verify and clear residual Day exposure before new Day buys
+poetry run python execute_trades.py --mode day --flatten
+
+# Execute trades after a verified opening cleanup
 echo '{"trades":[{"ticker":"NVDA","action":"buy","qty":10}]}' | \
   poetry run python execute_trades.py --mode day
 
-# Flatten all positions (end of day)
-poetry run python execute_trades.py --mode day --flatten
+# Calendar-aware guard: no-op before the deadline, verified flatten when due
+poetry run python execute_trades.py --mode day --flatten-if-due
 
 # Market pulse check
 poetry run python check_moves.py --mode day
@@ -517,14 +562,14 @@ poetry run python check_moves.py --mode day
 
 | Type | When to use | Key fields |
 |---|---|---|
-| `market` | Default — fill immediately | — |
+| `market` | Broker-submitted market order; fill is confirmed separately | — |
 | `limit` | Enter/exit at a specific price | `limit_price` |
 | `bracket` | Entry with automatic stop + target | `stop_price`, `take_profit` |
 | `stop` | Standalone stop-loss on existing position | `stop_price` |
 | `oco` | Exit-only: stop + take-profit on existing | `stop_price`, `take_profit` |
 | `trailing_stop` | Stop that rises with price | `trail_percent` |
 
-In swing mode, every buy automatically gets a bracket order with -7% stop. In day mode, stops are managed by the portfolio monitor.
+Regular-hours buys with supplied stop and target levels use broker brackets. Algo extended-hours orders are simple limit orders with software-managed levels, and protected regular-hours positions defer outside-hours replacement exits. A submission response does not mean the order filled.
 
 ---
 
@@ -568,246 +613,28 @@ Create your own — see `src/agents/mordecai.py` as a template. Register in `src
 
 ## Automation with OpenClaw
 
-The system can run autonomously via [OpenClaw](https://github.com/openclaw/openclaw) cron jobs. Swing and Day use dedicated trading agents; the Algo agent is monitor-only and reports the `swarm-trader-algo.service`, active universe and changes, current regime/strategies, positions, risk status, and executed trades.
+Swing and Day use dedicated OpenClaw agents for scheduled analysis and reports. The Algo daemon trades independently; its OpenClaw agent reports service health, persisted strategy ownership, scan freshness, regime, account risk, and broker-confirmed order events. The report agent does not place trades. All trader jobs use `America/New_York` so market-time schedules follow daylight saving changes.
 
-### Trading Agents and Algo Portfolio Monitor
+Deterministic Gateway command jobs provide the operational guards:
 
-OpenClaw cron expressions below use `America/New_York` (ET).
+- `day-open-recovery` repeats the verified Day account cleanup from 9:30 through 9:34 AM ET. The first Day agent report starts at 9:35 AM, and new Day buys require that day's successful recovery receipt.
+- `day-flatten-guard` checks the broker-calendar deadline every five minutes from noon through 4 PM ET on weekdays. The existing 3:45 PM Day report also checks the flatten result. Early closes move the deadline earlier.
+- Swing, Day, and Algo close-snapshot jobs record account-specific `snapshot_kind=close` baselines after the actual exchange close. Holidays are successful skips.
+- `algo-health` runs every ten minutes, including Sunday overnight, and exits nonzero on stale scans, state problems, broker protection gaps, or an inactive service.
 
-| Time (ET) | Agent | Job | Purpose |
-|---|---|---|---|---|
-| 9:30 AM | Day trader | `day-morning` | Market-open scan, VIX check, identify targets |
-| 9:30 AM | Swing trader | `swing-morning` | Health check, run stops, take snapshot |
-| 9:35 AM | Algo monitor | `algo-morning` | Service, universe, regime, positions, risk and order update |
-| 10:00 AM | Day trader | `day-brunch` | Opening follow-up, refresh candidates, confirmed setups |
-| 11:35 AM | Algo monitor | `algo-midday` | Mid-session portfolio and order update |
-| 12:00 PM | Day trader | `day-midday` | Position check, refresh candidates, afternoon trades |
-| 12:00 PM | Swing trader | `swing-midday` | Analysis, propose and execute trades |
-| 2:30 PM | Day trader | `day-afternoon` | Position check, refresh candidates, afternoon trades |
-| 3:00 PM | Swing trader | `swing-afternoon` | EOD review, final stops, performance report |
-| 3:45 PM | Day trader | `day-flatten` | **Mandatory flatten** — close all Day positions, EOD report |
-| 4:05 PM | Algo monitor | `algo-close` | End-of-day portfolio and fill update |
-
-### Swing Agent Crons
+The four Algo report jobs cover premarket, morning, midday, and close. Report jobs announce their summaries; command jobs alert on failures without delivering normal stdout. Existing trader and AutoResearch jobs also have explicit failure alerts and bounded timeouts. See [the maintained OpenClaw schedule and alert reference](ops/openclaw-crons.md) for the current job names, cron expressions, and operating details. Inspect the live declarations with:
 
 ```bash
-# Morning health check (9:30 AM Mon-Fri)
-openclaw cron add --name swing-morning \
-  --cron "30 9 * * 1-5" --tz "America/New_York" --exact \
-  --agent swing-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Morning health check.
-    1. Run: poetry run python portfolio_monitor.py --mode swing
-    2. Run: poetry run python risk_manager.py --status --mode swing
-    3. Run: poetry run python performance_tracker_v2.py --mode swing --snapshot --force
-    4. Brief report: equity, stops triggered, SPY comparison.'
-
-# Midday analysis (12:00 PM Mon-Fri)
-openclaw cron add --name swing-midday \
-  --cron "0 12 * * 1-5" --tz "America/New_York" --exact \
-  --agent swing-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Midday analysis.
-    1. Gather data: poetry run python gather_data.py --mode swing --include-universe
-    2. Analyze the gathered Swing universe and current Swing positions
-    3. Execute confirmed JSON decisions with: poetry run python execute_trades.py --mode swing
-    4. Report: trades executed, rejections from risk manager.'
-
-# Afternoon review (3:00 PM Mon-Fri)
-openclaw cron add --name swing-afternoon \
-  --cron "0 15 * * 1-5" --tz "America/New_York" --exact \
-  --agent swing-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Afternoon review.
-    1. Run: poetry run python portfolio_monitor.py --mode swing
-    2. Run: poetry run python performance_tracker_v2.py --mode swing --snapshot --force
-    3. EOD report: daily P&L, alpha vs SPY, overnight positions.'
+openclaw cron list --all --json
 ```
 
-### Day Trading Agent Crons
-
-```bash
-# Market-open scan (9:30 AM ET Mon-Fri)
-openclaw cron add --name day-morning \
-  --cron "30 9 * * 1-5" --tz "America/New_York" --exact \
-  --agent day-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Market-open scan.
-    1. Check VIX and economic calendar
-    2. Run: poetry run python scan_market.py --max 25 and retain its comma-separated ticker output
-    3. Pass those tickers to: poetry run python gather_data.py --mode day --tickers <comma-separated tickers>
-    4. Report: VIX level, scanned targets with entry zones, caution flags.'
-
-# Opening follow-up (10:00 AM ET Mon-Fri)
-openclaw cron add --name day-brunch \
-  --cron "0 10 * * 1-5" --tz "America/New_York" --exact \
-  --agent day-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Day opening follow-up.
-    1. Run: poetry run python portfolio_monitor.py --mode day to check the Day account and apply its configured stop rules.
-    2. Refresh candidates with poetry run python scan_market.py --max 25 and retain its comma-separated ticker output.
-    3. Pass those tickers to poetry run python gather_data.py --mode day --tickers <comma-separated ticker output>.
-    4. Review only Day account positions and fresh intraday data for confirmed setups. Do not treat Swing positions as Day positions.
-    5. Submit only confirmed decisions as valid JSON shaped like {"trades":[...]} to poetry run python execute_trades.py --mode day.
-    6. If no setup is confirmed, submit no orders. Report Day account equity, cash, P&L, open positions, stop actions, orders, and risk rejections.'
-
-# Midday position check (12:00 PM ET Mon-Fri)
-openclaw cron add --name day-midday \
-  --cron "0 12 * * 1-5" --tz "America/New_York" --exact \
-  --agent day-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Midday check.
-    1. Run: poetry run python portfolio_monitor.py --mode day
-    2. Run: poetry run python scan_market.py --max 25 and retain its comma-separated ticker output
-    3. Pass those tickers to: poetry run python gather_data.py --mode day --tickers <comma-separated tickers>
-    4. Review Day positions and fresh intraday data; identify confirmed afternoon setups
-    5. Execute only confirmed decisions as JSON via: poetry run python execute_trades.py --mode day
-    6. Report Day account equity/P&L, positions, stops, orders, and risk rejections.'
-
-# Afternoon setup review (2:30 PM ET Mon-Fri)
-openclaw cron add --name day-afternoon \
-  --cron "30 14 * * 1-5" --tz "America/New_York" --exact \
-  --agent day-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'Afternoon setup review.
-    1. Run: poetry run python portfolio_monitor.py --mode day
-    2. Run: poetry run python scan_market.py --max 25 and retain its comma-separated ticker output
-    3. Pass those tickers to: poetry run python gather_data.py --mode day --tickers <comma-separated tickers>
-    4. Review Day positions and fresh intraday data; identify confirmed setups before the flatten deadline
-    5. Execute only confirmed decisions as JSON via: poetry run python execute_trades.py --mode day
-    6. Report Day account equity/P&L, positions, stops, orders, and risk rejections.'
-
-# Mandatory EOD flatten (3:45 PM ET Mon-Fri)
-openclaw cron add --name day-flatten \
-  --cron "45 15 * * 1-5" --tz "America/New_York" --exact \
-  --agent day-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --message 'FLATTEN — 15 min to close.
-    1. Run: poetry run python execute_trades.py --mode day --flatten
-    2. Verify flat without placing another sell: poetry run python portfolio_monitor.py --mode day --dry-run
-    3. Run: poetry run python performance_tracker_v2.py --mode day --snapshot --force
-    4. EOD report: Day account daily P&L, positions, win rate, best/worst trade, alpha vs SPY.'
-```
-
-### Algo Portfolio Monitoring Agent and Crons
-
-The Algo portfolio runs as the `swarm-trader-algo.service` systemd daemon. Use a dedicated OpenClaw agent for read-only monitoring; these jobs report service health, regime, active strategies, universe changes and price moves, positions and P&L, risk limits, and broker-confirmed order status. The monitor never places or manages trades.
-
-Create the agent (after configuring OpenClaw's OpenAI provider):
-
-```bash
-openclaw agents add algo-agent \
-  --workspace /opt/swarm-trader \
-  --model openai/gpt-6-luna \
-  --non-interactive
-```
-
-The OpenClaw process must be able to read the Algo service journal. Check that before enabling the jobs:
-
-```bash
-sudo -u openclaw journalctl -u swarm-trader-algo.service --since "10 minutes ago" --no-pager
-```
-
-If that returns a permission error, grant the `openclaw` user read access to the system journal (for example, add it to `systemd-journal`) and restart the OpenClaw Gateway process so it receives the updated group membership. Do not grant the monitoring agent broad `sudo` access.
-
-These three weekday checks use New York time and send a concise portfolio summary to the same Telegram destination as the other examples. Each check reports service health and strategy-scan freshness, the current universe and changes since the preceding check, current regime and active strategies, held positions and their price deltas, account-wide risk usage, and order events with broker fill state distinguished from order submission. An update is sent every time, including when nothing changed.
-
-```bash
-# Morning check (9:35 AM ET, Mon-Fri)
-openclaw cron add --name algo-morning \
-  --cron "35 9 * * 1-5" --tz "America/New_York" --exact \
-  --agent algo-agent \
-  --model openai/gpt-6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --tools exec \
-  --message 'Run `cd /opt/swarm-trader && poetry run python -m src.algo.monitor_report` and format its JSON as a concise Telegram update (about 1,200 characters; max 2,000). Read-only: never place, cancel, or modify orders. Include service health/mode and last scan age, flagging stale scans during market hours; regime/reason and active strategies; universe count and all selected tickers, additions/removals, and largest price moves since the prior report (state when this is the initial baseline); held positions with strategy, quantity, current/entry prices, unrealized P&L, and price delta; daily/weekly P&L, buy entries versus cap, open positions versus limit, and circuit-breaker state; new order events with ticker, side, quantity, strategy, and broker status. Journal status `executed` means submitted; call orders filled only when Alpaca confirms it. Include fill quantity/average price when available. State data gaps. Always send an update, even when there are no changes.'
-
-# Midday check after the new-entry window (11:35 AM ET, Mon-Fri)
-openclaw cron add --name algo-midday \
-  --cron "35 11 * * 1-5" --tz "America/New_York" --exact \
-  --agent algo-agent \
-  --model openai/gpt-6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --tools exec \
-  --message 'Run `cd /opt/swarm-trader && poetry run python -m src.algo.monitor_report` and format its JSON as a concise Telegram update (about 1,200 characters; max 2,000). Read-only: never place, cancel, or modify orders. Include service health/mode and last scan age, flagging stale scans during market hours; regime/reason and active strategies; universe count and all selected tickers, additions/removals, and largest price moves since the prior report (state when this is the initial baseline); held positions with strategy, quantity, current/entry prices, unrealized P&L, and price delta; daily/weekly P&L, buy entries versus cap, open positions versus limit, and circuit-breaker state; new order events with ticker, side, quantity, strategy, and broker status. Journal status `executed` means submitted; call orders filled only when Alpaca confirms it. Include fill quantity/average price when available. State data gaps. Always send an update, even when there are no changes.'
-
-# End-of-day check after the regular session (4:05 PM ET, Mon-Fri)
-openclaw cron add --name algo-close \
-  --cron "5 16 * * 1-5" --tz "America/New_York" --exact \
-  --agent algo-agent \
-  --model openai/gpt-6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --best-effort-deliver \
-  --tools exec \
-  --message 'Run `cd /opt/swarm-trader && poetry run python -m src.algo.monitor_report` and format its JSON as a concise Telegram update (about 1,200 characters; max 2,000). Read-only: never place, cancel, or modify orders. Include service health/mode and last scan age, flagging stale scans during market hours; regime/reason and active strategies; universe count and all selected tickers, additions/removals, and largest price moves since the prior report (state when this is the initial baseline); held positions with strategy, quantity, current/entry prices, unrealized P&L, and price delta; daily/weekly P&L, buy entries versus cap, open positions versus limit, and circuit-breaker state; new order events with ticker, side, quantity, strategy, and broker status. Journal status `executed` means submitted; call orders filled only when Alpaca confirms it. Include fill quantity/average price when available. State data gaps. Always send an update, even when there are no changes.'
-```
-
-**AutoResearch crons** (optional, after market close):
-
-```bash
-# Evolution run (5:00 PM Mon-Fri)
-openclaw cron add --name autoresearch-run \
-  --cron "0 17 * * 1-5" \
-  --agent swing-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --timeout 10800 \
-  --message "poetry run python autoresearch/evolve.py --iterations 50"
-
-# Results report (8:00 PM Mon-Fri)
-openclaw cron add --name autoresearch-report \
-  --cron "0 20 * * 1-5" \
-  --agent swing-agent \
-  --model openai/gpt-5.6-luna \
-  --session isolated \
-  --announce --channel telegram --to 8545556566 \
-  --message "Read autoresearch/experiments/log.jsonl Summarize: experiments, best fitness, top findings."
-```
-
-### Managing Crons
-
-```bash
-openclaw cron list                        # See all jobs
-openclaw cron run swarm-morning           # Trigger manually
-openclaw cron disable swarm-midday        # Pause a job
-openclaw cron enable swarm-midday         # Resume
-openclaw cron rm <job-id>                 # Delete
-```
+The active AutoResearch run is Day-only and uses five iterations. It does not tune Algo parameters; `ALPACA_DATA_TIER` controls the data feed used by current research backtests.
 
 ---
 
 ## CLI Reference
 
-Account-aware scripts should be run with an explicit `--mode swing|day`; each mode routes to its configured Alpaca account.
+Account-aware scripts should be run with an explicit `--mode`; each supported mode routes to its configured Alpaca account. Algo trade execution is reserved for the leased coordinator.
 
 ### Core Scripts
 
@@ -815,10 +642,11 @@ Account-aware scripts should be run with an explicit `--mode swing|day`; each mo
 |---|---|---|
 | `run_hedge_fund.py` | Multi-agent analysis + execution | `--execute`, `--tickers`, `--mode`, `--show-reasoning` |
 | `gather_data.py` | Market data gathering | `--mode`, `--tickers`, `--top N`, `--output` |
-| `execute_trades.py` | Trade execution with risk validation | `--mode`, `--file`, `--flatten`, `--dry-run` |
+| `execute_trades.py` | Trade execution with risk validation | `--mode`, `--file`, `--flatten`, `--flatten-if-due` (Day), `--dry-run` |
 | `risk_manager.py` | Risk status check | `--status`, `--mode` |
 | `portfolio_monitor.py` | Stop loss monitoring + auto-sell | `--mode`, `--dry-run` / `--no-sell` |
-| `performance_tracker_v2.py` | Mode-specific daily snapshots + benchmarking | `--mode`, `--snapshot`, `--report`, `--json`, `--days N` |
+| `performance_tracker_v2.py` | Account-specific snapshots, benchmarking, optional broker fill P&L | `--mode`, `--snapshot`, `--snapshot-kind close`, `--report`, `--json`, `--fill-report`, `--days N` |
+| `python -m src.account_baseline` | One-time weekly loss baseline for a verified unused paper account | `--mode` |
 | `check_portfolio.py` | Quick portfolio overview | `--mode`, `--telegram`, `--json` |
 | `check_moves.py` | Universe pulse check | `--mode` |
 | `rebalance.py` | Sell non-universe positions | `--mode`, `--execute` |
@@ -853,7 +681,16 @@ swarm-trader/
 ├── .env.example               # Secrets template
 ├── src/
 │   ├── config.py              # MODES dict — single source of truth per mode
-│   ├── accounts.py            # Swing/Day routing + explicit Algo account route
+│   ├── accounts.py            # Three paper account routes + broker verification
+│   ├── day_recovery.py        # Daily, account-bound verified opening receipt
+│   ├── market_calendar.py     # Broker-calendar Day deadlines and early closes
+│   ├── fill_analytics.py      # Read-only broker FILL FIFO realized P&L
+│   ├── algo/                 # One coordinator, SQLite state, reconciliation, health
+│   │   ├── daemon.py          # Continuous coordinator and execution lease
+│   │   ├── state_store.py     # Authoritative SQLite strategy/owner state
+│   │   ├── reconciliation.py  # Exact broker and journal ownership checks
+│   │   ├── healthcheck.py     # Read-only daemon, state, broker protection check
+│   │   └── sessions.py       # ET broker sessions and BOATS/overnight feeds
 │   ├── strategies/             # Pure rules, per-strategy state, regime, universe
 │   │   ├── mean_reversion.py   # Bollinger mean reversion + Open Dip adapter
 │   │   ├── trend_following.py  # Moving-average crossover
@@ -863,7 +700,7 @@ swarm-trader/
 │   │   ├── regime.py           # Deterministic SPY strategy ranking
 │   │   ├── universe.py         # Risk-catalog constrained liquid universe
 │   │   ├── registry.py         # Equal strategy-family evaluation interface
-│   │   ├── state_machine.py    # Persisted entry/position/exit lifecycle
+│   │   ├── state_machine.py    # Per-strategy ticker entry/position/exit lifecycle
 │   │   ├── regime_advisor.py   # Optional bounded local Ollama ranking advice
 │   │   └── runner.py           # Alpaca scan + shared executor handoff
 │   ├── tools/
@@ -876,7 +713,7 @@ swarm-trader/
 │   │   ├── market_regime.py   # Market regime classifier
 │   │   ├── portfolio_manager.py
 │   │   └── ...                # 12 LLM + 6 data/quant agents
-│   ├── alpaca_integration.py  # Alpaca API helpers + V2 risk integration
+│   ├── alpaca_integration.py  # Read-only Alpaca helpers + legacy decision previews
 │   └── llm/
 │       └── models.py          # 13 LLM provider definitions
 ├── autoresearch/
@@ -886,7 +723,8 @@ swarm-trader/
 │   ├── analyze.py             # Cross-run analytics
 │   └── experiments/           # Experiment logs
 ├── snapshots/                 # Daily performance snapshots
-├── data/                      # Trade journal, alerts, performance history
+├── data/                      # SQLite Algo state, JSON status, Day receipt, journal
+├── ops/                       # Maintained OpenClaw job and prompt references
 └── docs/
     ├── architecture.png       # System architecture diagram
     └── execution-methods.png  # Order types + safety rails reference
@@ -934,7 +772,11 @@ set_mode("day", reason="FOMC day", updated_by="human", override=True, override_h
 | `BLOCKED: leveraged ETF` | Trying to buy TQQQ in swing mode | Switch to day mode or remove the trade |
 | `ALPACA_API_KEY not set` | Missing `.env` | Copy `.env.example` to `.env` |
 | `No Alpaca account configured for mode 'day'` | Day credentials are missing | Add `ALPACA_DAY_API_KEY` and `ALPACA_DAY_API_SECRET` to `.env` |
-| `insufficient qty` on sell | Shares locked by open orders | Cancel orders via Alpaca dashboard |
+| `insufficient qty` on sell | Shares can be reserved by open broker orders | Inspect the account's open orders and retry after broker cancellation completes |
+| Day buy rejected for missing opening cleanup | Today's account-bound receipt is missing or stale | Run and verify `execute_trades.py --mode day --flatten` before a new entry |
+| Algo entries paused after restart | Ownership, stop, state, or data check failed | Inspect `poetry run python -m src.algo.daemon --status` and the `algo-health` report; resolve the broker/state mismatch before new entries |
+| Algo exit deferred outside regular hours | A protective bracket/OCO child is still open or `pending_cancel` | Review the broker order state; the coordinator reevaluates the exit during regular hours |
+| Close snapshot is not due | The broker's actual exchange close has not passed | Run `--snapshot-kind close` after that day's Alpaca calendar close |
 | Scanner returns only core tickers | Market closed | Scanner works during market hours |
 | Risk manager rejects everything | Multiple rules violated | Run `risk_manager.py --status` to see what's wrong |
 | `flatten` sells nothing | No positions or market closed | Expected behavior |

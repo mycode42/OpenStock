@@ -16,6 +16,7 @@ Query mode:
 """
 
 import argparse
+import fcntl
 import json
 import os
 import sys
@@ -23,40 +24,125 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
+BROKER_ORDER_STATUSES = {
+    "accepted", "accepted_for_bidding", "calculated", "canceled", "done_for_day",
+    "expired", "filled", "held", "new", "partially_filled", "pending_cancel",
+    "pending_new", "pending_replace", "rejected", "replaced", "stopped", "suspended",
+}
+SUBMITTED_STATUSES = {"submitted", "executed", "accepted", "new", "pending_new", "filled", "partially_filled"}
 
 
 def ensure_dir():
     JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _order_keys(entry: dict) -> set[tuple[str, str, str]]:
+    mode = f"{entry.get('trading_mode') or 'unknown'}:{entry.get('account_id') or 'legacy'}"
+    keys = set()
+    if entry.get("order_id"):
+        keys.add((mode, "order", str(entry["order_id"])))
+    if entry.get("client_order_id"):
+        keys.add((mode, "client", str(entry["client_order_id"])))
+    return keys
+
+
+def dedupe_journal_entries(entries: list[dict]) -> list[dict]:
+    """Keep one submission event per broker order or stable client ID."""
+    deduped: list[dict | None] = []
+    seen: dict[tuple[str, str, str], int] = {}
+    for entry in entries:
+        keys = _order_keys(entry)
+        matches = {seen[key] for key in keys if key in seen}
+        if not matches:
+            index = len(deduped)
+            deduped.append(dict(entry))
+        else:
+            index = min(matches)
+            combined = dict(deduped[index] or {})
+            for old_index in sorted(matches - {index}):
+                for field, value in (deduped[old_index] or {}).items():
+                    if value is not None and value != "":
+                        combined[field] = value
+                deduped[old_index] = None
+            for field, value in entry.items():
+                if value is not None and value != "":
+                    combined[field] = value
+            deduped[index] = combined
+            for old_index in matches:
+                for key, mapped_index in list(seen.items()):
+                    if mapped_index == old_index:
+                        seen[key] = index
+        for key in _order_keys(deduped[index] or {}):
+            seen[key] = index
+    return [entry for entry in deduped if entry is not None]
+
+
 def append_trades(execution_result: dict):
-    """Append executed trades from execute_trades.py output."""
+    """Append order submissions and rejections from execute_trades.py output."""
     ensure_dir()
     results = execution_result.get("results", [])
     timestamp = execution_result.get("timestamp", datetime.now().isoformat())
     mode = execution_result.get("mode", "unknown")
+    account_id = execution_result.get("account_id")
 
     logged = 0
-    with open(JOURNAL_PATH, "a") as f:
-        for trade in results:
-            if trade.get("status") in ("skipped",):
+    with open(JOURNAL_PATH, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        existing_keys = set()
+        for line in f:
+            try:
+                existing = json.loads(line)
+            except json.JSONDecodeError:
                 continue
+            if isinstance(existing, dict):
+                existing_keys.update(_order_keys(existing))
+        f.seek(0, os.SEEK_END)
+        for trade in results:
+            raw_status = trade.get("status")
+            if raw_status in ("skipped", "would_execute"):
+                continue
+            submission_status = trade.get("submission_status")
+            if not submission_status:
+                submission_status = "submitted" if raw_status in SUBMITTED_STATUSES else raw_status
+            broker_status = trade.get("broker_status")
+            if not broker_status and raw_status in BROKER_ORDER_STATUSES:
+                broker_status = raw_status
             entry = {
                 "timestamp": timestamp,
                 "mode": mode,
                 "trading_mode": execution_result.get("trading_mode", "unknown"),
+                "account_id": account_id,
                 "strategy": trade.get("strategy", "unspecified"),
                 "strategy_group": trade.get("strategy_group"),
                 "client_order_id": trade.get("client_order_id"),
                 "ticker": trade.get("ticker"),
                 "action": trade.get("action"),
                 "qty": trade.get("qty", 0),
-                "status": trade.get("status"),
-                "reasoning": trade.get("reasoning", ""),
+                "status": submission_status,
+                "submission_status": submission_status,
+                "broker_status": broker_status,
+                "reasoning": trade.get("reasoning") or trade.get("reason", ""),
                 "order_id": trade.get("order_id"),
                 "error": trade.get("error"),
+                "filled_qty": trade.get("filled_qty"),
+                "filled_avg_price": trade.get("filled_avg_price"),
+                "filled_at": trade.get("filled_at"),
+                "idempotent_replay": bool(trade.get("idempotent_replay")),
+                "pnl": trade.get("pnl"),
             }
+            keys = _order_keys(entry)
+            # A replay may supply the broker order ID after an earlier
+            # uncertain submission supplied only its stable client ID.
+            # Preserve that enrichment as an append event; readers merge it.
+            known_order_id = (
+                f"{entry.get('trading_mode') or 'unknown'}:{entry.get('account_id') or 'legacy'}",
+                "order", str(entry.get("order_id")),
+            )
+            if keys & existing_keys and (not entry.get("order_id") or known_order_id in existing_keys):
+                continue
             f.write(json.dumps(entry) + "\n")
+            existing_keys.update(keys)
             logged += 1
 
     return logged
@@ -94,23 +180,28 @@ def read_journal(limit=None, ticker=None, days=None):
 
 
 def compute_stats(entries):
-    """Compute win/loss stats from journal entries."""
-    executed = [e for e in entries if e.get("status") == "executed"]
+    """Count API submissions separately from broker-confirmed fills."""
+    entries = dedupe_journal_entries(entries)
+    submitted = [e for e in entries if e.get("submission_status", e.get("status")) in SUBMITTED_STATUSES]
+    filled = [e for e in submitted if e.get("broker_status") == "filled" or e.get("status") == "filled"]
+    partially_filled = [e for e in submitted if e.get("broker_status") == "partially_filled"]
     blocked = [e for e in entries if e.get("status") == "blocked"]
     failed = [e for e in entries if e.get("status") == "failed"]
 
-    buys = [e for e in executed if e.get("action") in ("buy", "cover")]
-    sells = [e for e in executed if e.get("action") in ("sell", "short")]
+    buys = [e for e in submitted if e.get("action") in ("buy", "cover")]
+    sells = [e for e in submitted if e.get("action") in ("sell", "short")]
+    filled_buys = [e for e in filled if e.get("action") in ("buy", "cover")]
+    filled_sells = [e for e in filled if e.get("action") in ("sell", "short")]
 
     # Ticker frequency
     ticker_counts = {}
-    for e in executed:
+    for e in submitted:
         t = e.get("ticker", "?")
         ticker_counts[t] = ticker_counts.get(t, 0) + 1
 
     # Action frequency by day
     daily = {}
-    for e in executed:
+    for e in submitted:
         day = e.get("timestamp", "")[:10]
         if day not in daily:
             daily[day] = {"buys": 0, "sells": 0, "total": 0}
@@ -122,11 +213,15 @@ def compute_stats(entries):
 
     return {
         "total_entries": len(entries),
-        "executed": len(executed),
+        "submitted": len(submitted),
+        "filled": len(filled),
+        "partially_filled": len(partially_filled),
         "blocked": len(blocked),
         "failed": len(failed),
         "buys": len(buys),
         "sells": len(sells),
+        "filled_buys": len(filled_buys),
+        "filled_sells": len(filled_sells),
         "unique_tickers": len(ticker_counts),
         "most_traded": sorted(ticker_counts.items(), key=lambda x: -x[1])[:5],
         "active_days": len(daily),
@@ -154,7 +249,9 @@ def show_stats(stats):
     print(f"  CASSIUS TRADE JOURNAL — STATS")
     print(f"{'='*50}")
     print(f"  Total entries:   {stats['total_entries']}")
-    print(f"  Executed:        {stats['executed']}")
+    print(f"  Submitted:       {stats['submitted']}")
+    print(f"  Confirmed fills: {stats['filled']}")
+    print(f"  Partial fills:   {stats['partially_filled']}")
     print(f"  Blocked:         {stats['blocked']}")
     print(f"  Failed:          {stats['failed']}")
     print(f"  Buys:            {stats['buys']}")
@@ -179,8 +276,8 @@ def telegram_summary(stats, entries):
     last_5 = entries[-5:] if entries else []
 
     print("📓 Cassius Trade Journal")
-    print(f"📊 {stats['executed']} executed | {stats['blocked']} blocked | {stats['failed']} failed")
-    print(f"📈 {stats['buys']} buys | 📉 {stats['sells']} sells | 🎯 {stats['unique_tickers']} tickers")
+    print(f"📊 {stats['submitted']} submitted | {stats['filled']} broker-confirmed filled | {stats['blocked']} blocked | {stats['failed']} failed")
+    print(f"📈 {stats['buys']} buy submissions | 📉 {stats['sells']} sell submissions | 🎯 {stats['unique_tickers']} tickers")
     print(f"📅 {stats['active_days']} active trading days")
 
     if stats["most_traded"]:

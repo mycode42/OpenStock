@@ -15,10 +15,14 @@ Usage:
 """
 
 import argparse
+import hashlib
+import json
 import logging
+import math
 import os
 import sys
 from datetime import datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -39,7 +43,8 @@ logging.basicConfig(
 log = logging.getLogger("portfolio_monitor")
 MARKET_TZ = ZoneInfo("America/New_York")
 
-from src.accounts import get_account_for_mode
+from src.accounts import get_account_for_mode, verify_account_for_mode
+from src.market_calendar import get_day_schedule
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
 
@@ -70,28 +75,63 @@ def get_positions() -> list[dict]:
     return _get("positions")
 
 
-def place_market_sell(symbol: str, qty: int, reason: str, dry_run: bool) -> dict:
-    """Submit a market sell order, or report it without selling in dry-run mode."""
+def place_market_sell(symbol: str, qty: float, reason: str, dry_run: bool) -> dict:
+    """Submit one verified position-reducing sell, or preview it."""
     if dry_run:
         msg = f"DRY-RUN: Would sell {qty} {symbol} — {reason}"
         log.info(msg)
         return {"status": "dry_run", "symbol": symbol, "qty": qty, "reason": reason}
 
-    order = {
-        "symbol": symbol,
-        "qty": str(qty),
-        "side": "sell",
-        "type": "market",
-        "time_in_force": "day",
-    }
-    r = requests.post(f"{API_BASE}/orders", headers=_headers(), json=order, timeout=10)
-    if r.status_code in (200, 201):
-        data = r.json()
-        log.info(f"SOLD {qty} {symbol} — {reason}. Order ID: {data.get('id')}")
-        return {"status": "sold", "symbol": symbol, "qty": qty, "reason": reason, "order_id": data.get("id")}
-    else:
-        log.error(f"Failed to sell {symbol}: HTTP {r.status_code} — {r.text[:200]}")
-        return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason, "error": r.text[:200]}
+    from execute_trades import (
+        _submit_broker_order, account_execution_lock, cancel_open_orders_for_symbol,
+    )
+
+    try:
+        with account_execution_lock(_active_mode):
+            verify_account_for_mode(_active_mode)
+            if _active_mode == "day":
+                risk = get_mode_config("day")["risk"]
+                schedule = get_day_schedule(
+                    flatten_by=risk.get("flatten_by", "15:45"),
+                    flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
+                    entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
+                )
+                now = datetime.now(MARKET_TZ)
+                if schedule is None or not schedule.market_open(now) or schedule.flatten_due(now):
+                    return {"status": "failed", "symbol": symbol, "qty": qty,
+                            "reason": reason, "error": "Day stop sell requires an open session before the flatten deadline"}
+            cancelled = cancel_open_orders_for_symbol(symbol, mode=_active_mode)
+            if not cancelled.get("success"):
+                return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason,
+                        "error": cancelled.get("error")}
+            fresh = next((p for p in get_positions() if p.get("symbol") == symbol), None)
+            held_qty = Decimal(str((fresh or {}).get("qty", 0)))
+            if held_qty <= 0:
+                return {"status": "already_flat", "symbol": symbol, "qty": 0, "reason": reason}
+            sell_qty = held_qty
+            if sell_qty <= 0:
+                return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason,
+                        "error": "No sellable position quantity remained"}
+            event = reason.split(":", 1)[0].strip().lower()
+            identity = f"{_active_mode}:{datetime.now(MARKET_TZ).date()}:{symbol}:{sell_qty}:{event}"
+            client_order_id = f"stop-{hashlib.sha256(identity.encode()).hexdigest()[:20]}"
+            order = {
+                "symbol": symbol,
+                "qty": format(sell_qty, "f"),
+                "side": "sell",
+                "type": "market",
+                "time_in_force": "day",
+                "client_order_id": client_order_id,
+            }
+            result = _submit_broker_order(order, "market", mode=_active_mode)
+            if not result.get("success"):
+                return {"status": "failed", "symbol": symbol, "qty": str(sell_qty),
+                        "reason": reason, "client_order_id": order["client_order_id"], **result}
+            log.info("Submitted %s %s sell for %s, order %s", sell_qty, symbol, reason, result["order_id"])
+            return {"status": "submitted", "symbol": symbol, "qty": str(sell_qty),
+                    "reason": reason, "client_order_id": order["client_order_id"], **result}
+    except (requests.RequestException, ValueError, TimeoutError) as exc:
+        return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason, "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +139,21 @@ def place_market_sell(symbol: str, qty: int, reason: str, dry_run: bool) -> dict
 # ---------------------------------------------------------------------------
 
 def get_intraday_high(symbol: str) -> float | None:
-    """Fetch today's intraday high from yfinance (1m data, last session)."""
+    """Fetch only today's New York session high for trailing-stop checks."""
     try:
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="1d", interval="1m")
         if hist.empty:
             log.warning("Yahoo Finance returned no intraday bars for %s", symbol)
             return None
-        return float(hist["High"].max())
+        index = hist.index.tz_convert(MARKET_TZ)
+        today = datetime.now(MARKET_TZ).date()
+        current = hist.loc[index.date == today]
+        if current.empty:
+            log.warning("Yahoo Finance returned no bars from today's session for %s", symbol)
+            return None
+        high = float(current["High"].max())
+        return high if math.isfinite(high) and high > 0 else None
     except Exception as e:
         log.warning(f"Could not get intraday high for {symbol}: {e}")
         return None
@@ -204,6 +251,55 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
 
     log.info(f"Portfolio monitor starting (mode={mode}, dry_run={dry_run}, account={get_account_for_mode(mode).name})")
 
+    # Day liquidation is time-sensitive. Run it before account reporting,
+    # benchmark downloads, or intraday-high lookups can delay the close.
+    calendar_error = None
+    if mode_risk.get("flatten_eod", False):
+        try:
+            schedule = get_day_schedule(
+                flatten_by=mode_risk.get("flatten_by", "15:45"),
+                flatten_lead_minutes=mode_risk.get("flatten_lead_minutes", 15),
+                entry_cutoff_minutes=mode_risk.get("entry_cutoff_minutes", 15),
+            )
+            flatten_due = schedule is None or schedule.flatten_due(datetime.now(MARKET_TZ))
+        except Exception as exc:
+            calendar_error = f"Day market calendar unavailable: {exc}"
+            log.error(calendar_error)
+            return {
+                "timestamp": datetime.now(MARKET_TZ).isoformat(),
+                "trading_mode": mode,
+                "mode": "dry_run" if dry_run else "live",
+                "status": "failed",
+                "success": False,
+                "eod_flatten": False,
+                "eod_flatten_attempted": False,
+                "actions": [],
+                "warnings": [calendar_error],
+            }
+        if flatten_due:
+            from execute_trades import flatten_all
+            try:
+                flatten_result = flatten_all(dry_run=dry_run, mode=mode)
+            except Exception as exc:
+                flatten_result = {"status": "failed", "verified_flat": False, "results": [], "errors": [str(exc)]}
+            for error in flatten_result.get("errors", []):
+                log.error("Day flatten: %s", error)
+            return {
+                "timestamp": datetime.now(MARKET_TZ).isoformat(),
+                "trading_mode": mode,
+                "mode": "dry_run" if dry_run else "live",
+                "status": "dry_run" if dry_run else flatten_result.get("status", "failed"),
+                "success": bool(flatten_result.get("success")) if not dry_run else True,
+                "eod_flatten": bool(flatten_result.get("verified_flat")),
+                "eod_flatten_attempted": True,
+                "flatten_result": flatten_result,
+                "actions": [
+                    {**row, "stop_type": "eod_flatten"}
+                    for row in flatten_result.get("results", [])
+                ],
+                "warnings": flatten_result.get("errors", []),
+            }
+
     account = get_account()
     positions = get_positions()
 
@@ -213,50 +309,16 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
     daily_pnl = equity - last_equity
     daily_pnl_pct = (daily_pnl / last_equity) if last_equity else 0
 
-    spy_return = get_spy_daily_return()
-
     actions = []
     warnings = []
     long_positions = [p for p in positions if float(p.get("qty", 0)) > 0]
 
-    # ── Day mode: auto-flatten if past flatten_by time ───────────────────────
-    if mode_risk.get("flatten_eod", False):
-        flatten_time = mode_risk.get("flatten_by", "15:45")
-        h, m = map(int, flatten_time.split(":"))
-        now = datetime.now(MARKET_TZ)
-        if now.hour > h or (now.hour == h and now.minute >= m):
-            log.info(f"Day mode: past {flatten_time} ET — flattening all positions")
-            try:
-                from execute_trades import flatten_all
-                flatten_result = flatten_all(dry_run=dry_run, mode=mode)
-                for r in flatten_result.get("results", []):
-                    actions.append({**r, "stop_type": "eod_flatten"})
-            except Exception as e:
-                log.error(f"EOD flatten failed: {e}")
-
-            _print_summary(
-                equity=equity, cash=cash, daily_pnl=daily_pnl, daily_pnl_pct=daily_pnl_pct,
-                spy_return=spy_return, positions=long_positions, actions=actions, warnings=warnings,
-                dry_run=dry_run, mode=mode, stop_loss_pct=stop_loss_pct, trailing_stop_pct=trailing_stop_pct,
-            )
-            return {
-                "timestamp": datetime.now(MARKET_TZ).isoformat(),
-                "trading_mode": mode,
-                "mode": "dry_run" if dry_run else "live",
-                "equity": equity,
-                "daily_pnl_pct": round(daily_pnl_pct * 100, 2),
-                "spy_return_pct": round(spy_return * 100, 2) if spy_return is not None else None,
-                "positions_checked": len(long_positions),
-                "stops_triggered": len(actions),
-                "eod_flatten": True,
-                "actions": actions,
-                "warnings": warnings,
-            }
-
     # ── Per-position stop checks ─────────────────────────────────────────────
+    if calendar_error:
+        warnings.append(calendar_error)
     for pos in long_positions:
         symbol = pos["symbol"]
-        qty = int(float(pos["qty"]))
+        qty = float(pos["qty"])
 
         intraday_high = get_intraday_high(symbol)
         if intraday_high is None:
@@ -296,6 +358,7 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
                     f"{pct_from_high*100:.1f}% from today's high (stop at -{trailing_stop_pct*100:.1f}%)"
                 )
 
+    spy_return = get_spy_daily_return()
     _print_summary(
         equity=equity, cash=cash, daily_pnl=daily_pnl, daily_pnl_pct=daily_pnl_pct,
         spy_return=spy_return, positions=long_positions, actions=actions, warnings=warnings,
@@ -311,6 +374,9 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
         "spy_return_pct": round(spy_return * 100, 2) if spy_return is not None else None,
         "positions_checked": len(long_positions),
         "stops_triggered": len(actions),
+        "status": "failed" if calendar_error or any(a.get("status") == "failed" for a in actions) else "ok",
+        "success": not calendar_error and all(a.get("status") != "failed" for a in actions),
+        "eod_flatten": False,
         "actions": actions,
         "warnings": warnings,
     }
@@ -419,3 +485,6 @@ if __name__ == "__main__":
     except Exception as e:
         log.error(f"Monitor failed: {e}", exc_info=True)
         sys.exit(1)
+    print(json.dumps(result, indent=2))
+    if not result.get("success", True):
+        sys.exit(2)

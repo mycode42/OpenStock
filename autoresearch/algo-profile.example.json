@@ -1,0 +1,21 @@
+{
+  "trend_following": {
+    "fast_period": 9,
+    "slow_period": 21
+  },
+  "momentum": {
+    "lookback": 12,
+    "minimum_return": 0.015,
+    "minimum_volume_ratio": 1.2
+  },
+  "mean_reversion": {
+    "window": 20,
+    "band_width": 2.0,
+    "entry_rsi": 30,
+    "exit_rsi": 58
+  },
+  "opening_range_breakout": {
+    "opening_range_bars": 6,
+    "minimum_volume_ratio": 1.25
+  }
+}

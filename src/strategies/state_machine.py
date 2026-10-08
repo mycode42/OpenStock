@@ -2,7 +2,8 @@
 
 Signal rules remain pure functions in their strategy modules. This module owns
 the order/position lifecycle shared by those strategies:
-FLAT -> ENTRY_PENDING -> OPEN -> EXIT_PENDING -> COOLDOWN -> FLAT.
+ FLAT -> ENTRY_PENDING -> OPEN -> EXIT_PENDING -> COOLDOWN -> FLAT.
+Unverified broker holdings are QUARANTINED until their entry is attributable.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ ENTRY_PENDING = "entry_pending"
 OPEN = "open"
 EXIT_PENDING = "exit_pending"
 COOLDOWN = "cooldown"
+QUARANTINED = "quarantined"
 PENDING_PHASES = {ENTRY_PENDING, EXIT_PENDING}
 
 
@@ -33,6 +35,12 @@ def _state_for(states: dict, strategy: str, ticker: str) -> dict:
         "last_evaluated_bar": None,
         "stop_price": None,
         "take_profit": None,
+        "entry_order_id": None,
+        "entry_client_order_id": None,
+        "entry_source": None,
+        "quarantine_reason": None,
+        "submission_outcome": None,
+        "last_known_qty": None,
     }
     state = states.setdefault(strategy, {}).setdefault(ticker, {})
     for key, value in defaults.items():
@@ -61,7 +69,12 @@ class RuleStrategyStateMachine:
     def __init__(self, states: dict, position_owners: dict[str, str]):
         self.states = states
         self.position_owners = position_owners
-        normalized = {str(ticker).upper(): owner for ticker, owner in position_owners.items()}
+        normalized = {}
+        for ticker, owner in position_owners.items():
+            symbol = str(ticker).upper()
+            if symbol in normalized and normalized[symbol] != owner:
+                raise ValueError(f"Conflicting owners for {symbol}")
+            normalized[symbol] = owner
         position_owners.clear()
         position_owners.update(normalized)
 
@@ -83,7 +96,12 @@ class RuleStrategyStateMachine:
         for strategy, by_symbol in self.states.items():
             for ticker, state in by_symbol.items():
                 ticker = str(ticker).upper()
-                if state.get("phase") in {ENTRY_PENDING, OPEN, EXIT_PENDING} and ticker in normalized_positions:
+                has_provenance = bool(state.get("entry_order_id") or state.get("entry_client_order_id"))
+                if (
+                    has_provenance
+                    and state.get("phase") in {ENTRY_PENDING, OPEN, EXIT_PENDING}
+                    and ticker in normalized_positions
+                ):
                     self.position_owners.setdefault(ticker, strategy)
 
         for ticker, owner in list(self.position_owners.items()):
@@ -100,8 +118,19 @@ class RuleStrategyStateMachine:
             )
 
             if quantity > 0:
+                owner_state["last_known_qty"] = quantity
                 if owner_state.get("phase") == EXIT_PENDING and (matching_order or _recent_transition(owner_state)):
                     continue
+                if owner_state.get("phase") == ENTRY_PENDING:
+                    entry_order = matching_order if matching_order and matching_order.get("side") == "buy" else None
+                    if entry_order and entry_order.get("id"):
+                        owner_state["entry_order_id"] = str(entry_order["id"])
+                        owner_state["entry_client_order_id"] = entry_order.get("client_order_id")
+                        owner_state["entry_source"] = "coordinator"
+                    elif owner_state.get("order_id"):
+                        owner_state["entry_order_id"] = str(owner_state["order_id"])
+                        owner_state["entry_client_order_id"] = owner_state.get("client_order_id")
+                        owner_state["entry_source"] = "coordinator"
                 owner_state.update({
                     "phase": OPEN,
                     "owner": owner,
@@ -134,6 +163,7 @@ class RuleStrategyStateMachine:
                 })
                 _touch(owner_state)
             self.position_owners.pop(ticker, None)
+            owner_state["last_known_qty"] = None
 
         # Keep pending states until the matching Alpaca order resolves;
         # otherwise return an unfilled entry to a one-bar cooldown.
@@ -156,6 +186,10 @@ class RuleStrategyStateMachine:
                 if state.get("phase") not in PENDING_PHASES:
                     continue
                 if ticker in normalized_positions and state.get("pending_action") == "buy":
+                    if state.get("order_id") and not state.get("entry_order_id"):
+                        state["entry_order_id"] = str(state["order_id"])
+                        state["entry_client_order_id"] = state.get("client_order_id")
+                        state["entry_source"] = "coordinator"
                     state["phase"] = OPEN
                     state["owner"] = strategy
                     state["pending_action"] = None
@@ -199,6 +233,7 @@ class RuleStrategyStateMachine:
             owner = self.position_owners.get(ticker)
             if owner:
                 state = _state_for(self.states, owner, ticker)
+                state["last_known_qty"] = float(position.get("qty", 0) or 0)
                 if state.get("phase") not in PENDING_PHASES:
                     state.update({"phase": OPEN, "owner": owner, "pending_action": None})
 
@@ -223,11 +258,85 @@ class RuleStrategyStateMachine:
             )
         return False
 
+    def allows_protective_exit(self, strategy: str, ticker: str) -> bool:
+        """A fresh stop quote may exit an owned holding without a new signal bar."""
+        ticker = ticker.upper()
+        state = _state_for(self.states, strategy, ticker)
+        return state.get("phase") == OPEN and self.position_owners.get(ticker) == strategy
+
+    def adopt_verified_position(
+        self, strategy: str, ticker: str, *, entry_order_id: str,
+        entry_client_order_id: str | None = None,
+        source: str = "journal_broker_match",
+        stop_price: float | None = None,
+        take_profit: float | None = None,
+    ) -> None:
+        """Attach a current broker holding only after its exact entry ID is proved."""
+        ticker = ticker.upper()
+        if not entry_order_id or not strategy or not ticker:
+            raise ValueError("Verified adoption requires strategy, ticker, and entry order ID")
+        current_owner = self.position_owners.get(ticker)
+        if current_owner is not None and current_owner != strategy:
+            raise ValueError(f"Cannot reassign {ticker} from {current_owner} to {strategy}")
+        for other_strategy, by_symbol in self.states.items():
+            if other_strategy == strategy:
+                continue
+            other = by_symbol.get(ticker)
+            if other and other.get("phase") in {ENTRY_PENDING, OPEN, EXIT_PENDING}:
+                raise ValueError(f"Another active state owns {ticker}: {other_strategy}")
+        state = _state_for(self.states, strategy, ticker)
+        old_entry_id = state.get("entry_order_id")
+        if old_entry_id and old_entry_id != entry_order_id and state.get("phase") in {ENTRY_PENDING, OPEN, EXIT_PENDING}:
+            raise ValueError(f"Conflicting active entry provenance for {strategy}/{ticker}")
+        state.update({
+            "phase": OPEN,
+            "strategy": strategy,
+            "ticker": ticker,
+            "owner": strategy,
+            "pending_action": None,
+            "client_order_id": None,
+            "order_id": None,
+            "entry_order_id": str(entry_order_id),
+            "entry_client_order_id": entry_client_order_id,
+            "entry_source": source,
+            "quarantine_reason": None,
+        })
+        if state.get("stop_price") is None and stop_price is not None:
+            state["stop_price"] = stop_price
+        if state.get("take_profit") is None and take_profit is not None:
+            state["take_profit"] = take_profit
+        self.position_owners[ticker] = strategy
+        _touch(state)
+
+    def quarantine_position(self, ticker: str, reason: str) -> None:
+        """Release a broker holding whose persisted owner cannot be verified."""
+        ticker = ticker.upper()
+        owner = self.position_owners.pop(ticker, None)
+        if owner is None:
+            return
+        state = _state_for(self.states, owner, ticker)
+        state.update({
+            "phase": QUARANTINED,
+            "owner": None,
+            "pending_action": None,
+            "client_order_id": None,
+            "order_id": None,
+            "quarantine_reason": reason,
+        })
+        _touch(state)
+
     def prepare(self, trade: dict) -> None:
         """Persist the pending transition before contacting the executor."""
         strategy = str(trade.get("strategy", "unspecified"))
         ticker = str(trade.get("ticker", "")).upper()
         action = str(trade.get("action", "")).lower()
+        if action not in {"buy", "sell"} or not ticker or not strategy:
+            raise ValueError("Rule transition requires a buy/sell, strategy, and ticker")
+        current_owner = self.position_owners.get(ticker)
+        if action == "buy" and current_owner is not None:
+            raise ValueError(f"Cannot prepare a new entry for owned {ticker}")
+        if action == "sell" and current_owner != strategy:
+            raise ValueError(f"Cannot exit {ticker} for non-owner {strategy}")
         state = _state_for(self.states, strategy, ticker)
         state.update({
             "phase": ENTRY_PENDING if action == "buy" else EXIT_PENDING,
@@ -238,10 +347,15 @@ class RuleStrategyStateMachine:
             "client_order_id": trade.get("client_order_id"),
             "order_id": None,
             "last_signal_bar": trade.get("signal_bar_time"),
+            "submission_outcome": "pending",
         })
         if action == "buy":
             state["stop_price"] = trade.get("stop_price")
             state["take_profit"] = trade.get("take_profit")
+            state["entry_order_id"] = None
+            state["entry_client_order_id"] = trade.get("client_order_id")
+            state["entry_source"] = "coordinator"
+            state["quarantine_reason"] = None
         _touch(state)
         if action == "buy":
             self.position_owners[ticker] = strategy
@@ -253,11 +367,30 @@ class RuleStrategyStateMachine:
         action = str(trade.get("action", "")).lower()
         state = _state_for(self.states, strategy, ticker)
         result = result or {}
-        successful = result.get("success") is True or result.get("status") == "executed"
+        status = str(result.get("status") or "").lower()
+        successful = bool(result.get("order_id")) and (
+            result.get("success") is True or status in {"submitted", "executed"}
+        )
         if successful:
             state["order_id"] = result.get("order_id")
+            state["submission_outcome"] = "accepted"
             if action == "buy":
                 self.position_owners[ticker] = strategy
+                if result.get("order_id"):
+                    state["entry_order_id"] = str(result["order_id"])
+                    state["entry_client_order_id"] = trade.get("client_order_id")
+                    state["entry_source"] = "coordinator"
+            _touch(state)
+            return
+
+        # A failed subprocess, missing response row, or failed broker lookup
+        # does not prove the broker rejected an order. Keep the persisted
+        # client ID pending until Alpaca positions/orders resolve it.
+        explicitly_rejected = status in {"blocked", "would_execute"} or (
+            result.get("broker_status") in {"rejected", "canceled", "expired"}
+        )
+        if not explicitly_rejected:
+            state["submission_outcome"] = "uncertain"
             _touch(state)
             return
 
@@ -268,13 +401,17 @@ class RuleStrategyStateMachine:
                 "cooldown_bar": trade.get("signal_bar_time"),
                 "stop_price": None,
                 "take_profit": None,
+                "entry_order_id": None,
+                "entry_client_order_id": None,
+                "entry_source": None,
             })
             if self.position_owners.get(ticker) == strategy:
                 self.position_owners.pop(ticker, None)
         else:
             state.update({"phase": OPEN, "owner": strategy})
         state.update({"pending_action": None, "client_order_id": None, "order_id": None})
+        state["submission_outcome"] = "rejected"
         _touch(state)
 
 
-__all__ = ["RuleStrategyStateMachine"]
+__all__ = ["RuleStrategyStateMachine", "FLAT", "ENTRY_PENDING", "OPEN", "EXIT_PENDING", "COOLDOWN", "QUARANTINED"]

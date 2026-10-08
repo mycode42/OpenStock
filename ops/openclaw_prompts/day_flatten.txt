@@ -1,0 +1,7 @@
+Day account end-of-session check. Run each command from /opt/swarm-trader and label the report Day/DayTrading.
+
+1. Run `poetry run python execute_trades.py --mode day --flatten-if-due`. Read its JSON and exit code. It uses the broker calendar, cancels outstanding Day orders, closes positions when due, and verifies both positions and open orders with the broker. A nonzero exit, success=false, positions_remaining, or open_orders_remaining is an incident: report the exact errors and remaining symbols/order IDs. If status is not_due, state the calendar deadline and do not claim the account is flat.
+2. Run `poetry run python check_portfolio.py --mode day --json` for the verified Day account's equity, cash, daily P&L and remaining positions. If this check fails, report the data failure. The first command's broker verification is the authority for open-order clearance.
+3. Run `poetry run python performance_tracker_v2.py --mode day --json` for confirmed performance statistics when available. Only cite a win rate, best/worst trade or SPY comparison when the output supports it; submitted journal orders alone do not establish fills or realized P&L.
+
+Send one concise Telegram report with flatten status, verified position/order counts, daily P&L, available performance metrics and any risk issue. The dedicated close snapshot job records the end-of-session baseline.

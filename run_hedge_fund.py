@@ -22,6 +22,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 load_dotenv()  # Load .env before any imports that need credentials
@@ -96,20 +97,26 @@ def _execute_via_execute_trades(decisions: dict, mode: str, dry_run: bool) -> li
         capture_output=True,
         text=True,
         cwd=str(Path(__file__).parent),
+        timeout=90,
+        check=False,
     )
 
     if result.stderr:
         print(result.stderr, file=sys.stderr, end="")
 
-    if result.returncode != 0 or not result.stdout.strip():
-        return []
+    if result.returncode != 0:
+        raise RuntimeError(f"Canonical executor exited {result.returncode}: {result.stderr[-500:]}")
+    if not result.stdout.strip():
+        raise RuntimeError("Canonical executor returned no result output")
 
     try:
         output = json.loads(result.stdout)
-        return output.get("results", [])
-    except json.JSONDecodeError:
-        print(f"⚠️ Could not parse execute_trades.py output", file=sys.stderr)
-        return []
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Canonical executor returned invalid JSON") from exc
+    rows = output.get("results")
+    if not isinstance(rows, list):
+        raise RuntimeError("Canonical executor returned no result list")
+    return rows
 
 
 def main():
@@ -214,6 +221,8 @@ Examples:
             output_telegram_summary(decisions, trade_results, args.execute)
         else:
             output_detailed_summary(decisions, analyst_signals, trade_results, args.execute)
+        if args.execute and any(row.get("status") == "failed" for row in trade_results):
+            return 2
 
     except Exception as e:
         print(f"❌ Error: {e}")
@@ -262,7 +271,7 @@ def output_detailed_summary(decisions, analyst_signals, trade_results, executed)
                 print(f"✅ {ticker}: WOULD {action.upper()} {qty} shares (DRY RUN)")
             else:
                 order_id = result.get("order_id", "")
-                print(f"✅ {ticker}: {action.upper()} {qty} shares (Order: {order_id})")
+                print(f"✅ {ticker}: {action.upper()} {qty} shares submitted (Order: {order_id})")
         else:
             failed_trades += 1
             reason = result.get("reason", result.get("error", "Unknown error"))
@@ -274,7 +283,7 @@ def output_detailed_summary(decisions, analyst_signals, trade_results, executed)
 def output_telegram_summary(decisions, trade_results, executed):
     """Output Telegram-friendly summary (no markdown tables)."""
     print("🤖 Swarm Trader AI Hedge Fund Analysis")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M PST')}")
+    print(f"⏰ {datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %H:%M %Z')}")
     print()
 
     signals_count = {"bullish": 0, "bearish": 0, "neutral": 0}
@@ -305,11 +314,11 @@ def output_telegram_summary(decisions, trade_results, executed):
     else:
         print("🎯 No trades recommended (all hold)")
 
-    successful = len([r for r in trade_results if r.get("status") in ("would_execute", "executed") or r.get("success")])
+    successful = len([r for r in trade_results if r.get("status") in ("would_execute", "submitted") or r.get("success")])
     failed = len([r for r in trade_results if r.get("status") in ("blocked", "failed")])
 
     if executed:
-        print(f"\n✅ Executed: {successful} trades, {failed} failed")
+        print(f"\n✅ Submitted: {successful} orders, {failed} failed")
     else:
         print(f"\n🧪 DRY RUN: {successful} trades would execute, {failed} blocked by V2 risk rules")
 

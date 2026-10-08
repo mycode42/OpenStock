@@ -14,15 +14,19 @@ Usage:
   poetry run python performance_tracker_v2.py --json              # JSON output
   poetry run python performance_tracker_v2.py --days 21           # Last 21 days
   poetry run python performance_tracker_v2.py --mode day --snapshot --force
+  poetry run python performance_tracker_v2.py --mode algo --json --fill-report
 """
 
 import argparse
 import json
 import logging
 import math
+import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -30,7 +34,10 @@ load_dotenv(override=True)
 
 import requests
 import yfinance as yf
-from src.accounts import get_account_for_mode
+from src.accounts import get_account_for_mode, verify_account_for_mode
+from src.market_calendar import get_day_schedule
+from src.fill_analytics import FillHistoryError, get_account_fill_report
+from trade_journal import dedupe_journal_entries
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +53,8 @@ TRADE_JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
 
 RISK_FREE_RATE_ANNUAL = 0.045  # ~4.5% annualised (T-bill proxy)
 RISK_FREE_DAILY = RISK_FREE_RATE_ANNUAL / 252
+MARKET_TZ = ZoneInfo("America/New_York")
+SUBMITTED_STATUSES = {"submitted", "executed", "accepted", "new", "pending_new", "filled", "partially_filled"}
 
 
 # ---------------------------------------------------------------------------
@@ -64,13 +73,15 @@ def _alpaca_get(endpoint: str, mode: str = "swing") -> dict | list:
 
 def get_portfolio(mode: str = "swing") -> dict:
     """Fetch current Alpaca account + positions for one trading mode."""
-    alpaca_account = get_account_for_mode(mode)
-    account = _alpaca_get("account", mode=mode)
+    alpaca_account, account = verify_account_for_mode(mode)
     positions_raw = _alpaca_get("positions", mode=mode)
     equity = float(account["equity"])
     cash = float(account["cash"])
     last_equity = float(account.get("last_equity", equity))
     daily_pnl_pct = ((equity - last_equity) / last_equity) if last_equity else 0.0
+    broker_account_id = str(account.get("id") or account.get("account_number") or "")
+    if not broker_account_id:
+        raise ValueError("Alpaca account response omitted its ID")
 
     return {
         "equity": equity,
@@ -78,6 +89,7 @@ def get_portfolio(mode: str = "swing") -> dict:
         "invested": equity - cash,
         "position_count": len(positions_raw),
         "account_name": alpaca_account.name,
+        "account_id": broker_account_id,
         "daily_pnl_pct": daily_pnl_pct,
         "daily_pnl": equity - last_equity,
     }
@@ -115,8 +127,8 @@ def _snapshot_dir(mode: str) -> Path:
     return SNAPSHOTS_DIR / mode
 
 
-def load_snapshots(days: int | None = None, mode: str = "swing") -> list[dict]:
-    """Load snapshots for one account/mode, optionally filtered by date."""
+def load_snapshots(days: int | None = None, mode: str = "swing", account_id: str | None = None) -> list[dict]:
+    """Load snapshots for one broker account and mode when its ID is given."""
     snapshot_dir = _snapshot_dir(mode)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(snapshot_dir.glob("*.json"))
@@ -124,7 +136,12 @@ def load_snapshots(days: int | None = None, mode: str = "swing") -> list[dict]:
     for f in files:
         try:
             with open(f) as fp:
-                snapshots.append(json.load(fp))
+                snapshot = json.load(fp)
+                if account_id is None or (
+                    snapshot.get("account_id") == account_id
+                    and snapshot.get("trading_mode") == mode
+                ):
+                    snapshots.append(snapshot)
         except Exception:
             continue
 
@@ -135,8 +152,8 @@ def load_snapshots(days: int | None = None, mode: str = "swing") -> list[dict]:
     return snapshots
 
 
-def load_trade_journal(mode: str = "swing") -> list[dict]:
-    """Load trades tagged for one mode; legacy untagged rows stay unclassified."""
+def load_trade_journal(mode: str = "swing", account_id: str | None = None) -> list[dict]:
+    """Load submissions for one mode and, when supplied, one broker account."""
     trades = []
     unclassified = 0
     if not TRADE_JOURNAL_PATH.exists():
@@ -151,7 +168,9 @@ def load_trade_journal(mode: str = "swing") -> list[dict]:
                         entry_mode = entry.get("trading_mode")
                         if entry_mode is None:
                             unclassified += 1
-                        elif entry_mode == mode:
+                        elif entry_mode == mode and (
+                            account_id is None or entry.get("account_id") == account_id
+                        ):
                             trades.append(entry)
                     except json.JSONDecodeError:
                         continue
@@ -163,7 +182,63 @@ def load_trade_journal(mode: str = "swing") -> list[dict]:
             unclassified,
             mode,
         )
-    return trades
+    return dedupe_journal_entries(trades)
+
+
+def reconcile_trade_orders(trades: list[dict], mode: str) -> tuple[list[dict], dict]:
+    """Attach current broker order status to journal submissions for reporting.
+
+    The journal records the API submission at one point in time. Alpaca is the
+    source of truth for fills, cancellations and rejects after that point.
+    """
+    wanted = {str(row.get("order_id")) for row in trades if row.get("order_id")}
+    if not wanted:
+        return trades, {"matched": 0, "unmatched": 0, "error": None}
+    try:
+        account, _ = verify_account_for_mode(mode)
+        response = requests.get(
+            f"{account.base_url}/orders",
+            headers=account.headers,
+            params={"status": "all", "limit": 500, "direction": "desc", "nested": "true"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        orders = response.json()
+        if not isinstance(orders, list):
+            raise ValueError("Alpaca returned an invalid order list")
+        by_id = {}
+
+        def collect(order: dict) -> None:
+            order_id = order.get("id")
+            if order_id:
+                by_id[str(order_id)] = order
+            for leg in order.get("legs") or []:
+                if isinstance(leg, dict):
+                    collect(leg)
+
+        for order in orders:
+            if isinstance(order, dict):
+                collect(order)
+        matched = 0
+        enriched = []
+        for row in trades:
+            value = dict(row)
+            broker = by_id.get(str(value.get("order_id")))
+            if broker:
+                matched += 1
+                value["broker_status"] = broker.get("status")
+                value["filled_qty"] = broker.get("filled_qty")
+                value["filled_avg_price"] = broker.get("filled_avg_price")
+            enriched.append(value)
+        return enriched, {
+            "matched": matched,
+            "unmatched": len(wanted - set(by_id)),
+            "order_list_limit_reached": len(orders) >= 500,
+            "error": None,
+        }
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("Could not reconcile %s journal orders: %s", mode, exc)
+        return trades, {"matched": 0, "unmatched": len(wanted), "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +289,7 @@ def compute_trade_stats(trades: list[dict]) -> dict:
     closed_trades = [
         t for t in trades
         if t.get("action", "").lower() in ("sell", "cover")
+        and (t.get("broker_status") == "filled" or t.get("status") == "filled")
         and t.get("pnl") is not None
     ]
 
@@ -256,12 +332,23 @@ def compute_strategy_stats(trades: list[dict]) -> dict[str, dict]:
         grouped.setdefault(strategy, []).append(trade)
     result = {}
     for strategy, rows in sorted(grouped.items()):
+        submitted = [
+            row for row in rows
+            if row.get("submission_status", row.get("status")) in SUBMITTED_STATUSES
+        ]
+        filled = [
+            row for row in submitted
+            if row.get("broker_status") == "filled" or row.get("status") == "filled"
+        ]
         result[strategy] = {
             "orders": len(rows),
-            "executed": sum(row.get("status") in ("executed", "accepted", "new", "filled", "partially_filled") for row in rows),
+            "submitted": len(submitted),
+            "filled": len(filled),
+            "partially_filled": sum(row.get("broker_status") == "partially_filled" for row in submitted),
             "blocked": sum(row.get("status") == "blocked" for row in rows),
-            "entries": sum(str(row.get("action", "")).lower() in ("buy", "short") for row in rows),
-            "exits": sum(str(row.get("action", "")).lower() in ("sell", "cover") for row in rows),
+            "failed": sum(row.get("status") == "failed" for row in rows),
+            "entries": sum(str(row.get("action", "")).lower() in ("buy", "short") for row in submitted),
+            "exits": sum(str(row.get("action", "")).lower() in ("sell", "cover") for row in submitted),
             "closed_trades_with_pnl": sum(row.get("pnl") is not None for row in rows),
         }
     return result
@@ -339,23 +426,38 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
 # Snapshot
 # ---------------------------------------------------------------------------
 
-def take_snapshot(force: bool = False, mode: str = "swing") -> dict | None:
+def take_snapshot(force: bool = False, mode: str = "swing", snapshot_kind: str | None = None) -> dict | None:
     """Record today's equity and benchmark data for a specific trading mode."""
+    if snapshot_kind not in (None, "close"):
+        raise ValueError(f"Unsupported snapshot kind: {snapshot_kind}")
     snapshot_dir = _snapshot_dir(mode)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now().strftime("%Y-%m-%d")
+    now = datetime.now(MARKET_TZ)
+    today = now.strftime("%Y-%m-%d")
     snap_file = snapshot_dir / f"{today}.json"
 
-    if snap_file.exists() and not force:
-        log.info(f"Snapshot for {today} already exists. Use --force to overwrite.")
-        with open(snap_file) as f:
-            return json.load(f)
+    if snapshot_kind == "close":
+        schedule = get_day_schedule(flatten_by="15:45", on_date=now.date(), mode=mode)
+        if schedule is None:
+            return {"date": today, "skipped": True, "reason": "no equity market session"}
+        if now < schedule.closes_at:
+            raise ValueError(f"Close snapshot is due after {schedule.closes_at.isoformat()}")
 
     try:
         portfolio = get_portfolio(mode=mode)
     except Exception as e:
         log.error(f"Failed to fetch portfolio: {e}")
         return None
+    if snap_file.exists() and not force:
+        with open(snap_file) as f:
+            existing = json.load(f)
+        if (
+            existing.get("account_id") == portfolio["account_id"]
+            and existing.get("trading_mode") == mode
+            and existing.get("snapshot_kind") == (snapshot_kind or "intraday")
+        ):
+            log.info("Snapshot for %s already exists for this account and kind", today)
+            return existing
 
     spy_price = None
     qqq_price = None
@@ -384,9 +486,11 @@ def take_snapshot(force: bool = False, mode: str = "swing") -> dict | None:
 
     snapshot = {
         "date": today,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": now.isoformat(),
+        "snapshot_kind": snapshot_kind or "intraday",
         "trading_mode": mode,
         "account_name": portfolio["account_name"],
+        "account_id": portfolio["account_id"],
         "equity": portfolio["equity"],
         "cash": portfolio["cash"],
         "invested": portfolio["invested"],
@@ -399,14 +503,21 @@ def take_snapshot(force: bool = False, mode: str = "swing") -> dict | None:
         "qqq_daily_pct": round(qqq_daily * 100, 4) if qqq_daily is not None else None,
     }
 
-    with open(snap_file, "w") as f:
-        json.dump(snapshot, f, indent=2)
+    temp_path = None
+    try:
+        with NamedTemporaryFile("w", dir=snapshot_dir, prefix=f".{today}.", suffix=".tmp", delete=False) as f:
+            temp_path = Path(f.name)
+            json.dump(snapshot, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_path, snap_file)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
-    log.info(
-        f"Snapshot saved: equity=${portfolio['equity']:,.2f}, "
-        f"SPY=${spy_price:.2f}, " if spy_price else "SPY=N/A, "
-        f"QQQ=${qqq_price:.2f}" if qqq_price else "QQQ=N/A"
-    )
+    spy_label = f"${spy_price:.2f}" if spy_price is not None else "N/A"
+    qqq_label = f"${qqq_price:.2f}" if qqq_price is not None else "N/A"
+    log.info("Snapshot saved: equity=$%s, SPY=%s, QQQ=%s", f"{portfolio['equity']:,.2f}", spy_label, qqq_label)
     return snapshot
 
 
@@ -483,32 +594,67 @@ def terminal_report(perf: dict, trade_stats: dict, mode: str = "swing") -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(description="Swarm Trader Performance Tracker")
     parser.add_argument("--snapshot", action="store_true", help="Record today's snapshot")
     parser.add_argument("--force", action="store_true", help="Overwrite today's snapshot")
+    parser.add_argument("--snapshot-kind", choices=["close"],
+                        help="Mark a broker-calendar-verified end-of-session snapshot")
     parser.add_argument("--report", action="store_true", help="Terminal performance report")
     parser.add_argument("--json", action="store_true", help="JSON output")
+    parser.add_argument("--fill-report", action="store_true",
+                        help="Reconcile gross realized P&L from broker FILL activities")
     parser.add_argument("--days", type=int, help="Limit to last N days")
     parser.add_argument("--mode", choices=["swing", "day", "algo"], default="swing",
                         help="Account/mode to snapshot or report (default: swing)")
     args = parser.parse_args()
+    if args.snapshot_kind and not args.snapshot:
+        parser.error("--snapshot-kind requires --snapshot")
+    if args.fill_report and args.snapshot:
+        parser.error("--fill-report cannot be combined with --snapshot")
 
     if args.snapshot:
-        snap = take_snapshot(force=args.force, mode=args.mode)
-        if snap:
-            print(
-                f"{args.mode.upper()} snapshot saved: {snap['date']} — "
-                f"equity=${snap['equity']:,.2f} "
-                f"({snap.get('account_name', args.mode.title())})"
-            )
-        return
+        try:
+            snap = take_snapshot(force=args.force, mode=args.mode, snapshot_kind=args.snapshot_kind)
+        except (requests.RequestException, ValueError) as exc:
+            log.error("Cannot record %s snapshot: %s", args.mode, exc)
+            return 1
+        if snap is None:
+            return 1
+        if snap.get("skipped"):
+            print(f"{args.mode.upper()} close snapshot skipped: {snap['reason']}")
+            return 0
+        print(
+            f"{args.mode.upper()} snapshot saved: {snap['date']} — "
+            f"equity=${snap['equity']:,.2f} "
+            f"({snap.get('account_name', args.mode.title())})"
+        )
+        return 0
 
-    snapshots = load_snapshots(days=args.days, mode=args.mode)
-    trades = load_trade_journal(mode=args.mode)
+    try:
+        _, current_account = verify_account_for_mode(args.mode)
+        current_account_id = str(current_account.get("id") or current_account.get("account_number") or "")
+        if not current_account_id:
+            raise ValueError("Alpaca account response omitted its ID")
+    except (requests.RequestException, ValueError) as exc:
+        log.error("Cannot verify current %s account for reporting: %s", args.mode, exc)
+        return 1
+    snapshots = load_snapshots(days=args.days, mode=args.mode, account_id=current_account_id)
+    trades = load_trade_journal(mode=args.mode, account_id=current_account_id)
+    trades, order_reconciliation = reconcile_trade_orders(trades, mode=args.mode)
     perf = compute_performance(snapshots)
     trade_stats = compute_trade_stats(trades)
     strategy_stats = compute_strategy_stats(trades)
+    fill_report = None
+    if args.fill_report:
+        try:
+            fill_report = get_account_fill_report(args.mode, trades)
+        except (requests.RequestException, FillHistoryError, ValueError) as exc:
+            log.error("Cannot reconcile %s broker fills: %s", args.mode, exc)
+            return 1
+        # The summary is concise enough for cron reports. Full per-fill
+        # details remain available through src.fill_analytics directly.
+        fill_report.pop("realized_fills", None)
 
     if args.json:
         output = {
@@ -516,7 +662,10 @@ def main():
             "performance": perf,
             "trade_stats": trade_stats,
             "strategy_stats": strategy_stats,
+            "order_reconciliation": order_reconciliation,
         }
+        if fill_report is not None:
+            output["fill_report"] = fill_report
         print(json.dumps(output, indent=2, default=str))
     elif args.report or not args.json:
         terminal_report(perf, trade_stats, mode=args.mode)
@@ -525,10 +674,23 @@ def main():
             for name, values in strategy_stats.items():
                 print(
                     f"    {name:<28} {values['orders']:>4} orders  "
-                    f"{values['entries']} entries / {values['exits']} exits  "
-                    f"{values['blocked']} blocked"
+                    f"{values['submitted']} submitted / {values['filled']} filled  "
+                    f"{values['blocked']} blocked / {values['failed']} failed"
                 )
+        if order_reconciliation["error"]:
+            print("  Broker order reconciliation unavailable; fill counts may be stale.")
+        elif order_reconciliation["unmatched"]:
+            print(f"  {order_reconciliation['unmatched']} journal order(s) not found in recent broker history.")
+        if fill_report is not None:
+            pnl = fill_report.get("realized_pnl")
+            pnl_label = f"${float(pnl):+,.2f}" if pnl is not None else "unknown"
+            print(f"  Gross realized P&L from broker fills: {pnl_label}")
+            print(f"  By strategy: {fill_report.get('strategy_pnl') or {}}")
+            print(f"  Unattributed gross P&L: ${float(fill_report['unattributed_realized_pnl']):+,.2f}")
+            if not fill_report.get("realized_pnl_complete"):
+                print("  Broker fill basis is incomplete; realized total is unknown.")
+    return 0 if fill_report is None or fill_report.get("realized_pnl_complete") else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
