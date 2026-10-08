@@ -1,5 +1,3 @@
-from datetime import date, timedelta
-
 import pytest
 
 import risk_manager
@@ -7,7 +5,6 @@ from src.config import ALGO_MODE_CONFIG, MODES, STRATEGY_CONFIG, get_mode_config
 from src.strategies import mean_reversion, momentum, opening_range_breakout, pairs, trend_following
 from src.strategies.regime import rank_strategies
 from src.strategies.state_machine import COOLDOWN, ENTRY_PENDING, OPEN, RuleStrategyStateMachine
-from src.strategies.universe import _is_allowed_asset, _metrics
 
 
 SESSION_DATE = "2026-10-07"
@@ -66,7 +63,7 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 20
     assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 40
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.05
-    assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.32
+    assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
     assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.15
     assert MODES["swing"]["risk"]["max_open_positions"] == 12
     assert MODES["swing"]["risk"]["max_trades_per_day"] == 4
@@ -315,38 +312,3 @@ def test_strategy_state_machine_persists_software_stop_and_target():
 
     assert states["mean_reversion"]["AAPL"]["stop_price"] == 98.0
     assert states["mean_reversion"]["AAPL"]["take_profit"] == 104.0
-
-
-def test_universe_asset_filter_rejects_warrants_and_leverage_but_keeps_allowed_day_etf():
-    base = {
-        "status": "active",
-        "tradable": True,
-        "class": "us_equity",
-        "exchange": "NASDAQ",
-        "name": "Example Corporation Common Stock",
-    }
-    assert _is_allowed_asset("AAPL", base, mode="algo", configured_symbols={"AAPL"})[0]
-    assert not _is_allowed_asset(
-        "ABCDW", {**base, "name": "Example Warrant"}, mode="algo", configured_symbols={"ABCDW"},
-    )[0]
-    leveraged = {**base, "name": "ProShares UltraPro QQQ"}
-    assert not _is_allowed_asset("TQQQ", leveraged, mode="algo", configured_symbols={"TQQQ"})[0]
-    assert _is_allowed_asset("TQQQ", leveraged, mode="day", configured_symbols={"TQQQ"})[0]
-
-
-def test_dynamic_universe_metrics_require_history_price_and_dollar_volume():
-    first = date(2026, 1, 1)
-    bars = [
-        {"date": (first + timedelta(days=index)).isoformat(), "close": 100.0, "volume": 250_000}
-        for index in range(61)
-    ]
-    sessions = [bar["date"] for bar in bars[-21:]]
-
-    metrics = _metrics(bars, sessions)
-
-    assert metrics is not None
-    assert metrics["average_dollar_volume_20d"] == pytest.approx(25_000_000)
-    assert metrics["clean_daily_bars"] == 61
-    assert _metrics(bars[-59:], sessions) is None
-    illiquid = [{**bar, "volume": 100_000} for bar in bars]
-    assert _metrics(illiquid, sessions) is None

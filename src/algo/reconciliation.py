@@ -14,7 +14,7 @@ from pathlib import Path
 
 from src.algo.incidents import open_incident_symbols, resolve_incident
 from src.algo.protection import verified_recovery_oco
-from src.strategies.registry import RULE_MODULES
+from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
 from src.strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
 
 
@@ -358,7 +358,7 @@ def reconcile_startup(
         journal_proved = bool(
             journal_row
             and str(journal_row.get("ticker", "")).upper() == ticker
-            and journal_row.get("strategy") in RULE_MODULES
+            and journal_row.get("strategy") in ALGO_DEFAULT_PARAMETERS
             and journal_row["client_order_id"] == entry.get("client_order_id")
         )
         pending_client = prior_state.get("entry_client_order_id") or prior_state.get("client_order_id")

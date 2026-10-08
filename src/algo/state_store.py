@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.strategies.registry import RULE_MODULES
+from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
 
 
 SCHEMA_VERSION = 1
@@ -107,7 +107,7 @@ def validate_portfolio(portfolio: dict) -> None:
 
     seen_active: dict[str, str] = {}
     for strategy, by_symbol in states.items():
-        if strategy not in RULE_MODULES or not isinstance(by_symbol, dict):
+        if strategy not in ALGO_DEFAULT_PARAMETERS or not isinstance(by_symbol, dict):
             raise StateCorruptionError(f"Unknown or malformed Algo strategy: {strategy}")
         for ticker, state in by_symbol.items():
             if not isinstance(ticker, str) or not ticker or ticker != ticker.upper():
@@ -136,7 +136,7 @@ def validate_portfolio(portfolio: dict) -> None:
     for ticker, strategy in owners.items():
         if not isinstance(ticker, str) or not ticker or ticker != ticker.upper():
             raise StateCorruptionError(f"Malformed owned ticker: {ticker!r}")
-        if strategy not in RULE_MODULES:
+        if strategy not in ALGO_DEFAULT_PARAMETERS:
             raise StateCorruptionError(f"Unknown Algo position owner for {ticker}: {strategy!r}")
         state = (states.get(strategy) or {}).get(ticker)
         if not state or state.get("phase") not in ACTIVE_PHASES:

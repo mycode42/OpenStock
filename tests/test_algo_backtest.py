@@ -6,7 +6,7 @@ from src.algo.backtest import AlgoPortfolioBacktest, _regular_session_bars
 from src.algo.market_store import SQLiteBarStore
 from src.algo.slippage_sensitivity import parse_slippage_grid
 from src.algo.walk_forward import walk_forward_windows
-from src.algo.research_rules import evaluate_research_signal
+from src.strategies.rule_pipeline import evaluate_rule_signal
 from src.strategies.registry import validate_parameter_profile
 from src.strategies.signals import Signal
 
@@ -53,11 +53,11 @@ def test_orb_research_buffer_filters_weak_breakouts():
     ]
     bars.append({"t": "2026-10-05T14:00:00Z", "o": 100, "h": 101, "l": 99, "c": 100.5, "v": 20})
 
-    assert evaluate_research_signal(
+    assert evaluate_rule_signal(
         "opening_range_breakout", "AAPL", bars,
         {"opening_range_bars": 6, "minimum_volume_ratio": 1.25},
     ) is not None
-    assert evaluate_research_signal(
+    assert evaluate_rule_signal(
         "opening_range_breakout", "AAPL", bars,
         {
             "opening_range_bars": 6, "minimum_volume_ratio": 1.25,
@@ -134,7 +134,7 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
         return None
 
     monkeypatch.setattr(
-        "src.algo.research_rules.evaluate_strategy",
+        "src.strategies.rule_pipeline.evaluate_strategy",
         lambda name, mode, ticker, history, position_qty=0, parameters=None:
             deterministic_signal(name, mode, ticker, history, position_qty, parameters),
     )
@@ -174,15 +174,15 @@ def test_opening_dip_research_rule_requires_window_dip_bounce_and_volume():
         "minimum_bounce_pct": 0.001, "higher_low_bars": 1,
     }
 
-    signal = evaluate_research_signal("mean_reversion", "AAPL", bars, parameters)
+    signal = evaluate_rule_signal("mean_reversion", "AAPL", bars, parameters)
 
     assert signal is not None
     assert signal.action == "buy"
-    assert evaluate_research_signal(
+    assert evaluate_rule_signal(
         "mean_reversion", "AAPL", bars,
         {**parameters, "minimum_dip_pct": 0.02},
     ) is None
-    assert evaluate_research_signal(
+    assert evaluate_rule_signal(
         "mean_reversion", "AAPL", bars,
         {**parameters, "entry_window_minutes": 5},
     ) is None
@@ -219,7 +219,7 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
         return Signal(ticker, "buy", "momentum", "test trigger", 0.9) if strategy == "momentum" else None
 
     monkeypatch.setattr(
-        "src.algo.research_rules.evaluate_strategy",
+        "src.strategies.rule_pipeline.evaluate_strategy",
         lambda name, mode, ticker, history, position_qty=0, parameters=None:
             deterministic_signal(name, mode, ticker, history, position_qty, parameters),
     )
@@ -279,7 +279,7 @@ def test_strategy_specific_cooldown_only_blocks_the_exited_strategy(monkeypatch)
         return None
 
     monkeypatch.setattr(
-        "src.algo.research_rules.evaluate_strategy",
+        "src.strategies.rule_pipeline.evaluate_strategy",
         lambda name, mode, ticker, history, position_qty=0, parameters=None:
             deterministic_signal(name, mode, ticker, history, position_qty, parameters),
     )

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import requests
 
+from src.config import ALGO_MODE_CONFIG, get_mode_config
 from src.strategies import runner, universe as strategy_universe
 from src.strategies.signals import Signal
 
@@ -43,19 +44,64 @@ def test_swing_and_day_use_their_fixed_configured_universes():
     day = strategy_universe.configured_universe("day")
 
     assert swing["tickers"] == [
-        "NVDA", "SPCX", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN",
+        "NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN",
         "PLTR", "AMD", "CRM", "SNOW", "NET", "PANW",
         "JPM", "V", "UNH", "JNJ", "PG", "KO",
         "COIN", "MSTR", "RKLB", "SMCI", "SPY", "QQQ", "GLD", "TLT",
     ]
     assert day["tickers"] == [
-        "NVDA", "SPCX", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN",
-        "PLTR", "COIN", "MSTR", "RKLB", "SMCI", "SPY", "QQQ", "TQQQ", "SOXL",
+        "NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN",
+        "PLTR", "TQQQ", "COIN", "SPY", "QQQ",
     ]
     assert swing["dynamic"] is False
     assert day["dynamic"] is False
-    assert swing["categories"]["SPCX"] == "core_tech"
-    assert day["categories"]["SOXL"] == "etf_direction"
+    assert swing["categories"]["COIN"] == "tactical"
+    assert day["categories"]["TQQQ"] == "momentum"
+    assert {
+        key: bucket["max_sector_pct"]
+        for key, bucket in get_mode_config("swing")["universe"].items()
+    } == {
+        "core_tech": 0.30,
+        "growth": 0.25,
+        "value_dividend": 0.25,
+        "tactical": 0.03,
+        "hedge": 0.15,
+    }
+    assert {
+        key: bucket["max_sector_pct"]
+        for key, bucket in get_mode_config("day")["universe"].items()
+    } == {
+        "mega_cap": 0.50,
+        "momentum": 0.35,
+        "etf_direction": 0.30,
+    }
+    assert {
+        key: bucket["max_sector_pct"]
+        for key, bucket in ALGO_MODE_CONFIG["universe"].items()
+    } == {
+        "core_tech": 0.40,
+        "diversifiers": 0.30,
+        "hedge": 0.20,
+        "tactical": 0.04,
+    }
+
+
+def test_algo_uses_the_configured_22_symbol_universe():
+    algo = strategy_universe.configured_universe("algo")
+
+    assert algo["tickers"] == [
+        "NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD",
+        "JPM", "V", "UNH", "JNJ", "PG", "KO",
+        "SPY", "QQQ", "GLD", "TLT",
+        "PLTR", "CRM", "PANW",
+    ]
+    assert algo["dynamic"] is False
+    assert algo["categories"]["PLTR"] == "tactical"
+    assert algo["categories"]["SPY"] == "hedge"
+    assert "universe_selection" not in ALGO_MODE_CONFIG
+    assert ALGO_MODE_CONFIG["universe"]["tactical"]["max_per_stock_pct"] == 0.02
+    assert ALGO_MODE_CONFIG["risk"]["max_tactical_pct"] == 0.04
+    assert ALGO_MODE_CONFIG["risk"]["max_tactical_positions"] == 2
 
 
 @pytest.mark.parametrize("mode", ["swing", "day"])
@@ -69,7 +115,7 @@ def test_swing_and_day_scans_do_not_call_dynamic_selector(monkeypatch, mode):
     monkeypatch.setattr(runner, "_fetch_latest_quotes", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         runner, "rank_strategies",
-        lambda bars, mode: {"regime": "range_bound", "reason": "test", "ranked": [], "active": []},
+        lambda bars, mode, **kwargs: {"regime": "range_bound", "reason": "test", "ranked": [], "active": []},
     )
 
     result = runner.scan(mode=mode)
@@ -85,8 +131,11 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     bar_calls = []
     quote_feeds = []
 
-    def fetch_bars(symbols, *, mode, timeframe, start, end, limit, feed="sip"):
-        bar_calls.append({"timeframe": timeframe, "start": start, "end": end, "feed": feed})
+    def fetch_bars(symbols, *, mode, timeframe, start, end, limit, feed="sip", adjustment=None):
+        bar_calls.append({
+            "timeframe": timeframe, "start": start, "end": end,
+            "feed": feed, "adjustment": adjustment,
+        })
         if timeframe == "5Min":
             return {"AAPL": [{"t": "2026-10-08T00:55:00Z", "c": 100, "h": 101, "l": 99, "v": 1000}]}
         return {"SPY": [{"t": "2026-10-07T20:00:00Z", "c": 100}]}
@@ -99,7 +148,7 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     monkeypatch.setattr(runner, "_fetch_latest_quotes", fetch_quotes)
     monkeypatch.setattr(
         runner, "rank_strategies",
-        lambda bars, mode: {"regime": "trending_up", "reason": "test", "ranked": [], "active": []},
+        lambda bars, mode, **kwargs: {"regime": "trending_up", "reason": "test", "ranked": [], "active": []},
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
 
@@ -113,7 +162,10 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     )
 
     intraday = next(call for call in bar_calls if call["timeframe"] == "5Min")
+    daily = next(call for call in bar_calls if call["timeframe"] == "1Day")
     assert intraday["feed"] == "boats"
+    assert daily["feed"] == "sip"
+    assert daily["adjustment"] == "split"
     assert datetime.fromisoformat(intraday["end"]) <= FROZEN_NOW
     assert quote_feeds == ["boats"]
     assert result["data_status"]["historical_delay_seconds"] == 0
@@ -201,15 +253,15 @@ def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
     )
     monkeypatch.setattr(
         runner, "rank_strategies",
-        lambda bars, mode: {
+        lambda bars, mode, **kwargs: {
             "regime": "trending_up", "reason": "test",
             "ranked": [{"strategy": "momentum", "score": 0.9}], "active": ["momentum"],
         },
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
-        runner, "evaluate_strategy",
-        lambda *args: Signal("AAPL", "buy", "momentum", "test", strength=1.0),
+        runner, "evaluate_rule_signal",
+        lambda *args, **kwargs: Signal("AAPL", "buy", "momentum", "test", strength=1.0),
     )
 
     result = runner.scan(
@@ -245,39 +297,21 @@ def test_historical_bar_fetch_follows_pagination(monkeypatch):
     assert calls[1]["page_token"] == "next"
 
 
-def test_universe_keeps_overnight_eligibility_for_unselected_holdings(monkeypatch):
-    mode_config = {
-        "universe": {"core": {"tickers": ["AAPL", "MSFT"], "max_sector_pct": 1.0}},
-        "risk": {"max_sector_pct": 1.0},
-    }
-    monkeypatch.setattr(
-        strategy_universe, "_catalog",
-        lambda mode: (mode_config, {"AAPL": "core", "MSFT": "core"}, ["AAPL", "MSFT"]),
-    )
-    monkeypatch.setattr(strategy_universe, "get_most_active", lambda **kwargs: [])
-    asset = {
-        "status": "active", "tradable": True, "class": "us_equity", "exchange": "NASDAQ",
-        "name": "Example Common Stock", "overnight_tradable": True,
-    }
+def test_algo_universe_is_not_truncated_and_keeps_overnight_asset_flags(monkeypatch):
+    fixed = strategy_universe.configured_universe("algo")["tickers"]
     monkeypatch.setattr(
         strategy_universe, "_fetch_active_assets",
-        lambda mode: {"AAPL": dict(asset), "MSFT": dict(asset)},
-    )
-    first = date(2026, 1, 1)
-    bars = [
-        {"t": f"{first + timedelta(days=index)}T00:00:00Z", "o": 100, "h": 101,
-         "l": 99, "c": 100, "v": 250_000}
-        for index in range(61)
-    ]
-    monkeypatch.setattr(
-        strategy_universe, "_fetch_daily_bars",
-        lambda symbols, **kwargs: {ticker: list(bars) for ticker in [*symbols, "SPY"]},
+        lambda mode: {
+            "SPY": {"overnight_tradable": True},
+            "NVDA": {"attributes": ["overnight_tradable"]},
+        },
     )
 
     result = strategy_universe.select_universe("algo", max_tickers=1)
 
-    assert result["tickers"] == ["AAPL"]
-    assert result["overnight_tradable_tickers"] == ["AAPL", "MSFT"]
+    assert result["tickers"] == fixed
+    assert result["overnight_tradable_tickers"] == ["NVDA", "SPY"]
+    assert result["selection_source"] == "configured_fixed_universe"
 
 
 def test_one_shot_algo_cli_is_removed(monkeypatch):

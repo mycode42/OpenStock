@@ -1,6 +1,6 @@
 [project]
 name = "swarm-trader"
-version = "1.5.0"
+version = "1.6.0"
 description = "Paper-trading strategy portfolios and research tools"
 authors = [{ name = "Swarm Trader maintainers" }]
 readme = "README.md"

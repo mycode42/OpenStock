@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from src.algo.backtest import (
-    AlgoPortfolioBacktest, DAILY_WARMUP_DAYS,
+    AlgoPortfolioBacktest, DAILY_WARMUP_DAYS, multi_factor_warmup_days,
     validate_research_controls, validate_strategy_filter,
 )
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
@@ -36,6 +36,7 @@ METRICS = (
     "candidate_setup_count_by_strategy", "average_candidate_ticker_days_per_session",
     "strategy_metrics", "average_holding_minutes", "median_holding_minutes",
     "average_calendar_holding_hours", "max_consecutive_losses", "time_in_market_pct",
+    "multi_factor_diagnostics",
 )
 
 
@@ -119,9 +120,17 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
     """Evaluate one independent fold in a worker process."""
     index, window, symbols, profiles, spy_daily, args = payload
     store = SQLiteBarStore(args.db)
+    warmup_days = max((
+        multi_factor_warmup_days(profile["parameters"])
+        for profile in profiles
+        if profile["strategies"] is None or "multi_factor" in profile["strategies"]
+    ), default=0)
+    train_start = (
+        date.fromisoformat(window["train_start"]) - timedelta(days=warmup_days)
+    ).isoformat() if warmup_days else window["train_start"]
     intraday = store.bars(
         symbols, feed=args.feed, timeframe="5Min",
-        start=window["train_start"], end=window["train_end"],
+        start=train_start, end=window["train_end"],
         adjustment=args.adjustment,
     )
     train_runs = []
@@ -164,9 +173,12 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
     del intraday
     gc.collect()
 
+    test_start = (
+        date.fromisoformat(window["test_start"]) - timedelta(days=warmup_days)
+    ).isoformat() if warmup_days else window["test_start"]
     intraday = store.bars(
         symbols, feed=args.feed, timeframe="5Min",
-        start=window["test_start"], end=window["test_end"],
+        start=test_start, end=window["test_end"],
         adjustment=args.adjustment,
     )
     test_report = _run_portfolio(
@@ -207,6 +219,13 @@ def run_walk_forward(args) -> dict:
         raise ValueError("max_candidate_ticker_days_per_session must be finite and positive")
     args.max_candidate_ticker_days_per_session = frequency_limit
 
+    profiles = _read_profiles(args.profiles)
+    needs_factor_adjustment = any(
+        profile["strategies"] is None or "multi_factor" in profile["strategies"]
+        for profile in profiles
+    )
+    args.adjustment = args.adjustment or ("split" if needs_factor_adjustment else "raw")
+
     store = SQLiteBarStore(args.db)
     coverage = store.coverage()
     symbols_with_bars = {
@@ -237,7 +256,6 @@ def run_walk_forward(args) -> dict:
             f"Need more sessions than the {args.train_days}-session training window; "
             f"found {len(trading_dates)}"
         )
-    profiles = _read_profiles(args.profiles)
     workers = getattr(args, "workers", 1)
     if workers < 1:
         raise ValueError("workers must be at least 1")
@@ -277,6 +295,11 @@ def run_walk_forward(args) -> dict:
         "symbols_without_bars_in_period": symbols_without_bars,
         "universe_model": "fixed supplied symbol list for every train and test window",
         "start": args.start, "end": args.end,
+        "multi_factor_warmup_days": max((
+            multi_factor_warmup_days(profile["parameters"])
+            for profile in profiles
+            if profile["strategies"] is None or "multi_factor" in profile["strategies"]
+        ), default=0),
         "trading_session_count": len(trading_dates),
         "candidate_profile_count": len(profiles),
         "selection_rule": (
@@ -315,7 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", required=True)
     parser.add_argument("--profiles", required=True, help="JSON array of named signal parameter profiles")
     parser.add_argument("--feed", choices=["sip"], default=regular_feed())
-    parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default="raw")
+    parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default=None)
     parser.add_argument("--train-days", type=int, default=30, help="number of prior trading sessions per fit window")
     parser.add_argument("--test-days", type=int, default=10, help="number of later trading sessions per holdout")
     parser.add_argument("--step-days", type=int, default=10, help="advance in trading sessions between holdouts")

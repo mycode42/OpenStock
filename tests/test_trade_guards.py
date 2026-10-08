@@ -221,6 +221,24 @@ def test_short_entries_and_overcovers_are_blocked():
     assert risk_manager.validate_trade("AAPL", "cover", 6, 100, short_state, mode="swing").rule == "overcover"
     assert risk_manager.validate_trade("AAPL", "cover", 5, 100, short_state, mode="swing").approved
 
+
+def test_algo_tactical_satellites_are_limited_to_two_positions():
+    risk_manager._universe_cache.pop("algo", None)
+    state = _state(
+        positions={
+            "PLTR": {"symbol": "PLTR", "qty": 10, "market_value": 1_000},
+            "CRM": {"symbol": "CRM", "qty": 10, "market_value": 1_000},
+        },
+        sector_alloc={"tactical": 2_000},
+        open_position_count=2,
+    )
+
+    blocked_new_name = risk_manager.validate_trade("PANW", "buy", 1, 100, state, mode="algo")
+    allowed_scale_in = risk_manager.validate_trade("PLTR", "buy", 1, 100, state, mode="algo")
+
+    assert blocked_new_name.rule == "max_tactical_positions"
+    assert allowed_scale_in.approved
+
 def test_uncatalogued_entry_cannot_skip_sector_limits():
     for mode in ("swing", "day", "algo"):
         result = risk_manager.validate_trade("ZZZZ", "buy", 1, 100, _state(), mode=mode)

@@ -1,0 +1,25 @@
+[
+  {
+    "name": "baseline",
+    "strategies": ["multi_factor"],
+    "parameters": {}
+  },
+  {
+    "name": "top_three",
+    "strategies": ["multi_factor"],
+    "parameters": {
+      "multi_factor": {
+        "top_n": 3
+      }
+    }
+  },
+  {
+    "name": "daily_rebalance",
+    "strategies": ["multi_factor"],
+    "parameters": {
+      "multi_factor": {
+        "rebalance_frequency": "daily"
+      }
+    }
+  }
+]

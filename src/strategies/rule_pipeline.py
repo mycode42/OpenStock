@@ -1,4 +1,4 @@
-"""Research-only signal variants; live strategy defaults remain unchanged."""
+"""Shared pure signal pipeline for live Algo scans and research replay."""
 
 from __future__ import annotations
 
@@ -107,10 +107,13 @@ def _confirmed_trend(
     )
 
 
-def evaluate_research_signal(
+def evaluate_rule_signal(
     name: str, ticker: str, bars: list[dict], parameters: dict | None = None,
+    *, position_qty: float = 0,
 ) -> Signal | None:
-    """Apply optional, bounded research filters to the production rule signals."""
+    """Apply configured rule filters, then delegate to the production signal module."""
+    if name not in RULE_PARAMETERS:
+        return None
     params = dict(parameters or {})
     rule_params = _parameters(name, params)
 
@@ -137,7 +140,7 @@ def evaluate_research_signal(
             if opening_high <= 0 or latest_close <= opening_high * (1 + buffer_pct):
                 return None
 
-    signal = evaluate_strategy(name, "algo", ticker, bars, 0, parameters=rule_params)
+    signal = evaluate_strategy(name, "algo", ticker, bars, position_qty, parameters=rule_params)
     if signal is None or signal.action != "buy" or name != "momentum":
         return signal
     max_extension = float(params.get("max_extension_pct", 0))

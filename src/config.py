@@ -13,7 +13,7 @@ MODES = {
         "universe": {
             "core_tech": {
                 "label": "Core Technology",
-                "tickers": ["NVDA", "SPCX", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN"],
+                "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN"],
                 "max_sector_pct": 0.30,
                 "max_per_stock_pct": 0.08,
             },
@@ -32,7 +32,7 @@ MODES = {
             "tactical": {
                 "label": "Tactical",
                 "tickers": ["COIN", "MSTR", "RKLB", "SMCI"],
-                "max_sector_pct": 0.15,
+                "max_sector_pct": 0.03,
                 "max_per_stock_pct": 0.05,
             },
             "hedge": {
@@ -63,19 +63,19 @@ MODES = {
         "universe": {
             "mega_cap": {
                 "label": "Mega-Cap Liquid",
-                "tickers": ["NVDA", "SPCX", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN"],
+                "tickers": ["NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN"],
                 "max_sector_pct": 0.50,
                 "max_per_stock_pct": 0.15,
             },
             "momentum": {
                 "label": "Momentum",
-                "tickers": ["PLTR", "COIN", "MSTR", "RKLB", "SMCI"],
+                "tickers": ["PLTR","TQQQ", "COIN"],
                 "max_sector_pct": 0.35,
                 "max_per_stock_pct": 0.12,
             },
             "etf_direction": {
                 "label": "ETF Direction / Hedge",
-                "tickers": ["SPY", "QQQ", "TQQQ", "SOXL"],
+                "tickers": ["SPY", "QQQ"],
                 "max_sector_pct": 0.30,
                 "max_per_stock_pct": 0.15,
             },
@@ -102,14 +102,6 @@ MODES = {
 }
 
 STRATEGY_CONFIG = {
-    "universe_min_avg_dollar_volume_20d": 20_000_000,
-    "universe_min_price": 5.0,
-    "universe_max_price": 500.0,
-    "universe_min_clean_daily_bars": 60,
-    "universe_history_days": 180,
-    "universe_active_candidate_count": 100,
-    "universe_moderate_volatility_target_annualized": 0.35,
-    "universe_volatility_penalty": 2.5,
     "portfolio_scan_seconds": 60,
     "universe_retry_seconds": 300,
     "quote_stale_seconds": 90,
@@ -125,50 +117,40 @@ STRATEGY_CONFIG = {
     "pairs_entry_z": 2.0,
 }
 
-# Algo owns an independent broad candidate catalog. Swing and Day scan only
-# their explicitly configured fixed lists above.
-ALGO_UNIVERSE_CANDIDATES = {
+# Algo has its own fixed universe while signal and portfolio behavior are
+# validated. Swing and Day retain their separately configured fixed lists.
+ALGO_PORTFOLIO_UNIVERSE = {
     "core_tech": {
-        "label": "Core Technology",
-        "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "SPCX", "QCOM", "ORCL", "CSCO", "IBM", "INTC", "ADBE", "ACN", "AMAT", "TXN", "ADI", "LRCX", "KLAC", "MU", "MRVL", "APH", "SNPS", "CDNS"],
+        "label": "Mega-liquid Tech / Growth",
+        "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD"],
+        "max_sector_pct": 0.40,
+        "max_per_stock_pct": 0.05,
     },
-    "growth": {
-        "label": "Growth",
-        "tickers": ["PLTR", "AMD", "CRM", "SNOW", "NET", "PANW", "CRWD", "NOW", "DDOG", "SHOP", "UBER", "APP", "NFLX", "ABNB", "DASH", "TTD", "ZS", "MDB", "ARM", "CDW", "ROP", "TEAM"],
-    },
-    "value_dividend": {
-        "label": "Value & Dividend",
-        "tickers": ["JPM", "V", "UNH", "JNJ", "PG", "KO", "PEP", "BAC", "LOW", "XOM", "CVX", "WMT", "COST", "HD", "MCD", "CAT", "GE", "BA", "ABBV", "LLY", "MRK", "AMGN", "TMO", "DHR", "BSX", "MA", "AXP", "GS", "MS", "C", "WFC", "TJX", "TGT", "CL", "MDLZ", "PM", "HON", "DE", "UNP", "UPS", "COP", "SLB", "EOG", "NEE", "DUK", "SO"],
-    },
-    "tactical": {
-        "label": "Tactical",
-        "tickers": ["COIN", "MSTR", "RKLB", "SMCI", "IONQ", "TEM", "TSLA", "ASTS", "CRSP"],
+    "diversifiers": {
+        "label": "High-quality Non-Tech / Diversifiers",
+        "tickers": ["JPM", "V", "UNH", "JNJ", "PG", "KO"],
+        "max_sector_pct": 0.30,
+        "max_per_stock_pct": 0.05,
     },
     "hedge": {
-        "label": "Hedge / Direction",
-        "tickers": ["SPY", "QQQ", "GLD", "TLT", "SPCX", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLU", "XLY", "XLB", "SMH", "VNQ", "HYG", "EFA", "EEM", "LQD", "XLRE"],
-    },
-}
-ALGO_PORTFOLIO_UNIVERSE = {
-    category: {
-        **bucket,
-        "tickers": list(bucket["tickers"]),
-        "max_sector_pct": 0.32,
+        "label": "Broad Market & Hedge ETFs",
+        "tickers": ["SPY", "QQQ", "GLD", "TLT"],
+        "max_sector_pct": 0.20,
         "max_per_stock_pct": 0.05,
-    }
-    for category, bucket in ALGO_UNIVERSE_CANDIDATES.items()
+    },
+    "tactical": {
+        "label": "Optional Tactical Satellite",
+        "tickers": ["PLTR", "CRM", "PANW"],
+        "max_sector_pct": 0.04,
+        "max_per_stock_pct": 0.02,
+    },
 }
 ALGO_MODE_CONFIG = {
     "label": "Autonomous Algo Portfolio",
-    "universe_selection": {
-        "target": 50,
-        "minimum_target": 40,
-        "maximum_target": 60,
-    },
     "universe": ALGO_PORTFOLIO_UNIVERSE,
     "risk": {
         "max_position_pct": 0.05,
-        "max_sector_pct": 0.32,
+        "max_sector_pct": 0.40,
         "stop_loss_pct": 0.01,
         "trailing_stop_pct": 0.03,
         "daily_loss_limit": 0.02,
@@ -177,7 +159,8 @@ ALGO_MODE_CONFIG = {
         "max_trades_per_day": 40,
         "max_open_positions": 20,
         "min_cash_pct": 0.15,
-        "max_tactical_pct": 0.15,
+        "max_tactical_pct": 0.04,
+        "max_tactical_positions": 2,
         "flatten_eod": False,
         "allow_leveraged_etfs": False,
     },

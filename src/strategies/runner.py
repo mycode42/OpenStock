@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -31,9 +32,12 @@ from src.strategies import pairs
 from src.strategies.regime import rank_strategies
 from src.strategies.regime_advisor import apply_regime_advisory
 from src.market_data import feeds_for_session, historical_delay_seconds, regular_feed
-from src.strategies.registry import evaluate as evaluate_strategy
+from src.strategies.registry import ALGO_DEFAULT_PARAMETERS, RULE_MODULES, evaluate as evaluate_strategy
+from src.strategies.rule_pipeline import evaluate_rule_signal
+from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
 from src.strategies.state_machine import RuleStrategyStateMachine
 from src.strategies.universe import configured_universe, select_universe
+from src.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -59,7 +63,7 @@ def _request(endpoint: str, *, mode: str, base: str = DATA_BASE, params: dict | 
 
 def _fetch_bars(
     symbols: list[str], *, mode: str, timeframe: str, start: str, end: str,
-    limit: int, feed: str | None = None,
+    limit: int, feed: str | None = None, adjustment: str | None = None,
 ) -> dict[str, list[dict]]:
     if not symbols:
         return {}
@@ -79,6 +83,8 @@ def _fetch_bars(
                 "sort": "asc",
                 "feed": feed,
             }
+            if adjustment:
+                params["adjustment"] = adjustment
             if page_token:
                 params["page_token"] = page_token
             payload = _request("stocks/bars", mode=mode, params=params)
@@ -226,10 +232,14 @@ def _make_trade(signal: dict, price: float, equity: float, position: dict, mode_
     if equity <= 0 or price <= 0 or stop_pct <= 0:
         return None
     risk_dollars = equity * float(STRATEGY_CONFIG["risk_per_trade_pct"])
-    max_position_dollars = equity * min(
+    max_position_pct = min(
         float(STRATEGY_CONFIG["max_strategy_position_pct"]),
         float(mode_risk["max_position_pct"]),
     )
+    suggested_weight = signal.get("target_weight")
+    if isinstance(suggested_weight, (int, float)) and suggested_weight > 0:
+        max_position_pct = min(max_position_pct, float(suggested_weight))
+    max_position_dollars = equity * max_position_pct
     risk_quantity = int(risk_dollars / (price * stop_pct))
     position_quantity = int(max_position_dollars / price)
     quantity = min(risk_quantity, position_quantity)
@@ -247,6 +257,47 @@ def _make_trade(signal: dict, price: float, equity: float, position: dict, mode_
         "reasoning": signal["reason"],
         "strategy": signal["strategy"],
     }
+
+
+def _multi_factor_rebalance_signals(
+    strategy_states: dict,
+    daily_bars: dict[str, list[dict]],
+    selected_symbols: list[str],
+    position_owners: dict[str, str],
+    session: date,
+) -> tuple[dict[str, MultiFactorSignal], dict | None]:
+    """Persist one PIT-safe factor rebalance per configured period."""
+    generator = SignalGenerator(MultiFactorConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor")))
+    period = generator.rebalance_key(session)
+    by_symbol = strategy_states.setdefault("multi_factor", {})
+    held = {ticker for ticker, owner in position_owners.items() if owner == "multi_factor"}
+    tracked = set(selected_symbols) | held
+    if not any(by_symbol.get(ticker, {}).get("last_rebalance_period") != period for ticker in tracked):
+        return {}, None
+    signals, diagnostics = generator.generate(
+        daily_bars,
+        symbols=selected_symbols,
+        as_of=session - timedelta(days=1),
+        session=session,
+        held_positions=held,
+    )
+    if not diagnostics["minimum_universe_met"]:
+        return {}, diagnostics
+    records = {item.ticker: item for item in signals}
+    for ticker in tracked:
+        item = records.get(ticker)
+        state = by_symbol.setdefault(ticker, {})
+        state.update({
+            "last_rebalance_period": period,
+            "factor_score": item.score if item else None,
+            "factor_rank": item.rank if item else None,
+            "desired_direction": item.direction if item else "flat",
+            "target_weight": item.target_weight if item else 0.0,
+        })
+    return {
+        ticker: item for ticker, item in records.items()
+        if item.action in {"buy", "sell"}
+    }, diagnostics
 
 
 def execute_trades(trades: list[dict], *, mode: str, dry_run: bool = False) -> dict:
@@ -304,11 +355,11 @@ def scan(
     if universe_result is not None:
         universe = universe_result
     elif mode == "algo":
-        target = max_tickers or int(mode_config["universe_selection"]["target"])
-        universe = select_universe(mode, max_tickers=target)
+        universe = select_universe(mode)
     else:
         universe = configured_universe(mode, max_tickers=max_tickers)
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
+    event_config = EventStrategyConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("event_driven"))
     excluded = {str(symbol).upper() for symbol in (excluded_symbols or set())}
     track_owners = position_owners is not None
     owner_map = position_owners if position_owners is not None else {}
@@ -350,10 +401,17 @@ def scan(
     strategy_symbols = list(dict.fromkeys(
         [symbol for symbol in selected_symbols if symbol not in excluded] + held_symbols
     ))
+    # SPY is part of the fixed Algo universe and remains available to macro
+    # event signals; ordinary strategies still use their configured symbols.
+    if mode == "algo" and event_config.enabled and "SPY" not in strategy_symbols:
+        strategy_symbols.append("SPY")
     symbols_for_bars = list(dict.fromkeys(strategy_symbols + PAIR_DATA_SYMBOLS + ["SPY"]))
 
     now_utc = datetime.now(timezone.utc)
-    daily_start = (now_utc - timedelta(days=220)).date().isoformat()
+    factor_config = MultiFactorConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor"))
+    daily_history_days = factor_config.warmup_calendar_days() if mode == "algo" else 220
+    daily_start = (now_utc - timedelta(days=daily_history_days)).date().isoformat()
+    daily_feed = regular_feed() if mode == "algo" else data_feed
     historical_status = "ok"
     historical_bar_end: str | None = None
     try:
@@ -364,7 +422,8 @@ def scan(
             start=daily_start,
             end=now_utc.isoformat(),
             limit=10000,
-            feed=data_feed,
+            feed=daily_feed,
+            adjustment="split" if mode == "algo" else None,
         )
         daily_bars = {ticker: _completed_daily(bars, today) for ticker, bars in daily_bars.items()}
     except Exception as exc:
@@ -463,8 +522,38 @@ def scan(
             if historical_status == "ok":
                 historical_status = "stale"
 
+    event_generator = None
+    event_calendar_diagnostics = EventCalendar().diagnostics()
+    event_strategy_available = False
+    event_calendar_status = "disabled_by_config"
+    if mode == "algo" and event_config.enabled:
+        default_calendar = Path(__file__).resolve().parents[2] / "data" / "event_calendar.csv"
+        calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
+        try:
+            event_calendar = EventCalendar.from_csv(calendar_path)
+            checked_at = datetime.now(timezone.utc)
+            freshness = event_calendar.freshness(checked_at)
+            event_calendar_diagnostics = event_calendar.diagnostics(checked_at)
+            if freshness["fresh"] and event_calendar.events:
+                event_generator = EventSignalGenerator(event_calendar, event_config)
+                event_strategy_available = True
+                event_calendar_status = "ready"
+            else:
+                event_calendar_status = "stale" if event_calendar.events else "empty"
+                reason = freshness["reason"] or "calendar is empty"
+                event_calendar_diagnostics["unavailable_reason"] = reason
+                scan_errors.append(f"event strategy calendar {event_calendar_status}: {reason}: {calendar_path}")
+        except (OSError, ValueError) as exc:
+            event_calendar_status = "unavailable"
+            scan_errors.append(f"event strategy calendar unavailable: {type(exc).__name__}: {exc}")
     try:
-        regime = rank_strategies(daily_bars.get("SPY", []), mode=mode)
+        if mode == "algo" and event_config.enabled:
+            regime = rank_strategies(
+                daily_bars.get("SPY", []), mode=mode, event_enabled=event_strategy_available,
+                event_disable_in_volatile=event_config.disable_in_volatile,
+            )
+        else:
+            regime = rank_strategies(daily_bars.get("SPY", []), mode=mode)
     except Exception as exc:
         if mode != "algo":
             raise
@@ -520,6 +609,15 @@ def scan(
         "degraded" if quote_errors or owned_positions_without_fresh_quotes else
         "unavailable" if not fresh_quote_symbols else "ok"
     )
+    multi_factor_signals: dict[str, MultiFactorSignal] = {}
+    multi_factor_diagnostics = None
+    if mode == "algo" and fresh_quote_symbols.intersection(strategy_symbols):
+        try:
+            multi_factor_signals, multi_factor_diagnostics = _multi_factor_rebalance_signals(
+                strategy_states, daily_bars, selected_symbols, owner_map, date.fromisoformat(today),
+            )
+        except Exception as exc:
+            scan_errors.append(f"multi-factor rebalance: {type(exc).__name__}: {exc}")
     rank_score = {
         entry["strategy"]: entry.get("selection_score", entry["score"])
         for entry in regime.get("ranked", [])
@@ -537,6 +635,8 @@ def scan(
             # strategy take over a holding whose entry strategy is unknown.
             continue
         candidates = [owner] if owner else regime.get("active", [])
+        if mode == "algo" and ticker not in selected_symbols and owner is None:
+            candidates = [name for name in candidates if name == "event_driven"]
         protective_state = (strategy_states or {}).get(owner, {}).get(ticker, {}) if owner else {}
         quote = latest_quotes.get(ticker)
         if owner and position_qty > 0 and quote:
@@ -566,6 +666,8 @@ def scan(
                         "software_protection": True,
                     })
         for strategy_name in candidates:
+            if strategy_name == "event_driven" and (mode != "algo" or session_name not in {None, "regular"}):
+                continue
             if (
                 strategy_name == "opening_range_breakout"
                 and session_name is not None
@@ -574,20 +676,55 @@ def scan(
             ):
                 continue
             signal_bar_time = symbol_bars[-1].get("t") if symbol_bars else None
+            if strategy_name == "multi_factor":
+                signal = multi_factor_signals.get(ticker)
+                if signal is None:
+                    continue
+                signal_bar_time = signal.rebalance_key
+            elif strategy_name == "event_driven":
+                if event_generator is None or not symbol_bars:
+                    continue
+                try:
+                    signal_as_of = datetime.fromisoformat(
+                        str(symbol_bars[-1]["t"]).replace("Z", "+00:00"),
+                    ) + timedelta(minutes=5)
+                    previous_close = float(daily_bars[ticker][-1]["c"]) if daily_bars.get(ticker) else None
+                    signal = event_generator.generate(
+                        ticker, symbol_bars, as_of=signal_as_of,
+                        universe=set(selected_symbols) | ({"SPY"} if ticker == "SPY" else set()),
+                        regime=str(regime.get("regime", "unknown")),
+                        previous_close=previous_close,
+                        strategy_state=strategy_states.setdefault("event_driven", {}),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    scan_errors.append(f"event strategy signal {ticker}: {type(exc).__name__}: {exc}")
+                    continue
+            else:
+                signal = None
             if lifecycle:
                 lifecycle.observe(strategy_name, ticker, signal_bar_time)
-            try:
-                signal = evaluate_strategy(strategy_name, mode, ticker, symbol_bars, position_qty)
-            except Exception as exc:
-                if mode != "algo":
-                    raise
-                scan_errors.append(f"{strategy_name} signal {ticker}: {type(exc).__name__}: {exc}")
-                entry_pause_reasons.append("one or more Algo signal rules failed")
-                continue
+            if signal is None and strategy_name in RULE_MODULES:
+                try:
+                    if mode == "algo":
+                        signal = evaluate_rule_signal(
+                            strategy_name, ticker, symbol_bars,
+                            parameters=ALGO_DEFAULT_PARAMETERS.get(strategy_name),
+                            position_qty=position_qty,
+                        )
+                    else:
+                        signal = evaluate_strategy(
+                            strategy_name, mode, ticker, symbol_bars, position_qty,
+                        )
+                except Exception as exc:
+                    if mode != "algo":
+                        raise
+                    scan_errors.append(f"{strategy_name} signal {ticker}: {type(exc).__name__}: {exc}")
+                    entry_pause_reasons.append("one or more Algo signal rules failed")
+                    continue
             if signal is None or (owner and signal.action != "sell"):
                 continue
             item = signal.to_dict()
-            item["rank_score"] = rank_score.get(strategy_name, 0)
+            item["rank_score"] = float(item.get("score", 0)) if strategy_name == "multi_factor" else rank_score.get(strategy_name, 0)
             item["signal_bar_time"] = signal_bar_time
             if lifecycle and not lifecycle.allows(
                 strategy_name, ticker, signal.action, item["signal_bar_time"],
@@ -676,6 +813,19 @@ def scan(
             identity = f"{mode}:{today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:{item.get('signal_bar_time') or ''}"
             trade["client_order_id"] = f"rule-{today.replace('-', '')}-{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             trade["signal_bar_time"] = item.get("signal_bar_time")
+            if item.get("event_id"):
+                trade["event_id"] = item["event_id"]
+            if item.get("strategy") == "event_driven" and event_generator is not None:
+                try:
+                    signal_time = datetime.fromisoformat(
+                        str(item.get("signal_bar_time") or quote_time.isoformat()).replace("Z", "+00:00"),
+                    ) + timedelta(minutes=5)
+                    event_generator.record_proposal(
+                        item, as_of=signal_time,
+                        strategy_state=strategy_states.setdefault("event_driven", {}),
+                    )
+                except (TypeError, ValueError):
+                    scan_errors.append("event strategy cooldown state could not be recorded")
             item_orders = pending_by_symbol.get(item["ticker"], [])
             protective_exit = any(_is_protective_sell_order(order) for order in item_orders)
             if trade["action"] == "sell" and protective_exit:
@@ -715,6 +865,16 @@ def scan(
         "trading_mode": mode,
         "universe": universe,
         "market_regime": regime,
+        "multi_factor_diagnostics": multi_factor_diagnostics,
+        "event_strategy_diagnostics": (
+            event_generator.diagnostics(datetime.now(timezone.utc))
+            if event_generator is not None else {
+                **event_calendar_diagnostics,
+                "enabled": False,
+                "configured_enabled": event_config.enabled,
+                "status": event_calendar_status,
+            }
+        ),
         "signals": generated,
         "pairs": pair_output,
         "trades": trades,
@@ -749,7 +909,7 @@ def scan(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Scan the dynamic universe with pure rule-based strategies")
+    parser = argparse.ArgumentParser(description="Scan the configured universe with rule-based strategies")
     parser.add_argument("--mode", choices=["swing", "day"], default="swing")
     parser.add_argument("--max-tickers", type=int, default=None)
     parser.add_argument("--execute", action="store_true", help="Submit generated trades through execute_trades.py")

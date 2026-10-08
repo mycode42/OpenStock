@@ -49,6 +49,7 @@ def run_sensitivity(args) -> dict:
         ))
         reports.append({
             "slippage_bps_each_side": slippage,
+            "data_adjustment": report["data_adjustment"],
             "parameter_profile_sha256": report["parameter_profile_sha256"],
             **{key: report[key] for key in METRICS},
         })
@@ -57,7 +58,7 @@ def run_sensitivity(args) -> dict:
     return {
         "simulator": "swarm_algo_slippage_sensitivity_v1",
         "data_tier_at_run": reports[0].get("data_tier_at_run"), "feed": args.feed,
-        "data_adjustment": args.adjustment, "symbols": symbols,
+        "data_adjustment": reports[0]["data_adjustment"], "symbols": symbols,
         "start": args.start, "end": args.end,
         "baseline_slippage_bps_each_side": args.baseline_slippage_bps,
         "profile": args.profile,
@@ -87,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start", required=True)
     parser.add_argument("--end", required=True)
     parser.add_argument("--feed", choices=["sip"], default=regular_feed())
-    parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default="raw")
+    parser.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default=None)
     parser.add_argument("--capital", type=float, default=100_000)
     parser.add_argument("--slippage-grid", default="0,2,5,10,20")
     parser.add_argument("--baseline-slippage-bps", type=float, default=5)

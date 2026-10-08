@@ -14,6 +14,8 @@ class Signal:
     strength: float = 0.0
     stop_pct: float | None = None
     strategy_group: str | None = None
+    target_weight: float | None = None
+    event_id: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -30,4 +32,3 @@ class PairSignal:
 
     def to_dict(self) -> dict:
         return asdict(self)
-

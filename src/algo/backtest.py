@@ -7,6 +7,7 @@ orders fill no earlier than the next bar's open with configured slippage.
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 import hashlib
 import json
 import logging
@@ -33,14 +34,20 @@ from src.strategies.registry import (
     ALGO_DEFAULT_PARAMETERS,
     validate_parameter_profile,
 )
+from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
 from src.strategies.regime import rank_strategies
 from src.strategies.runner import _make_trade
-from src.algo.research_rules import evaluate_research_signal
+from src.strategies.rule_pipeline import evaluate_rule_signal
+from src.strategies.multi_factor.config import MultiFactorConfig
+from src.strategies.multi_factor.diagnostics import information_coefficient, turnover
+from src.strategies.multi_factor.features import aggregate_intraday_bars
+from src.strategies.multi_factor.signals import SignalGenerator
 
 
 ET = ZoneInfo("America/New_York")
 BAR_MINUTES = 5
 DAILY_WARMUP_DAYS = 180
+FACTOR_WARMUP_DAYS = 260
 STRATEGY_NAMES = set(ALGO_DEFAULT_PARAMETERS)
 RESEARCH_CONTROL_KEYS = {
     "max_entries_per_day", "max_open_positions", "max_positions_per_strategy",
@@ -48,6 +55,13 @@ RESEARCH_CONTROL_KEYS = {
     "cooldown_minutes_by_strategy",
     "one_orb_attempt_per_ticker_per_day",
 }
+
+
+def multi_factor_warmup_days(profile: dict | None = None) -> int:
+    """Calendar-day history needed for the longest configured daily factor."""
+    settings = (profile or {}).get("multi_factor") if isinstance(profile, dict) else None
+    config = MultiFactorConfig.from_dict(settings)
+    return max(FACTOR_WARMUP_DAYS, config.warmup_calendar_days())
 
 
 def validate_strategy_filter(strategies: list[str] | None) -> list[str] | None:
@@ -135,6 +149,7 @@ class AlgoPortfolioBacktest:
         profile: dict | None = None,
         strategies: list[str] | None = None,
         research_controls: dict | None = None,
+        event_calendar: EventCalendar | None = None,
     ) -> None:
         if not math.isfinite(initial_capital) or initial_capital <= 0:
             raise ValueError("Initial capital must be a positive finite number")
@@ -159,8 +174,32 @@ class AlgoPortfolioBacktest:
         self.profile = validate_parameter_profile(profile or {})
         self.strategy_filter = validate_strategy_filter(strategies)
         self.research_controls = validate_research_controls(research_controls)
+        self.event_calendar = event_calendar or EventCalendar()
+        self.event_config = EventStrategyConfig.from_dict(self.profile.get("event_driven"))
+        self.event_signal_generator = EventSignalGenerator(self.event_calendar, self.event_config)
+        self.event_strategy_state: dict = {}
+        self.multi_factor_enabled = self.strategy_filter is None or "multi_factor" in self.strategy_filter
+        self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(self.profile.get("multi_factor")))
+        all_daily_bars = aggregate_intraday_bars(intraday_bars)
+        self.previous_closes_by_day: dict[tuple[str, date], float] = {}
+        for symbol, rows in all_daily_bars.items():
+            for index, row in enumerate(rows):
+                if index:
+                    self.previous_closes_by_day[(symbol, date.fromisoformat(row["date"]))] = float(rows[index - 1]["c"])
+        self.daily_stock_bars = all_daily_bars if self.multi_factor_enabled else {}
+        self.daily_stock_series = {
+            symbol: (
+                [date.fromisoformat(row["date"]) for row in rows],
+                [float(row["c"]) for row in rows],
+            )
+            for symbol, rows in self.daily_stock_bars.items()
+        }
+        self.last_multi_factor_rebalance_key: str | None = None
+        self.multi_factor_snapshots: list[dict] = []
+        self.multi_factor_rebalance_diagnostics: list[dict] = []
         self.positions: dict[str, Position] = {}
         self.pending_entries: dict[str, dict] = {}
+        self.pending_exits: dict[str, dict] = {}
         self.last_prices: dict[str, float] = {}
         self.histories: dict[tuple[str, date], list[dict]] = defaultdict(list)
         self.closed_trades: list[dict] = []
@@ -345,6 +384,129 @@ class AlgoPortfolioBacktest:
                 signal_at=order["signal_at"], bars_held=0,
             )
 
+    def _fill_pending_exits(self, bars: dict[str, dict], timestamp: datetime) -> None:
+        for ticker in list(self.pending_exits):
+            bar = bars.get(ticker)
+            if bar is None:
+                continue
+            order = self.pending_exits[ticker]
+            signal_at = datetime.fromisoformat(order["signal_at"])
+            if timestamp < signal_at:
+                continue
+            self.pending_exits.pop(ticker)
+            if ticker in self.positions:
+                fill_price = float(bar["o"]) * (1 - self.slippage)
+                self._close_position(ticker, fill_price, timestamp, order["reason"])
+
+    def _queue_exit_signal(self, ticker: str, signal: dict, bar: dict, timestamp: datetime) -> None:
+        position = self.positions.get(ticker)
+        if position is None or position.strategy != signal.get("strategy") or ticker in self.pending_exits:
+            return
+        result = validate_trade(
+            ticker=ticker, action="sell", qty=position.qty,
+            entry_price=float(bar["c"]), portfolio_state=self._risk_state(), mode="algo",
+        )
+        if not result.approved:
+            self.rejections[str(result.rule or "risk_rejected")] += 1
+            return
+        self.pending_exits[ticker] = {
+            "reason": signal["reason"],
+            "signal_at": (timestamp + timedelta(minutes=BAR_MINUTES)).isoformat(),
+        }
+
+    def _multi_factor_rebalance(self, session: date) -> tuple[dict[str, dict], dict | None]:
+        if not self.multi_factor_enabled:
+            return {}, None
+        key = self.multi_factor_generator.rebalance_key(session)
+        if key == self.last_multi_factor_rebalance_key:
+            return {}, None
+        held = {
+            ticker for ticker, position in self.positions.items()
+            if position.strategy == "multi_factor"
+        }
+        signals, diagnostics = self.multi_factor_generator.generate(
+            self.daily_stock_bars,
+            symbols=self.symbols,
+            as_of=session - timedelta(days=1),
+            session=session,
+            held_positions=held,
+        )
+        if not diagnostics["minimum_universe_met"]:
+            return {}, diagnostics
+        self.last_multi_factor_rebalance_key = key
+        scores = {item.ticker: item.score for item in signals if item.action != "sell"}
+        factor_scores: dict[str, dict[str, float]] = defaultdict(dict)
+        for item in signals:
+            if item.action == "sell":
+                continue
+            for factor, value in item.factor_zscores.items():
+                factor_scores[factor][item.ticker] = value
+        targets = {item.ticker for item in signals if item.action in {"buy", "hold"}}
+        previous_targets = self.multi_factor_snapshots[-1]["targets"] if self.multi_factor_snapshots else set()
+        diagnostics["turnover"] = turnover(previous_targets, targets)
+        self.multi_factor_snapshots.append({
+            "as_of": session - timedelta(days=1),
+            "scores": scores,
+            "factor_scores": dict(factor_scores),
+            "targets": targets,
+        })
+        self.multi_factor_rebalance_diagnostics.append(diagnostics)
+        for item in signals:
+            if item.action not in {"buy", "sell"}:
+                continue
+            day_key = session.isoformat()
+            self.signal_events_by_strategy[(day_key, "multi_factor")] += 1
+            if item.action == "buy":
+                self.candidate_ticker_days.add((day_key, item.ticker))
+                self.candidate_strategy_ticker_days.add((day_key, item.ticker, "multi_factor"))
+                self.candidate_setups_by_strategy[(day_key, "multi_factor")] += 1
+        return {
+            item.ticker: item.to_dict() for item in signals
+            if item.action in {"buy", "sell"}
+        }, diagnostics
+
+    def _multi_factor_ic(self) -> dict:
+        ic_values = []
+        factor_ic_values: dict[str, list[float]] = defaultdict(list)
+        for snapshot in self.multi_factor_snapshots:
+            returns = {}
+            for symbol in snapshot["scores"]:
+                rows = self.daily_stock_series.get(symbol)
+                if rows is None:
+                    continue
+                session_dates, closes = rows
+                future_index = bisect_right(session_dates, snapshot["as_of"])
+                if future_index > 0 and future_index + 20 < len(closes):
+                    start_close = closes[future_index - 1]
+                    end_close = closes[future_index + 20]
+                    if start_close > 0:
+                        returns[symbol] = end_close / start_close - 1
+            value = information_coefficient(snapshot["scores"], returns)
+            if value is not None:
+                ic_values.append(value)
+            for factor, scores in snapshot["factor_scores"].items():
+                value = information_coefficient(scores, returns)
+                if value is not None:
+                    factor_ic_values[factor].append(value)
+        return {
+            "rebalance_count": len(self.multi_factor_snapshots),
+            "average_turnover": round(statistics.mean(
+                [row["turnover"] for row in self.multi_factor_rebalance_diagnostics]
+            ), 4) if self.multi_factor_rebalance_diagnostics else None,
+            "mean_spearman_ic_forward_21_sessions": round(statistics.mean(ic_values), 4) if ic_values else None,
+            "ic_observation_count": len(ic_values),
+            "mean_spearman_ic_forward_21_sessions_by_factor": {
+                factor: round(statistics.mean(values), 4)
+                for factor, values in sorted(factor_ic_values.items())
+            },
+            "ic_observation_count_by_factor": {
+                factor: len(values) for factor, values in sorted(factor_ic_values.items())
+            },
+            "ic_horizon_sessions": 21,
+            "ic_labels_overlap": True,
+            "value_factor_enabled": self.multi_factor_generator.config.factor_weights.get("value_earnings_yield", 0) > 0,
+        }
+
     def _regime(self, trading_day: date) -> dict:
         completed = []
         for bar in self.spy_daily_bars:
@@ -355,17 +517,38 @@ class AlgoPortfolioBacktest:
             except (KeyError, TypeError, ValueError):
                 continue
         completed.sort(key=self._timestamp)
-        return rank_strategies(completed, mode="algo")
+        return rank_strategies(
+            completed, mode="algo", event_enabled=self.event_config.enabled,
+            event_disable_in_volatile=self.event_config.disable_in_volatile,
+        )
 
-    def _signal_for(self, ticker: str, history: list[dict], active: list[str], ranked: dict) -> dict | None:
+    def _previous_close(self, ticker: str, trading_day: date) -> float | None:
+        return self.previous_closes_by_day.get((ticker.upper(), trading_day))
+
+    def _signal_for(
+        self, ticker: str, history: list[dict], active: list[str], ranked: dict,
+        timestamp: datetime,
+    ) -> dict | None:
         options = []
         for strategy in active:
             if self.strategy_filter is not None and strategy not in self.strategy_filter:
                 continue
+            if strategy == "multi_factor":
+                continue
             try:
-                signal = evaluate_research_signal(
-                    strategy, ticker, history, parameters=self.profile.get(strategy),
-                )
+                if strategy == "event_driven":
+                    signal = self.event_signal_generator.generate(
+                        ticker, history,
+                        as_of=timestamp + timedelta(minutes=BAR_MINUTES),
+                        universe=set(self.symbols),
+                        regime=str(self._current_regime.get("regime", "unknown")),
+                        previous_close=self._previous_close(ticker, timestamp.astimezone(ET).date()),
+                        strategy_state=self.event_strategy_state,
+                    )
+                else:
+                    signal = evaluate_rule_signal(
+                        strategy, ticker, history, parameters=self.profile.get(strategy),
+                    )
             except Exception as exc:
                 self.rejections[f"signal_error:{strategy}:{type(exc).__name__}"] += 1
                 continue
@@ -458,6 +641,11 @@ class AlgoPortfolioBacktest:
             "take_profit": float(sized["take_profit"]),
             "signal_at": signal_at,
         }
+        if strategy == "event_driven":
+            self.event_signal_generator.record_proposal(
+                signal, as_of=timestamp + timedelta(minutes=BAR_MINUTES),
+                strategy_state=self.event_strategy_state,
+            )
         self.entry_counts[self.day_key] += 1
         self.entry_counts_by_strategy[(self.day_key, strategy)] += 1
 
@@ -483,15 +671,20 @@ class AlgoPortfolioBacktest:
             raise ValueError("At least 22 completed SPY daily bars before the replay are required")
 
         last_day: date | None = None
+        factor_signals_for_day: dict[str, dict] = {}
+        factor_signals_date: date | None = None
         event_times = list(events)
         for index, timestamp in enumerate(event_times):
             bars = events[timestamp]
             trading_day = timestamp.astimezone(ET).date()
             if last_day != trading_day:
                 self._current_regime = self._regime(trading_day)
+                factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
+                factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
                 last_day = trading_day
             self._start_periods(trading_day)
             self._fill_pending_entries(bars, timestamp)
+            self._fill_pending_exits(bars, timestamp)
             for ticker, bar in bars.items():
                 self._check_brackets(ticker, bar, timestamp)
             for ticker, bar in bars.items():
@@ -504,11 +697,24 @@ class AlgoPortfolioBacktest:
                 for item in regime.get("ranked", [])
             }
             candidates = []
+            if factor_signals_date == trading_day:
+                for ticker, signal in list(factor_signals_for_day.items()):
+                    if signal["action"] == "sell" and ticker in bars:
+                        self._queue_exit_signal(ticker, signal, bars[ticker], timestamp)
+                        factor_signals_for_day.pop(ticker, None)
             for ticker, bar in bars.items():
                 if ticker in self.positions or ticker in self.pending_entries:
                     continue
+                factor_signal = factor_signals_for_day.get(ticker) if factor_signals_date == trading_day else None
+                if (
+                    factor_signal and factor_signal["action"] == "buy"
+                    and "multi_factor" in regime.get("active", [])
+                ):
+                    factor_signal["rank_score"] = float(factor_signal.get("score", 0))
+                    candidates.append((ticker, bar, factor_signal))
+                    factor_signals_for_day.pop(ticker, None)
                 history = self.histories[(ticker, trading_day)]
-                signal = self._signal_for(ticker, history, regime.get("active", []), ranked)
+                signal = self._signal_for(ticker, history, regime.get("active", []), ranked, timestamp)
                 if signal:
                     candidates.append((ticker, bar, signal))
 
@@ -641,6 +847,9 @@ class AlgoPortfolioBacktest:
                 len(self.candidate_ticker_days) / session_count, 3
             ) if session_count else 0,
             "strategy_metrics": strategy_metrics,
+            "event_strategy_diagnostics": self.event_signal_generator.diagnostics(
+                event_times[-1] + timedelta(minutes=BAR_MINUTES),
+            ),
             "average_holding_minutes": round(statistics.mean(closed_holds), 2) if closed_holds else None,
             "median_holding_minutes": round(statistics.median(closed_holds), 2) if closed_holds else None,
             "average_calendar_holding_hours": round(statistics.mean(
@@ -687,10 +896,12 @@ class AlgoPortfolioBacktest:
                 for ticker in self.symbols
             },
             "risk_rejections": dict(sorted(self.rejections.items())),
+            "multi_factor_diagnostics": self._multi_factor_ic(),
             "daily_equity": self.daily_curve,
             "closed_trades": self.closed_trades,
             "open_positions": open_positions,
             "unfilled_entries_at_end": sorted(self.pending_entries),
+            "unfilled_exits_at_end": sorted(self.pending_exits),
             "assumptions": [
                 "Fixed user-supplied universe; no point-in-time membership or delisted-symbol reconstruction.",
                 "Completed 5-minute bars only; signals fill at the next available bar open.",
@@ -788,30 +999,37 @@ def fetch_dataset(args) -> dict:
     feed = args.feed or regular_feed()
     tier = data_tier()
     store = SQLiteBarStore(args.db)
-    request_start = f"{start.isoformat()}T00:00:00Z"
+    selected_strategies = _read_strategy_filter(getattr(args, "strategies", None))
+    needs_factor_warmup = selected_strategies is None or "multi_factor" in selected_strategies
+    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "event_driven" in selected_strategies
+    adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
+    warmup_days = multi_factor_warmup_days(_read_profile(getattr(args, "profile", None))) if needs_factor_warmup else 0
+    data_start = start - timedelta(days=warmup_days) if needs_factor_warmup else start
+    request_start = f"{data_start.isoformat()}T00:00:00Z"
     request_end = f"{end.isoformat()}T23:59:59Z"
     intraday = fetch_alpaca_bars(
         symbols, timeframe="5Min", start=request_start, end=request_end,
-        feed=feed, adjustment=args.adjustment,
+        feed=feed, adjustment=adjustment,
     )
     intraday, outside_session_bars, invalid_ohlc_bars = _regular_session_bars(intraday)
     intraday_rows = store.write_bars(
-        intraday, feed=feed, timeframe="5Min", adjustment=args.adjustment,
+        intraday, feed=feed, timeframe="5Min", adjustment=adjustment,
         data_tier=tier, requested_start=request_start, requested_end=request_end,
     )
     daily_start = start - timedelta(days=DAILY_WARMUP_DAYS)
     daily_from = f"{daily_start.isoformat()}T00:00:00Z"
     daily = fetch_alpaca_bars(
         ["SPY"], timeframe="1Day", start=daily_from, end=request_end,
-        feed=feed, adjustment=args.adjustment,
+        feed=feed, adjustment=adjustment,
     )
     daily_rows = store.write_bars(
-        daily, feed=feed, timeframe="1Day", adjustment=args.adjustment,
+        daily, feed=feed, timeframe="1Day", adjustment=adjustment,
         data_tier=tier, requested_start=daily_from, requested_end=request_end,
     )
     return {
         "database": str(Path(args.db).resolve()), "data_tier": tier, "feed": feed,
-        "adjustment": args.adjustment, "intraday_rows": intraday_rows,
+        "adjustment": adjustment, "intraday_rows": intraday_rows,
+        "intraday_warmup_days": warmup_days,
         "discarded_outside_session_bars": outside_session_bars,
         "discarded_invalid_ohlc_bars": invalid_ohlc_bars,
         "spy_daily_rows": daily_rows, "symbols": symbols,
@@ -822,14 +1040,21 @@ def run_backtest(args) -> dict:
     symbols = _split_symbols(args.symbols)
     feed = args.feed or regular_feed()
     store = SQLiteBarStore(args.db)
+    selected_strategies = _read_strategy_filter(getattr(args, "strategies", None))
+    needs_factor_warmup = selected_strategies is None or "multi_factor" in selected_strategies
+    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "event_driven" in selected_strategies
+    adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
+    profile = _read_profile(args.profile)
+    warmup_days = multi_factor_warmup_days(profile) if needs_factor_warmup else 0
+    data_start = (date.fromisoformat(args.start) - timedelta(days=warmup_days)).isoformat() if needs_factor_warmup else args.start
     intraday = store.bars(
-        symbols, feed=feed, timeframe="5Min", start=args.start,
-        end=args.end, adjustment=args.adjustment,
+        symbols, feed=feed, timeframe="5Min", start=data_start,
+        end=args.end, adjustment=adjustment,
     )
     daily_start = (date.fromisoformat(args.start) - timedelta(days=DAILY_WARMUP_DAYS)).isoformat()
     daily = store.bars(
         ["SPY"], feed=feed, timeframe="1Day", start=daily_start,
-        end=args.end, adjustment=args.adjustment,
+        end=args.end, adjustment=adjustment,
     ).get("SPY", [])
     missing = [ticker for ticker in symbols if not intraday.get(ticker)]
     if missing:
@@ -837,14 +1062,16 @@ def run_backtest(args) -> dict:
     replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=daily,
         start=args.start, end=args.end, feed=feed,
-        data_adjustment=args.adjustment, initial_capital=args.capital,
-        slippage_bps=args.slippage_bps, profile=_read_profile(args.profile),
-        strategies=_read_strategy_filter(getattr(args, "strategies", None)),
+        data_adjustment=adjustment, initial_capital=args.capital,
+        slippage_bps=args.slippage_bps, profile=profile,
+        strategies=selected_strategies,
         research_controls=_read_research_controls(args),
+        event_calendar=(EventCalendar.from_csv(args.event_calendar) if getattr(args, "event_calendar", None) else None),
     )
     report = replay.run()
     report["data_tier_at_run"] = data_tier()
     report["database"] = str(Path(args.db).resolve())
+    report["multi_factor_warmup_days"] = warmup_days
     if args.output:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -864,7 +1091,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--feed", choices=["sip"], default=None,
         help="Plus SIP regular-session feed",
     )
-    fetch.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default="raw")
+    fetch.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default=None)
+    fetch.add_argument("--strategies", help="optional comma-separated strategies; controls factor warmup")
+    fetch.add_argument("--profile", help="optional parameter profile; determines factor-history warmup")
     fetch.add_argument("--db", default=str(DEFAULT_DB))
     fetch.set_defaults(handler=fetch_dataset)
 
@@ -873,11 +1102,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--start", required=True)
     run.add_argument("--end", required=True)
     run.add_argument("--feed", choices=["sip"], default=None, help="Plus SIP regular-session feed stored in the database")
-    run.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default="raw")
+    run.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default=None)
     run.add_argument("--capital", type=float, default=100_000)
     run.add_argument("--slippage-bps", type=float, default=5)
     run.add_argument("--profile", help="optional JSON with signal parameters only; risk settings cannot be changed")
     run.add_argument("--strategies", help="optional comma-separated strategy isolation filter")
+    run.add_argument("--event-calendar", help="optional point-in-time event calendar CSV")
     run.add_argument("--research-max-entries-per-day", type=int)
     run.add_argument("--research-max-open-positions", type=int)
     run.add_argument("--research-max-positions-per-strategy", type=int)

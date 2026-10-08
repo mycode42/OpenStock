@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from src.strategies import mean_reversion, momentum, opening_range_breakout, trend_following
+from src.strategies.event_driven.config import EventStrategyConfig
+from src.strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
 
 
 RULE_MODULES = {
@@ -11,12 +13,17 @@ RULE_MODULES = {
     "momentum": momentum,
     "opening_range_breakout": opening_range_breakout,
 }
+# Enable the conservative, risk-capped event satellite in Algo mode. The
+# strategy class itself remains disabled by default for standalone use.
+EVENT_DEFAULT_CONFIG = EventStrategyConfig(enabled=True).to_dict()
 
 ALGO_DEFAULT_PARAMETERS = {
     "trend_following": {"fast_period": 9, "slow_period": 21},
     "momentum": {"lookback": 12, "minimum_return": 0.015, "minimum_volume_ratio": 1.2},
     "mean_reversion": {"window": 20, "band_width": 2.0, "entry_rsi": 30, "exit_rsi": 58},
     "opening_range_breakout": {"opening_range_bars": 6, "minimum_volume_ratio": 1.25},
+    "multi_factor": MULTI_FACTOR_DEFAULT_CONFIG.to_dict(),
+    "event_driven": EVENT_DEFAULT_CONFIG,
 }
 
 PARAMETER_KEYS = {
@@ -35,6 +42,12 @@ PARAMETER_KEYS = {
         "opening_range_bars", "minimum_volume_ratio", "post_range_delay_bars",
         "breakout_buffer_pct",
     },
+    "multi_factor": {
+        "rebalance_frequency", "top_n", "min_universe", "minimum_score",
+        "winsor_quantile", "momentum_lookbacks", "volatility_lookback",
+        "reversal_lookback", "factor_weights", "long_only",
+    },
+    "event_driven": set(EVENT_DEFAULT_CONFIG),
 }
 
 
@@ -49,6 +62,13 @@ def validate_parameter_profile(profile: dict) -> dict:
         unknown = set(values) - PARAMETER_KEYS[strategy]
         if unknown:
             raise ValueError(f"Unsupported {strategy} parameter(s): {', '.join(sorted(unknown))}")
+        if strategy == "multi_factor":
+            from src.strategies.multi_factor.config import MultiFactorConfig
+            normalized[strategy] = MultiFactorConfig.from_dict(values).to_dict()
+            continue
+        if strategy == "event_driven":
+            normalized[strategy] = EventStrategyConfig.from_dict(values).to_dict()
+            continue
         normalized[strategy] = dict(values)
 
     def number(strategy: str, key: str, default: float, low: float, high: float, *, integer: bool = False):

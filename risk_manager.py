@@ -1001,6 +1001,28 @@ def validate_trade(
     # In day mode max_tactical_pct=1.0, so this rule never fires.
     if tactical_tickers and risk["max_tactical_pct"] < 1.0:
         if ticker.upper() in tactical_tickers or ticker.upper() in MOONSHOTS:
+            max_tactical_positions = risk.get("max_tactical_positions")
+            if max_tactical_positions is not None:
+                tactical_symbols = {
+                    symbol.upper()
+                    for symbol, position in portfolio_state["positions"].items()
+                    if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
+                    and float(position.get("qty", 0) or 0) > 0
+                }
+                tactical_symbols.update(
+                    symbol.upper()
+                    for symbol, value in (portfolio_state.get("pending_buy_value_by_ticker") or {}).items()
+                    if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
+                    and float(value or 0) > 0
+                )
+                if ticker.upper() not in tactical_symbols and len(tactical_symbols) >= max_tactical_positions:
+                    msg = (
+                        f"BLOCKED: Tactical position limit of {max_tactical_positions} reached "
+                        f"({len(tactical_symbols)} active or pending)."
+                    )
+                    log.warning(msg)
+                    return ValidationResult(False, msg, "max_tactical_positions")
+
             tactical_positions = [
                 v for k, v in portfolio_state["positions"].items()
                 if k in tactical_tickers or k in MOONSHOTS

@@ -7,7 +7,10 @@ import math
 from src.strategies.indicators import closes, moving_average
 
 
-def rank_strategies(spy_daily_bars: list[dict], mode: str = "swing") -> dict:
+def rank_strategies(
+    spy_daily_bars: list[dict], mode: str = "swing", *,
+    event_enabled: bool = False, event_disable_in_volatile: bool = True,
+) -> dict:
     values = closes(spy_daily_bars)
     if len(values) < 22:
         return {
@@ -23,24 +26,28 @@ def rank_strategies(spy_daily_bars: list[dict], mode: str = "swing") -> dict:
     return_20d = values[-1] / values[-21] - 1
     if volatility >= 0.025:
         regime = "volatile"
-        weights = {}
+        weights = {"event_driven": 0.56} if event_enabled and not event_disable_in_volatile else {}
         reason = f"20-day daily volatility {volatility:.1%} exceeds 2.5%"
     elif sma20 and values[-1] > sma20 and return_20d >= 0.01:
         regime = "trending_up"
-        weights = {"trend_following": 1.0, "momentum": 0.9, "opening_range_breakout": 0.82, "mean_reversion": 0.25, "pairs_stat_arb": 0.2}
+        weights = {"trend_following": 1.0, "momentum": 0.9, "opening_range_breakout": 0.82, "multi_factor": 0.8, "event_driven": 0.58, "mean_reversion": 0.25, "pairs_stat_arb": 0.2}
         reason = f"SPY above 20-day average with {return_20d:.1%} 20-day return"
     elif sma20 and values[-1] < sma20 and return_20d <= -0.01:
         regime = "trending_down"
-        weights = {"trend_following": 0.72, "momentum": 0.65, "opening_range_breakout": 0.55, "mean_reversion": 0.15, "pairs_stat_arb": 0.25}
+        weights = {"trend_following": 0.72, "momentum": 0.65, "opening_range_breakout": 0.55, "event_driven": 0.56, "mean_reversion": 0.15, "pairs_stat_arb": 0.25}
         reason = f"SPY below 20-day average with {return_20d:.1%} 20-day return"
     else:
         regime = "range_bound"
-        weights = {"mean_reversion": 1.0, "pairs_stat_arb": 0.68, "trend_following": 0.25, "momentum": 0.2, "opening_range_breakout": 0.15}
+        weights = {"mean_reversion": 1.0, "pairs_stat_arb": 0.68, "multi_factor": 0.65, "event_driven": 0.58, "trend_following": 0.25, "momentum": 0.2, "opening_range_breakout": 0.15}
         reason = f"SPY 20-day return {return_20d:.1%}; no directional trend"
 
     available = {"trend_following", "momentum", "mean_reversion"}
     if mode in {"day", "algo"}:
         available.add("opening_range_breakout")
+    if mode == "algo":
+        available.add("multi_factor")
+        if event_enabled:
+            available.add("event_driven")
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
     active = [name for name, score in ranked if score >= 0.55 and name in available]
     return {
