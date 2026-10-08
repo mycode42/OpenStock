@@ -1,6 +1,6 @@
-# EXPERIMENT: smoother_macd_confirmation
-# HYPOTHESIS: A slower MACD signal line should reduce noisy momentum confirmations in choppy intraday trading and improve trade quality.
-# CHANGE: Increased MACD_SIGNAL_PERIOD from 7 to 9
+# EXPERIMENT: boost_moderate_volume_score
+# HYPOTHESIS: Giving moderate participation a slightly stronger confidence contribution may qualify otherwise-valid signals without lowering the global confidence cutoff.
+# CHANGE: Increased the confidence score for volume ratios from 0.80x to below VOLUME_CONFIRM_RATIO from 40 to 55
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,12 +14,15 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "smoother_macd_confirmation"
+EXPERIMENT_NAME = "boost_moderate_volume_score"
 EXPERIMENT_HYPOTHESIS = (
-    "A slower MACD signal line should reduce noisy momentum confirmations in "
-    "choppy intraday trading and improve trade quality."
+    "Giving moderate participation a slightly stronger confidence contribution "
+    "may qualify otherwise-valid signals without lowering the global confidence cutoff."
 )
-EXPERIMENT_CHANGE = "Increased MACD_SIGNAL_PERIOD from 7 to 9"
+EXPERIMENT_CHANGE = (
+    "Increased the confidence score for volume ratios from 0.80x to below "
+    "VOLUME_CONFIRM_RATIO from 40 to 55"
+)
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -231,7 +234,7 @@ def _ticker_signal(
         elif volume_ratio >= VOLUME_CONFIRM_RATIO:
             volume_score = 70.0
         elif volume_ratio >= 0.80:
-            volume_score = 40.0
+            volume_score = 55.0
         else:
             volume_score = 10.0
         if bull >= bear:
