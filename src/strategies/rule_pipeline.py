@@ -190,6 +190,16 @@ def evaluate_rule_signal(
         if not STRATEGY_CONFIG.get(flag, False):
             return None
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
+    # Stop distances are live risk settings, not research-tunable signal
+    # parameters. Apply the horizon-specific Algo values after profile merge.
+    from src.config import ALGO_MODE_CONFIG
+    algo_risk = ALGO_MODE_CONFIG["risk"]
+    if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
+        params["hard_stop_pct"] = algo_risk["stop_loss_pct_by_strategy"][name]
+    if name in algo_risk.get("trailing_stop_pct_by_strategy", {}):
+        params["trailing_stop_pct"] = algo_risk["trailing_stop_pct_by_strategy"][name]
+    if name in algo_risk.get("trailing_activation_pct_by_strategy", {}):
+        params["trailing_activation_pct"] = algo_risk["trailing_activation_pct_by_strategy"][name]
     rule_params = _parameters(name, params)
 
     if name == "swing_mean_reversion":

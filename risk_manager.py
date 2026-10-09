@@ -791,6 +791,7 @@ def validate_trade(
     entry_price: float,
     portfolio_state: Optional[dict] = None,
     mode: str = None,
+    strategy: str | None = None,
 ) -> ValidationResult:
     """
     Validate a proposed trade against all hard rules for the given mode.
@@ -814,6 +815,13 @@ def validate_trade(
     ticker_sector, ticker_max_pct, tactical_tickers, universe = _get_universe_maps(mode)
 
     action = action.lower()
+
+    if mode == "algo" and action in {"buy", "short"} and strategy in {"multi_factor", "event_driven"}:
+        return ValidationResult(
+            False,
+            "Multi Factor and Event Driven are confirmation-only and cannot own positions.",
+            "satellite_confirmation_only",
+        )
 
     if action == "hold":
         return ValidationResult(approved=True, reason="Hold — no order to validate")

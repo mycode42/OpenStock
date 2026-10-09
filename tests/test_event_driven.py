@@ -1,4 +1,5 @@
 from datetime import date, datetime, time, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -9,6 +10,8 @@ from src.strategies.event_driven import (
     EventCalendar, EventSignalGenerator, EventStrategyConfig, ScheduledEvent,
 )
 from src.strategies.event_driven.reactions import daily_event_reaction
+from src.strategies.event_driven.reactions import EventSignal
+from src.strategies.signals import Signal
 from src.strategies.registry import validate_parameter_profile
 
 
@@ -136,7 +139,7 @@ def test_event_config_and_profile_keep_frequency_and_holding_bounded():
     ("gap", "move", "action"),
     [(0.03, 0.02, "buy"), (0.03, -0.025, "short")],
 )
-def test_daily_event_proposal_reaches_the_backtest_risk_manager(monkeypatch, gap, move, action):
+def test_event_satellite_alone_does_not_create_a_backtest_order(monkeypatch, gap, move, action):
     event_day = date(2025, 9, 4)
     replay_day = date(2025, 9, 5)
     event = _event(event_day)
@@ -170,7 +173,7 @@ def test_daily_event_proposal_reaches_the_backtest_risk_manager(monkeypatch, gap
     monkeypatch.setattr(
         backtest_module, "rank_strategies",
         lambda *_args, **_kwargs: {
-            "regime": "range_bound", "active": ["event_driven"],
+            "regime": "range_bound", "active": [], "satellites": ["event_driven"],
             "ranked": [{"strategy": "event_driven", "score": 0.5}],
         },
     )
@@ -189,7 +192,50 @@ def test_daily_event_proposal_reaches_the_backtest_risk_manager(monkeypatch, gap
     )
     report = replay.run()
 
-    assert report["entry_count_by_strategy"]["event_driven"] == 1
-    assert report["open_positions"][0]["strategy"] == "event_driven"
-    assert risk_calls and risk_calls[0]["action"] == action
-    assert risk_calls[0]["mode"] == "algo"
+    assert report["entry_count_by_strategy"].get("event_driven", 0) == 0
+    assert report["open_positions"] == []
+    assert risk_calls == []
+
+
+def test_event_confirmation_keeps_one_core_owned_order(monkeypatch):
+    replay = AlgoPortfolioBacktest(
+        symbols=["AAPL"], intraday_bars={"AAPL": []}, spy_daily_bars=[],
+        start="2025-09-05", end="2025-09-05", feed="sip", data_adjustment="raw",
+        profile={"event_driven": {"enabled": True}},
+    )
+    replay.day_key = "2025-09-05"
+    replay._current_regime = {
+        "regime": "range_bound", "active": ["momentum"], "satellites": ["event_driven"],
+    }
+    event_signal = EventSignal(
+        ticker="AAPL", action="buy", strategy="event_driven", reason="daily catalyst follow-through",
+        strength=0.8, stop_pct=0.06, target_weight=0.02, risk_multiplier=0.5,
+        event_id="earnings-AAPL-test", exit_mode="follow_through", maximum_holding_sessions=3,
+    )
+    replay.event_signal_generator = SimpleNamespace(
+        generate=lambda *args, **kwargs: event_signal,
+        record_proposal=lambda *args, **kwargs: None,
+    )
+    signal = replay._signal_for(
+        "AAPL", [], ["momentum"], {"momentum": 0.8},
+        datetime(2025, 9, 5, 10, 0, tzinfo=ET),
+        momentum_signals={"AAPL": Signal("AAPL", "buy", "momentum", "daily rank", 0.8)},
+    )
+    risk_calls = []
+    monkeypatch.setattr(
+        backtest_module, "validate_trade",
+        lambda **kwargs: risk_calls.append(kwargs) or SimpleNamespace(approved=True, rule=None),
+    )
+
+    replay._queue_signal(
+        "AAPL", signal, {"o": 100, "h": 101, "l": 99, "c": 100, "v": 1_000},
+        datetime(2025, 9, 5, 10, 0, tzinfo=ET),
+    )
+
+    assert len(replay.pending_entries) == 1
+    order = replay.pending_entries["AAPL"]
+    assert order["strategy"] == "momentum"
+    assert order["satellite_confirmations"] == ["event_driven"]
+    assert replay.entry_counts_by_strategy[("2025-09-05", "momentum")] == 1
+    assert replay.entry_counts_by_strategy[("2025-09-05", "event_driven")] == 0
+    assert risk_calls and risk_calls[0]["strategy"] == "momentum"

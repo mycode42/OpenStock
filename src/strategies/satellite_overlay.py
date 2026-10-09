@@ -111,9 +111,15 @@ def apply_satellite_confirmations(
         return result
 
     result["strength"] = min(1.0, float(result.get("strength", 0.0)) + strength_bonus)
+    try:
+        base_risk_multiplier = float(result.get("risk_multiplier", 1.0))
+    except (TypeError, ValueError):
+        return result
+    if not math.isfinite(base_risk_multiplier) or base_risk_multiplier <= 0:
+        return result
     result["risk_multiplier"] = min(
         settings.max_risk_multiplier,
-        1.0 + risk_bonus,
+        base_risk_multiplier * (1.0 + risk_bonus),
     )
     result["rank_score"] = float(result.get("rank_score", 0.0)) + strength_bonus
     result["satellite_confirmations"] = confirmations

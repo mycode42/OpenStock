@@ -17,8 +17,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -63,8 +63,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -107,8 +107,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -154,8 +154,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -198,8 +198,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -236,8 +236,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -277,8 +277,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -318,8 +318,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -392,8 +392,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -465,8 +465,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -548,8 +548,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
@@ -586,8 +586,8 @@
       }
     },
     "controls": {
-      "max_entries_per_day": 15,
-      "max_open_positions": 20,
+      "max_entries_per_day": 10,
+      "max_open_positions": 16,
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,

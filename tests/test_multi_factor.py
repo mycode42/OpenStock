@@ -125,7 +125,7 @@ def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
     assert by_symbol["CCC"].direction == "short"
 
 
-def test_multi_factor_stays_active_as_a_bearish_satellite():
+def test_multi_factor_stays_available_as_a_bearish_satellite():
     spy = [
         {"t": f"2026-09-{index + 1:02d}T20:00:00Z", "c": 200 - index}
         for index in range(25)
@@ -133,7 +133,8 @@ def test_multi_factor_stays_active_as_a_bearish_satellite():
     regime = rank_strategies(spy, mode="algo")
 
     assert regime["regime"] == "trending_down"
-    assert "multi_factor" in regime["active"]
+    assert "multi_factor" not in regime["active"]
+    assert "multi_factor" in regime["satellites"]
 
 
 def test_factor_satellite_direction_modes_are_explicit():

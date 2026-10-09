@@ -144,9 +144,17 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     monkeypatch.setattr(runner, "_fetch_latest_quotes", fetch_quotes)
     monkeypatch.setattr(
         runner, "rank_strategies",
-        lambda bars, mode, **kwargs: {"regime": "trending_up", "reason": "test", "ranked": [], "active": []},
+        lambda bars, mode, **kwargs: {
+            "regime": "trending_up", "reason": "test",
+            "ranked": [{"strategy": "momentum", "score": 0.8}],
+            "active": ["momentum"], "satellites": [],
+        },
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
+    monkeypatch.setattr(
+        runner, "generate_swing_momentum_signals",
+        lambda *args, **kwargs: ({"AAPL": Signal("AAPL", "buy", "momentum", "test entry", 0.8)}, {}),
+    )
 
     result = runner.scan(
         mode="algo",
@@ -166,7 +174,14 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     assert quote_feeds == ["boats"]
     assert result["data_status"]["historical_delay_seconds"] == 0
     assert result["data_status"]["historical_bars"] == "ok"
-    assert result["entries_paused"] is False
+    assert result["entries_paused"] is True
+    assert "overnight entries are disabled by configuration" in result["entry_pause_reasons"]
+    assert result["trades"] == []
+    assert any(
+        item["action"] == "buy"
+        and "overnight entries are disabled by configuration" in item["suppressed_reason"]
+        for item in result["signals"]
+    )
 
 
 def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
@@ -231,6 +246,38 @@ def test_extended_hours_exit_keeps_broker_stop_in_place(monkeypatch):
     )
     assert result["trades"] == []
     assert "broker protective order remains active" in result["signals"][0]["suppressed_reason"]
+
+
+def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):
+    position = {"AAPL": {"symbol": "AAPL", "qty": "2", "avg_entry_price": "100"}}
+    bracket_stop = [{
+        "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
+        "order_class": "bracket", "status": "held",
+    }]
+    _mock_common(monkeypatch, positions=position, orders=bracket_stop)
+    monkeypatch.setattr(
+        runner, "_fetch_bars",
+        lambda *args, **kwargs: (_ for _ in ()).throw(requests.HTTPError("historical data unavailable")),
+    )
+    monkeypatch.setattr(
+        runner, "_fetch_latest_quotes",
+        lambda symbols, *, mode, feed, errors=None: {"AAPL": _quote(98)},
+    )
+    states = {"trend_following": {"AAPL": {
+        "phase": "open", "stop_price": 99.0, "take_profit": 105.0,
+    }}}
+
+    result = runner.scan(
+        mode="algo", universe_result={"tickers": []},
+        position_owners={"AAPL": "trend_following"}, strategy_states=states,
+        session_name="regular", trading_date="2026-10-07",
+        extended_hours=False, data_feed="sip", quote_feed="sip",
+    )
+
+    assert len(result["trades"]) == 1, result["signals"]
+    assert result["trades"][0]["action"] == "sell"
+    assert result["trades"][0]["cancel_open_orders"] is True
+    assert result["trades"][0]["software_protection"] is True
 
 
 def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):

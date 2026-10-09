@@ -50,8 +50,8 @@ CORE_STRATEGIES = (
 ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 3
 COMBINED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 15
 CORE_RESEARCH_CONTROLS = {
-    "max_entries_per_day": 15,
-    "max_open_positions": 20,
+    "max_entries_per_day": 10,
+    "max_open_positions": 16,
     "max_positions_per_strategy": 5,
     "max_entries_per_strategy_per_day": {
         "mean_reversion": 3, "momentum": 1,

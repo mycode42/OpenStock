@@ -72,13 +72,13 @@ set_mode("day", reason="FOMC day", updated_by="human", override=True, override_h
 
 ### Multi-Account Routing
 
-Swing, Day, and Algo operate on their configured Alpaca accounts. Algo has one coordinator and persisted lifecycle records for each strategy and ticker. Its coordinator submits orders through `execute_trades.py --mode algo` and the code-enforced 11-rule `risk_manager.py`; direct Algo execution without the active coordinator lease is rejected.
+Swing, Day, and Algo operate on their configured Alpaca accounts. Algo has one coordinator and persisted lifecycle records for each strategy and ticker. Its coordinator submits orders through `execute_trades.py --mode algo` and the code-enforced `risk_manager.py`; direct Algo execution without the active coordinator lease is rejected.
 
 | Mode | Account | Purpose |
 |---|---|---|
 | `swing` | Primary account | Multi-day holds, conservative risk |
 | `day` | Day trading account | Intraday only, flattens EOD |
-| `algo` | Dedicated Algo account | Continuous six-strategy portfolio: four core rules with Multi Factor and Event Driven as confirmation satellites; pairs remain analysis-only |
+| `algo` | Dedicated Algo account | Continuous portfolio: five core rules with Multi Factor and Event Driven as confirmation satellites; pairs remain analysis-only |
 
 Credentials are configured in `.env`:
 
@@ -110,17 +110,17 @@ acct.headers  # ready-to-use API headers
 
 ### Autonomous Algo Portfolio
 
-Mean reversion, trend following, momentum, and opening-range breakout are the four core entry rules. The deterministic SPY regime filter chooses which core rules may propose entries. Multi Factor and Event Driven run as satellites: they can confirm an aligned core entry, raise its priority, and modestly increase its risk budget, but cannot open a position or become its owner. Every resulting proposal still passes the regular Algo risk validation and position caps. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
+Open-dip mean reversion, opening-range breakout, swing/cyclical mean reversion, swing trend, and swing momentum are the five core entry rules. The deterministic SPY regime filter chooses the allowed core set first. The optional OpenAI advisor can only rank that set. Multi Factor and Event Driven are confirmation-only satellites: an aligned signal may confirm a core proposal, raise its priority, and modestly increase its risk budget. They cannot create an order, consume an entry slot, or own a position. Every core proposal passes through the portfolio coordinator and regular Algo risk validation. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
 
-All three modes use the Algo Trader Plus market-data plan through the shared `ALPACA_DATA_TIER=algo_trader_plus` setting. Regular and extended sessions use SIP. Algo's overnight intraday signal bars and quotes use real-time `feed=boats`, with entries enabled only for assets Alpaca marks `overnight_tradable`; daily regime and factor history remains on SIP. The service follows Alpaca's 24/5 sessions using New York time and the broker calendar. Overnight orders remain simple limit DAY orders with `extended_hours=true`; regular-session orders continue through the shared executor and risk manager. Algo's 40-entry quota follows its 20:00–20:00 ET trading session and it allows 20 open positions, subject to configured position, sector, cash, and drawdown limits. Execution remains paper-only. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for session and feed details.
+All three modes use the Algo Trader Plus market-data plan through the shared `ALPACA_DATA_TIER=algo_trader_plus` setting. Regular and extended-session data use SIP. Algo may read overnight bars and quotes from `feed=boats`, but `overnight_entries_enabled` is false: BOATS data is for observation and position management until that config is explicitly enabled. Swing positions may remain open overnight; intraday positions are flattened before the regular close, and `allow_intraday_overnight` remains false. The service follows Alpaca's 24/5 sessions using New York time and the broker calendar. The shared Algo cap is 10 new entries per 20:00–20:00 ET trade date, with no more than 3 intraday entries and 3 swing-group entries per day. The owner book is capped at 16 positions: 10 swing and 6 intraday-core; satellites have no owner slots. Execution remains paper-only. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for session and feed details.
 
-Extended-hours entries have software-managed stops and targets. The coordinator attaches a broker-verified full-size OCO during the next regular session once no symbol order remains open. For positions with broker bracket or OCO protection, a competing software exit signal is deferred while the protective order remains open: Alpaca can leave a cancellation in `pending_cancel`, which may neither release the shares nor preserve the stop. The service reports the suppressed exit and reevaluates it after broker reconciliation. A stale or failed historical bar request pauses new entries but does not disable quote-driven protective checks on owned positions.
+Extended-hours entries have software-managed stops and targets. The coordinator attaches a broker-verified full-size OCO during the next regular session once no symbol order remains open. Ordinary strategy exit signals wait while a broker bracket or OCO is active. A quote-triggered software hard/trailing stop can request a protective-order cancellation and market exit during regular hours; execution verifies cancellation and reconciles the remaining position first, and a `pending_cancel` leaves the stop in place and the exit deferred. A stale or failed historical bar request pauses new entries but does not disable quote-driven protective checks on owned positions.
 
 #### Algo portfolio replay
 
 `src.algo.backtest` replays the deterministic Algo regime selector, strategy rules, shared sizing, and hard risk validator over stored regular-session 5-minute bars. It fills signals no earlier than the next bar open, models adverse slippage, and reports its assumptions with every run. It is research-only and cannot submit orders.
 
-`src.algo.auto_research` is a separate weekday research job for Algo. It uses the fixed 22-symbol Algo universe, refreshes Plus SIP split-adjusted bars, fits non-negative Ridge factor weights from purged 21-session forward labels, and runs chronological walk-forward profiles for the four core rules plus Multi Factor and Event Driven confirmation overlays. The profile set compares a core-only baseline, bounded core-rule variants, each satellite separately, and both satellites together. A training profile with an enabled satellite must produce at least three confirmed entries per training fold to pass the sample gate. The job also compares a four-rule portfolio against the six-strategy portfolio on 2024–2025 and the available 2026 forward period. The job never edits live settings, reloads the service, or submits orders. Its Telegram report is a review request: a candidate requires your explicit approval before any live-system change.
+`src.algo.auto_research` is a separate weekday research job for Algo. It uses the fixed 22-symbol Algo universe, refreshes Plus SIP split-adjusted bars, fits non-negative Ridge factor weights from purged 21-session forward labels, and runs chronological walk-forward profiles for the five core rules plus Multi Factor and Event Driven confirmation overlays. The profile set compares a core-only baseline, bounded core-rule variants, each satellite separately, and both satellites together. A training profile with an enabled satellite must produce at least three confirmed entries per training fold to pass the sample gate. The job also compares the five-core-rule portfolio against the same portfolio with two confirmation satellites on 2024–2025 and the available 2026 forward period. The job never edits live settings, reloads the service, or submits orders. Its Telegram report is a review request: a candidate requires your explicit approval before any live-system change.
 
 Historical scheduled-event inputs are rebuilt into `data/research/algo-auto/event-calendar-historical.csv`: issuer earnings dates use SEC EDGAR 8-K Item 2.02 filing acceptance times (ETFs are excluded), while CPI/NFP and FOMC dates use official BLS and Federal Reserve archives. Macro reactions become visible no earlier than their scheduled release, and all reaction windows align to stored regular-session bars. This is a conservative historical reaction ledger, not an intraday news feed; event profiles are skipped and reported if a valid full-range calendar cannot be built or reused. Historical fixed-universe membership remains a survivorship limitation.
 
@@ -149,7 +149,7 @@ Replay currently covers regular hours only. It uses a fixed supplied symbol list
 
 #### Multi Factor confirmation satellite
 
-The Algo-only `src.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It selects up to five long targets for research diagnostics. In the live six-strategy portfolio, a current-period long target confirms a matching core-rule entry; it cannot open or own a position. The current risk manager is long-only, so the strategy does not create shorts. Factor-only backtest runs report ranking and IC diagnostics without creating standalone positions.
+The Algo-only `src.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It computes long and short ranks for research diagnostics. In the live portfolio, only same-ticker, same-direction evidence confirms a core-rule proposal; it cannot open or own a position. Factor-only backtest runs report ranking and IC diagnostics without creating standalone positions.
 
 Features use completed daily bars through the prior session. Live settings are centralized in `ALGO_DEFAULT_PARAMETERS["multi_factor"]`; research profiles can override the validated fields without changing live settings. The simulator aggregates stored regular-session 5-minute bars and fetches 260 calendar days of warmup by default, extending it for longer configured horizons. The fixed universe supplied to a backtest must contain enough names with the required history to meet `min_universe` (20 by default). Value is disabled by default; if enabled, it requires earnings-yield observations with an `available_at` timestamp, and observations published after the rebalance cutoff are ignored. No price-only value proxy is substituted.
 
@@ -183,9 +183,9 @@ if proposal is not None:
         execute_trades([proposal], mode="algo")
 ```
 
-`_make_trade` applies the existing Algo risk sizing and the signal's target weight as an additional cap; the executor calls `risk_manager.validate_trade()` again before submission. The backtester applies the same validator to buys and sells and respects the deterministic SPY regime's permission to open factor positions. Backtest diagnostics include target turnover and weekly 21-session Spearman IC; those labels overlap and are descriptive. AutoResearch separately uses monthly-spaced 21-session labels with a purge for its Ridge fit and expanding prequential IC. The fixed 22-symbol universe is replayed across all historical years because point-in-time membership is not available; this creates survivorship and listing-availability bias, which limits historical conclusions.
+`_make_trade` applies the existing Algo risk sizing and the signal's target weight as an additional cap; the executor calls `risk_manager.validate_trade()` again before submission. The backtester applies the same validator to buys and sells; the deterministic SPY regime permits only core strategies, while satellites only confirm aligned core proposals. Backtest diagnostics include target turnover and weekly 21-session Spearman IC; those labels overlap and are descriptive. AutoResearch separately uses monthly-spaced 21-session labels with a purge for its Ridge fit and expanding prequential IC. The fixed 22-symbol universe is replayed across all historical years because point-in-time membership is not available; this creates survivorship and listing-availability bias, which limits historical conclusions.
 
-The portfolio coordinator runs after sizing and before `risk_manager.validate_trade()`. It shares a 10-entry daily budget (3 for intraday), 8% per-name cap, 100% gross cap, +60%/-40% net caps, and existing universe-sector groups capped at 30% for core technology, 25% for other groups, and 15% for tactical names. It rejects opposite-side stacking by default, gives swing core strategies priority over satellites, blocks swing entries during the first 15 minutes, and schedules intraday positions to flatten before the session ends. The risk manager remains the final approval layer.
+The portfolio coordinator shares a 10-entry daily budget, a 3-entry intraday slice, and a 3-entry swing slice. It caps owner positions at 10 swing and 6 intraday-core; satellites have no independent position or entry allowance. It also applies an 8% per-name cap, 100% gross cap, +60%/-40% net caps, and universe-group caps of 30% for core technology, 25% for diversifiers/hedges, and 15% for tactical names. It rejects duplicate or opposing exposure by default, blocks swing entries during the first 15 minutes, rejects overnight entries while disabled, and flattens intraday holdings before the regular close. Coordinator budget rejections are logged. `risk_manager.validate_trade()` remains the final approval layer.
 
 Walk-forward reports require at least three chronological, non-overlapping test folds. Each fold selects parameters using only its preceding training window, then evaluates the selected profile and predeclared one-at-a-time threshold neighbors on the frozen test fold. A fixed profile is promotable only when that same profile is selected in every fold, it has positive after-cost and buy-and-hold excess returns in a majority of folds, meets the minimum trade sample in every fold, and at least one neighboring value is profitable for every tuned threshold. Every replay includes spread, adverse open slippage, per-share commission, modeled short borrow, and a penalty for unknown historical borrow availability; explicit hard-to-borrow shorts are skipped. Reports compare the combined book and each strategy with an equal-weight buy-and-hold benchmark for the same symbols, and include pairwise daily strategy-P&L correlation and same-ticker/direction holding overlap. Test-window positions are liquidated with modeled costs. These are research gates only; they do not change live settings. The fixed universe still creates survivorship and listing-availability bias because historical point-in-time membership is unavailable.
 
@@ -358,17 +358,18 @@ Algo has its own limits; Swing and Day retain the values above and below. The sh
 
 | Parameter | Algo limit |
 |---|---|
-| Max open positions | 20 |
-| New buy entries/day | 40; counts buys that open a flat ticker, not scale-ins or exits |
+| Max open positions | 16 total: up to 10 swing and 6 intraday-core |
+| New entries/trade date | 10 shared; up to 3 intraday and 3 swing-group entries |
+| Satellite-owned positions/entries | 0; Multi Factor and Event Driven only confirm aligned core proposals |
 | Max position | 5% of equity |
-| Sector/theme allocation | 32% per configured bucket; tactical holdings have a separate 15% aggregate cap |
+| Sector/theme allocation | Effective: 30% tech, 25% diversifiers, 20% hedge ETFs, 4% tactical; the coordinator's 25% hedge / 15% tactical ceilings do not loosen the tighter risk-manager catalog |
 | Daily circuit breaker | -2% |
 | Weekly circuit breaker | -5% |
 | No-buy threshold | -2% daily P&L |
 | Minimum cash reserve | 15% |
 | Leveraged ETFs | Banned |
 
-Position count and entry throughput rise together, while individual size stays at 5%, the drawdown breakers remain at -2%/-5%, and tactical exposure stays capped. Algo uses the existing strategy-provided stops and the configured 1% hard-stop / 3% trailing defaults.
+The risk manager enforces the same 10-entry daily hard ceiling and 16-position book ceiling in addition to coordinator group limits. Algo uses explicit horizon-based protection from `ALGO_MODE_CONFIG`: open-dip and ORB hard stops are 1.1% with 0.8% software trails; swing trend and momentum use 6% hard stops with 4.5% trails; cyclical mean reversion uses a 7% hard stop with a 5% trail. Trails activate only after a favorable move and tighten the persisted software stop. Swing stops therefore remain sized for multi-session holds. `overnight_entries_enabled` is false and `allow_intraday_overnight` is false; no new BOATS entries are permitted.
 
 ---
 
@@ -376,7 +377,7 @@ Position count and entry throughput rise together, while individual size stays a
 
 ```
 Swing/Day agents + explicit mode       Algo daemon + deterministic SPY regime
-        │                                    │  optional local ranking advice
+        │                                    │  bounded OpenAI ranking within allowed core set
         │                                    ├── per-strategy SQLite lifecycle
         │                                    └── broker/journal reconciliation
         └──────────────────┬─────────────────┘
@@ -392,7 +393,7 @@ Swing/Day agents + explicit mode       Algo daemon + deterministic SPY regime
 
 ## Risk Management (V2)
 
-The risk manager (`risk_manager.py`) enforces **11 hard rules** that no agent can bypass. Every trade proposal passes through `validate_trade()` before execution. Violations are rejected with a clear reason.
+The risk manager (`risk_manager.py`) enforces **12 hard rules** that no agent can bypass. Every trade proposal passes through `validate_trade()` before execution. Violations are rejected with a clear reason.
 
 ### Rules (Code-Enforced)
 
@@ -403,12 +404,13 @@ The risk manager (`risk_manager.py`) enforces **11 hard rules** that no agent ca
 | 3 | Daily loss circuit breaker | -2% | -3% | -2% |
 | 4 | No new buys if down for day | -3% | -2% | -2% |
 | 5 | Weekly loss circuit breaker | -5% | -8% | -5% |
-| 6 | Daily entries | 4 trades | 20 trades | 40 new-position buys |
-| 7 | Max open positions | 12 | 8 | 20 |
+| 6 | Daily entries | 4 trades | 20 trades | 10 shared new entries |
+| 7 | Max open positions | 12 | 8 | 16 total (10 swing + 6 intraday core) |
 | 8 | Min cash reserve | 20% | 10% | 15% |
 | 9 | Max position size | 8% | 15% | 5% |
-| 10 | Max sector allocation | 30% | 50% | 32% per configured bucket |
-| 11 | Tactical/high-risk cap | 3% total | No cap | 15% total |
+| 10 | Max sector allocation | 30% | 50% | Coordinator: 30% tech, 25% diversifiers/hedges, 15% tactical |
+| 11 | Tactical/high-risk cap | 3% total | No cap | 4% total; coordinator ceiling is 15% |
+| 12 | Satellite ownership | n/a | n/a | Multi Factor/Event Driven cannot own entries |
 
 ### Stop Losses
 
@@ -416,7 +418,7 @@ The configured defaults are:
 
 - **Swing:** -7% hard stop from entry + 15% trailing stop from peak.
 - **Day:** -1.2% hard stop + 3% trailing stop from intraday high.
-- **Algo:** strategy stop/target where supplied, with 1% hard-stop and 3% trailing defaults.
+- **Algo:** horizon-specific stops from `ALGO_MODE_CONFIG`: intraday 1.1% hard / 0.8% trailing; swing 6–7% hard / 4.5–5% trailing.
 
 Regular-session entries with stop and target levels use broker brackets. Extended-hours Algo orders cannot use those brackets, so the coordinator monitors persisted software levels using fresh quotes. `portfolio_monitor.py` checks Swing and Day positions when invoked by their jobs; do not assume it runs continuously.
 
@@ -726,7 +728,7 @@ Account-aware scripts should be run with an explicit `--mode`; each supported mo
 swarm-trader/
 ├── run_hedge_fund.py          # Main runner — analysis + execution
 ├── run_analysis.py            # Wrapper for run_hedge_fund.py
-├── risk_manager.py            # V2 risk manager (11 hard rules, code-enforced)
+├── risk_manager.py            # V2 risk manager (12 hard rules, code-enforced)
 ├── portfolio_monitor.py       # Stop loss monitor + auto-sell + SPY comparison
 ├── performance_tracker_v2.py  # Daily snapshots, Sharpe ratio, benchmarking
 ├── execute_trades.py          # Trade executor with risk validation

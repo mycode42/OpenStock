@@ -69,3 +69,18 @@ def test_satellites_confirm_short_core_signals_only_in_the_same_direction():
         event_signal={"action": "buy"},
     )
     assert mismatch == signal
+
+
+def test_satellite_bonus_scales_core_budget_without_resetting_it():
+    signal = {
+        "ticker": "AAPL", "action": "buy", "strategy": "momentum",
+        "strength": 0.7, "risk_multiplier": 0.6,
+    }
+    result = apply_satellite_confirmations(
+        signal,
+        factor_signal={"action": "buy", "direction": "long"},
+        event_signal={"action": "buy"},
+    )
+
+    assert result["strategy"] == "momentum"
+    assert result["risk_multiplier"] == pytest.approx(0.72)

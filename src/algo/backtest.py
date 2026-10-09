@@ -145,6 +145,9 @@ class Position:
     signal_at: str
     bars_held: int = 0
     satellite_confirmations: list[str] = field(default_factory=list)
+    trailing_stop_pct: float | None = None
+    trailing_activation_pct: float | None = None
+    favorable_extreme: float | None = None
     entry_commission: float = 0.0
     borrow_cost: float = 0.0
 
@@ -390,6 +393,7 @@ class AlgoPortfolioBacktest:
             result = validate_trade(
                 ticker=ticker, action=action, qty=abs(position.qty),
                 entry_price=float(bar["c"]), portfolio_state=state, mode="algo",
+                strategy=position.strategy,
             )
             if not result.approved:
                 self.rejections[f"coordinator_flatten:{result.rule or 'risk_rejected'}"] += 1
@@ -539,6 +543,24 @@ class AlgoPortfolioBacktest:
         elif target_hit:
             raw_fill, reason = position.take_profit, "target"
         else:
+            # A stop tightened from today's high/low is active next bar. This
+            # avoids assuming an intrabar price sequence the data cannot prove.
+            if position.trailing_stop_pct and position.trailing_activation_pct:
+                if is_short:
+                    extreme = min(position.favorable_extreme or position.entry_price, low)
+                    favorable = (position.entry_price - extreme) / position.entry_price
+                    if favorable >= position.trailing_activation_pct:
+                        position.stop_price = min(
+                            position.stop_price, extreme * (1 + position.trailing_stop_pct),
+                        )
+                else:
+                    extreme = max(position.favorable_extreme or position.entry_price, high)
+                    favorable = (extreme - position.entry_price) / position.entry_price
+                    if favorable >= position.trailing_activation_pct:
+                        position.stop_price = max(
+                            position.stop_price, extreme * (1 - position.trailing_stop_pct),
+                        )
+                position.favorable_extreme = extreme
             position.bars_held += 1
             return
         exit_action = "cover" if is_short else "sell"
@@ -573,6 +595,9 @@ class AlgoPortfolioBacktest:
                 stop_price=order["stop_price"], take_profit=order["take_profit"],
                 signal_at=order["signal_at"], bars_held=0,
                 satellite_confirmations=list(order.get("satellite_confirmations", [])),
+                trailing_stop_pct=order.get("trailing_stop_pct"),
+                trailing_activation_pct=order.get("trailing_activation_pct"),
+                favorable_extreme=fill_price,
                 entry_commission=commission,
             )
 
@@ -605,6 +630,7 @@ class AlgoPortfolioBacktest:
         result = validate_trade(
             ticker=ticker, action=action, qty=abs(position.qty),
             entry_price=float(bar["c"]), portfolio_state=self._risk_state(), mode="algo",
+            strategy=position.strategy,
         )
         if not result.approved:
             self.rejections[str(result.rule or "risk_rejected")] += 1
@@ -799,24 +825,17 @@ class AlgoPortfolioBacktest:
             } else "5Min"
             options.append(item)
 
+        allowed_satellites = set(self._current_regime.get("satellites", []))
         if (
             factor_signal is not None
-            and "multi_factor" in (self._current_regime.get("active", []))
+            and "multi_factor" in allowed_satellites
             and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
+            and position_qty and held is not None and held.strategy == "multi_factor"
+            and factor_signal.get("action") in {"sell", "cover"}
         ):
-            expected_actions = {"sell", "cover"} if position_qty else {"buy", "short"}
-            if factor_signal.get("action") in expected_actions:
-                if not position_qty:
-                    self.signal_events_by_strategy[(self.day_key or "", "multi_factor")] += 1
-                    ticker_day = (self.day_key or "", ticker)
-                    strategy_ticker_day = (*ticker_day, "multi_factor")
-                    self.candidate_ticker_days.add(ticker_day)
-                    if strategy_ticker_day not in self.candidate_strategy_ticker_days:
-                        self.candidate_strategy_ticker_days.add(strategy_ticker_day)
-                        self.candidate_setups_by_strategy[(self.day_key or "", "multi_factor")] += 1
-                options.append({
-                    **factor_signal, "rank_score": -1.0, "timeframe": "1Day",
-                })
+            # Preserve exit management for any legacy satellite-owned holding;
+            # factor entry signals are evidence only and never enter options.
+            options.append({**factor_signal, "rank_score": -1.0, "timeframe": "1Day"})
 
         event_evidence = None
 
@@ -824,7 +843,7 @@ class AlgoPortfolioBacktest:
         if (
             (self.event_satellite_enabled or (held is not None and held.strategy == "event_driven"))
             and (
-                "event_driven" in self._current_regime.get("active", [])
+                "event_driven" in allowed_satellites
                 or (held is not None and held.strategy == "event_driven")
             )
             and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
@@ -847,28 +866,20 @@ class AlgoPortfolioBacktest:
                 self.rejections[f"signal_error:event_driven:{type(exc).__name__}"] += 1
         if event_signal is not None:
             event_evidence = event_signal.to_dict()
-            expected_actions = {"sell", "cover"} if position_qty else {"buy", "short"}
-            if event_signal.action in expected_actions:
-                self.signal_events_by_strategy[(self.day_key or "", "event_driven")] += 1
-                item = dict(event_evidence)
-                item["rank_score"] = -1.0
-                item["timeframe"] = "1Day"
-                if not position_qty:
-                    ticker_day = (self.day_key or "", ticker)
-                    strategy_ticker_day = (*ticker_day, "event_driven")
-                    self.candidate_ticker_days.add(ticker_day)
-                    if strategy_ticker_day not in self.candidate_strategy_ticker_days:
-                        self.candidate_strategy_ticker_days.add(strategy_ticker_day)
-                        self.candidate_setups_by_strategy[(self.day_key or "", "event_driven")] += 1
-                options.append(item)
+            self.signal_events_by_strategy[(self.day_key or "", "event_driven")] += 1
+            if (
+                position_qty and held is not None and held.strategy == "event_driven"
+                and event_signal.action in {"sell", "cover"}
+            ):
+                options.append({**event_evidence, "rank_score": -1.0, "timeframe": "1Day"})
 
         if not options:
             return None
         chosen = max(options, key=lambda item: (item["rank_score"], item["strength"]))
         chosen = apply_satellite_confirmations(
             chosen,
-            factor_signal=(factor_signal if "multi_factor" in active else None),
-            event_signal=event_evidence if "event_driven" in active else None,
+            factor_signal=(factor_signal if "multi_factor" in allowed_satellites else None),
+            event_signal=event_evidence if "event_driven" in allowed_satellites else None,
             config=self.satellite_config,
         )
         for satellite in chosen.get("satellite_confirmations", []):
@@ -884,6 +895,9 @@ class AlgoPortfolioBacktest:
             return
         action = str(signal["action"])
         strategy = str(signal["strategy"])
+        if strategy in SATELLITE_STRATEGIES:
+            self.rejections["satellite_confirmation_only"] += 1
+            return
         controls = self.research_controls
         entries_today = self.entry_counts[self.day_key]
         if entries_today >= controls.get("max_entries_per_day", self.risk["max_trades_per_day"]):
@@ -990,6 +1004,10 @@ class AlgoPortfolioBacktest:
             count for (day, name), count in self.entry_counts_by_strategy.items()
             if day == self.day_key and name in INTRADAY_STRATEGIES
         )
+        swing_entries = sum(
+            count for (day, name), count in self.entry_counts_by_strategy.items()
+            if day == self.day_key and name in {"trend_following", "momentum", "swing_mean_reversion"}
+        )
         coordinator_book = self.coordinator.new_book(
             equity=float(state["equity"]),
             positions=state["positions"],
@@ -998,6 +1016,7 @@ class AlgoPortfolioBacktest:
             pending_short_values=state["pending_short_value_by_ticker"],
             entries_today=int(state["entry_count_today"]),
             intraday_entries_today=intraday_entries,
+            swing_entries_today=swing_entries,
         )
         decision = coordinator_book.review(
             sized, session="regular", timestamp=timestamp,
@@ -1009,7 +1028,7 @@ class AlgoPortfolioBacktest:
         sized = decision.proposal
         result = validate_trade(
             ticker=ticker, action=action, qty=int(sized["qty"]),
-            entry_price=close, portfolio_state=state, mode="algo",
+            entry_price=close, portfolio_state=state, mode="algo", strategy=strategy,
         )
         if not result.approved:
             self.rejections[str(result.rule or "risk_rejected")] += 1
@@ -1021,6 +1040,8 @@ class AlgoPortfolioBacktest:
             "action": action,
             "stop_price": float(sized["stop_price"]),
             "take_profit": float(sized["take_profit"]),
+            "trailing_stop_pct": sized.get("trailing_stop_pct"),
+            "trailing_activation_pct": sized.get("trailing_activation_pct"),
             "signal_at": signal_at,
             "satellite_confirmations": list(signal.get("satellite_confirmations", [])),
         }
@@ -1177,7 +1198,13 @@ class AlgoPortfolioBacktest:
                         as_of=trading_day - timedelta(days=1),
                         regime=str(self._current_regime.get("regime", "unknown")),
                         held_positions=held_momentum,
-                        parameters=self.profile.get("momentum"),
+                        parameters={
+                            **ALGO_DEFAULT_PARAMETERS["momentum"],
+                            **(self.profile.get("momentum") or {}),
+                            "hard_stop_pct": self.risk["stop_loss_pct_by_strategy"]["momentum"],
+                            "trailing_stop_pct": self.risk["trailing_stop_pct_by_strategy"]["momentum"],
+                            "trailing_activation_pct": self.risk["trailing_activation_pct_by_strategy"]["momentum"],
+                        },
                     )
                 except Exception as exc:
                     self.rejections[f"signal_error:momentum:{type(exc).__name__}"] += 1
@@ -1226,7 +1253,7 @@ class AlgoPortfolioBacktest:
                 history = self.histories[(ticker, trading_day)]
                 factor_support = (
                     self.latest_multi_factor_signals.get(ticker)
-                    if "multi_factor" in regime.get("active", []) else None
+                    if "multi_factor" in regime.get("satellites", []) else None
                 )
                 position = self.positions.get(ticker)
                 signal = self._signal_for(

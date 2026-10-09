@@ -244,7 +244,7 @@ def test_opening_dip_research_rule_requires_window_dip_bounce_and_volume():
 
 
 def test_research_controls_cannot_exceed_live_algo_ceilings():
-    with pytest.raises(ValueError, match="between 1 and 15"):
+    with pytest.raises(ValueError, match="between 1 and 10"):
         AlgoPortfolioBacktest(
             symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
             start="2026-10-05", end="2026-10-05", feed="sip",

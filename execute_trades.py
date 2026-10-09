@@ -1287,6 +1287,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                 entry_price=ref_price,
                 portfolio_state=rm_portfolio_state,
                 mode=mode,
+                strategy=strategy,
             )
             if not rm_result.approved:
                 log.warning(
@@ -1315,6 +1316,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                 entry_price=float(entry_price or 0),
                 portfolio_state=rm_portfolio_state,
                 mode=mode,
+                strategy=strategy,
             )
             if not rm_result.approved:
                 results.append({
@@ -1402,7 +1404,9 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             ):
                 cancel_result = cancel_open_orders_for_symbol(
                     ticker, mode=mode,
-                    allow_protective=bool(trade.get("coordinator_force_flatten")),
+                    allow_protective=bool(
+                        trade.get("coordinator_force_flatten") or trade.get("software_protection")
+                    ),
                 )
                 if not cancel_result.get("success"):
                     results.append({

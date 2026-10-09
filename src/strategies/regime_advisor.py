@@ -99,10 +99,11 @@ def _openai_suggestion(
         proposed = parsed.get("ranking", []) if isinstance(parsed, dict) else []
         if not isinstance(proposed, list):
             return [], "model response did not contain a ranking list"
-        accepted = []
-        for item in proposed:
-            if isinstance(item, str) and item in active and item not in accepted:
-                accepted.append(item)
+        if any(not isinstance(item, str) or item not in active for item in proposed):
+            return [], "model response included a strategy blocked by deterministic regime checks"
+        if len(set(proposed)) != len(proposed):
+            return [], "model response repeated a strategy"
+        accepted = list(proposed)
         if not accepted:
             return [], "model response contained no allowed active strategy"
         return accepted + [name for name in active if name not in accepted], None
@@ -110,6 +111,10 @@ def _openai_suggestion(
         # SDK error messages can include credential fragments; log only the class.
         return [], type(exc).__name__
     except (ValueError, TypeError, AttributeError) as exc:
+        return [], type(exc).__name__
+    except Exception as exc:
+        # Keep advisor/network failures strictly advisory; deterministic rules
+        # remain available even if a provider raises outside the SDK errors.
         return [], type(exc).__name__
 
 
@@ -138,23 +143,41 @@ def apply_regime_advisory(regime: dict) -> dict:
             for item in regime.get("ranked", [])
             if item.get("strategy") in active
         ]
-        suggestion, error = _openai_suggestion(
-            os.getenv("OPENAI_API_BASE", "").strip(),
-            model,
-            str(regime.get("regime", "unknown")),
-            str(regime.get("reason", "")),
-            json.dumps(active, separators=(",", ":")),
-            json.dumps(available_rankings, separators=(",", ":")),
-            regime.get("spy_return_20d"),
-            regime.get("spy_volatility_20d"),
-            int(STRATEGY_CONFIG["regime_llm_timeout_seconds"]),
-            int(time.time() // 900),
-        )
+        try:
+            suggestion, error = _openai_suggestion(
+                os.getenv("OPENAI_API_BASE", "").strip(),
+                model,
+                str(regime.get("regime", "unknown")),
+                str(regime.get("reason", "")),
+                json.dumps(active, separators=(",", ":")),
+                json.dumps(available_rankings, separators=(",", ":")),
+                regime.get("spy_return_20d"),
+                regime.get("spy_volatility_20d"),
+                int(STRATEGY_CONFIG["regime_llm_timeout_seconds"]),
+                int(time.time() // 900),
+            )
+        except Exception as exc:
+            suggestion, error = [], type(exc).__name__
     if error:
         regime["regime_advisory"].update({"status": "fallback", "error": error})
         LOG.warning("OpenAI regime suggestion unavailable; deterministic order retained: %s", error)
         return regime
 
+    deterministic_active = list(regime.get("active", []))
+    # Validate again at the boundary so a malformed provider, test double, or
+    # future client cannot revive a strategy blocked by the deterministic gate.
+    if (
+        not isinstance(suggestion, list)
+        or any(not isinstance(name, str) or name not in deterministic_active for name in suggestion)
+        or len(set(suggestion)) != len(suggestion)
+    ):
+        regime["regime_advisory"].update({
+            "status": "fallback",
+            "error": "advisor ranking included a strategy blocked by deterministic regime checks",
+        })
+        LOG.warning("Invalid OpenAI regime ranking; deterministic allowed set retained")
+        return regime
+    suggestion = suggestion + [name for name in deterministic_active if name not in suggestion]
     priority = {name: len(suggestion) - index for index, name in enumerate(suggestion)}
     regime["active"] = suggestion
     regime["regime_advisory"].update({
@@ -162,6 +185,7 @@ def apply_regime_advisory(regime: dict) -> dict:
         "suggested_order": suggestion,
         "applied_order": suggestion,
     })
+    LOG.info("OpenAI regime ranking applied within deterministic allowed set: %s", suggestion)
     for item in regime.get("ranked", []):
         name = item.get("strategy")
         if name in priority:

@@ -60,7 +60,11 @@ def rank_strategies(
             weights["intraday_momentum"] = 0.3 if regime == "range_bound" else 0.56
             available.add("intraday_momentum")
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    active = [name for name, score in ranked if score >= 0.55 and name in available]
+    allowed = [name for name, score in ranked if score >= 0.55 and name in available]
+    # Satellites are context providers only. Keep their eligibility separate
+    # from the core set that the regime advisor may prioritize for entries.
+    satellites = [name for name in allowed if name in {"multi_factor", "event_driven"}]
+    active = [name for name in allowed if name not in {"multi_factor", "event_driven"}]
     return {
         "regime": regime,
         "reason": reason,
@@ -71,4 +75,5 @@ def rank_strategies(
             for name, score in ranked
         ],
         "active": active,
+        "satellites": satellites,
     }

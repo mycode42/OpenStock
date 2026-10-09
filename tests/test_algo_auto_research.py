@@ -44,7 +44,7 @@ def _synthetic_daily_history(session_count: int = 2700) -> dict[str, list[dict]]
 def test_auto_research_profiles_are_bounded_and_have_strategy_cooldowns():
     profiles = _read_profiles("autoresearch/algo-daily-profiles.json")
     assert len(profiles) == 12
-    assert all(profile["controls"]["max_entries_per_day"] == 15 for profile in profiles)
+    assert all(profile["controls"]["max_entries_per_day"] == 10 for profile in profiles)
     assert all("cooldown_minutes_by_strategy" in profile["controls"] for profile in profiles)
     expected = {
         "mean_reversion", "momentum", "opening_range_breakout", "trend_following",
@@ -77,7 +77,7 @@ def test_isolated_optimizer_uses_one_direction_and_simple_candidate_sets():
                 else:
                     assert settings["allow_long"] is (direction == "long")
                     assert settings["allow_short"] is (direction == "short")
-                assert profile["controls"]["max_entries_per_day"] == 15
+                assert profile["controls"]["max_entries_per_day"] == 10
 
 
 def test_combined_replay_compares_core_with_all_six_as_overlays(monkeypatch):

@@ -240,7 +240,9 @@ def _make_trade(signal: dict, price: float, equity: float, position: dict, mode_
             "direction": "close_short" if action == "cover" else "close_long",
         }
 
-    stop_pct = float(signal.get("stop_pct") or mode_risk["stop_loss_pct"])
+    strategy = str(signal.get("strategy", ""))
+    configured_stop = mode_risk.get("stop_loss_pct_by_strategy", {}).get(strategy)
+    stop_pct = float(configured_stop or signal.get("stop_pct") or mode_risk["stop_loss_pct"])
     if equity <= 0 or price <= 0 or stop_pct <= 0:
         return None
     try:
@@ -277,6 +279,8 @@ def _make_trade(signal: dict, price: float, equity: float, position: dict, mode_
         if action == "short" else
         round(price + (price - stop_price) * float(STRATEGY_CONFIG["take_profit_r_multiple"]), 2)
     )
+    trailing_stop = mode_risk.get("trailing_stop_pct_by_strategy", {}).get(strategy)
+    trailing_activation = mode_risk.get("trailing_activation_pct_by_strategy", {}).get(strategy)
     return {
         "ticker": signal["ticker"],
         "action": action,
@@ -284,12 +288,57 @@ def _make_trade(signal: dict, price: float, equity: float, position: dict, mode_
         "entry_price": price,
         "stop_price": stop_price,
         "take_profit": target_price,
+        "trailing_stop_pct": trailing_stop,
+        "trailing_activation_pct": trailing_activation,
         "reasoning": signal["reason"],
         "strategy": signal["strategy"],
         "timeframe": signal.get("timeframe"),
         "direction": "long" if action == "buy" else "short",
         "strategy_group": signal.get("strategy_group", "swing" if signal["strategy"] in {"trend_following", "momentum", "swing_mean_reversion"} else "intraday"),
     }
+
+
+def _update_trailing_stop(
+    state: dict,
+    *,
+    strategy: str,
+    qty: float,
+    entry_price: object,
+    current_price: float,
+    mode_risk: dict,
+) -> float | None:
+    """Maintain a persisted, direction-aware software trail inside the hard stop."""
+    entry = _positive_price_level(entry_price)
+    if entry is None or qty == 0 or current_price <= 0:
+        return _positive_price_level(state.get("stop_price"))
+    stop_pct = mode_risk.get("stop_loss_pct_by_strategy", {}).get(strategy)
+    trail_pct = mode_risk.get("trailing_stop_pct_by_strategy", {}).get(strategy)
+    activation_pct = mode_risk.get("trailing_activation_pct_by_strategy", {}).get(strategy)
+    try:
+        hard_pct = float(stop_pct)
+        trail_pct = float(trail_pct)
+        activation_pct = float(activation_pct)
+    except (TypeError, ValueError):
+        return _positive_price_level(state.get("stop_price"))
+    if not all(math.isfinite(value) and value > 0 for value in (hard_pct, trail_pct, activation_pct)):
+        return _positive_price_level(state.get("stop_price"))
+
+    is_short = qty < 0
+    hard_stop = entry * (1 + hard_pct) if is_short else entry * (1 - hard_pct)
+    existing_stop = _positive_price_level(state.get("stop_price"))
+    stop = min(existing_stop, hard_stop) if is_short and existing_stop else (
+        max(existing_stop, hard_stop) if existing_stop else hard_stop
+    )
+    best_key = "trailing_trough_price" if is_short else "trailing_peak_price"
+    best = _positive_price_level(state.get(best_key)) or entry
+    best = min(best, current_price) if is_short else max(best, current_price)
+    state[best_key] = round(best, 4)
+    favorable = (entry - best) / entry if is_short else (best - entry) / entry
+    if favorable >= activation_pct:
+        trailing = best * (1 + trail_pct) if is_short else best * (1 - trail_pct)
+        stop = min(stop, trailing) if is_short else max(stop, trailing)
+    state["stop_price"] = round(stop, 2)
+    return state["stop_price"]
 
 
 def _multi_factor_rebalance_signals(
@@ -449,7 +498,7 @@ def scan(
     if mode == "algo" and not selected_symbols:
         entry_pause_reasons.append("the Algo universe is empty")
     if mode == "algo" and session_name == "overnight" and not bool(
-        STRATEGY_CONFIG.get("overnight_entries_enabled", True)
+        STRATEGY_CONFIG.get("overnight_entries_enabled", False)
     ):
         entry_pause_reasons.append("overnight entries are disabled by configuration")
 
@@ -659,7 +708,7 @@ def scan(
         try:
             regime = apply_regime_advisory(regime)
         except Exception as exc:
-            # The optional local advisor must never interrupt deterministic
+            # The optional ranking advisor must never interrupt deterministic
             # strategy exits or quote-driven protection.
             scan_errors.append(f"optional regime advisor: {type(exc).__name__}: {exc}")
             regime["regime_advisory"] = {"status": "fallback", "error": str(exc)}
@@ -667,6 +716,7 @@ def scan(
             entry_pause_reasons.append("deterministic SPY regime is unavailable")
             if historical_status == "ok":
                 historical_status = "degraded"
+    allowed_satellites = set(regime.get("satellites", []))
     equity = float(account.get("equity", 0) or 0)
     quote_errors: list[str] = []
     latest_quotes = _fetch_latest_quotes(
@@ -728,6 +778,12 @@ def scan(
     momentum_diagnostics = None
     if mode == "algo":
         try:
+            momentum_parameters = dict(ALGO_DEFAULT_PARAMETERS["momentum"])
+            momentum_parameters.update({
+                "hard_stop_pct": risk_config["stop_loss_pct_by_strategy"]["momentum"],
+                "trailing_stop_pct": risk_config["trailing_stop_pct_by_strategy"]["momentum"],
+                "trailing_activation_pct": risk_config["trailing_activation_pct_by_strategy"]["momentum"],
+            })
             held_momentum = {}
             for ticker, owner in owner_map.items():
                 if owner != "momentum":
@@ -741,7 +797,7 @@ def scan(
             momentum_signals, momentum_diagnostics = generate_swing_momentum_signals(
                 daily_bars, symbols=selected_symbols, as_of=date.fromisoformat(today) - timedelta(days=1),
                 regime=str(regime.get("regime", "unknown")), held_positions=held_momentum,
-                parameters=ALGO_DEFAULT_PARAMETERS["momentum"],
+                parameters=momentum_parameters,
             )
         except Exception as exc:
             scan_errors.append(f"daily momentum ranking: {type(exc).__name__}: {exc}")
@@ -792,23 +848,23 @@ def scan(
             # On the continuous shared account, don't let a newly active
             # strategy take over a holding whose entry strategy is unknown.
             continue
-        candidates = [owner] if owner else [
+        candidates = [owner] if owner and owner not in SATELLITE_STRATEGIES else [
             name for name in regime.get("active", [])
             if name in CORE_STRATEGIES
             or name in {"intraday_trend", "intraday_momentum"}
-            or (name == "multi_factor" and satellite_config.multi_factor_enabled)
-            or (name == "event_driven" and event_satellite_enabled)
         ]
-        # Satellites submit their own small swing proposals through this same
-        # candidate pipeline; they remain outside the intraday strategy group.
-        if owner in {"multi_factor", "event_driven"}:
+        # Existing satellite-owned holdings remain exit-manageable. A flat
+        # ticker never receives a satellite entry candidate.
+        if owner in SATELLITE_STRATEGIES and position_qty != 0:
             candidates = [owner]
+        elif owner in SATELLITE_STRATEGIES:
+            candidates = []
         event_signal = None
         if (
             mode == "algo" and event_generator is not None
             and (event_satellite_enabled or owner == "event_driven")
             and session_name in {None, "regular"}
-            and ("event_driven" in candidates or "event_driven" in regime.get("active", []))
+            and ("event_driven" in candidates or "event_driven" in allowed_satellites)
         ):
             try:
                 event_state = strategy_states.setdefault("event_driven", {})
@@ -832,6 +888,15 @@ def scan(
                 quote.get("ask" if position_qty < 0 else "bid", quote["price"])
             )
             stop_price = _positive_price_level(protective_state.get("stop_price"))
+            if 0 <= quote_age <= int(STRATEGY_CONFIG["quote_stale_seconds"]):
+                stop_price = _update_trailing_stop(
+                    protective_state,
+                    strategy=owner,
+                    qty=position_qty,
+                    entry_price=position.get("avg_entry_price"),
+                    current_price=current_price,
+                    mode_risk=risk_config,
+                )
             target_price = _positive_price_level(protective_state.get("take_profit"))
             protective_reason = None
             if 0 <= quote_age <= int(STRATEGY_CONFIG["quote_stale_seconds"]):
@@ -942,7 +1007,7 @@ def scan(
             options.append(item)
 
         factor_confirmation = None
-        if "multi_factor" in regime.get("active", []):
+        if "multi_factor" in allowed_satellites:
             factor_confirmation = factor_confirmation_signals.get(ticker)
 
         event_confirmation = event_signal.to_dict() if event_signal is not None else None
@@ -952,7 +1017,7 @@ def scan(
                 apply_satellite_confirmations(
                     item,
                     factor_signal=factor_confirmation,
-                    event_signal=event_confirmation,
+                    event_signal=(event_confirmation if "event_driven" in allowed_satellites else None),
                     config=satellite_config,
                 )
                 for item in options
@@ -969,7 +1034,10 @@ def scan(
                 key=lambda item: (bool(item.get("software_protection")), item["rank_score"], item["strength"]),
             )
         ticker_orders = pending_by_symbol.get(ticker, [])
-        pending_entry = any(str(order.get("side", "")).lower() in {"buy", "sell"} for order in ticker_orders)
+        pending_entry = position_qty == 0 and any(
+            str(order.get("side", "")).lower() in {"buy", "sell"}
+            for order in ticker_orders
+        )
         protective_exit_order = any(
             _is_protective_sell_order(order, position_qty) for order in ticker_orders
         )
@@ -978,8 +1046,11 @@ def scan(
             and not _is_protective_sell_order(order, position_qty)
             for order in ticker_orders
         )
-        if (mode == "algo" and chosen["action"] in {"sell", "cover"}
-                and protective_exit_order and not chosen.get("coordinator_force_flatten")):
+        if (
+            mode == "algo" and chosen["action"] in {"sell", "cover"}
+            and protective_exit_order and not chosen.get("coordinator_force_flatten")
+            and not (chosen.get("software_protection") and session_name == "regular")
+        ):
             # A broker bracket/OCO already owns the exit quantity. Alpaca may
             # cancel its stop and profit legs at different times; replacing a
             # rule exit by cancelling both can leave the holding without a
@@ -1118,6 +1189,7 @@ def scan(
             pending_short_values=pending_shorts,
             entries_today=entries_today,
             intraday_entries_today=intraday_entries_today,
+            swing_entries_today=group_entry_counts.get("swing", 0),
         )
 
     # Resolve shared limits in strategy-priority order so lower-priority
@@ -1249,6 +1321,8 @@ def scan(
             )
             if trade["action"] in {"sell", "cover"} and (protective_exit or item.get("coordinator_force_flatten")):
                 trade["cancel_open_orders"] = True
+            if item.get("software_protection"):
+                trade["software_protection"] = True
             if item.get("coordinator_force_flatten"):
                 trade["coordinator_force_flatten"] = True
             trades.append(trade)

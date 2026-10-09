@@ -9,7 +9,7 @@ import math
 from typing import Mapping
 from zoneinfo import ZoneInfo
 
-from src.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG, get_mode_config
+from src.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG, STRATEGY_CONFIG, get_mode_config
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -21,6 +21,7 @@ INTRADAY_STRATEGIES = frozenset({
 SWING_STRATEGIES = frozenset({
     "trend_following", "momentum", "swing_mean_reversion", "multi_factor", "event_driven",
 })
+SWING_CORE_STRATEGIES = frozenset({"trend_following", "momentum", "swing_mean_reversion"})
 SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})
 
 
@@ -34,6 +35,7 @@ class PortfolioCoordinatorConfig:
     max_net_short_pct: float = 0.40
     max_daily_entries: int = 10
     max_intraday_entries: int = 3
+    max_swing_entries: int = 3
     swing_open_delay_minutes: int = 15
     intraday_close_cutoff_minutes: int = 15
     allow_opposite_netting: bool = False
@@ -60,9 +62,12 @@ class PortfolioCoordinatorConfig:
         ):
             raise ValueError("coordinator exposure limits must be finite fractions in (0, 1]")
         if (
-            isinstance(self.max_daily_entries, bool) or not isinstance(self.max_daily_entries, int)
-            or isinstance(self.max_intraday_entries, bool) or not isinstance(self.max_intraday_entries, int)
-            or self.max_daily_entries < 1 or not 0 <= self.max_intraday_entries <= self.max_daily_entries
+            any(isinstance(value, bool) or not isinstance(value, int) for value in (
+                self.max_daily_entries, self.max_intraday_entries, self.max_swing_entries,
+            ))
+            or self.max_daily_entries < 1
+            or not 0 <= self.max_intraday_entries <= self.max_daily_entries
+            or not 0 <= self.max_swing_entries <= self.max_daily_entries
         ):
             raise ValueError("coordinator entry limits are invalid")
         if (
@@ -157,6 +162,7 @@ class CoordinatorBook:
         pending_short_values: Mapping[str, float] | None = None,
         entries_today: int = 0,
         intraday_entries_today: int = 0,
+        swing_entries_today: int = 0,
         ticker_groups: Mapping[str, str] | None = None,
     ) -> None:
         if not math.isfinite(equity) or equity <= 0:
@@ -170,6 +176,7 @@ class CoordinatorBook:
         self.pending_names: set[str] = set()
         self.entries_today = int(entries_today)
         self.intraday_entries_today = int(intraday_entries_today)
+        self.swing_entries_today = int(swing_entries_today)
         for ticker, position in (positions or {}).items():
             qty = float(position.get("qty", 0) or 0)
             market_value = float(position.get("market_value") or 0)
@@ -218,6 +225,8 @@ class CoordinatorBook:
             return CoordinationDecision(True, dict(proposal))
         ticker = str(proposal.get("ticker", "")).upper()
         strategy = str(proposal.get("strategy", ""))
+        if strategy in SATELLITE_STRATEGIES:
+            return self._reject(proposal, "satellite strategies are confirmation-only and cannot own positions")
         qty = proposal.get("qty")
         price = proposal.get("entry_price")
         if not ticker or isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
@@ -231,6 +240,8 @@ class CoordinatorBook:
 
         local = timestamp.astimezone(ET) if timestamp.tzinfo else timestamp.replace(tzinfo=ET)
         session_name = session or "regular"
+        if session_name == "overnight" and not STRATEGY_CONFIG.get("overnight_entries_enabled", False):
+            return self._reject(proposal, "overnight entries are disabled by configuration")
         is_intraday = strategy in INTRADAY_STRATEGIES
         if is_intraday and session_name != "regular" and not self.config.allow_intraday_overnight:
             return self._reject(proposal, "intraday strategies are regular-session only")
@@ -265,6 +276,8 @@ class CoordinatorBook:
             return self._reject(proposal, "shared daily entry budget is exhausted")
         if is_intraday and self.intraday_entries_today >= self.config.max_intraday_entries:
             return self._reject(proposal, "shared intraday entry slice is exhausted")
+        if strategy in SWING_CORE_STRATEGIES and self.swing_entries_today >= self.config.max_swing_entries:
+            return self._reject(proposal, "shared swing entry slice is exhausted")
 
         gross = sum(abs(value) for value in self.name_signed.values())
         current_name_same_direction = max(0.0, current * direction)
@@ -303,6 +316,8 @@ class CoordinatorBook:
         self.entries_today += 1
         if is_intraday:
             self.intraday_entries_today += 1
+        if strategy in SWING_CORE_STRATEGIES:
+            self.swing_entries_today += 1
         if strategy == "swing_mean_reversion" and regime in {"trending_up", "trending_down"}:
             approved["coordinator_regime_throttle"] = "half_size_in_strong_trend"
         elif strategy == "trend_following" and regime == "range_bound":

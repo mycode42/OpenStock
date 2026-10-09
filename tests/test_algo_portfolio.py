@@ -5,6 +5,7 @@ from src.config import ALGO_MODE_CONFIG, MODES, STRATEGY_CONFIG, get_mode_config
 from src.strategies import mean_reversion, momentum, opening_range_breakout, pairs, trend_following
 from src.strategies.regime import rank_strategies
 from src.strategies.signals import Signal
+from src.strategies.runner import _make_trade, _update_trailing_stop
 import src.strategies.rule_pipeline as rule_pipeline
 from src.strategies.state_machine import COOLDOWN, ENTRY_PENDING, OPEN, RuleStrategyStateMachine
 
@@ -62,14 +63,25 @@ def _bars(closes, volumes=None):
 
 
 def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
-    assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 20
-    assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 15
+    assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 16
+    assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 10
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.05
     assert ALGO_MODE_CONFIG["risk"]["allow_short_positions"] is True
     assert ALGO_MODE_CONFIG["risk"]["max_short_positions"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_short_exposure_pct"] == 0.20
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
     assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.15
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_open_positions"] == 10
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 3
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_open_positions"] == 6
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 3
+    assert "multi_factor" not in ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]
+    assert "event_driven" not in ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]
+    assert STRATEGY_CONFIG["overnight_entries_enabled"] is False
+    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["trend_following"] > 0.05
+    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["mean_reversion"] <= 0.012
+    assert STRATEGY_CONFIG["enable_intraday_trend"] is False
+    assert STRATEGY_CONFIG["enable_intraday_momentum"] is False
     assert MODES["swing"]["risk"]["max_open_positions"] == 12
     assert MODES["swing"]["risk"]["max_trades_per_day"] == 4
     assert MODES["day"]["risk"]["max_open_positions"] == 8
@@ -77,6 +89,40 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert STRATEGY_CONFIG["extended_hours_max_spread_pct"] == 0.02
     with pytest.raises(ValueError, match="Unknown mode"):
         get_mode_config("unknown")
+
+
+def test_algo_stop_sizing_uses_horizon_specific_config():
+    risk = ALGO_MODE_CONFIG["risk"]
+    intraday = _make_trade({
+        "ticker": "AAPL", "action": "buy", "strategy": "mean_reversion",
+        "reason": "intraday setup", "risk_multiplier": 1.0,
+    }, 100, 100_000, {}, risk)
+    swing = _make_trade({
+        "ticker": "AAPL", "action": "buy", "strategy": "trend_following",
+        "reason": "swing setup", "risk_multiplier": 1.0, "stop_pct": 0.01,
+    }, 100, 100_000, {}, risk)
+
+    assert intraday["stop_price"] == 98.9
+    assert swing["stop_price"] == 94.0
+    assert swing["trailing_stop_pct"] > intraday["trailing_stop_pct"]
+
+
+def test_algo_software_trails_tighten_for_both_directions():
+    risk = ALGO_MODE_CONFIG["risk"]
+    long_state = {"stop_price": 94.0}
+    short_state = {"stop_price": 106.0}
+
+    long_stop = _update_trailing_stop(
+        long_state, strategy="trend_following", qty=10, entry_price=100,
+        current_price=104, mode_risk=risk,
+    )
+    short_stop = _update_trailing_stop(
+        short_state, strategy="trend_following", qty=-10, entry_price=100,
+        current_price=96, mode_risk=risk,
+    )
+
+    assert long_stop > 94.0
+    assert short_stop < 106.0
 
 
 def test_algo_entry_count_ignores_scale_ins_to_existing_positions():
@@ -180,6 +226,26 @@ def test_algo_entry_quota_blocks_new_positions_when_history_is_unavailable():
 
     assert not result.approved
     assert result.rule == "entry_count_unavailable"
+
+
+def test_algo_risk_manager_blocks_the_tenth_shared_daily_entry():
+    state = _portfolio_state(entry_count_today=10, trade_count_today=10)
+
+    result = risk_manager.validate_trade("AAPL", "buy", 1, 100, state, mode="algo")
+
+    assert not result.approved
+    assert result.rule == "max_trades_per_day"
+
+
+@pytest.mark.parametrize("action", ["buy", "short"])
+@pytest.mark.parametrize("strategy", ["multi_factor", "event_driven"])
+def test_risk_manager_rejects_satellite_position_ownership(action, strategy):
+    result = risk_manager.validate_trade(
+        "AAPL", action, 1, 100, _portfolio_state(), mode="algo", strategy=strategy,
+    )
+
+    assert not result.approved
+    assert result.rule == "satellite_confirmation_only"
 
 
 def test_algo_entry_quota_does_not_block_scale_ins_at_limit_or_missing_history():
