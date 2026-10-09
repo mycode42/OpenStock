@@ -19,7 +19,7 @@ load_dotenv(ROOT / ".env", override=True)
 from risk_manager import get_portfolio_state  # noqa: E402
 from src.algo.alpaca import AlgoAlpaca  # noqa: E402
 from src.algo.state_store import AlgoStateStore, StateStoreError  # noqa: E402
-from src.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG  # noqa: E402
+from src.algo.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG  # noqa: E402
 
 
 ET = ZoneInfo("America/New_York")

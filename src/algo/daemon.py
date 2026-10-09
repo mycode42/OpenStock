@@ -21,7 +21,8 @@ from src.algo.protection_recovery import recover_broker_protection
 from src.algo.reconciliation import reconcile_startup
 from src.algo.sessions import ET, get_trading_window, next_session_start
 from src.algo.state_store import AlgoStateStore, StateStoreError
-from src.config import ALGO_SERVICE_CONFIG, STRATEGY_CONFIG
+from src.algo.config import ALGO_SERVICE_CONFIG
+from src.config import STRATEGY_CONFIG
 from src.strategies.runner import execute_trades as execute_strategy_trades
 from src.strategies.runner import scan as scan_strategy_portfolio
 from src.strategies.state_machine import RuleStrategyStateMachine

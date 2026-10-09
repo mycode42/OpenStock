@@ -107,6 +107,30 @@ def test_algo_stop_sizing_uses_horizon_specific_config():
     assert swing["trailing_stop_pct"] > intraday["trailing_stop_pct"]
 
 
+def test_algo_trade_sizing_respects_ticker_universe_cap():
+    risk = ALGO_MODE_CONFIG["risk"]
+    trade = _make_trade({
+        "ticker": "PLTR", "action": "buy", "strategy": "trend_following",
+        "reason": "swing setup", "risk_multiplier": 1.0,
+    }, 200, 100_000, {}, risk, mode_universe=ALGO_MODE_CONFIG["universe"])
+
+    assert trade is not None
+    assert trade["qty"] * trade["entry_price"] <= 100_000 * 0.02
+    state = {
+        "equity": 100_000, "cash": 100_000, "available_cash": 100_000,
+        "daily_pnl_pct": 0, "weekly_pnl_pct": 0,
+        "positions": {}, "sector_alloc": {}, "open_position_count": 0,
+        "entry_count_today": 0, "entry_count_available": True,
+        "trade_count_today": 0, "pending_buy_value_by_ticker": {},
+        "pending_exposure_available": True,
+    }
+    result = risk_manager.validate_trade(
+        ticker=trade["ticker"], action=trade["action"], qty=trade["qty"],
+        entry_price=trade["entry_price"], portfolio_state=state, mode="algo",
+    )
+    assert result.approved, result.reason
+
+
 def test_algo_software_trails_tighten_for_both_directions():
     risk = ALGO_MODE_CONFIG["risk"]
     long_state = {"stop_price": 94.0}

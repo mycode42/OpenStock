@@ -9,7 +9,8 @@ import math
 from typing import Mapping
 from zoneinfo import ZoneInfo
 
-from src.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG, STRATEGY_CONFIG, get_mode_config
+from src.algo.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
+from src.config import STRATEGY_CONFIG, get_mode_config
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -29,21 +30,19 @@ SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})
 class PortfolioCoordinatorConfig:
     """Portfolio-level ceilings; risk_manager remains the final authority."""
 
-    max_name_pct: float = 0.08
-    max_gross_pct: float = 1.00
-    max_net_long_pct: float = 0.60
-    max_net_short_pct: float = 0.40
-    max_daily_entries: int = 10
-    max_intraday_entries: int = 3
-    max_swing_entries: int = 3
-    swing_open_delay_minutes: int = 15
-    intraday_close_cutoff_minutes: int = 15
-    allow_opposite_netting: bool = False
-    allow_intraday_overnight: bool = False
-    regime_throttle_enabled: bool = True
-    sector_caps: Mapping[str, float] = field(default_factory=lambda: {
-        "core_tech": 0.30, "diversifiers": 0.25, "hedge": 0.25, "tactical": 0.15,
-    })
+    max_name_pct: float = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_name_pct"]
+    max_gross_pct: float = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_gross_pct"]
+    max_net_long_pct: float = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_net_long_pct"]
+    max_net_short_pct: float = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_net_short_pct"]
+    max_daily_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_daily_entries"]
+    max_intraday_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_intraday_entries"]
+    max_swing_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_swing_entries"]
+    swing_open_delay_minutes: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["swing_open_delay_minutes"]
+    intraday_close_cutoff_minutes: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["intraday_close_cutoff_minutes"]
+    allow_opposite_netting: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_opposite_netting"]
+    allow_intraday_overnight: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_intraday_overnight"]
+    regime_throttle_enabled: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_throttle_enabled"]
+    sector_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["sector_caps"]))
 
     @classmethod
     def from_dict(cls, values: Mapping | None = None) -> "PortfolioCoordinatorConfig":

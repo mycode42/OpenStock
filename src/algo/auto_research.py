@@ -20,6 +20,7 @@ import sys
 import tempfile
 from zoneinfo import ZoneInfo
 
+from src.algo.config import get_algo_research_controls
 from src.algo.backtest import (
     DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, _regular_session_bars,
     multi_factor_warmup_days,
@@ -49,22 +50,7 @@ CORE_STRATEGIES = (
 )
 ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 3
 COMBINED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 15
-CORE_RESEARCH_CONTROLS = {
-    "max_entries_per_day": 10,
-    "max_open_positions": 16,
-    "max_positions_per_strategy": 5,
-    "max_entries_per_strategy_per_day": {
-        "mean_reversion": 3, "momentum": 1,
-        "opening_range_breakout": 3, "trend_following": 1,
-        "swing_mean_reversion": 1,
-    },
-    "cooldown_minutes_by_strategy": {
-        "mean_reversion": 90, "momentum": 7200,
-        "opening_range_breakout": 60, "trend_following": 7200,
-        "swing_mean_reversion": 7200,
-    },
-    "one_orb_attempt_per_ticker_per_day": True,
-}
+CORE_RESEARCH_CONTROLS = get_algo_research_controls()
 
 
 def _parse_date(value: str) -> date:
@@ -492,26 +478,14 @@ def _combined_portfolio_replay(
         start=(start - timedelta(days=DAILY_WARMUP_DAYS)).isoformat(),
         end=end.isoformat(), adjustment=ADJUSTMENT,
     ).get("SPY", [])
-    core = ["mean_reversion", "momentum", "opening_range_breakout", "trend_following"]
-    all_six = [*core, "multi_factor", "event_driven"]
-    results = {}
-    variants = {
-        "four_core_rules": (core, {"satellite_overlay": {
-            "multi_factor_enabled": False, "event_driven_enabled": False,
-        }}),
-        "six_strategy_satellite_portfolio": (all_six, {"satellite_overlay": {
-            "multi_factor_enabled": True,
-            "event_driven_enabled": event_calendar is not None,
-        }, "event_driven": {"enabled": event_calendar is not None}}),
+    results = {
+        variant: _combined_replay_variant(
+            symbols=symbols, start=start, end=end,
+            intraday=intraday, spy=spy, event_calendar=event_calendar,
+            variant=variant,
+        )
+        for variant in ("four_core_rules", "six_strategy_satellite_portfolio")
     }
-    for name, (strategies, profile) in variants.items():
-        report = AlgoPortfolioBacktest(
-            symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy,
-            start=start.isoformat(), end=end.isoformat(), feed=FEED,
-            data_adjustment=ADJUSTMENT, slippage_bps=5, profile=profile,
-            strategies=strategies, event_calendar=event_calendar,
-        ).run()
-        results[name] = _summarize_backtest(report)
     del intraday, spy
     return {
         "start": start.isoformat(), "end": end.isoformat(),
@@ -621,6 +595,75 @@ def _factor_portfolio_replay(
     return _summarize_backtest(result)
 
 
+def _combined_replay_variant(
+    *,
+    symbols: list[str],
+    start: date,
+    end: date,
+    intraday: dict[str, list[dict]],
+    spy: list[dict],
+    event_calendar: EventCalendar | None,
+    variant: str,
+) -> dict:
+    core = ["mean_reversion", "momentum", "opening_range_breakout", "trend_following"]
+    if variant == "four_core_rules":
+        strategies = core
+        profile = {"satellite_overlay": {
+            "multi_factor_enabled": False, "event_driven_enabled": False,
+        }}
+    elif variant == "six_strategy_satellite_portfolio":
+        strategies = [*core, "multi_factor", "event_driven"]
+        profile = {"satellite_overlay": {
+            "multi_factor_enabled": True,
+            "event_driven_enabled": event_calendar is not None,
+        }, "event_driven": {"enabled": event_calendar is not None}}
+    else:
+        raise ValueError(f"Unknown combined replay variant: {variant}")
+
+    report = AlgoPortfolioBacktest(
+        symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy,
+        start=start.isoformat(), end=end.isoformat(), feed=FEED,
+        data_adjustment=ADJUSTMENT, slippage_bps=5, profile=profile,
+        strategies=strategies, event_calendar=event_calendar,
+    ).run()
+    return _summarize_backtest(report)
+
+
+def _run_portfolio_replay_job(job: tuple) -> tuple[str, str, str, dict]:
+    """Run one independent replay in a worker process."""
+    kind, group, variant, payload = job
+    store = payload["store"]
+    symbols = payload["symbols"]
+    start = payload["start"]
+    end = payload["end"]
+    if kind == "factor":
+        report = _factor_portfolio_replay(
+            store, symbols=symbols, start=start, end=end,
+            weights=payload["weights"],
+        )
+        return kind, group, variant, report
+    if kind != "combined":
+        raise ValueError(f"Unknown replay job kind: {kind}")
+
+    warmup_days = multi_factor_warmup_days({})
+    bars_start = (start - timedelta(days=warmup_days)).isoformat()
+    intraday = store.bars(
+        symbols, feed=FEED, timeframe="5Min", start=bars_start,
+        end=end.isoformat(), adjustment=ADJUSTMENT,
+    )
+    spy = store.bars(
+        ["SPY"], feed=FEED, timeframe="1Day",
+        start=(start - timedelta(days=DAILY_WARMUP_DAYS)).isoformat(),
+        end=end.isoformat(), adjustment=ADJUSTMENT,
+    ).get("SPY", [])
+    report = _combined_replay_variant(
+        symbols=symbols, start=start, end=end,
+        intraday=intraday, spy=spy,
+        event_calendar=payload["event_calendar"], variant=variant,
+    )
+    return kind, group, variant, report
+
+
 def run_daily_research(args) -> dict:
     if data_tier() != "algo_trader_plus" or regular_feed() != FEED:
         raise ValueError("Algo AutoResearch is restricted to Plus SIP data")
@@ -662,6 +705,7 @@ def run_daily_research(args) -> dict:
     factor_report = train_factor_model(history, min_universe=MIN_COVERED_UNIVERSE)
     factor_replays = {}
     combined_replays = {}
+    replay_jobs = []
     if not args.factor_only:
         equal_weights = {name: 0.25 for name in factor_report["factor_names"]}
         frozen_weights = factor_report["frozen_2016_2023_weights"]
@@ -669,41 +713,79 @@ def run_daily_research(args) -> dict:
         # The model through 2025 is a separate forward vintage for the 2026 replay.
         if date(2024, 1, 1) <= end:
             holdout_end = min(end, cutoff_2025)
-            factor_replays["fixed_2024_2025_holdout"] = {
-                "baseline_equal_weights": _factor_portfolio_replay(
-                    store, symbols=covered_symbols, start=date(2024, 1, 1),
-                    end=holdout_end, weights=equal_weights,
-                ),
-                "weights_fit_through_2023": _factor_portfolio_replay(
-                    store, symbols=covered_symbols, start=date(2024, 1, 1),
-                    end=holdout_end, weights=frozen_weights,
+            group = "fixed_2024_2025_holdout"
+            factor_replays[group] = {}
+            for variant, weights in (
+                ("baseline_equal_weights", equal_weights),
+                ("weights_fit_through_2023", frozen_weights),
+            ):
+                replay_jobs.append(("factor", group, variant, {
+                    "store": store, "symbols": covered_symbols,
+                    "start": date(2024, 1, 1), "end": holdout_end,
+                    "weights": weights,
+                }))
+            combined_replays[group] = {
+                "start": date(2024, 1, 1).isoformat(),
+                "end": holdout_end.isoformat(),
+                "event_calendar_available": event_calendar is not None,
+                "results": {},
+                "comparison_note": (
+                    "The six-strategy variant keeps the four core rules as entry owners; "
+                    "Multi Factor and Event Driven only confirm and amplify aligned core entries."
                 ),
             }
+            for variant in ("four_core_rules", "six_strategy_satellite_portfolio"):
+                replay_jobs.append(("combined", group, variant, {
+                    "store": store, "symbols": covered_symbols,
+                    "start": date(2024, 1, 1), "end": holdout_end,
+                    "event_calendar": event_calendar,
+                }))
         if date(2026, 1, 1) <= end:
             weights_2025 = factor_report.get("weights_fit_through_2025")
             if weights_2025:
-                factor_replays["forward_2026"] = {
-                    "baseline_equal_weights": _factor_portfolio_replay(
-                        store, symbols=covered_symbols, start=date(2026, 1, 1),
-                        end=end, weights=equal_weights,
-                    ),
-                    "weights_fit_through_2025": _factor_portfolio_replay(
-                        store, symbols=covered_symbols, start=date(2026, 1, 1),
-                        end=end, weights=weights_2025,
+                group = "forward_2026"
+                factor_replays[group] = {}
+                for variant, weights in (
+                    ("baseline_equal_weights", equal_weights),
+                    ("weights_fit_through_2025", weights_2025),
+                ):
+                    replay_jobs.append(("factor", group, variant, {
+                        "store": store, "symbols": covered_symbols,
+                        "start": date(2026, 1, 1), "end": end,
+                        "weights": weights,
+                    }))
+                combined_replays[group] = {
+                    "start": date(2026, 1, 1).isoformat(),
+                    "end": end.isoformat(),
+                    "event_calendar_available": event_calendar is not None,
+                    "results": {},
+                    "comparison_note": (
+                        "The six-strategy variant keeps the four core rules as entry owners; "
+                        "Multi Factor and Event Driven only confirm and amplify aligned core entries."
                     ),
                 }
+                for variant in ("four_core_rules", "six_strategy_satellite_portfolio"):
+                    replay_jobs.append(("combined", group, variant, {
+                        "store": store, "symbols": covered_symbols,
+                        "start": date(2026, 1, 1), "end": end,
+                        "event_calendar": event_calendar,
+                    }))
 
-        if date(2024, 1, 1) <= end:
-            combined_end = min(end, date(2025, 12, 31))
-            combined_replays["fixed_2024_2025_holdout"] = _combined_portfolio_replay(
-                store, symbols=covered_symbols, start=date(2024, 1, 1),
-                end=combined_end, event_calendar=event_calendar,
-            )
-        if date(2026, 1, 1) <= end:
-            combined_replays["forward_2026"] = _combined_portfolio_replay(
-                store, symbols=covered_symbols, start=date(2026, 1, 1),
-                end=end, event_calendar=event_calendar,
-            )
+    portfolio_replay_workers = 0
+    if replay_jobs:
+        portfolio_replay_workers = min(
+            max(1, args.workers), len(replay_jobs), os.cpu_count() or 1,
+        )
+        with ProcessPoolExecutor(max_workers=portfolio_replay_workers) as executor:
+            futures = [executor.submit(_run_portfolio_replay_job, job) for job in replay_jobs]
+            for completed, future in enumerate(as_completed(futures), start=1):
+                kind, group, variant, replay_report = future.result()
+                target = factor_replays[group] if kind == "factor" else combined_replays[group]["results"]
+                target[variant] = replay_report
+                print(
+                    f"Completed Algo portfolio replay {completed}/{len(futures)}: {group}.{variant}",
+                    file=sys.stderr, flush=True,
+                )
 
     isolated_walk_forward = None
     walk_forward = None
@@ -795,6 +877,7 @@ def run_daily_research(args) -> dict:
         "research_only": True,
         "live_configuration_changed": False,
         "trade_or_order_actions": 0,
+        "portfolio_replay_worker_count": portfolio_replay_workers,
         "data": {
             "tier": data_tier(), "feed": FEED, "adjustment": ADJUSTMENT,
             "range_start": start.isoformat(), "range_end": end.isoformat(),

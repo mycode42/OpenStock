@@ -192,7 +192,7 @@ def evaluate_rule_signal(
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
     # Stop distances are live risk settings, not research-tunable signal
     # parameters. Apply the horizon-specific Algo values after profile merge.
-    from src.config import ALGO_MODE_CONFIG
+    from src.algo.config import ALGO_MODE_CONFIG
     algo_risk = ALGO_MODE_CONFIG["risk"]
     if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
         params["hard_stop_pct"] = algo_risk["stop_loss_pct_by_strategy"][name]

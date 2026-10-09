@@ -21,7 +21,8 @@ from src.algo.protection import verified_recovery_oco
 from src.algo.reconciliation import OPEN_ORDER_STATUSES
 from src.algo.sessions import ET, TradingWindow, get_trading_window
 from src.algo.state_store import AlgoStateStore, StateStoreError
-from src.config import ALGO_SERVICE_CONFIG, STRATEGY_CONFIG
+from src.algo.config import ALGO_SERVICE_CONFIG
+from src.config import STRATEGY_CONFIG
 
 
 ROOT = Path(__file__).resolve().parents[2]
