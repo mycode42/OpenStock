@@ -17,7 +17,7 @@ def test_after_hours_earnings_use_next_alpaca_session():
     assert event is not None
     assert event.scheduled_at.isoformat() == "2026-10-09T16:00:00-04:00"
     assert event.reaction_start_at.isoformat() == "2026-10-12T09:30:00-04:00"
-    assert event.reaction_end_at.isoformat() == "2026-10-12T11:00:00-04:00"
+    assert event.reaction_end_at.isoformat() == "2026-10-14T16:00:00-04:00"
 
 
 def test_unspecified_earnings_timing_is_not_guessed():

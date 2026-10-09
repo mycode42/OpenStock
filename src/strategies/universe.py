@@ -74,6 +74,8 @@ def load_algo_universe() -> dict:
         "timestamp": datetime.now(ET).isoformat(),
         "overnight_tradable_tickers": [],
         "overnight_metadata_status": "unavailable",
+        "easy_to_borrow_tickers": [],
+        "shortability_metadata_status": "unavailable",
     })
     try:
         assets = _fetch_active_assets("algo")
@@ -85,4 +87,11 @@ def load_algo_universe() -> dict:
         ticker for ticker in result["tickers"] if _overnight_tradable(assets.get(ticker))
     )
     result["overnight_metadata_status"] = "ok"
+    result["easy_to_borrow_tickers"] = sorted(
+        ticker for ticker in result["tickers"]
+        if assets.get(ticker, {}).get("tradable") is True
+        and assets.get(ticker, {}).get("shortable") is True
+        and str(assets.get(ticker, {}).get("borrow_status", "")).lower() == "easy_to_borrow"
+    )
+    result["shortability_metadata_status"] = "ok"
     return result

@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.0.0] - 2026-10-09
+
+V2.0.0 makes the Algo portfolio a coordinated, multi-horizon long/short system and adds a strict research promotion gate. Swing, Day, and Algo continue to use separate fixed universes and paper-account routes.
+
+### Added
+
+- A portfolio coordinator before the risk manager with per-name, sector, gross/net exposure, shared entry-budget, session, and regime-throttle controls. It can reject or reduce proposals; the risk manager remains the final approval layer.
+- Daily swing trend and momentum strategies plus a separate cyclical mean-reversion strategy. The five-minute trend and momentum variants remain disabled; open-dip and opening-range breakout remain the intraday strategies.
+- Directional long/short support for the core strategies and the lower-budget multi-factor and scheduled-event satellites.
+- Daily-only multi-factor ranking and scheduled-event reaction/follow-through exits.
+- Portfolio replay diagnostics for after-cost strategy returns, buy-and-hold excess returns, pairwise strategy-P&L correlation, and same-name directional overlap.
+- A chronological walk-forward promotion gate with at least three folds, held-out evaluation, mandatory trading costs, minimum trade counts, parameter-neighbor stability, and fixed test windows.
+
+### Changed
+
+- Algo strategy lifecycle and coordinator state are persisted in SQLite; execution continues through the shared risk manager and Alpaca order path.
+- The coordinator schedules intraday positions to flatten by default and reserves only a slice of the daily entry budget for intraday strategies.
+- Removed the legacy web flow-editor application from the package; the maintained trading, research, and operations interfaces are the command-line tools and OpenClaw jobs documented here.
+- Stopped tracking generated AutoResearch experiment logs; `.gitignore` keeps deployment-specific runs local.
+- Package metadata and release documentation now identify V2.0.0.
+
+### Validation
+
+- `poetry check --lock`
+- `poetry build` (source distribution and wheel)
+- `poetry run python -m pytest -q` (250 passed)
+- GitHub Actions runs the same validation gate for the release commit and tag.
+- Paper-trading software only. Research candidates do not change live parameters, and this release does not certify strategy profitability.
+
 ## [1.6.0] - 2026-10-08
 
 V1.6 adds research-only cross-sectional and scheduled-event strategies to the Algo portfolio, consolidates live and replay rule evaluation, and fixes Algo on a curated universe while keeping Swing and Day universes separate.

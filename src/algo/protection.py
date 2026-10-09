@@ -42,10 +42,16 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
         return None
     if recovery.get("entry_order_id") and recovery["entry_order_id"] != entry_id:
         return None
-    quantity = _amount(position_qty)
+    signed_quantity = _amount(position_qty)
+    quantity = abs(signed_quantity) if signed_quantity is not None else None
+    is_short = signed_quantity is not None and signed_quantity < 0
+    exit_side = "buy" if is_short else "sell"
     stop = _amount(state.get("stop_price"))
     target = _amount(state.get("take_profit"))
-    if quantity is None or quantity <= 0 or stop is None or target is None or not 0 < stop < target:
+    valid_levels = stop < target if stop is not None and target is not None and not is_short else (
+        stop > target if stop is not None and target is not None else False
+    )
+    if quantity is None or quantity <= 0 or stop is None or target is None or not valid_levels:
         return None
     if recovery.get("qty") is not None and _amount(recovery["qty"]) != quantity:
         return None
@@ -66,7 +72,7 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
         not parent_id
         or (recovery.get("order_id") and str(recovery["order_id"]) != parent_id)
         or str(parent.get("symbol") or "").upper() != ticker
-        or str(parent.get("side") or "").lower() != "sell"
+        or str(parent.get("side") or "").lower() != exit_side
         or str(parent.get("type") or "").lower() != "limit"
         or str(parent.get("order_class") or "").lower() != "oco"
         or str(parent.get("status") or "").lower() not in ACTIVE_ORDER_STATUSES
@@ -82,7 +88,7 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
     if (
         (child.get("symbol") and str(child["symbol"]).upper() != ticker)
         or (child.get("parent_order_id") and str(child["parent_order_id"]) != parent_id)
-        or str(child.get("side") or "").lower() != "sell"
+        or str(child.get("side") or "").lower() != exit_side
         or str(child.get("type") or "").lower() not in {"stop", "stop_limit"}
         or str(child.get("status") or "").lower() not in ACTIVE_ORDER_STATUSES
         or _remaining(child) != quantity

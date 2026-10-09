@@ -1,92 +1,112 @@
-"""Simple post-event price/volume confirmation rules."""
+"""Daily-bar earnings and macro reactions with bounded swing exits."""
 
 from __future__ import annotations
 
 from datetime import datetime
 import math
+from statistics import mean
 
 from src.strategies.event_driven.config import EventStrategyConfig
 from src.strategies.event_driven.models import ScheduledEvent
-from src.strategies.signals import Signal
+from src.strategies.swing_common import SwingSignal, clean_daily_bars
 
 
-def post_event_reaction(
+class EventSignal(SwingSignal):
+    """A risk-sized satellite signal carrying its chosen exit horizon."""
+
+    def __init__(self, *args, exit_mode: str, maximum_holding_sessions: int, **kwargs) -> None:
+        if exit_mode not in {"reaction", "follow_through"}:
+            raise ValueError("event exit_mode must be reaction or follow_through")
+        super().__init__(*args, strategy_group="swing_satellite", **kwargs)
+        object.__setattr__(self, "exit_mode", exit_mode)
+        object.__setattr__(self, "maximum_holding_sessions", maximum_holding_sessions)
+
+    def to_dict(self) -> dict:
+        return {
+            **super().to_dict(),
+            "exit_mode": self.exit_mode,
+            "maximum_holding_sessions": self.maximum_holding_sessions,
+        }
+
+
+def daily_event_reaction(
     event: ScheduledEvent,
     ticker: str,
     bars: list[dict],
     *,
     as_of: datetime,
-    previous_close: float | None,
     config: EventStrategyConfig,
-) -> Signal | None:
-    """Return a long continuation only after a confirmed range break.
-
-    ``bars`` must contain completed bars through ``as_of``. The first
-    ``opening_range_bars`` after the explicit reaction start define the range;
-    an entry is considered only on a later bar during the event window.
-    """
-    if not bars:
+) -> EventSignal | None:
+    """Use only a completed daily event-session bar known by ``as_of``."""
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
         return None
-    if event.is_earnings and (
-        previous_close is None or not math.isfinite(previous_close) or previous_close <= 0
-    ):
+    sessions = clean_daily_bars(bars)
+    if len({row[0] for row in sessions}) != len(sessions):
+        # Intraday candles are deliberately rejected; this module has no
+        # five-minute event entry path.
         return None
+    visible = [row for row in sessions if row[0] < as_of.astimezone(event.reaction_start_at.tzinfo).date()]
+    event_day = event.reaction_start_at.date()
+    event_index = next((index for index, row in enumerate(visible) if row[0] == event_day), None)
+    if event_index is None:
+        return None
+    _, bar, close = visible[event_index]
     try:
-        timed = [
-            (datetime.fromisoformat(str(bar["t"]).replace("Z", "+00:00")), bar)
-            for bar in bars
-        ]
-        if any(timestamp.tzinfo is None for timestamp, _ in timed):
-            return None
-        event_bars = [
-            bar for timestamp, bar in timed
-            if event.reaction_start_at <= timestamp <= as_of
-        ]
-        if len(event_bars) <= config.opening_range_bars:
-            return None
-        opening_range = event_bars[:config.opening_range_bars]
-        current = event_bars[-1]
-        opening_price = float(opening_range[0]["o"])
-        close = float(current["c"])
-        high = max(float(bar["h"]) for bar in opening_range)
-        volumes = [float(bar.get("v", 0) or 0) for bar in event_bars[:-1]]
-        current_volume = float(current.get("v", 0) or 0)
-    except (KeyError, TypeError, ValueError, OverflowError):
+        opened = float(bar["o"])
+        volume = float(bar.get("v", 0) or 0)
+        prior_volumes = [float(row[1].get("v", 0) or 0) for row in visible[max(0, event_index - 20):event_index]]
+        prior_volume = mean([value for value in prior_volumes if math.isfinite(value) and value > 0])
+    except (KeyError, TypeError, ValueError):
         return None
-    if not all(math.isfinite(value) for value in (opening_price, close, high, current_volume)):
+    if not all(math.isfinite(value) and value > 0 for value in (opened, close)):
         return None
-    if opening_price <= 0 or close <= 0 or high <= 0 or not volumes:
-        return None
-    average_volume = sum(volumes) / len(volumes)
-    volume_ratio = current_volume / average_volume if average_volume > 0 else 0
-    if volume_ratio < config.minimum_volume_ratio:
+    if prior_volume <= 0 or volume / prior_volume < config.minimum_volume_ratio:
         return None
 
+    exit_mode = "follow_through"
+    maximum_holding = config.follow_through_sessions
     if event.is_earnings:
-        gap_pct = opening_price / previous_close - 1
-        if not config.minimum_gap_pct <= gap_pct <= config.maximum_gap_pct:
+        if event_index == 0:
             return None
-        reason = f"earnings gap continuation {gap_pct:.1%}; volume {volume_ratio:.2f}x"
-        strength = min(0.95, 0.65 + gap_pct)
+        previous_close = visible[event_index - 1][2]
+        gap = opened / previous_close - 1 if previous_close > 0 else 0
+        if not config.minimum_gap_pct <= abs(gap) <= config.maximum_gap_pct:
+            return None
+        event_direction = "long" if gap > 0 else "short"
+        session_move = close / opened - 1
+        if session_move * gap >= 0 and abs(session_move) >= config.minimum_macro_move_pct:
+            direction = event_direction
+            reason = f"earnings gap {gap:+.1%} held through daily close; follow-through"
+        elif session_move * gap < 0 and abs(session_move) >= config.minimum_macro_move_pct:
+            direction = "short" if event_direction == "long" else "long"
+            exit_mode = "reaction"
+            maximum_holding = 1
+            reason = f"earnings gap {gap:+.1%} faded by daily close; reaction fade"
+        else:
+            return None
     else:
-        move_pct = close / opening_price - 1
-        if move_pct < config.minimum_macro_move_pct:
+        move = close / opened - 1
+        if abs(move) < config.minimum_macro_move_pct:
             return None
-        reason = f"{event.event_type.upper()} post-event breakout {move_pct:.1%}; volume {volume_ratio:.2f}x"
-        strength = min(0.9, 0.62 + move_pct)
+        direction = "long" if move > 0 else "short"
+        reason = f"{event.event_type.upper()} daily reaction {move:+.1%}; follow-through"
 
-    breakout_level = high * (1 + config.breakout_buffer_pct)
-    if close <= breakout_level:
+    if (direction == "long" and not config.allow_long) or (direction == "short" and not config.allow_short):
         return None
-    vwap = current.get("vw")
-    if vwap is not None:
-        try:
-            if close < float(vwap):
-                return None
-        except (TypeError, ValueError):
-            return None
-    return Signal(
-        ticker=ticker.upper(), action="buy", strategy="event_driven", reason=reason,
-        strength=strength, stop_pct=config.stop_pct, target_weight=config.risk_limited_weight,
-        event_id=event.event_id,
+    if direction == "long" and close < (opened + close) / 2:
+        return None
+    if direction == "short" and close > (opened + close) / 2:
+        return None
+    strength = min(0.9, 0.62 + abs(close / opened - 1))
+    return EventSignal(
+        ticker=ticker.upper(), action="buy" if direction == "long" else "short",
+        strategy="event_driven", reason=f"{reason}; daily volume {volume / prior_volume:.2f}x",
+        strength=strength,
+        stop_pct=config.reaction_stop_pct if exit_mode == "reaction" else config.stop_pct,
+        target_weight=config.risk_limited_weight, risk_multiplier=config.risk_multiplier,
+        event_id=event.event_id, exit_mode=exit_mode,
+        maximum_holding_sessions=maximum_holding,
     )
+
+
+__all__ = ["EventSignal", "daily_event_reaction"]

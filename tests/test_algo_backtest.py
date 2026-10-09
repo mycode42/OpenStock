@@ -1,11 +1,13 @@
 from datetime import date, datetime, time, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 from src.algo.backtest import AlgoPortfolioBacktest, _regular_session_bars
+import src.algo.backtest as backtest_module
 from src.algo.market_store import SQLiteBarStore
 from src.algo.slippage_sensitivity import parse_slippage_grid
-from src.algo.walk_forward import walk_forward_windows
+from src.algo.walk_forward import _trim_sessions_without_regime_warmup, walk_forward_windows
 from src.strategies.rule_pipeline import evaluate_rule_signal
 from src.strategies.registry import validate_parameter_profile
 from src.strategies.signals import Signal
@@ -34,7 +36,8 @@ def test_market_store_upserts_plus_sip_bars(tmp_path):
 
 
 def test_profile_can_change_rule_parameters_but_not_portfolio_risk():
-    assert validate_parameter_profile({"momentum": {"lookback": 15}}) == {"momentum": {"lookback": 15}}
+    momentum = validate_parameter_profile({"momentum": {"lookbacks": [5, 10]}})
+    assert momentum["momentum"]["lookbacks"] == [5, 10]
     assert validate_parameter_profile({
         "mean_reversion": {"signal_model": "opening_dip", "minimum_dip_pct": 0.01},
     })["mean_reversion"]["signal_model"] == "opening_dip"
@@ -78,6 +81,16 @@ def test_walk_forward_windows_are_chronological_and_non_overlapping():
     ]
     with pytest.raises(ValueError, match="must be at least test_days"):
         walk_forward_windows(sessions, train_days=3, test_days=3, step_days=2)
+
+
+def test_walk_forward_skips_initial_sessions_until_regime_warmup_exists():
+    sessions = [date(2016, 1, 4) + timedelta(days=index) for index in range(30)]
+    spy_daily_dates = sessions[:24]
+
+    eligible, skipped = _trim_sessions_without_regime_warmup(sessions, spy_daily_dates)
+
+    assert skipped == 22
+    assert eligible == sessions[22:]
 
 
 def test_slippage_grid_is_sorted_and_rejects_invalid_values():
@@ -128,16 +141,12 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
         {"t": _utc(replay_day, 9, 40), "o": 102.3, "h": 104, "l": 99, "c": 102.5, "v": 100},
     ]
 
-    def deterministic_signal(strategy, mode, ticker, history, position_qty=0, parameters=None):
-        if strategy == "momentum" and len(history) == 1:
-            return Signal(ticker, "buy", "momentum", "test trigger", 1.0)
+    def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
+        if strategy == "opening_range_breakout" and len(history) == 1:
+            return Signal(ticker, "buy", strategy, "test trigger", 1.0)
         return None
 
-    monkeypatch.setattr(
-        "src.strategies.rule_pipeline.evaluate_strategy",
-        lambda name, mode, ticker, history, position_qty=0, parameters=None:
-            deterministic_signal(name, mode, ticker, history, position_qty, parameters),
-    )
+    monkeypatch.setattr(backtest_module, "evaluate_rule_signal", deterministic_signal)
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
@@ -159,6 +168,52 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
     assert report["average_holding_minutes"] == 5
     assert report["candidate_setup_count"] == 1
     assert report["candidate_ticker_day_count"] == 1
+
+
+def test_portfolio_replay_models_short_entry_cover_and_entry_relative_return(monkeypatch):
+    replay_day = date(2026, 10, 5)
+    daily_dates = []
+    cursor = replay_day - timedelta(days=1)
+    while len(daily_dates) < 25:
+        if cursor.weekday() < 5:
+            daily_dates.append(cursor)
+        cursor -= timedelta(days=1)
+    daily_dates.reverse()
+    spy_daily = [
+        {"t": f"{day.isoformat()}T20:00:00Z", "c": 110 - index * 0.25}
+        for index, day in enumerate(daily_dates)
+    ]
+    bars = [
+        {"t": _utc(replay_day, 9, 30), "o": 100, "h": 100.5, "l": 99.5, "c": 100, "v": 100},
+        {"t": _utc(replay_day, 9, 35), "o": 100, "h": 100.2, "l": 99.5, "c": 100, "v": 100},
+        {"t": _utc(replay_day, 9, 40), "o": 99, "h": 99.5, "l": 97.5, "c": 98.5, "v": 100},
+    ]
+
+    def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
+        if strategy != "opening_range_breakout":
+            return None
+        if position_qty == 0 and len(history) == 1:
+            return Signal(ticker, "short", strategy, "test short trigger", 1.0)
+        return None
+
+    monkeypatch.setattr(backtest_module, "evaluate_rule_signal", deterministic_signal)
+    replay = AlgoPortfolioBacktest(
+        symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
+        start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
+        data_adjustment="raw", initial_capital=100_000, slippage_bps=5,
+    )
+
+    report = replay.run()
+
+    assert report["closed_trade_count"] == 1
+    trade = report["closed_trades"][0]
+    assert trade["direction"] == "short"
+    assert trade["qty"] < 0
+    assert trade["exit_reason"] == "target"
+    assert trade["pnl"] > 0
+    assert trade["return_pct"] == pytest.approx(
+        round((trade["entry_price"] - trade["exit_price"]) / trade["entry_price"], 6),
+    )
 
 
 def test_opening_dip_research_rule_requires_window_dip_bounce_and_volume():
@@ -189,11 +244,24 @@ def test_opening_dip_research_rule_requires_window_dip_bounce_and_volume():
 
 
 def test_research_controls_cannot_exceed_live_algo_ceilings():
-    with pytest.raises(ValueError, match="between 1 and 40"):
+    with pytest.raises(ValueError, match="between 1 and 15"):
         AlgoPortfolioBacktest(
             symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
             start="2026-10-05", end="2026-10-05", feed="sip",
             data_adjustment="raw", research_controls={"max_entries_per_day": 41},
+        )
+    with pytest.raises(ValueError, match="between 1 and 5"):
+        AlgoPortfolioBacktest(
+            symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
+            start="2026-10-05", end="2026-10-05", feed="sip",
+            data_adjustment="raw", research_controls={"max_positions_per_strategy": 6},
+        )
+    with pytest.raises(ValueError, match="live Algo cap of 1"):
+        AlgoPortfolioBacktest(
+            symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
+            start="2026-10-05", end="2026-10-05", feed="sip",
+            data_adjustment="raw",
+            research_controls={"max_entries_per_strategy_per_day": {"momentum": 3}},
         )
 
 
@@ -215,21 +283,17 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
         for hour, minute in ((9, 30), (9, 35), (9, 40))
     ]
 
-    def deterministic_signal(strategy, mode, ticker, history, position_qty=0, parameters=None):
-        return Signal(ticker, "buy", "momentum", "test trigger", 0.9) if strategy == "momentum" else None
+    def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
+        return Signal(ticker, "buy", strategy, "test trigger", 0.9) if strategy == "opening_range_breakout" else None
 
-    monkeypatch.setattr(
-        "src.strategies.rule_pipeline.evaluate_strategy",
-        lambda name, mode, ticker, history, position_qty=0, parameters=None:
-            deterministic_signal(name, mode, ticker, history, position_qty, parameters),
-    )
+    monkeypatch.setattr(backtest_module, "evaluate_rule_signal", deterministic_signal)
     replay = AlgoPortfolioBacktest(
         symbols=["MSFT", "AAPL"],
         intraday_bars={"MSFT": bars, "AAPL": bars},
         spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
         data_adjustment="raw", research_controls={"max_entries_per_day": 1},
-        strategies=["momentum"],
+        strategies=["opening_range_breakout"],
     )
 
     report = replay.run()
@@ -241,57 +305,30 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
 
 def test_strategy_specific_cooldown_only_blocks_the_exited_strategy(monkeypatch):
     replay_day = date(2026, 10, 5)
-    daily_dates = []
-    cursor = replay_day - timedelta(days=1)
-    while len(daily_dates) < 25:
-        if cursor.weekday() < 5:
-            daily_dates.append(cursor)
-        cursor -= timedelta(days=1)
-    daily_dates.reverse()
     spy_daily = [
-        {"t": f"{day.isoformat()}T20:00:00Z", "c": 100 + index * 0.25}
-        for index, day in enumerate(daily_dates)
+        {"t": f"2026-09-{index + 1:02d}T20:00:00Z", "c": 100 + index}
+        for index in range(25)
     ]
-    bars = [
-        {"t": _utc(replay_day, 9, 30), "o": 100, "h": 100.2, "l": 99.8, "c": 100, "v": 100},
-        {"t": _utc(replay_day, 9, 35), "o": 100, "h": 100.2, "l": 98.5, "c": 99, "v": 100},
-        {"t": _utc(replay_day, 9, 40), "o": 99.2, "h": 99.4, "l": 99.1, "c": 99.3, "v": 100},
-        {"t": _utc(replay_day, 9, 45), "o": 99.3, "h": 99.5, "l": 99.1, "c": 99.4, "v": 100},
-    ]
-
-    monkeypatch.setattr(
-        "src.algo.backtest.rank_strategies",
-        lambda *_args, **_kwargs: {
-            "regime": "range_bound",
-            "active": ["momentum", "mean_reversion"],
-            "ranked": [
-                {"strategy": "momentum", "score": 1.0},
-                {"strategy": "mean_reversion", "score": 0.9},
-            ],
-        },
-    )
-
-    def deterministic_signal(name, mode, ticker, history, position_qty=0, parameters=None):
-        if name == "mean_reversion":
-            return Signal(ticker, "buy", name, "test", 0.8)
-        if name == "momentum" and len(history) >= 3:
-            return Signal(ticker, "buy", name, "test", 0.8)
-        return None
-
-    monkeypatch.setattr(
-        "src.strategies.rule_pipeline.evaluate_strategy",
-        lambda name, mode, ticker, history, position_qty=0, parameters=None:
-            deterministic_signal(name, mode, ticker, history, position_qty, parameters),
-    )
     replay = AlgoPortfolioBacktest(
-        symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
+        symbols=["AAPL"], intraday_bars={}, spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
-        data_adjustment="raw", strategies=["mean_reversion", "momentum"],
+        data_adjustment="raw", strategies=["mean_reversion", "trend_following"],
         research_controls={"cooldown_minutes_by_strategy": {"mean_reversion": 60}},
     )
+    replay.day_key = replay_day.isoformat()
+    replay._current_regime = {"regime": "range_bound"}
+    timestamp = datetime(2026, 10, 5, 14, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(backtest_module, "validate_trade", lambda **_: SimpleNamespace(approved=True))
 
-    report = replay.run()
+    replay.last_exit_at_by_strategy[("AAPL", "mean_reversion")] = timestamp - timedelta(minutes=30)
+    replay._queue_signal(
+        "AAPL", {"ticker": "AAPL", "action": "buy", "strategy": "mean_reversion", "reason": "test"},
+        {"c": 100}, timestamp,
+    )
+    assert replay.rejections["research_ticker_cooldown"] == 1
 
-    assert report["entry_count_by_strategy"]["mean_reversion"] == 1
-    assert report["entry_count_by_strategy"]["momentum"] == 1
-    assert report["risk_rejections"]["research_ticker_cooldown"] >= 1
+    replay._queue_signal(
+        "AAPL", {"ticker": "AAPL", "action": "buy", "strategy": "trend_following", "reason": "test"},
+        {"c": 100}, timestamp,
+    )
+    assert replay.pending_entries["AAPL"]["strategy"] == "trend_following"

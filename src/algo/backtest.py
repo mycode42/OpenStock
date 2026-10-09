@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from bisect import bisect_right
+import csv
 import hashlib
 import json
 import logging
@@ -42,14 +43,21 @@ from src.strategies.multi_factor.config import MultiFactorConfig
 from src.strategies.multi_factor.diagnostics import information_coefficient, turnover
 from src.strategies.multi_factor.features import aggregate_intraday_bars
 from src.strategies.multi_factor.signals import SignalGenerator
+from src.strategies.swing_momentum import generate_signals as generate_swing_momentum_signals
 from src.strategies.satellite_overlay import (
-    CORE_STRATEGIES, SatelliteOverlayConfig, apply_satellite_confirmations,
+    CORE_STRATEGIES, SATELLITE_STRATEGIES, SatelliteOverlayConfig,
+    apply_satellite_confirmations,
+)
+from src.strategies.portfolio_coordinator import (
+    INTRADAY_STRATEGIES, PortfolioCoordinator, PortfolioCoordinatorConfig,
+    strategy_priority, throttle_signal,
 )
 
 
 ET = ZoneInfo("America/New_York")
 BAR_MINUTES = 5
 DAILY_WARMUP_DAYS = 180
+MIN_REGIME_DAILY_BARS = 22
 FACTOR_WARMUP_DAYS = 260
 STRATEGY_NAMES = set(ALGO_DEFAULT_PARAMETERS)
 RESEARCH_CONTROL_KEYS = {
@@ -88,10 +96,11 @@ def validate_research_controls(controls: dict | None) -> dict:
     if unknown:
         raise ValueError(f"unknown research control(s): {', '.join(sorted(unknown))}")
     normalized = dict(controls)
+    live_risk = get_mode_config("algo")["risk"]
     limits = {
-        "max_entries_per_day": (1, 40),
-        "max_open_positions": (1, 20),
-        "max_positions_per_strategy": (1, 20),
+        "max_entries_per_day": (1, live_risk["max_trades_per_day"]),
+        "max_open_positions": (1, live_risk["max_open_positions"]),
+        "max_positions_per_strategy": (1, live_risk["max_positions_per_strategy"]),
         "cooldown_minutes": (0, 390),
     }
     for key, (minimum, maximum) in limits.items():
@@ -103,16 +112,19 @@ def validate_research_controls(controls: dict | None) -> dict:
     per_strategy = normalized.get("max_entries_per_strategy_per_day", {})
     if not isinstance(per_strategy, dict):
         raise ValueError("max_entries_per_strategy_per_day must be an object")
+    live_daily_caps = live_risk.get("max_entries_per_strategy_per_day", {})
     for name, value in per_strategy.items():
-        if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 40:
-            raise ValueError("per-strategy daily entry limits must use known strategies and integers from 1 to 40")
+        maximum = live_daily_caps.get(name, live_risk["max_trades_per_day"])
+        if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
+            raise ValueError(f"per-strategy daily entry limits must not exceed the live Algo cap of {maximum}")
     normalized["max_entries_per_strategy_per_day"] = per_strategy
     cooldowns = normalized.get("cooldown_minutes_by_strategy", {})
     if not isinstance(cooldowns, dict):
         raise ValueError("cooldown_minutes_by_strategy must be an object")
     for name, value in cooldowns.items():
-        if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 390:
-            raise ValueError("strategy cooldowns must use known strategies and integers from 0 to 390")
+        maximum = live_risk.get("cooldown_minutes_by_strategy", {}).get(name, 390)
+        if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
+            raise ValueError("strategy cooldowns must use known strategies and stay within the live Algo cap")
     normalized["cooldown_minutes_by_strategy"] = cooldowns
     orb_once = normalized.get("one_orb_attempt_per_ticker_per_day", False)
     if not isinstance(orb_once, bool):
@@ -133,6 +145,8 @@ class Position:
     signal_at: str
     bars_held: int = 0
     satellite_confirmations: list[str] = field(default_factory=list)
+    entry_commission: float = 0.0
+    borrow_cost: float = 0.0
 
 
 class AlgoPortfolioBacktest:
@@ -154,11 +168,26 @@ class AlgoPortfolioBacktest:
         strategies: list[str] | None = None,
         research_controls: dict | None = None,
         event_calendar: EventCalendar | None = None,
+        spread_bps: float = 3.0,
+        commission_per_share: float = 0.005,
+        short_borrow_annual_pct: float = 0.03,
+        unknown_borrow_penalty_bps: float = 25.0,
+        borrow_availability: dict[tuple[str, str], bool] | None = None,
+        coordinator_config: PortfolioCoordinatorConfig | None = None,
+        force_close_at_end: bool = False,
     ) -> None:
         if not math.isfinite(initial_capital) or initial_capital <= 0:
             raise ValueError("Initial capital must be a positive finite number")
         if not math.isfinite(slippage_bps) or slippage_bps < 0:
             raise ValueError("Slippage basis points must be finite and non-negative")
+        if not math.isfinite(spread_bps) or spread_bps < 0:
+            raise ValueError("Spread basis points must be finite and non-negative")
+        if not math.isfinite(commission_per_share) or commission_per_share < 0:
+            raise ValueError("Commission per share must be finite and non-negative")
+        if not math.isfinite(short_borrow_annual_pct) or short_borrow_annual_pct < 0:
+            raise ValueError("Annual short borrow rate must be finite and non-negative")
+        if not math.isfinite(unknown_borrow_penalty_bps) or unknown_borrow_penalty_bps < 0:
+            raise ValueError("Unknown borrow penalty must be finite and non-negative")
         if feed != "sip":
             raise ValueError("Plus regular-session replay requires SIP; BOATS requires its own overnight model")
         self.symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
@@ -174,10 +203,27 @@ class AlgoPortfolioBacktest:
         self.cash = float(initial_capital)
         self.slippage = float(slippage_bps) / 10_000
         self.slippage_bps = float(slippage_bps)
+        self.spread_bps = float(spread_bps)
+        self.commission_per_share = float(commission_per_share)
+        self.short_borrow_annual_pct = float(short_borrow_annual_pct)
+        self.unknown_borrow_penalty_bps = float(unknown_borrow_penalty_bps)
+        self.borrow_availability = {
+            (str(ticker).upper(), str(day)): bool(available)
+            for (ticker, day), available in (borrow_availability or {}).items()
+        }
+        self.borrow_coverage: Counter[str] = Counter()
+        self.borrow_cost_total = 0.0
+        self.commission_total = 0.0
+        self.coordinator = PortfolioCoordinator(coordinator_config)
+        self.force_close_at_end = bool(force_close_at_end)
         self.risk = get_mode_config("algo")["risk"]
         self.profile = validate_parameter_profile(profile or {})
         self.strategy_filter = validate_strategy_filter(strategies)
-        self.satellite_config = SatelliteOverlayConfig.from_dict(self.profile.get("satellite_overlay"))
+        self.satellite_config = SatelliteOverlayConfig.from_dict({
+            "multi_factor_enabled": STRATEGY_CONFIG.get("algo_multi_factor_enabled", True),
+            "event_driven_enabled": STRATEGY_CONFIG.get("algo_event_driven_enabled", True),
+            **self.profile.get("satellite_overlay", {}),
+        })
         self.research_controls = validate_research_controls(research_controls)
         self.event_calendar = event_calendar or EventCalendar()
         self.event_config = EventStrategyConfig.from_dict(self.profile.get("event_driven"))
@@ -198,7 +244,10 @@ class AlgoPortfolioBacktest:
             for index, row in enumerate(rows):
                 if index:
                     self.previous_closes_by_day[(symbol, date.fromisoformat(row["date"]))] = float(rows[index - 1]["c"])
-        self.daily_stock_bars = all_daily_bars if self.multi_factor_enabled else {}
+        # Swing trend, momentum, cyclical mean reversion, and Multi Factor all
+        # consume the same point-in-time daily aggregates. Each caller filters
+        # strictly through the last completed session.
+        self.daily_stock_bars = all_daily_bars
         self.daily_stock_series = {
             symbol: (
                 [date.fromisoformat(row["date"]) for row in rows],
@@ -230,6 +279,9 @@ class AlgoPortfolioBacktest:
         self.orb_attempts: set[tuple[str, str]] = set()
         self.exposed_event_count = 0
         self.daily_curve: list[dict] = []
+        self.daily_strategy_pnl: list[dict] = []
+        self.holdings_by_day: dict[str, dict[str, set[tuple[str, str]]]] = defaultdict(lambda: defaultdict(set))
+        self._last_strategy_pnl: dict[str, float] = defaultdict(float)
         self.max_drawdown = 0.0
         self.peak_equity = self.initial_capital
         self.day_key: str | None = None
@@ -278,10 +330,97 @@ class AlgoPortfolioBacktest:
         return dict(sorted(events.items()))
 
     def _equity(self) -> float:
-        return self.cash + sum(
+        marked = self.cash + sum(
             position.qty * self.last_prices.get(ticker, position.entry_price)
             for ticker, position in self.positions.items()
         )
+        liquidation_rate = (self.spread_bps / 2 + self.slippage_bps) / 10_000
+        exit_costs = sum(
+            abs(position.qty * self.last_prices.get(ticker, position.entry_price)) * liquidation_rate
+            + abs(position.qty) * self.commission_per_share
+            for ticker, position in self.positions.items()
+        )
+        return marked - exit_costs
+
+    def _fill_price(self, raw_price: float, action: str, *, extra_bps: float = 0.0) -> float:
+        """Apply half-spread plus adverse slippage to a marketable fill."""
+        cost = (self.spread_bps / 2 + self.slippage_bps + extra_bps) / 10_000
+        return raw_price * (1 + cost if action in {"buy", "cover"} else 1 - cost)
+
+    def _borrow_status(self, ticker: str, timestamp: datetime) -> bool | None:
+        day = timestamp.astimezone(ET).date().isoformat()
+        status = self.borrow_availability.get((ticker.upper(), day))
+        self.borrow_coverage["known_easy" if status is True else "known_not_easy" if status is False else "unknown"] += 1
+        return status
+
+    def _record_holdings(self, trading_day: date) -> None:
+        day_key = trading_day.isoformat()
+        for ticker, position in self.positions.items():
+            direction = "short" if position.qty < 0 else "long"
+            self.holdings_by_day[day_key][position.strategy].add((ticker, direction))
+
+    def _charge_daily_borrow(self) -> None:
+        if self.short_borrow_annual_pct <= 0:
+            return
+        for ticker, position in self.positions.items():
+            if position.qty >= 0 or position.strategy in INTRADAY_STRATEGIES:
+                continue
+            mark = self.last_prices.get(ticker, position.entry_price)
+            fee = abs(position.qty) * mark * self.short_borrow_annual_pct / 252
+            self.cash -= fee
+            position.borrow_cost += fee
+            self.borrow_cost_total += fee
+
+    def _flatten_positions(
+        self, bars: dict[str, dict], timestamp: datetime,
+        *, strategies: set[str] | None = None, reason: str,
+    ) -> None:
+        """Close eligible positions at a modeled marketable fill through RM."""
+        if strategies is None and not self.force_close_at_end:
+            return
+        for ticker, position in list(self.positions.items()):
+            if strategies is not None and position.strategy not in strategies:
+                continue
+            bar = bars.get(ticker)
+            if bar is None:
+                self.rejections["intraday_eod_flatten_missing_bar"] += 1
+                continue
+            action = "cover" if position.qty < 0 else "sell"
+            state = self._risk_state()
+            result = validate_trade(
+                ticker=ticker, action=action, qty=abs(position.qty),
+                entry_price=float(bar["c"]), portfolio_state=state, mode="algo",
+            )
+            if not result.approved:
+                self.rejections[f"coordinator_flatten:{result.rule or 'risk_rejected'}"] += 1
+                continue
+            fill = self._fill_price(float(bar["c"]), action)
+            self._close_position(ticker, fill, timestamp, reason)
+
+    def _strategy_total_pnl(self) -> dict[str, float]:
+        totals: dict[str, float] = defaultdict(float)
+        for trade in self.closed_trades:
+            totals[str(trade["strategy"])] += float(trade["pnl"])
+        exit_cost_rate = (self.spread_bps / 2 + self.slippage_bps) / 10_000
+        for ticker, position in self.positions.items():
+            mark = self.last_prices.get(ticker, position.entry_price)
+            estimated_exit_cost = abs(position.qty * mark) * exit_cost_rate
+            estimated_exit_commission = abs(position.qty) * self.commission_per_share
+            totals[position.strategy] += (
+                position.qty * (mark - position.entry_price)
+                - position.entry_commission - estimated_exit_commission
+                - estimated_exit_cost - position.borrow_cost
+            )
+        return totals
+
+    def _record_daily_strategy_pnl(self, trading_day: date) -> None:
+        totals = self._strategy_total_pnl()
+        daily = {
+            strategy: round(totals.get(strategy, 0.0) - self._last_strategy_pnl.get(strategy, 0.0), 4)
+            for strategy in sorted(STRATEGY_NAMES)
+        }
+        self._last_strategy_pnl = defaultdict(float, totals)
+        self.daily_strategy_pnl.append({"date": trading_day.isoformat(), "pnl_by_strategy": daily})
 
     def _start_periods(self, trading_day: date) -> None:
         day_key = trading_day.isoformat()
@@ -305,14 +444,23 @@ class AlgoPortfolioBacktest:
                 "current_price": price, "pct_of_equity": market_value / equity if equity else 0,
             }
             sector = self.ticker_sector.get(ticker, "other")
-            sectors[sector] += market_value
+            sectors[sector] += abs(market_value)
         pending_value = {
             ticker: float(order["qty"]) * float(order["reference_price"])
             for ticker, order in self.pending_entries.items()
+            if order.get("action", "buy") == "buy"
+        }
+        pending_short_value = {
+            ticker: float(order["qty"]) * float(order["reference_price"])
+            for ticker, order in self.pending_entries.items()
+            if order.get("action") == "short"
         }
         for ticker, value in pending_value.items():
             sectors[self.ticker_sector.get(ticker, "other")] += value
+        for ticker, value in pending_short_value.items():
+            sectors[self.ticker_sector.get(ticker, "other")] += value
         pending_new = {ticker for ticker in pending_value if ticker not in positions}
+        pending_new.update(ticker for ticker in pending_short_value if ticker not in positions)
         day_pnl = (equity / self.day_start_equity - 1) if self.day_start_equity else 0
         week_pnl = (equity / self.week_start_equity - 1) if self.week_start_equity else 0
         entry_count = self.entry_counts[self.day_key or ""]
@@ -324,6 +472,9 @@ class AlgoPortfolioBacktest:
             "available_cash_pct": (self.cash - sum(pending_value.values())) / equity if equity else 0,
             "pending_buy_reservation": sum(pending_value.values()),
             "pending_buy_value_by_ticker": pending_value,
+            "pending_short_value_by_ticker": pending_short_value,
+            "shortability_available": True,
+            "easy_to_borrow_symbols": list(self.symbols),
             "pending_new_symbols": sorted(pending_new),
             "pending_exposure_available": True,
             "daily_pnl_pct": day_pnl,
@@ -342,10 +493,14 @@ class AlgoPortfolioBacktest:
         self.last_exit_at_by_strategy[(ticker, position.strategy)] = timestamp
         exit_value = position.qty * price
         self.cash += exit_value
-        pnl = position.qty * (price - position.entry_price)
+        exit_commission = abs(position.qty) * self.commission_per_share
+        self.cash -= exit_commission
+        self.commission_total += exit_commission
+        pnl = position.qty * (price - position.entry_price) - position.entry_commission - exit_commission - position.borrow_cost
         self.closed_trades.append({
             "ticker": ticker,
             "strategy": position.strategy,
+            "direction": "short" if position.qty < 0 else "long",
             "qty": position.qty,
             "entry_at": position.entry_at,
             "entry_price": round(position.entry_price, 6),
@@ -354,7 +509,14 @@ class AlgoPortfolioBacktest:
             "exit_price": round(price, 6),
             "exit_reason": reason,
             "pnl": round(pnl, 2),
-            "return_pct": round(price / position.entry_price - 1, 6),
+            "entry_commission": round(position.entry_commission, 4),
+            "exit_commission": round(exit_commission, 4),
+            "borrow_cost": round(position.borrow_cost, 4),
+            "return_pct": round(
+                ((position.entry_price - price) / position.entry_price)
+                if position.qty < 0 else (price / position.entry_price - 1),
+                6,
+            ),
             "holding_minutes": max(BAR_MINUTES, position.bars_held * BAR_MINUTES),
             "satellite_confirmations": list(position.satellite_confirmations),
         })
@@ -364,22 +526,24 @@ class AlgoPortfolioBacktest:
         if position is None:
             return
         opening, high, low = (float(bar[key]) for key in ("o", "h", "l"))
-        stop_hit = low <= position.stop_price
-        target_hit = high >= position.take_profit
-        if opening <= position.stop_price:
-            raw_fill, reason, slippage = opening, "stop_gap", self.slippage
-        elif opening >= position.take_profit:
-            raw_fill, reason, slippage = opening, "target_gap", 0.0
+        is_short = position.qty < 0
+        stop_hit = high >= position.stop_price if is_short else low <= position.stop_price
+        target_hit = low <= position.take_profit if is_short else high >= position.take_profit
+        if (opening >= position.stop_price if is_short else opening <= position.stop_price):
+            raw_fill, reason = opening, "stop_gap"
+        elif (opening <= position.take_profit if is_short else opening >= position.take_profit):
+            raw_fill, reason = opening, "target_gap"
         elif stop_hit:
             # If both bracket legs occur within one bar, assume the adverse leg.
-            raw_fill, reason, slippage = position.stop_price, "stop", self.slippage
+            raw_fill, reason = position.stop_price, "stop"
         elif target_hit:
-            # A limit target may receive price improvement at an opening gap.
-            raw_fill, reason, slippage = position.take_profit, "target", 0.0
+            raw_fill, reason = position.take_profit, "target"
         else:
             position.bars_held += 1
             return
-        self._close_position(ticker, raw_fill * (1 - slippage), timestamp, reason)
+        exit_action = "cover" if is_short else "sell"
+        adverse_fill = self._fill_price(raw_fill, exit_action)
+        self._close_position(ticker, adverse_fill, timestamp, reason)
 
     def _fill_pending_entries(self, bars: dict[str, dict], timestamp: datetime) -> None:
         for ticker in list(self.pending_entries):
@@ -387,18 +551,29 @@ class AlgoPortfolioBacktest:
             if bar is None:
                 continue
             order = self.pending_entries.pop(ticker)
-            fill_price = float(bar["o"]) * (1 + self.slippage)
-            required_cash = fill_price * order["qty"]
-            if required_cash > self.cash - self._equity() * float(self.risk["min_cash_pct"]):
+            action = order.get("action", "buy")
+            borrow_status = self._borrow_status(ticker, timestamp) if action == "short" else True
+            if action == "short" and borrow_status is False:
+                self.rejections["hard_to_borrow_at_fill"] += 1
+                continue
+            extra_bps = self.unknown_borrow_penalty_bps if action == "short" and borrow_status is None else 0.0
+            fill_price = self._fill_price(float(bar["o"]), action, extra_bps=extra_bps)
+            signed_qty = int(order["qty"]) if action == "buy" else -int(order["qty"])
+            required_cash = fill_price * abs(signed_qty)
+            if action == "buy" and required_cash > self.cash - self._equity() * float(self.risk["min_cash_pct"]):
                 self.rejections["fill_cash_gap"] += 1
                 continue
-            self.cash -= required_cash
+            commission = abs(signed_qty) * self.commission_per_share
+            self.cash += required_cash if action == "short" else -required_cash
+            self.cash -= commission
+            self.commission_total += commission
             self.positions[ticker] = Position(
-                ticker=ticker, strategy=order["strategy"], qty=order["qty"],
+                ticker=ticker, strategy=order["strategy"], qty=signed_qty,
                 entry_price=fill_price, entry_at=timestamp.isoformat(),
                 stop_price=order["stop_price"], take_profit=order["take_profit"],
                 signal_at=order["signal_at"], bars_held=0,
                 satellite_confirmations=list(order.get("satellite_confirmations", [])),
+                entry_commission=commission,
             )
 
     def _fill_pending_exits(self, bars: dict[str, dict], timestamp: datetime) -> None:
@@ -412,15 +587,23 @@ class AlgoPortfolioBacktest:
                 continue
             self.pending_exits.pop(ticker)
             if ticker in self.positions:
-                fill_price = float(bar["o"]) * (1 - self.slippage)
+                is_short = self.positions[ticker].qty < 0
+                action = "cover" if is_short else "sell"
+                fill_price = self._fill_price(float(bar["o"]), action)
                 self._close_position(ticker, fill_price, timestamp, order["reason"])
 
     def _queue_exit_signal(self, ticker: str, signal: dict, bar: dict, timestamp: datetime) -> None:
         position = self.positions.get(ticker)
         if position is None or position.strategy != signal.get("strategy") or ticker in self.pending_exits:
             return
+        action = "cover" if position.qty < 0 else "sell"
+        minimum_hold = int(self.risk.get("minimum_hold_minutes_by_strategy", {}).get(position.strategy, 0))
+        entry_at = datetime.fromisoformat(position.entry_at.replace("Z", "+00:00"))
+        if (timestamp - entry_at).total_seconds() < minimum_hold * 60:
+            self.rejections["minimum_holding_period"] += 1
+            return
         result = validate_trade(
-            ticker=ticker, action="sell", qty=position.qty,
+            ticker=ticker, action=action, qty=abs(position.qty),
             entry_price=float(bar["c"]), portfolio_state=self._risk_state(), mode="algo",
         )
         if not result.approved:
@@ -428,6 +611,7 @@ class AlgoPortfolioBacktest:
             return
         self.pending_exits[ticker] = {
             "reason": signal["reason"],
+            "action": action,
             "signal_at": (timestamp + timedelta(minutes=BAR_MINUTES)).isoformat(),
         }
 
@@ -438,7 +622,11 @@ class AlgoPortfolioBacktest:
         if key == self.last_multi_factor_rebalance_key:
             return {}, None
         held = {
-            ticker for ticker, position in self.positions.items()
+            ticker: {
+                "qty": position.qty, "entry_at": position.entry_at,
+                "entry_price": position.entry_price,
+            }
+            for ticker, position in self.positions.items()
             if position.strategy == "multi_factor"
         }
         signals, diagnostics = self.multi_factor_generator.generate(
@@ -446,19 +634,27 @@ class AlgoPortfolioBacktest:
             symbols=self.symbols,
             as_of=session - timedelta(days=1),
             session=session,
+            regime=str(self._current_regime.get("regime", "unknown")),
             held_positions=held,
         )
         if not diagnostics["minimum_universe_met"]:
             return {}, diagnostics
+        prior_intraday = {}
+        for symbol, bars in self.intraday_bars.items():
+            prior_intraday[symbol] = [
+                bar for bar in bars
+                if self._timestamp(bar).astimezone(ET).date() < session
+            ][-3:]
+        signals = self.multi_factor_generator.apply_intraday_size_tilt(signals, prior_intraday)
         self.last_multi_factor_rebalance_key = key
-        scores = {item.ticker: item.score for item in signals if item.action != "sell"}
+        scores = {item.ticker: item.score for item in signals if item.action not in {"sell", "cover"}}
         factor_scores: dict[str, dict[str, float]] = defaultdict(dict)
         for item in signals:
-            if item.action == "sell":
+            if item.action in {"sell", "cover"}:
                 continue
             for factor, value in item.factor_zscores.items():
                 factor_scores[factor][item.ticker] = value
-        targets = {item.ticker for item in signals if item.action in {"buy", "hold"}}
+        targets = {item.ticker for item in signals if item.action in {"buy", "short", "hold"}}
         previous_targets = self.multi_factor_snapshots[-1]["targets"] if self.multi_factor_snapshots else set()
         diagnostics["turnover"] = turnover(previous_targets, targets)
         self.multi_factor_snapshots.append({
@@ -469,13 +665,13 @@ class AlgoPortfolioBacktest:
         })
         self.multi_factor_rebalance_diagnostics.append(diagnostics)
         for item in signals:
-            if item.action not in {"buy", "sell"}:
+            if item.action not in {"buy", "sell", "cover", "short"}:
                 continue
             day_key = session.isoformat()
             self.signal_events_by_strategy[(day_key, "multi_factor")] += 1
         return {
             item.ticker: item.to_dict() for item in signals
-            if item.action in {"buy", "sell"}
+            if item.action in {"buy", "sell", "cover", "short"}
         }, diagnostics
 
     def _multi_factor_ic(self) -> dict:
@@ -533,29 +729,61 @@ class AlgoPortfolioBacktest:
         return rank_strategies(
             completed, mode="algo", event_enabled=self.event_satellite_enabled,
             event_disable_in_volatile=self.event_config.disable_in_volatile,
+            intraday_trend_enabled=bool(STRATEGY_CONFIG.get("enable_intraday_trend", False)),
+            intraday_momentum_enabled=bool(STRATEGY_CONFIG.get("enable_intraday_momentum", False)),
         )
 
     def _previous_close(self, ticker: str, trading_day: date) -> float | None:
         return self.previous_closes_by_day.get((ticker.upper(), trading_day))
 
+    def _completed_daily_history(self, ticker: str, trading_day: date) -> list[dict]:
+        return [
+            row for row in self.daily_stock_bars.get(ticker.upper(), [])
+            if date.fromisoformat(str(row.get("date", ""))[:10]) < trading_day
+        ]
+
     def _signal_for(
         self, ticker: str, history: list[dict], active: list[str], ranked: dict,
-        timestamp: datetime, factor_signal: dict | None = None,
+        timestamp: datetime, factor_signal: dict | None = None, position_qty: float = 0,
+        momentum_signals: dict[str, object] | None = None,
     ) -> dict | None:
         options = []
-        for strategy in active:
+        held = self.positions.get(ticker)
+        strategies = [held.strategy] if held is not None else active
+        for strategy in strategies:
             if self.strategy_filter is not None and strategy not in self.strategy_filter:
                 continue
             if strategy not in CORE_STRATEGIES:
                 continue
+            if strategy == "intraday_trend" and not STRATEGY_CONFIG.get("enable_intraday_trend", False):
+                continue
+            if strategy == "intraday_momentum" and not STRATEGY_CONFIG.get("enable_intraday_momentum", False):
+                continue
             try:
-                signal = evaluate_rule_signal(
-                    strategy, ticker, history, parameters=self.profile.get(strategy),
-                )
+                if strategy == "momentum":
+                    signal = (momentum_signals or {}).get(ticker)
+                else:
+                    daily_strategy = strategy in {
+                        "trend_following", "momentum", "swing_mean_reversion",
+                    }
+                    signal_bars = (
+                        self._completed_daily_history(ticker, timestamp.astimezone(ET).date())
+                        if daily_strategy else history
+                    )
+                    signal = evaluate_rule_signal(
+                        strategy, ticker, signal_bars, parameters=self.profile.get(strategy),
+                        position_qty=position_qty,
+                        entry_at=held.entry_at if held is not None else None,
+                        entry_price=held.entry_price if held is not None else None,
+                        position_target=held.take_profit if held is not None else None,
+                    )
             except Exception as exc:
                 self.rejections[f"signal_error:{strategy}:{type(exc).__name__}"] += 1
                 continue
-            if signal is None or signal.action != "buy":
+            if signal is None or signal.action not in ({"sell", "cover"} if position_qty else {"buy", "short"}):
+                continue
+            if position_qty:
+                options.append({**signal.to_dict(), "rank_score": ranked.get(strategy, 0)})
                 continue
             self.signal_events_by_strategy[(self.day_key or "", strategy)] += 1
             ticker_day = (self.day_key or "", ticker)
@@ -566,32 +794,81 @@ class AlgoPortfolioBacktest:
                 self.candidate_setups_by_strategy[(self.day_key or "", strategy)] += 1
             item = signal.to_dict()
             item["rank_score"] = ranked.get(strategy, 0)
+            item["timeframe"] = "1Day" if strategy in {
+                "trend_following", "momentum", "swing_mean_reversion",
+            } else "5Min"
             options.append(item)
+
+        if (
+            factor_signal is not None
+            and "multi_factor" in (self._current_regime.get("active", []))
+            and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
+        ):
+            expected_actions = {"sell", "cover"} if position_qty else {"buy", "short"}
+            if factor_signal.get("action") in expected_actions:
+                if not position_qty:
+                    self.signal_events_by_strategy[(self.day_key or "", "multi_factor")] += 1
+                    ticker_day = (self.day_key or "", ticker)
+                    strategy_ticker_day = (*ticker_day, "multi_factor")
+                    self.candidate_ticker_days.add(ticker_day)
+                    if strategy_ticker_day not in self.candidate_strategy_ticker_days:
+                        self.candidate_strategy_ticker_days.add(strategy_ticker_day)
+                        self.candidate_setups_by_strategy[(self.day_key or "", "multi_factor")] += 1
+                options.append({
+                    **factor_signal, "rank_score": -1.0, "timeframe": "1Day",
+                })
+
+        event_evidence = None
+
+        event_signal = None
+        if (
+            (self.event_satellite_enabled or (held is not None and held.strategy == "event_driven"))
+            and (
+                "event_driven" in self._current_regime.get("active", [])
+                or (held is not None and held.strategy == "event_driven")
+            )
+            and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
+            and (held is None or held.strategy == "event_driven")
+        ):
+            try:
+                signal_as_of = timestamp + timedelta(minutes=BAR_MINUTES)
+                event_signal = self.event_signal_generator.generate(
+                    ticker,
+                    self._completed_daily_history(ticker, timestamp.astimezone(ET).date()),
+                    as_of=signal_as_of,
+                    universe=set(self.symbols),
+                    regime=str(self._current_regime.get("regime", "unknown")),
+                    strategy_state=self.event_strategy_state,
+                    position_qty=position_qty if held and held.strategy == "event_driven" else 0,
+                    entry_at=held.entry_at if held and held.strategy == "event_driven" else None,
+                    entry_price=held.entry_price if held and held.strategy == "event_driven" else None,
+                )
+            except Exception as exc:
+                self.rejections[f"signal_error:event_driven:{type(exc).__name__}"] += 1
+        if event_signal is not None:
+            event_evidence = event_signal.to_dict()
+            expected_actions = {"sell", "cover"} if position_qty else {"buy", "short"}
+            if event_signal.action in expected_actions:
+                self.signal_events_by_strategy[(self.day_key or "", "event_driven")] += 1
+                item = dict(event_evidence)
+                item["rank_score"] = -1.0
+                item["timeframe"] = "1Day"
+                if not position_qty:
+                    ticker_day = (self.day_key or "", ticker)
+                    strategy_ticker_day = (*ticker_day, "event_driven")
+                    self.candidate_ticker_days.add(ticker_day)
+                    if strategy_ticker_day not in self.candidate_strategy_ticker_days:
+                        self.candidate_strategy_ticker_days.add(strategy_ticker_day)
+                        self.candidate_setups_by_strategy[(self.day_key or "", "event_driven")] += 1
+                options.append(item)
+
         if not options:
             return None
         chosen = max(options, key=lambda item: (item["rank_score"], item["strength"]))
-        event_signal = None
-        if (
-            self.event_satellite_enabled
-            and "event_driven" in active
-            and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
-        ):
-            try:
-                event = self.event_signal_generator.generate(
-                    ticker, history,
-                    as_of=timestamp + timedelta(minutes=BAR_MINUTES),
-                    universe=set(self.symbols),
-                    regime=str(self._current_regime.get("regime", "unknown")),
-                    previous_close=self._previous_close(ticker, timestamp.astimezone(ET).date()),
-                    strategy_state=self.event_strategy_state,
-                )
-                event_signal = event.to_dict() if event is not None else None
-            except Exception as exc:
-                self.rejections[f"signal_error:event_driven:{type(exc).__name__}"] += 1
         chosen = apply_satellite_confirmations(
             chosen,
             factor_signal=(factor_signal if "multi_factor" in active else None),
-            event_signal=event_signal,
+            event_signal=event_evidence if "event_driven" in active else None,
             config=self.satellite_config,
         )
         for satellite in chosen.get("satellite_confirmations", []):
@@ -603,8 +880,9 @@ class AlgoPortfolioBacktest:
             return
         if self.day_key is None:
             return
-        if not signal or signal.get("action") != "buy":
+        if not signal or signal.get("action") not in {"buy", "short"}:
             return
+        action = str(signal["action"])
         strategy = str(signal["strategy"])
         controls = self.research_controls
         entries_today = self.entry_counts[self.day_key]
@@ -618,15 +896,26 @@ class AlgoPortfolioBacktest:
             return
         strategy_positions = sum(position.strategy == strategy for position in self.positions.values())
         strategy_positions += sum(order["strategy"] == strategy for order in self.pending_entries.values())
-        strategy_position_cap = controls.get("max_positions_per_strategy")
+        strategy_caps = self.risk.get("max_positions_per_strategy_by_strategy", {})
+        strategy_position_cap = strategy_caps.get(
+            strategy, controls.get("max_positions_per_strategy", self.risk.get("max_positions_per_strategy")),
+        )
+        configured_global_cap = controls.get("max_positions_per_strategy")
+        if configured_global_cap is not None:
+            strategy_position_cap = min(int(strategy_position_cap), int(configured_global_cap))
         if strategy_position_cap is not None and strategy_positions >= strategy_position_cap:
             self.rejections["research_max_positions_per_strategy"] += 1
             return
-        strategy_daily_cap = controls.get("max_entries_per_strategy_per_day", {}).get(strategy)
+        strategy_daily_cap = controls.get(
+            "max_entries_per_strategy_per_day", self.risk.get("max_entries_per_strategy_per_day", {}),
+        ).get(strategy)
         if strategy_daily_cap is not None and self.entry_counts_by_strategy[(self.day_key, strategy)] >= strategy_daily_cap:
             self.rejections[f"research_max_entries_per_day:{strategy}"] += 1
             return
-        strategy_cooldowns = controls.get("cooldown_minutes_by_strategy", {})
+        strategy_cooldowns = {
+            **self.risk.get("cooldown_minutes_by_strategy", {}),
+            **controls.get("cooldown_minutes_by_strategy", {}),
+        }
         if strategy in strategy_cooldowns:
             cooldown_minutes = strategy_cooldowns[strategy]
             last_exit = self.last_exit_at_by_strategy.get((ticker, strategy))
@@ -636,28 +925,90 @@ class AlgoPortfolioBacktest:
         if last_exit and (timestamp - last_exit).total_seconds() < cooldown_minutes * 60:
             self.rejections["research_ticker_cooldown"] += 1
             return
+        for group in self.risk.get("strategy_group_limits", {}).values():
+            members = set(group.get("strategies", []))
+            if strategy not in members:
+                continue
+            group_open = sum(position.strategy in members for position in self.positions.values())
+            group_open += sum(order["strategy"] in members for order in self.pending_entries.values())
+            if group_open >= int(group.get("max_open_positions", 10**9)):
+                self.rejections["research_strategy_group_open_cap"] += 1
+                return
+            group_entries = sum(
+                count for (day, member), count in self.entry_counts_by_strategy.items()
+                if day == self.day_key and member in members
+            )
+            if group_entries >= int(group.get("max_entries_per_day", 10**9)):
+                self.rejections["research_strategy_group_daily_cap"] += 1
+                return
         if (
             strategy == "opening_range_breakout"
-            and controls.get("one_orb_attempt_per_ticker_per_day")
+            and controls.get(
+                "one_orb_attempt_per_ticker_per_day",
+                self.risk.get("one_orb_attempt_per_ticker_per_day", False),
+            )
             and (self.day_key, ticker) in self.orb_attempts
         ):
             self.rejections["research_orb_daily_attempt"] += 1
             return
         regime = self._current_regime
-        if regime.get("regime") == "trending_down":
+        if action == "buy" and regime.get("regime") == "trending_down":
             self.rejections["downtrend_entry_block"] += 1
             return
-        if strategy == "opening_range_breakout" and controls.get("one_orb_attempt_per_ticker_per_day"):
+        if action == "short":
+            regime_name = str(regime.get("regime", "unknown"))
+            if regime_name not in {"range_bound", "trending_down"}:
+                self.rejections["short_regime_block"] += 1
+                return
+            if ticker not in self.symbols:
+                self.rejections["short_universe_block"] += 1
+                return
+            if regime_name == "range_bound":
+                signal = {**signal, "risk_multiplier": float(self.risk.get("range_regime_short_risk_multiplier", 0.75))}
+            borrow_status = self._borrow_status(ticker, timestamp)
+            if borrow_status is False:
+                self.rejections["hard_to_borrow_short_skip"] += 1
+                return
+        if strategy == "opening_range_breakout" and controls.get(
+            "one_orb_attempt_per_ticker_per_day",
+            self.risk.get("one_orb_attempt_per_ticker_per_day", False),
+        ):
             self.orb_attempts.add((self.day_key, ticker))
         close = float(bar["c"])
         current_equity = self._equity()
+        signal, throttle_note = throttle_signal(
+            signal, str(regime.get("regime", "unknown")), self.coordinator.config,
+        )
+        if throttle_note:
+            self.rejections[f"coordinator_regime_throttle:{strategy}"] += 1
         sized = _make_trade(signal, close, current_equity, {}, self.risk)
         if not sized:
             self.rejections["zero_sized"] += 1
             return
         state = self._risk_state()
+        intraday_entries = sum(
+            count for (day, name), count in self.entry_counts_by_strategy.items()
+            if day == self.day_key and name in INTRADAY_STRATEGIES
+        )
+        coordinator_book = self.coordinator.new_book(
+            equity=float(state["equity"]),
+            positions=state["positions"],
+            position_owners={name: position.strategy for name, position in self.positions.items()},
+            pending_buy_values=state["pending_buy_value_by_ticker"],
+            pending_short_values=state["pending_short_value_by_ticker"],
+            entries_today=int(state["entry_count_today"]),
+            intraday_entries_today=intraday_entries,
+        )
+        decision = coordinator_book.review(
+            sized, session="regular", timestamp=timestamp,
+            regime=str(regime.get("regime", "unknown")),
+        )
+        if not decision.approved or decision.proposal is None:
+            self.rejections[f"portfolio_coordinator:{decision.reason}"] += 1
+            return
+        sized = decision.proposal
         result = validate_trade(
-            ticker=ticker, action="buy", qty=int(sized["qty"]),
+            ticker=ticker, action=action, qty=int(sized["qty"]),
             entry_price=close, portfolio_state=state, mode="algo",
         )
         if not result.approved:
@@ -667,6 +1018,7 @@ class AlgoPortfolioBacktest:
         self.pending_entries[ticker] = {
             "ticker": ticker, "strategy": signal["strategy"],
             "qty": int(sized["qty"]), "reference_price": close,
+            "action": action,
             "stop_price": float(sized["stop_price"]),
             "take_profit": float(sized["take_profit"]),
             "signal_at": signal_at,
@@ -679,8 +1031,102 @@ class AlgoPortfolioBacktest:
                 signal["event_confirmation"], as_of=timestamp + timedelta(minutes=BAR_MINUTES),
                 strategy_state=self.event_strategy_state,
             )
+        elif strategy == "event_driven":
+            self.event_signal_generator.record_proposal(
+                signal, as_of=timestamp + timedelta(minutes=BAR_MINUTES),
+                strategy_state=self.event_strategy_state,
+            )
         self.entry_counts[self.day_key] += 1
         self.entry_counts_by_strategy[(self.day_key, strategy)] += 1
+
+    def _buy_hold_report(self, events: dict[datetime, dict[str, dict]]) -> dict:
+        """Equal-weight buy-and-hold benchmark using the same symbols and fill costs."""
+        first: dict[str, dict] = {}
+        last: dict[str, dict] = {}
+        for bars in events.values():
+            for ticker, bar in bars.items():
+                first.setdefault(ticker, bar)
+                last[ticker] = bar
+        eligible = sorted(set(first) & set(last))
+        if not eligible:
+            return {"symbol_count": 0, "net_return_pct": 0.0, "net_pnl": 0.0}
+        allocation = self.initial_capital / len(eligible)
+        net_pnl = 0.0
+        invested = 0.0
+        for ticker in eligible:
+            buy_price = self._fill_price(float(first[ticker]["o"]), "buy")
+            qty = int(allocation / buy_price)
+            if qty <= 0:
+                continue
+            sell_price = self._fill_price(float(last[ticker]["c"]), "sell")
+            buy_commission = qty * self.commission_per_share
+            sell_commission = qty * self.commission_per_share
+            net_pnl += qty * (sell_price - buy_price) - buy_commission - sell_commission
+            invested += qty * buy_price + buy_commission
+        return {
+            "method": "equal_weight_buy_and_hold_same_symbols",
+            "symbol_count": len(eligible),
+            "symbols_with_prices": eligible,
+            "symbols_without_prices": sorted(set(self.symbols) - set(eligible)),
+            "invested_capital": round(invested, 2),
+            "net_pnl": round(net_pnl, 2),
+            "net_return_pct": round(net_pnl / self.initial_capital * 100, 4),
+            "costs_included": True,
+        }
+
+    @staticmethod
+    def _pearson(left: list[float], right: list[float]) -> float | None:
+        if len(left) < 2 or len(left) != len(right):
+            return None
+        left_mean, right_mean = statistics.mean(left), statistics.mean(right)
+        covariance = sum((a - left_mean) * (b - right_mean) for a, b in zip(left, right))
+        left_var = sum((a - left_mean) ** 2 for a in left)
+        right_var = sum((b - right_mean) ** 2 for b in right)
+        if left_var <= 0 or right_var <= 0:
+            return None
+        return covariance / math.sqrt(left_var * right_var)
+
+    def _correlation_report(self) -> dict:
+        dates = [str(row["date"]) for row in self.daily_curve]
+        daily = {str(row["date"]): row["pnl_by_strategy"] for row in self.daily_strategy_pnl}
+        active: dict[str, set[str]] = defaultdict(set)
+        for day, by_strategy in self.holdings_by_day.items():
+            for strategy, holdings in by_strategy.items():
+                if holdings:
+                    active[strategy].add(day)
+        pairs = []
+        strategies = sorted(STRATEGY_NAMES)
+        for index, left_name in enumerate(strategies):
+            for right_name in strategies[index + 1:]:
+                left = [float((daily.get(day) or {}).get(left_name, 0.0)) for day in dates]
+                right = [float((daily.get(day) or {}).get(right_name, 0.0)) for day in dates]
+                correlation = self._pearson(left, right)
+                overlap_days = 0
+                for day in dates:
+                    left_holds = self.holdings_by_day.get(day, {}).get(left_name, set())
+                    right_holds = self.holdings_by_day.get(day, {}).get(right_name, set())
+                    if left_holds & right_holds:
+                        overlap_days += 1
+                denominator = min(len(active[left_name]), len(active[right_name]))
+                overlap_fraction = overlap_days / denominator if denominator else 0.0
+                active_union = len(active[left_name] | active[right_name])
+                pairs.append({
+                    "strategy_a": left_name,
+                    "strategy_b": right_name,
+                    "daily_pnl_correlation": round(correlation, 4) if correlation is not None else None,
+                    "same_ticker_same_direction_overlap_days": overlap_days,
+                    "active_days_a": len(active[left_name]),
+                    "active_days_b": len(active[right_name]),
+                    "overlap_fraction_of_smaller_active_days": round(overlap_fraction, 4),
+                    "overlap_fraction_of_union_active_days": round(overlap_days / active_union, 4) if active_union else 0.0,
+                    "flag": bool(correlation is not None and correlation > 0.6 and overlap_fraction > 0.30),
+                })
+        return {
+            "definition": "Pearson correlation on daily strategy P&L changes; overlap is the share of the smaller strategy active-day count where both held the same ticker in the same direction.",
+            "thresholds": {"correlation_above": 0.6, "overlap_fraction_above": 0.30},
+            "pairs": pairs,
+            "flags": [pair for pair in pairs if pair["flag"]],
+        }
 
     def run(self) -> dict:
         logger = logging.getLogger("risk_manager")
@@ -700,12 +1146,15 @@ class AlgoPortfolioBacktest:
             for bar in self.spy_daily_bars
         }
         first_day = min(timestamp.astimezone(ET).date() for timestamp in events)
-        if sum(day < first_day for day in daily_dates) < 22:
-            raise ValueError("At least 22 completed SPY daily bars before the replay are required")
+        if sum(day < first_day for day in daily_dates) < MIN_REGIME_DAILY_BARS:
+            raise ValueError(
+                f"At least {MIN_REGIME_DAILY_BARS} completed SPY daily bars before the replay are required"
+            )
 
         last_day: date | None = None
         factor_signals_for_day: dict[str, dict] = {}
         factor_signals_date: date | None = None
+        momentum_signals_for_day: dict[str, object] = {}
         event_times = list(events)
         for index, timestamp in enumerate(event_times):
             bars = events[timestamp]
@@ -714,24 +1163,46 @@ class AlgoPortfolioBacktest:
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
                 factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
+                held_momentum = {
+                    ticker: {
+                        "qty": position.qty, "entry_at": position.entry_at,
+                        "entry_price": position.entry_price,
+                    }
+                    for ticker, position in self.positions.items()
+                    if position.strategy == "momentum"
+                }
+                try:
+                    momentum_signals_for_day, _ = generate_swing_momentum_signals(
+                        self.daily_stock_bars, symbols=self.symbols,
+                        as_of=trading_day - timedelta(days=1),
+                        regime=str(self._current_regime.get("regime", "unknown")),
+                        held_positions=held_momentum,
+                        parameters=self.profile.get("momentum"),
+                    )
+                except Exception as exc:
+                    self.rejections[f"signal_error:momentum:{type(exc).__name__}"] += 1
+                    momentum_signals_for_day = {}
                 if factor_diagnostics is not None:
                     self.latest_multi_factor_signals = (
                         {
                             ticker: signal for ticker, signal in factor_signals_for_day.items()
-                            if signal.get("action") in {"buy", "hold"}
+                            if signal.get("action") in {"buy", "hold", "short"}
                         }
                         if factor_diagnostics.get("minimum_universe_met") else {}
                     )
                 last_day = trading_day
             self._start_periods(trading_day)
+            self._record_holdings(trading_day)
             self._fill_pending_entries(bars, timestamp)
             self._fill_pending_exits(bars, timestamp)
+            self._record_holdings(trading_day)
             for ticker, bar in bars.items():
                 self._check_brackets(ticker, bar, timestamp)
             for ticker, bar in bars.items():
                 self.last_prices[ticker] = float(bar["c"])
                 history = self.histories[(ticker, trading_day)]
                 history.append(bar)
+            self._record_holdings(trading_day)
             regime = self._current_regime
             ranked = {
                 item["strategy"]: float(item.get("selection_score", item["score"]))
@@ -740,16 +1211,16 @@ class AlgoPortfolioBacktest:
             candidates = []
             if factor_signals_date == trading_day:
                 for ticker, signal in list(factor_signals_for_day.items()):
-                    if signal["action"] == "sell" and ticker in bars:
+                    if signal["action"] in {"sell", "cover"} and ticker in bars:
                         self._queue_exit_signal(ticker, signal, bars[ticker], timestamp)
                         factor_signals_for_day.pop(ticker, None)
             for ticker, bar in bars.items():
-                if ticker in self.positions or ticker in self.pending_entries:
+                if ticker in self.pending_entries or ticker in self.pending_exits:
                     continue
                 factor_signal = factor_signals_for_day.get(ticker) if factor_signals_date == trading_day else None
-                if factor_signal and factor_signal.get("action") == "sell":
-                    # Preserve exit management for any legacy Multi Factor
-                    # position; new entries are owned by a core rule.
+                if factor_signal and factor_signal.get("action") in {"sell", "cover"}:
+                    # Satellite exits share the same simulator risk manager
+                    # and next-bar fill model as core strategy exits.
                     self._queue_exit_signal(ticker, factor_signal, bar, timestamp)
                     factor_signals_for_day.pop(ticker, None)
                 history = self.histories[(ticker, trading_day)]
@@ -757,16 +1228,23 @@ class AlgoPortfolioBacktest:
                     self.latest_multi_factor_signals.get(ticker)
                     if "multi_factor" in regime.get("active", []) else None
                 )
+                position = self.positions.get(ticker)
                 signal = self._signal_for(
                     ticker, history, regime.get("active", []), ranked, timestamp,
                     factor_signal=factor_support,
+                    position_qty=position.qty if position is not None else 0,
+                    momentum_signals=momentum_signals_for_day,
                 )
                 if signal:
-                    candidates.append((ticker, bar, signal))
+                    if position is not None:
+                        self._queue_exit_signal(ticker, signal, bar, timestamp)
+                    else:
+                        candidates.append((ticker, bar, signal))
 
             # Resolve same-bar capacity consistently for baseline and research runs.
             candidates.sort(
                 key=lambda item: (
+                    strategy_priority(str(item[2].get("strategy", ""))),
                     -float(item[2].get("rank_score", 0)),
                     -float(item[2].get("strength", 0)),
                     item[0],
@@ -775,13 +1253,29 @@ class AlgoPortfolioBacktest:
             for ticker, bar, signal in candidates:
                 self._queue_signal(ticker, signal, bar, timestamp)
 
+            is_session_end = (
+                index + 1 == len(event_times)
+                or event_times[index + 1].astimezone(ET).date() != trading_day
+            )
+            if is_session_end:
+                self._record_holdings(trading_day)
+                self._charge_daily_borrow()
+                if not self.coordinator.config.allow_intraday_overnight:
+                    self._flatten_positions(
+                        bars, timestamp, strategies=set(INTRADAY_STRATEGIES),
+                        reason="coordinator_intraday_eod_flatten",
+                    )
+                if index + 1 == len(event_times) and self.force_close_at_end:
+                    self._flatten_positions(bars, timestamp, reason="walk_forward_window_end")
+                self._record_daily_strategy_pnl(trading_day)
+
             if self.positions:
                 self.exposed_event_count += 1
             equity = self._equity()
             self.peak_equity = max(self.peak_equity, equity)
             self.max_drawdown = max(self.max_drawdown, (self.peak_equity - equity) / self.peak_equity)
             # Capture the last replay mark for each New York trading date.
-            if index + 1 == len(event_times) or event_times[index + 1].astimezone(ET).date() != trading_day:
+            if is_session_end:
                 self.daily_curve.append({"date": trading_day.isoformat(), "equity": round(equity, 2)})
 
         final_equity = self._equity()
@@ -805,6 +1299,9 @@ class AlgoPortfolioBacktest:
             current_consecutive_losses = current_consecutive_losses + 1 if trade["pnl"] < 0 else 0
             max_consecutive_losses = max(max_consecutive_losses, current_consecutive_losses)
 
+        benchmark = self._buy_hold_report(events)
+        benchmark_return = float(benchmark["net_return_pct"])
+        strategy_totals = self._strategy_total_pnl()
         strategy_metrics = {}
         for strategy in sorted(STRATEGY_NAMES):
             trades = [trade for trade in self.closed_trades if trade["strategy"] == strategy]
@@ -830,7 +1327,13 @@ class AlgoPortfolioBacktest:
                 if strategy_losses else (None if not strategy_wins else "inf"),
                 "average_trade_pnl": round(statistics.mean([trade["pnl"] for trade in trades]), 2) if trades else None,
                 "average_holding_minutes": round(statistics.mean(durations), 2) if durations else None,
+                "net_pnl": round(strategy_totals.get(strategy, 0.0), 2),
+                "net_return_on_initial_book_pct": round(strategy_totals.get(strategy, 0.0) / self.initial_capital * 100, 4),
+                "excess_return_vs_buy_hold_pct_points": round(
+                    strategy_totals.get(strategy, 0.0) / self.initial_capital * 100 - benchmark_return, 4,
+                ),
             }
+        correlation_report = self._correlation_report()
         profile_hash = hashlib.sha256(
             json.dumps(self.profile, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -838,14 +1341,35 @@ class AlgoPortfolioBacktest:
             "parameters": self.profile,
             "strategy_filter": self.strategy_filter,
             "research_controls": self.research_controls,
+            "transaction_costs": {
+                "spread_bps": self.spread_bps,
+                "slippage_bps_each_side": self.slippage_bps,
+                "commission_per_share": self.commission_per_share,
+                "short_borrow_annual_pct": self.short_borrow_annual_pct,
+                "unknown_borrow_penalty_bps": self.unknown_borrow_penalty_bps,
+            },
+            "portfolio_coordinator": {
+                "max_name_pct": self.coordinator.config.max_name_pct,
+                "sector_caps": dict(self.coordinator.config.sector_caps),
+                "max_gross_pct": self.coordinator.config.max_gross_pct,
+                "max_net_long_pct": self.coordinator.config.max_net_long_pct,
+                "max_net_short_pct": self.coordinator.config.max_net_short_pct,
+                "max_daily_entries": self.coordinator.config.max_daily_entries,
+                "max_intraday_entries": self.coordinator.config.max_intraday_entries,
+            },
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         open_positions = []
         for ticker, position in sorted(self.positions.items()):
             mark = self.last_prices.get(ticker, position.entry_price)
+            estimated_exit_cost = abs(position.qty * mark) * (self.spread_bps / 2 + self.slippage_bps) / 10_000
             open_positions.append({
                 "ticker": ticker, "strategy": position.strategy, "qty": position.qty,
                 "entry_at": position.entry_at, "entry_price": round(position.entry_price, 6),
-                "mark": round(mark, 6), "unrealized_pnl": round(position.qty * (mark - position.entry_price), 2),
+                "mark": round(mark, 6), "unrealized_pnl": round(
+                    position.qty * (mark - position.entry_price) - position.entry_commission
+                    - position.borrow_cost - estimated_exit_cost
+                    - abs(position.qty) * self.commission_per_share, 2,
+                ),
                 "stop_price": position.stop_price, "take_profit": position.take_profit,
             })
         merged_profile = deepcopy(ALGO_DEFAULT_PARAMETERS)
@@ -864,7 +1388,7 @@ class AlgoPortfolioBacktest:
         event_diagnostics.pop("freshness", None)
         event_diagnostics["calendar_mode"] = "historical_point_in_time"
         return {
-            "simulator": "swarm_algo_portfolio_research_v2",
+            "simulator": "swarm_algo_portfolio_research_v3",
             "feed": self.feed,
             "data_adjustment": self.data_adjustment,
             "session": "regular",
@@ -877,6 +1401,11 @@ class AlgoPortfolioBacktest:
             "initial_capital": self.initial_capital,
             "final_equity": round(final_equity, 2),
             "net_return_pct": round((final_equity / self.initial_capital - 1) * 100, 4),
+            "buy_and_hold": benchmark,
+            "benchmark_net_return_pct": benchmark_return,
+            "excess_return_vs_buy_hold_pct_points": round(
+                (final_equity / self.initial_capital - 1) * 100 - benchmark_return, 4,
+            ),
             "max_drawdown_pct": round(self.max_drawdown * 100, 4),
             "closed_trade_count": len(self.closed_trades),
             "open_position_count": len(open_positions),
@@ -905,6 +1434,20 @@ class AlgoPortfolioBacktest:
                 len(self.candidate_ticker_days) / session_count, 3
             ) if session_count else 0,
             "strategy_metrics": strategy_metrics,
+            "strategy_correlation_report": correlation_report,
+            "portfolio_coordinator": {
+                "max_name_pct": self.coordinator.config.max_name_pct,
+                "sector_caps": dict(self.coordinator.config.sector_caps),
+                "max_gross_pct": self.coordinator.config.max_gross_pct,
+                "max_net_long_pct": self.coordinator.config.max_net_long_pct,
+                "max_net_short_pct": self.coordinator.config.max_net_short_pct,
+                "max_daily_entries": self.coordinator.config.max_daily_entries,
+                "max_intraday_entries": self.coordinator.config.max_intraday_entries,
+                "swing_open_delay_minutes": self.coordinator.config.swing_open_delay_minutes,
+                "intraday_close_cutoff_minutes": self.coordinator.config.intraday_close_cutoff_minutes,
+                "allow_opposite_netting": self.coordinator.config.allow_opposite_netting,
+                "allow_intraday_overnight": self.coordinator.config.allow_intraday_overnight,
+            },
             "event_strategy_diagnostics": {
                 **event_diagnostics,
                 "enabled": self.event_satellite_enabled,
@@ -929,8 +1472,19 @@ class AlgoPortfolioBacktest:
             "average_trade_pnl": round(statistics.mean(closed_pnls), 2) if closed_pnls else None,
             "daily_sharpe_annualized": round(math.sqrt(252) * statistics.mean(daily_returns) / daily_std, 4)
             if daily_std > 0 and daily_returns else None,
+            "transaction_costs": {
+                "spread_bps_round_trip_reference": self.spread_bps,
+                "spread_cost_applied_each_side_bps": self.spread_bps / 2,
+                "slippage_bps_each_side": self.slippage_bps,
+                "commission_per_share_each_side": self.commission_per_share,
+                "short_borrow_annual_pct": self.short_borrow_annual_pct,
+                "unknown_borrow_adverse_fill_penalty_bps": self.unknown_borrow_penalty_bps,
+                "commission_paid": round(self.commission_total, 2),
+                "short_borrow_paid": round(self.borrow_cost_total, 2),
+                "borrow_availability_observations": dict(self.borrow_coverage),
+            },
             "slippage_bps_each_side": self.slippage_bps,
-            "fees": "commissions and regulatory fees are not modeled",
+            "fees": "Spread, slippage, per-share commissions, modeled annual short borrow, and an adverse fill penalty when historical borrow status is unknown are included.",
             "parameter_profile": merged_profile,
             "parameter_profile_sha256": profile_hash,
             "experiment_sha256": experiment_hash,
@@ -943,6 +1497,9 @@ class AlgoPortfolioBacktest:
                 "take_profit_r_multiple": STRATEGY_CONFIG["take_profit_r_multiple"],
                 "max_open_positions": self.risk["max_open_positions"],
                 "max_trades_per_day": self.risk["max_trades_per_day"],
+                "max_short_positions": self.risk.get("max_short_positions"),
+                "max_short_exposure_pct": self.risk.get("max_short_exposure_pct"),
+                "allow_short_positions": self.risk.get("allow_short_positions", False),
                 "max_sector_pct": self.risk["max_sector_pct"],
                 "min_cash_pct": self.risk["min_cash_pct"],
                 "daily_loss_limit": self.risk["daily_loss_limit"],
@@ -961,6 +1518,7 @@ class AlgoPortfolioBacktest:
             "risk_rejections": dict(sorted(self.rejections.items())),
             "multi_factor_diagnostics": self._multi_factor_ic(),
             "daily_equity": self.daily_curve,
+            "daily_strategy_pnl": self.daily_strategy_pnl,
             "closed_trades": self.closed_trades,
             "open_positions": open_positions,
             "unfilled_entries_at_end": sorted(self.pending_entries),
@@ -974,7 +1532,10 @@ class AlgoPortfolioBacktest:
                 "LLM regime advice is omitted; replay uses the deterministic historical SPY regime only.",
                 "Risk limits are fixed. The profile changes signal-rule parameters only.",
                 "Open positions remain marked to market at the end; Algo positions are not forcibly flattened.",
-                "Rule-based exits and minimum holding times are not simulated; exits use the configured stop and target brackets.",
+                "Rule-based exits observe the configured minimum holding time; hard stop and target brackets can exit sooner.",
+                "Historical borrow availability is optional; explicit non-easy-to-borrow shorts are skipped and unknown availability receives an adverse fill penalty.",
+                "Short borrow is charged at the configured annual rate on positions still open at each session close.",
+                "The walk-forward runner liquidates all remaining positions at each test-window boundary with modeled exit costs.",
                 "Signal event counts are raw five-minute buy-signal observations and may include repeated observations of one setup.",
             ],
         }
@@ -1024,6 +1585,26 @@ def _read_profile(path: str | None) -> dict:
         return {}
     profile = json.loads(Path(path).read_text())
     return validate_parameter_profile(profile)
+
+
+def read_borrow_availability(path: str | None) -> dict[tuple[str, str], bool]:
+    """Read optional point-in-time borrow data with date,symbol,easy_to_borrow columns."""
+    if not path:
+        return {}
+    output: dict[tuple[str, str], bool] = {}
+    with Path(path).open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"date", "symbol", "easy_to_borrow"}
+        if not required.issubset(set(reader.fieldnames or [])):
+            raise ValueError("Borrow CSV requires date,symbol,easy_to_borrow columns")
+        for row in reader:
+            day = date.fromisoformat(str(row["date"]).strip()).isoformat()
+            ticker = str(row["symbol"]).strip().upper()
+            value = str(row["easy_to_borrow"]).strip().lower()
+            if not ticker or value not in {"true", "false", "1", "0", "yes", "no", "easy", "hard"}:
+                raise ValueError("Borrow CSV has an invalid symbol or easy_to_borrow value")
+            output[(ticker, day)] = value in {"true", "1", "yes", "easy"}
+    return output
 
 
 def _read_strategy_filter(value: str | None) -> list[str] | None:
@@ -1127,6 +1708,11 @@ def run_backtest(args) -> dict:
         start=args.start, end=args.end, feed=feed,
         data_adjustment=adjustment, initial_capital=args.capital,
         slippage_bps=args.slippage_bps, profile=profile,
+        spread_bps=getattr(args, "spread_bps", 3.0),
+        commission_per_share=getattr(args, "commission_per_share", 0.005),
+        short_borrow_annual_pct=getattr(args, "short_borrow_annual_pct", 3.0) / 100,
+        unknown_borrow_penalty_bps=getattr(args, "unknown_borrow_penalty_bps", 25.0),
+        borrow_availability=read_borrow_availability(getattr(args, "borrow_availability", None)),
         strategies=selected_strategies,
         research_controls=_read_research_controls(args),
         event_calendar=(EventCalendar.from_csv(args.event_calendar) if getattr(args, "event_calendar", None) else None),
@@ -1168,6 +1754,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--adjustment", choices=["raw", "split", "dividend", "all"], default=None)
     run.add_argument("--capital", type=float, default=100_000)
     run.add_argument("--slippage-bps", type=float, default=5)
+    run.add_argument("--spread-bps", type=float, default=3, help="assumed full quoted spread; half is charged on each side")
+    run.add_argument("--commission-per-share", type=float, default=0.005)
+    run.add_argument("--short-borrow-annual-pct", type=float, default=3.0)
+    run.add_argument("--unknown-borrow-penalty-bps", type=float, default=25)
+    run.add_argument("--borrow-availability", help="CSV with date,symbol,easy_to_borrow columns")
     run.add_argument("--profile", help="optional JSON with signal parameters only; risk settings cannot be changed")
     run.add_argument("--strategies", help="optional comma-separated strategy isolation filter")
     run.add_argument("--event-calendar", help="optional point-in-time event calendar CSV")

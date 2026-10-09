@@ -1,8 +1,4 @@
-"""Bounded confirmation overlays for the Algo rule portfolio.
-
-Multi Factor and Event Driven signals can confirm an entry proposed by one of
-the four core rules. They never create an entry or become the position owner.
-"""
+"""Bounded satellite confirmations for the Algo rule portfolio."""
 
 from __future__ import annotations
 
@@ -11,7 +7,9 @@ import math
 
 
 CORE_STRATEGIES = frozenset({
-    "mean_reversion", "momentum", "opening_range_breakout", "trend_following",
+    "mean_reversion", "swing_mean_reversion", "momentum",
+    "opening_range_breakout", "trend_following",
+    "intraday_trend", "intraday_momentum",
 })
 SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})
 
@@ -74,7 +72,9 @@ def apply_satellite_confirmations(
     """
     settings = config or SatelliteOverlayConfig()
     result = dict(signal)
-    if result.get("action") != "buy" or result.get("strategy") not in CORE_STRATEGIES:
+    action = result.get("action")
+    direction = "long" if action == "buy" else "short" if action == "short" else None
+    if direction is None or result.get("strategy") not in CORE_STRATEGIES:
         return result
 
     confirmations: list[str] = []
@@ -85,7 +85,12 @@ def apply_satellite_confirmations(
     if settings.multi_factor_enabled and factor_signal:
         factor_action = factor_signal.get("action")
         factor_direction = factor_signal.get("direction", "long" if factor_action == "buy" else "flat")
-        if factor_action in {"buy", "hold"} and factor_direction == "long":
+        factor_confirms = (
+            direction == "long" and factor_action in {"buy", "hold"} and factor_direction == "long"
+        ) or (
+            direction == "short" and factor_action == "short" and factor_direction == "short"
+        )
+        if factor_confirms:
             confirmations.append("multi_factor")
             strength_bonus += settings.multi_factor_strength_bonus
             risk_bonus += settings.multi_factor_risk_bonus
@@ -93,7 +98,7 @@ def apply_satellite_confirmations(
             score = factor_signal.get("score")
             reasons.append(f"factor rank {rank}" + (f" score {float(score):.2f}" if isinstance(score, (int, float)) else ""))
 
-    if settings.event_driven_enabled and event_signal and event_signal.get("action") == "buy":
+    if settings.event_driven_enabled and event_signal and event_signal.get("action") == action:
         confirmations.append("event_driven")
         strength_bonus += settings.event_driven_strength_bonus
         risk_bonus += settings.event_driven_risk_bonus

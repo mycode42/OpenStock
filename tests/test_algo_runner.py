@@ -270,7 +270,9 @@ def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
     assert result["entries_paused"] is True
     assert result["data_status"]["historical_bars"] == "stale"
     assert result["trades"] == []
-    assert "stale" in result["signals"][0]["suppressed_reason"]
+    # Algo Momentum is cross-sectional and daily now. With no daily history it
+    # emits no 5-minute fallback signal while the stale-data pause is active.
+    assert result["signals"] == []
 
 
 def test_historical_bar_fetch_follows_pagination(monkeypatch):

@@ -1,6 +1,6 @@
 [project]
 name = "swarm-trader"
-version = "1.6.0"
+version = "2.0.0"
 description = "Paper-trading strategy portfolios and research tools"
 authors = [{ name = "Swarm Trader maintainers" }]
 readme = "README.md"
@@ -9,10 +9,7 @@ requires-python = ">=3.11,<4.0"
 dynamic = ["dependencies"]
 
 [tool.poetry]
-packages = [
-    { include = "src", from = "." },
-    { include = "app", from = "." }
-]
+packages = [{ include = "src", from = "." }]
 include = [
     { path = "risk_manager.py", format = ["sdist", "wheel"] }
 ]
@@ -28,19 +25,14 @@ langgraph = "0.2.56"
 pandas = "^2.1.0"
 numpy = "^1.24.0"
 python-dotenv = "1.0.0"
+requests = "^2.32.5"
 matplotlib = "^3.9.2"
 tabulate = "^0.9.0"
 colorama = "^0.4.6"
 questionary = "^2.1.0"
 rich = "^13.9.4"
 langchain-google-genai = "^2.0.11"
-# Backend dependencies
-fastapi = {extras = ["standard"], version = "^0.104.0"}
-fastapi-cli = "^0.0.7"
 pydantic = "^2.4.2"
-httpx = "^0.27.0"
-sqlalchemy = "^2.0.22"
-alembic = "^1.12.0"
 langchain-gigachat = "^0.3.12"
 langchain-xai = "^0.2.5"
 yfinance = "^1.2.0"

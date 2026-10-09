@@ -147,6 +147,29 @@ def get_latest_ask(ticker: str, *, mode: str) -> float:
     return ask
 
 
+def get_latest_bid(ticker: str, *, mode: str) -> float:
+    """Require a fresh broker-data bid before sizing a new short market order."""
+    response = requests.get(
+        f"{DATA_BASE}/stocks/{ticker}/quotes/latest",
+        headers=_headers(mode),
+        params={"feed": "iex"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    quote = (response.json() or {}).get("quote") or {}
+    try:
+        bid = float(quote["bp"])
+        timestamp = datetime.fromisoformat(str(quote["t"]).replace("Z", "+00:00"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"Latest Alpaca bid unavailable for {ticker}") from exc
+    if not math.isfinite(bid) or bid <= 0 or timestamp.tzinfo is None:
+        raise ValueError(f"Latest Alpaca bid invalid for {ticker}")
+    age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+    if age < 0 or age > 90:
+        raise ValueError(f"Latest Alpaca bid for {ticker} is stale ({age:.0f}s)")
+    return bid
+
+
 def get_daily_pnl(account: dict) -> float:
     """Return today's P&L as a fraction of starting equity (negative = loss)."""
     equity = float(account.get("equity", 0))
@@ -333,6 +356,7 @@ def _replay_matches_order(order: dict, broker: dict, headers: dict) -> bool:
     if (
         broker.get("client_order_id") != order.get("client_order_id")
         or str(broker.get("time_in_force") or "").lower() != str(order.get("time_in_force") or "").lower()
+        or str(broker.get("position_intent") or "").lower() != str(order.get("position_intent") or "").lower()
     ):
         return False
     if "extended_hours" in order and broker.get("extended_hours") is not order["extended_hours"]:
@@ -669,17 +693,21 @@ def place_order(
         return {"success": False, "error": f"Unsupported trade action: {action}"}
     if order_type not in {"market", "limit", "bracket", "stop", "oco", "trailing_stop"}:
         return {"success": False, "error": f"Unsupported order type: {order_type}"}
-    if action == "short":
-        return {"success": False, "error": "New short entries are disabled"}
-    if action == "cover" and order_type not in {"market", "limit"}:
-        return {"success": False, "error": "Cover exits support market or limit orders only"}
-    if order_type == "oco" and action != "sell":
-        return {"success": False, "error": "OCO protection requires a position-reducing sell"}
-    if action != "buy" and (
+    if action == "short" and (_active_mode != "algo" or not get_mode_config("algo")["risk"].get("allow_short_positions")):
+        return {"success": False, "error": "New short entries are disabled for this mode"}
+    if action == "short" and (stop_price is None or take_profit is None):
+        return {"success": False, "error": "Algo short entries require attached stop-loss and take-profit prices"}
+    if action == "short" and order_type not in {"market", "limit", "bracket"}:
+        return {"success": False, "error": "Algo short entries require a bracket-capable entry order"}
+    if action == "cover" and order_type not in {"market", "limit", "oco", "stop"}:
+        return {"success": False, "error": "Cover exits support market, limit, stop, or OCO orders"}
+    if order_type == "oco" and action not in {"sell", "cover"}:
+        return {"success": False, "error": "OCO protection requires a position-reducing sell or cover"}
+    if action not in {"buy", "short"} and (
         order_type == "bracket"
         or (stop_price is not None and take_profit is not None and order_type != "oco")
     ):
-        return {"success": False, "error": "Entry brackets require a buy; use OCO for an existing long position"}
+        return {"success": False, "error": "Entry brackets require buy/short; use OCO for an existing position"}
     if order_type == "market" and limit_price is not None:
         return {"success": False, "error": "Market orders cannot include a limit price"}
     if order_type in {"stop", "trailing_stop"} and (
@@ -716,8 +744,8 @@ def place_order(
     if extended_hours:
         if _active_mode != "algo":
             return {"success": False, "error": "Extended-hours orders are enabled only for Algo mode"}
-        if action not in {"buy", "sell"} or order_type != "limit" or limit_price is None or float(limit_price) <= 0:
-            return {"success": False, "error": "Extended-hours orders require a buy/sell limit order with a positive limit price"}
+        if action not in {"buy", "sell", "cover"} or order_type != "limit" or limit_price is None or float(limit_price) <= 0:
+            return {"success": False, "error": "Extended-hours orders require a buy/sell/cover limit order with a positive limit price"}
         order = {
             "symbol": ticker,
             "qty": str(int(qty)),
@@ -727,9 +755,21 @@ def place_order(
             "limit_price": str(round(float(limit_price), 2)),
             "extended_hours": True,
         }
+        if action == "cover":
+            order["position_intent"] = "buy_to_close"
         if client_order_id:
             order["client_order_id"] = str(client_order_id)[:48]
         return {**_submit_broker_order(order, "limit"), "extended_hours": True}
+
+    if order_type in {"bracket", "oco", "market", "limit"} and stop_price is not None and take_profit is not None:
+        try:
+            stop_value = float(stop_price)
+            target_value = float(take_profit)
+        except (TypeError, ValueError):
+            return {"success": False, "error": "Protection prices must be numeric"}
+        valid_levels = stop_value > target_value if action in {"short", "cover"} else stop_value < target_value
+        if not all(math.isfinite(value) and value > 0 for value in (stop_value, target_value)) or not valid_levels:
+            return {"success": False, "error": "Stop and target prices do not match the trade direction"}
 
     if _active_mode == "algo" and order_type == "oco":
         # A replacement OCO is a new claim on the entire live holding.
@@ -744,7 +784,7 @@ def place_order(
                 row for row in _list_positions(headers)
                 if str(row.get("symbol", "")).upper() == str(ticker).upper()
             ]
-            if len(matches) != 1 or _position_qty(matches[0]) != Decimal(str(qty)):
+            if len(matches) != 1 or abs(_position_qty(matches[0])) != Decimal(str(qty)):
                 return {"success": False, "error": "Algo OCO repair quantity no longer matches the broker holding"}
             open_symbol_orders = [
                 row for row in _list_open_orders(headers)
@@ -756,14 +796,17 @@ def place_order(
             return {"success": False, "error": f"Algo OCO repair preflight unavailable: {exc}"}
 
     # Auto-calculate bracket prices if stop_pct is provided and prices are missing
-    if action == "buy" and order_type not in ("limit", "stop", "trailing_stop", "oco"):
+    if action in {"buy", "short"} and order_type not in ("limit", "stop", "trailing_stop", "oco"):
         ref_price = entry_price or limit_price or 0
         if ref_price > 0 and stop_pct is not None:
             if stop_price is None:
-                stop_price = round(ref_price * (1 - stop_pct), 2)
+                stop_price = round(ref_price * (1 + stop_pct), 2) if action == "short" else round(ref_price * (1 - stop_pct), 2)
             if take_profit is None and stop_price is not None:
                 stop_dist = abs(ref_price - float(stop_price))
-                take_profit = round(ref_price + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
+                take_profit = (
+                    round(ref_price - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
+                    if action == "short" else round(ref_price + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
+                )
 
     if order_type in {"market", "limit", "bracket"}:
         if (stop_price is None) != (take_profit is None):
@@ -781,7 +824,7 @@ def place_order(
     if order_type in required_fields and any(value is None for value in required_fields[order_type]):
         return {"success": False, "error": f"{order_type} order is missing a required price"}
 
-    use_bracket = action == "buy" and order_type in {"market", "limit", "bracket"} and (
+    use_bracket = action in {"buy", "short"} and order_type in {"market", "limit", "bracket"} and (
         order_type == "bracket"
         or (stop_price is not None and take_profit is not None)
     )
@@ -854,6 +897,15 @@ def place_order(
             "time_in_force": "day",
         }
 
+    # Make opening versus closing intent explicit to Alpaca. This is
+    # especially important for a sell-side short entry and buy-side cover.
+    order["position_intent"] = {
+        "buy": "buy_to_open",
+        "short": "sell_to_open",
+        "sell": "sell_to_close",
+        "cover": "buy_to_close",
+    }[action]
+
     if client_order_id:
         order["client_order_id"] = str(client_order_id)[:48]
 
@@ -867,7 +919,9 @@ def place_order(
     return result
 
 
-def cancel_open_orders_for_symbol(ticker: str, mode: str = None) -> dict:
+def cancel_open_orders_for_symbol(
+    ticker: str, mode: str = None, *, allow_protective: bool = False,
+) -> dict:
     """Cancel and confirm all symbol orders before a strategy market exit."""
     mode = mode or _active_mode
     headers = _headers(mode)
@@ -883,9 +937,8 @@ def cancel_open_orders_for_symbol(ticker: str, mode: str = None) -> dict:
             if not matched:
                 return {"success": True, "cancelled": cancelled}
             last_matched = matched
-            if mode == "algo" and any(
-                str(order.get("side", "")).lower() == "sell"
-                and (
+            if mode == "algo" and not allow_protective and any(
+                (
                     str(order.get("type", "")).lower() in {"stop", "stop_limit", "trailing_stop"}
                     or str(order.get("order_class", "")).lower() in {"bracket", "oco"}
                     or order.get("parent_order_id")
@@ -939,8 +992,10 @@ def validate_trade_legacy(ticker, action, qty, positions, portfolio_value, daily
         return False, f"No short position in {ticker} to cover"
     if action == "cover" and qty > abs(current_shares):
         return False, f"Cover quantity {qty} exceeds the {abs(current_shares):g} short shares in {ticker}"
-    if action == "short":
-        return False, "New short entries are disabled"
+    if action == "short" and current_shares > 0:
+        return False, "Close the long position before opening a short"
+    if action == "buy" and current_shares < 0:
+        return False, "Cover the short position before opening a long"
 
     daily_pnl_pct = 0.0  # circuit breaker is now handled by V2 risk manager
     if action in ("buy", "short") and daily_pnl_pct <= -daily_loss_limit:
@@ -1104,6 +1159,11 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
         extended_hours = bool(trade.get("extended_hours", False))
         entry_price = trade.get("entry_price")
         strategy = trade.get("strategy", "unspecified")
+        timeframe = trade.get("timeframe", "unknown")
+        direction = trade.get("direction") or (
+            "long" if action == "buy" else "short" if action == "short"
+            else "close_short" if action == "cover" else "close_long"
+        )
         strategy_group = trade.get("strategy_group")
         client_order_id = str(trade.get("client_order_id") or (
             f"sw-{mode[:2]}-{datetime.now(MARKET_TZ).date():%Y%m%d}-{trade_index}-{decision_digest}"
@@ -1122,6 +1182,17 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
         if action == "hold" or qty <= 0:
             results.append({"ticker": ticker, "action": action, "status": "skipped", "reason": "Hold or zero qty"})
             continue
+
+        if action == "short" and mode == "algo":
+            regime = str(trade.get("market_regime", "unknown"))
+            allowed_regimes = {"range_bound", "trending_down"}
+            if regime not in allowed_regimes:
+                results.append({
+                    "ticker": ticker, "action": action, "qty": qty,
+                    "status": "blocked", "reason": "Algo short entries require a neutral or bearish regime",
+                    "rule": "short_regime_block", "strategy": strategy,
+                })
+                continue
 
         if not RISK_MANAGER_AVAILABLE:
             reason = "V2 risk manager unavailable; order blocked"
@@ -1174,6 +1245,18 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                     continue
                 ref_price = max(hinted_price, live_ask)
                 entry_price = ref_price
+            elif not args.dry_run and action == "short":
+                try:
+                    live_bid = get_latest_bid(ticker, mode=mode)
+                except Exception as exc:
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "blocked", "reason": f"Fresh broker bid unavailable: {exc}",
+                        "rule": "fresh_bid_unavailable", "strategy": strategy,
+                    })
+                    continue
+                ref_price = max(hinted_price, limit_reference, live_bid)
+                entry_price = ref_price
             else:
                 ref_price = max(
                     hinted_price, limit_reference, float(pos.get("current_price", 0) or 0),
@@ -1184,6 +1267,19 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                     except Exception as exc:
                         ref_price = 0.0
                         log.warning("No reference price for %s: %s", ticker, exc)
+            if action == "short":
+                try:
+                    stop_value = float(stop_price)
+                    target_value = float(take_profit)
+                except (TypeError, ValueError):
+                    stop_value = target_value = 0.0
+                if not (target_value > 0 and target_value < ref_price < stop_value):
+                    results.append({
+                        "ticker": ticker, "action": action, "qty": qty,
+                        "status": "blocked", "reason": "Short bracket no longer surrounds the fresh entry reference price",
+                        "rule": "stale_short_bracket", "strategy": strategy,
+                    })
+                    continue
             rm_result = rm_validate_trade(
                 ticker=ticker,
                 action=action,
@@ -1193,7 +1289,10 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                 mode=mode,
             )
             if not rm_result.approved:
-                log.warning(f"V2 risk manager BLOCKED {action} {ticker}: {rm_result.reason}")
+                log.warning(
+                    "V2 risk manager BLOCKED %s %s %s %s (%s): %s",
+                    strategy, timeframe, direction, ticker, action, rm_result.reason,
+                )
                 results.append({
                     "ticker": ticker, "action": action, "qty": qty,
                     "status": "blocked",
@@ -1202,7 +1301,10 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                     "strategy": strategy,
                 })
                 continue
-            log.info(f"V2 risk manager approved {action} {ticker}")
+            log.info(
+                "V2 risk manager approved %s %s %s %s (%s)",
+                strategy, timeframe, direction, ticker, action,
+            )
         elif action in ("sell", "cover") and RISK_MANAGER_AVAILABLE:
             # The central validator explicitly allows exits; route them through
             # it too so every submitted signal uses the same policy boundary.
@@ -1232,26 +1334,26 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
         # ── Auto-calculate bracket for swing mode (mandatory stops) ──────────
         # In day mode: brackets are not required — stops managed intraday / via EOD flatten.
         # If the trade JSON explicitly includes stop_price, it will still be used.
-        if mode == "swing" and action in ("buy", "cover", "short") and order_type not in ("limit", "stop", "trailing_stop", "oco"):
+        if mode == "swing" and action in ("buy", "short") and order_type not in ("limit", "stop", "trailing_stop", "oco"):
             pos = positions.get(ticker, {})
             ref = entry_price or limit_price or float(pos.get("current_price", 0))
             if ref > 0:
                 if stop_price is None:
-                    if action in ("buy", "cover"):
+                    if action == "buy":
                         stop_price = round(ref * (1 - stop_loss_pct), 2)
                     else:  # short
                         stop_price = round(ref * (1 + stop_loss_pct), 2)
                 if take_profit is None and stop_price is not None:
                     stop_dist = abs(ref - float(stop_price))
-                    if action in ("buy", "cover"):
+                    if action == "buy":
                         take_profit = round(ref + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
                     else:
                         take_profit = round(ref - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
 
-            if action == "buy" and stop_price is not None:
+            if action in {"buy", "short"} and stop_price is not None:
                 log.info(
-                    f"BUY {ticker}: bracket order with stop=${stop_price:.2f} "
-                    f"(-{stop_loss_pct*100:.1f}%), target=${take_profit:.2f}"
+                    f"{action.upper()} {ticker}: bracket order with stop=${stop_price:.2f} "
+                    f"target=${take_profit:.2f}"
                 )
 
         # Legacy validate_trade (sell/cover position checks)
@@ -1288,7 +1390,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                 dry_entry["cancel_open_orders"] = True
             results.append(dry_entry)
             would_execute_count += 1
-            if action == "buy" and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
+            if action in {"buy", "short"} and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
                 rm_portfolio_state = rm_stage_approved_trade(
                     rm_portfolio_state, ticker, action, qty,
                     float(ref_price),
@@ -1298,7 +1400,10 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             if action in {"sell", "cover"} and (
                 trade.get("cancel_open_orders") or order_type in {"market", "limit"}
             ):
-                cancel_result = cancel_open_orders_for_symbol(ticker, mode=mode)
+                cancel_result = cancel_open_orders_for_symbol(
+                    ticker, mode=mode,
+                    allow_protective=bool(trade.get("coordinator_force_flatten")),
+                )
                 if not cancel_result.get("success"):
                     results.append({
                         "ticker": ticker, "action": action, "qty": qty,
@@ -1354,7 +1459,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             if result["success"]:
                 if not result.get("idempotent_replay"):
                     submitted_count += 1
-                if action == "buy" and not result.get("idempotent_replay") and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
+                if action in {"buy", "short"} and not result.get("idempotent_replay") and RISK_MANAGER_AVAILABLE and rm_portfolio_state is not None:
                     rm_portfolio_state = rm_stage_approved_trade(
                         rm_portfolio_state, ticker, action, qty,
                         float(ref_price),

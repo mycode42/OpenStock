@@ -7,7 +7,8 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "satellite_overlay": {
@@ -21,15 +22,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -42,7 +45,8 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "mean_reversion": {
@@ -64,15 +68,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -85,14 +91,15 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "trend_following": {
         "fast_period": 20,
         "slow_period": 50,
-        "confirmation_bars": 3,
-        "minimum_slope_pct": 0.002
+        "minimum_slope_pct": 0.002,
+        "average_type": "sma"
       },
       "satellite_overlay": {
         "multi_factor_enabled": false,
@@ -105,15 +112,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -126,12 +135,18 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "momentum": {
-        "minimum_return": 0.02,
-        "minimum_volume_ratio": 1.4
+        "lookbacks": [
+          5,
+          10,
+          20
+        ],
+        "top_n": 3,
+        "minimum_score_spread": 0.04
       },
       "satellite_overlay": {
         "multi_factor_enabled": false,
@@ -144,15 +159,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -165,7 +182,8 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "opening_range_breakout": {
@@ -185,15 +203,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -206,7 +226,8 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "satellite_overlay": {
@@ -220,15 +241,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -241,7 +264,8 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "satellite_overlay": {
@@ -258,15 +282,17 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }
@@ -279,7 +305,8 @@
       "opening_range_breakout",
       "trend_following",
       "multi_factor",
-      "event_driven"
+      "event_driven",
+      "swing_mean_reversion"
     ],
     "parameters": {
       "satellite_overlay": {
@@ -296,15 +323,285 @@
       "max_positions_per_strategy": 5,
       "max_entries_per_strategy_per_day": {
         "mean_reversion": 3,
-        "momentum": 2,
+        "trend_following": 1,
+        "momentum": 1,
         "opening_range_breakout": 3,
-        "trend_following": 2
+        "swing_mean_reversion": 1
       },
       "cooldown_minutes_by_strategy": {
         "mean_reversion": 90,
-        "momentum": 60,
+        "trend_following": 7200,
+        "momentum": 7200,
         "opening_range_breakout": 60,
-        "trend_following": 90
+        "swing_mean_reversion": 7200
+      },
+      "one_orb_attempt_per_ticker_per_day": true
+    }
+  },
+  {
+    "name": "combined_isolated_style_balanced",
+    "strategies": [
+      "mean_reversion",
+      "momentum",
+      "opening_range_breakout",
+      "trend_following",
+      "multi_factor",
+      "event_driven",
+      "swing_mean_reversion"
+    ],
+    "parameters": {
+      "mean_reversion": {
+        "signal_model": "opening_dip",
+        "minimum_dip_pct": 0.014,
+        "minimum_rip_pct": 0.014,
+        "minimum_bounce_pct": 0.002,
+        "minimum_fade_pct": 0.002,
+        "minimum_volume_ratio": 1.3,
+        "entry_window_minutes": 90,
+        "higher_low_bars": 1,
+        "lower_high_bars": 1,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "trend_following": {
+        "average_type": "sma",
+        "fast_period": 20,
+        "slow_period": 50,
+        "minimum_slope_pct": 0.002
+      },
+      "momentum": {
+        "lookbacks": [
+          5,
+          10,
+          20
+        ],
+        "top_n": 3,
+        "minimum_score_spread": 0.04
+      },
+      "opening_range_breakout": {
+        "opening_range_bars": 6,
+        "post_range_delay_bars": 2,
+        "minimum_volume_ratio": 1.5,
+        "breakout_buffer_pct": 0.001,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "satellite_overlay": {
+        "multi_factor_enabled": false,
+        "event_driven_enabled": false
+      }
+    },
+    "controls": {
+      "max_entries_per_day": 15,
+      "max_open_positions": 20,
+      "max_positions_per_strategy": 5,
+      "max_entries_per_strategy_per_day": {
+        "mean_reversion": 3,
+        "trend_following": 1,
+        "momentum": 1,
+        "opening_range_breakout": 3,
+        "swing_mean_reversion": 1
+      },
+      "cooldown_minutes_by_strategy": {
+        "mean_reversion": 90,
+        "trend_following": 7200,
+        "momentum": 7200,
+        "opening_range_breakout": 60,
+        "swing_mean_reversion": 7200
+      },
+      "one_orb_attempt_per_ticker_per_day": true
+    }
+  },
+  {
+    "name": "combined_isolated_style_strict",
+    "strategies": [
+      "mean_reversion",
+      "momentum",
+      "opening_range_breakout",
+      "trend_following",
+      "multi_factor",
+      "event_driven",
+      "swing_mean_reversion"
+    ],
+    "parameters": {
+      "mean_reversion": {
+        "signal_model": "opening_dip",
+        "minimum_dip_pct": 0.018,
+        "minimum_rip_pct": 0.018,
+        "minimum_bounce_pct": 0.0025,
+        "minimum_fade_pct": 0.0025,
+        "minimum_volume_ratio": 1.4,
+        "entry_window_minutes": 45,
+        "higher_low_bars": 1,
+        "lower_high_bars": 1,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "trend_following": {
+        "average_type": "sma",
+        "fast_period": 20,
+        "slow_period": 60,
+        "minimum_slope_pct": 0.004
+      },
+      "momentum": {
+        "lookbacks": [
+          10,
+          20
+        ],
+        "top_n": 2,
+        "minimum_score_spread": 0.05
+      },
+      "opening_range_breakout": {
+        "opening_range_bars": 6,
+        "post_range_delay_bars": 3,
+        "minimum_volume_ratio": 2.5,
+        "breakout_buffer_pct": 0.0025,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "satellite_overlay": {
+        "multi_factor_enabled": false,
+        "event_driven_enabled": false
+      }
+    },
+    "controls": {
+      "max_entries_per_day": 15,
+      "max_open_positions": 20,
+      "max_positions_per_strategy": 5,
+      "max_entries_per_strategy_per_day": {
+        "mean_reversion": 3,
+        "trend_following": 1,
+        "momentum": 1,
+        "opening_range_breakout": 3,
+        "swing_mean_reversion": 1
+      },
+      "cooldown_minutes_by_strategy": {
+        "mean_reversion": 90,
+        "trend_following": 7200,
+        "momentum": 7200,
+        "opening_range_breakout": 60,
+        "swing_mean_reversion": 7200
+      },
+      "one_orb_attempt_per_ticker_per_day": true
+    }
+  },
+  {
+    "name": "combined_isolated_style_balanced_with_satellites",
+    "strategies": [
+      "mean_reversion",
+      "momentum",
+      "opening_range_breakout",
+      "trend_following",
+      "multi_factor",
+      "event_driven",
+      "swing_mean_reversion"
+    ],
+    "parameters": {
+      "mean_reversion": {
+        "signal_model": "opening_dip",
+        "minimum_dip_pct": 0.014,
+        "minimum_rip_pct": 0.014,
+        "minimum_bounce_pct": 0.002,
+        "minimum_fade_pct": 0.002,
+        "minimum_volume_ratio": 1.3,
+        "entry_window_minutes": 90,
+        "higher_low_bars": 1,
+        "lower_high_bars": 1,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "trend_following": {
+        "fast_period": 20,
+        "slow_period": 50,
+        "minimum_slope_pct": 0.001,
+        "average_type": "sma"
+      },
+      "momentum": {
+        "lookbacks": [
+          5,
+          10,
+          20
+        ],
+        "top_n": 2,
+        "minimum_score_spread": 0.04
+      },
+      "opening_range_breakout": {
+        "opening_range_bars": 6,
+        "post_range_delay_bars": 2,
+        "minimum_volume_ratio": 1.5,
+        "breakout_buffer_pct": 0.001,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "multi_factor": {
+        "direction_mode": "regime_dependent",
+        "disable_in_volatile": true
+      },
+      "event_driven": {
+        "enabled": true,
+        "allow_long": true,
+        "allow_short": true
+      },
+      "satellite_overlay": {
+        "multi_factor_enabled": true,
+        "event_driven_enabled": true
+      }
+    },
+    "controls": {
+      "max_entries_per_day": 15,
+      "max_open_positions": 20,
+      "max_positions_per_strategy": 5,
+      "max_entries_per_strategy_per_day": {
+        "mean_reversion": 3,
+        "trend_following": 1,
+        "momentum": 1,
+        "opening_range_breakout": 3,
+        "swing_mean_reversion": 1
+      },
+      "cooldown_minutes_by_strategy": {
+        "mean_reversion": 90,
+        "trend_following": 7200,
+        "momentum": 7200,
+        "opening_range_breakout": 60,
+        "swing_mean_reversion": 7200
+      },
+      "one_orb_attempt_per_ticker_per_day": true
+    }
+  },
+  {
+    "name": "swing_mean_reversion_patient",
+    "strategies": [
+      "mean_reversion",
+      "trend_following",
+      "momentum",
+      "opening_range_breakout",
+      "swing_mean_reversion",
+      "multi_factor",
+      "event_driven"
+    ],
+    "parameters": {
+      "swing_mean_reversion": {
+        "stretch_pct": 0.08,
+        "minimum_stretch_days": 3
+      }
+    },
+    "controls": {
+      "max_entries_per_day": 15,
+      "max_open_positions": 20,
+      "max_positions_per_strategy": 5,
+      "max_entries_per_strategy_per_day": {
+        "mean_reversion": 3,
+        "trend_following": 1,
+        "momentum": 1,
+        "opening_range_breakout": 3,
+        "swing_mean_reversion": 1
+      },
+      "cooldown_minutes_by_strategy": {
+        "mean_reversion": 90,
+        "trend_following": 7200,
+        "momentum": 7200,
+        "opening_range_breakout": 60,
+        "swing_mean_reversion": 7200
       },
       "one_orb_attempt_per_ticker_per_day": true
     }

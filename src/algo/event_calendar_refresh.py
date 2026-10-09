@@ -124,7 +124,7 @@ def _earnings_event(
     if scheduled_at <= known_at.astimezone(ET):
         return None
     reaction_start = datetime.combine(reaction_day, time(9, 30), tzinfo=ET)
-    reaction_end = datetime.combine(reaction_day, time(11, 0), tzinfo=ET)
+    reaction_end = datetime.combine(reaction_day, time(16, 0), tzinfo=ET) + timedelta(days=2)
     return ScheduledEvent(
         event_id=f"earnings-{ticker}-{event_day:%Y%m%d}",
         event_type="earnings",
@@ -144,10 +144,10 @@ def _macro_events(*, known_at: datetime) -> list[ScheduledEvent]:
         if scheduled_at <= known_at.astimezone(ET):
             continue
         reaction_start = datetime.combine(event_day, time(9, 30), tzinfo=ET)
-        reaction_end = datetime.combine(event_day, time(11, 0), tzinfo=ET)
+        reaction_end = datetime.combine(event_day, time(16, 0), tzinfo=ET) + timedelta(days=2)
         if event_type == "fomc":
             reaction_start = scheduled_at
-            reaction_end = datetime.combine(event_day, time(15, 30), tzinfo=ET)
+            reaction_end = datetime.combine(event_day, time(16, 0), tzinfo=ET) + timedelta(days=2)
         events.append(ScheduledEvent(
             event_id=f"{event_type}-{event_day:%Y%m%d}",
             event_type=event_type,

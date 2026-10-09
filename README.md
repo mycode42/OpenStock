@@ -1,4 +1,4 @@
-# Swarm Trader V1.5
+# Swarm Trader V2.0.0
 
 Multi-agent AI trading system with separate Swing, Day, and Algo paper accounts. Analyst agents analyze stocks in Swing and Day. One continuous Algo coordinator selects strategy modules with a deterministic SPY regime check and manages their persisted lifecycles. All three routes use the shared **code-enforced risk management layer**.
 
@@ -21,11 +21,11 @@ Multi-agent AI trading system with separate Swing, Day, and Algo paper accounts.
 | Risk management | Basic | **Code-enforced risk manager — hard stops, circuit breakers, position limits** |
 | Mode steering | N/A | **`trading_mode.json` steers Swing/Day; Algo has its own coordinator** |
 | Performance tracking | None | **Daily snapshots, SPY/QQQ comparison, Sharpe ratio** |
-| Short positions | Not supported | **Existing short positions can be covered; new short entries are disabled** |
+| Short positions | Not supported | **Rule strategies can open and manage controlled long and short positions through shared risk checks** |
 | Analyst agents | 12 built-in | **20 agents (12 + apex + market regime + 6 data/quant)** |
 | Custom agents | Not supported | **Create your own analyst agents** |
 | Automation | Manual runs | **Scheduled OpenClaw agent pipeline** |
-| Strategy research | None | **Separate Day/Swing AutoResearch and research-only Algo walk-forward plus factor-weight candidates** |
+| Strategy research | None | **Separate Day/Swing AutoResearch and Algo walk-forward with cost, stability, and portfolio-overlap gates** |
 
 ---
 
@@ -185,7 +185,9 @@ if proposal is not None:
 
 `_make_trade` applies the existing Algo risk sizing and the signal's target weight as an additional cap; the executor calls `risk_manager.validate_trade()` again before submission. The backtester applies the same validator to buys and sells and respects the deterministic SPY regime's permission to open factor positions. Backtest diagnostics include target turnover and weekly 21-session Spearman IC; those labels overlap and are descriptive. AutoResearch separately uses monthly-spaced 21-session labels with a purge for its Ridge fit and expanding prequential IC. The fixed 22-symbol universe is replayed across all historical years because point-in-time membership is not available; this creates survivorship and listing-availability bias, which limits historical conclusions.
 
-The slippage sensitivity runner holds the strategy profile, symbols, dates, feed, and risk limits constant while varying adverse basis-point assumptions. The walk-forward runner chooses among a small supplied candidate list on each preceding training window and evaluates the selected profile on the next non-overlapping window. Candidate profiles can change signal rules only; portfolio risk settings and live settings are never modified. Each holdout fold starts with a flat portfolio and fresh capital, so fold results measure stability rather than one continuous deployable equity curve. The fixed 22-symbol replay uses the same current membership across the full period; point-in-time membership is unavailable, so survivorship and listing-availability bias remain. BOATS cannot be passed to these regular-session replay commands: overnight bars need a separate session calendar, entry cutoff, and overnight order/fill model first.
+The portfolio coordinator runs after sizing and before `risk_manager.validate_trade()`. It shares a 10-entry daily budget (3 for intraday), 8% per-name cap, 100% gross cap, +60%/-40% net caps, and existing universe-sector groups capped at 30% for core technology, 25% for other groups, and 15% for tactical names. It rejects opposite-side stacking by default, gives swing core strategies priority over satellites, blocks swing entries during the first 15 minutes, and schedules intraday positions to flatten before the session ends. The risk manager remains the final approval layer.
+
+Walk-forward reports require at least three chronological, non-overlapping test folds. Each fold selects parameters using only its preceding training window, then evaluates the selected profile and predeclared one-at-a-time threshold neighbors on the frozen test fold. A fixed profile is promotable only when that same profile is selected in every fold, it has positive after-cost and buy-and-hold excess returns in a majority of folds, meets the minimum trade sample in every fold, and at least one neighboring value is profitable for every tuned threshold. Every replay includes spread, adverse open slippage, per-share commission, modeled short borrow, and a penalty for unknown historical borrow availability; explicit hard-to-borrow shorts are skipped. Reports compare the combined book and each strategy with an equal-weight buy-and-hold benchmark for the same symbols, and include pairwise daily strategy-P&L correlation and same-ticker/direction holding overlap. Test-window positions are liquidated with modeled costs. These are research gates only; they do not change live settings. The fixed universe still creates survivorship and listing-availability bias because historical point-in-time membership is unavailable.
 
 Research controls can apply a ticker cooldown per strategy with `cooldown_minutes_by_strategy`; the legacy `cooldown_minutes` control remains global. Reports separate repeated five-minute signal observations from candidate counts deduplicated to one ticker/strategy/trading-day.
 
@@ -262,17 +264,17 @@ Algo's separate `max_tactical_pct` cap is also 4%, with at most 2 tactical posit
 Swing and Day scans use the fixed, mode-specific lists shown below. They remain available for diagnostics and explicit execution and use the same deterministic strategy modules, `execute_trades.py`, and `risk_manager.py`; `--execute` submits orders from the configured list.
 
 ```bash
-# One-shot Swing/Day diagnostics
+# Swing/Day strategy diagnostics
 poetry run python -m src.strategies.runner --mode swing
 poetry run python -m src.strategies.runner --mode day
 
-# Preview one-shot trades through the existing risk validation path
+# Preview proposed trades through the existing risk validation path
 poetry run python -m src.strategies.runner --mode swing --execute --dry-run
 
 # The continuous Algo-account portfolio mode is launched by systemd:
 poetry run python -m src.algo.daemon --mode algo
 
-# Submit eligible one-shot Day orders through the shared executor
+# Submit eligible Day orders through the shared executor
 poetry run python -m src.strategies.runner --mode day --execute
 ```
 
@@ -751,17 +753,22 @@ swarm-trader/
 │   │   ├── reconciliation.py  # Exact broker and journal ownership checks
 │   │   ├── healthcheck.py     # Read-only daemon, state, broker protection check
 │   │   └── sessions.py       # ET broker sessions and BOATS/overnight feeds
-│   ├── strategies/             # Pure rules, per-strategy state, regime, universe
-│   │   ├── mean_reversion.py   # Bollinger mean reversion + Open Dip adapter
-│   │   ├── trend_following.py  # Moving-average crossover
-│   │   ├── momentum.py         # Price and volume confirmed momentum
+│   ├── strategies/             # Pure rules, coordination, per-strategy state, regime
+│   │   ├── mean_reversion.py   # Intraday open-dip strategy
+│   │   ├── swing_mean_reversion.py # Separate multi-day cyclical strategy
+│   │   ├── swing_trend_following.py # Daily trend strategy
+│   │   ├── swing_momentum.py   # Daily cross-sectional momentum
 │   │   ├── opening_range_breakout.py # 30-minute ORB rule
+│   │   ├── portfolio_coordinator.py # Shared exposure, entry, and session gates
+│   │   ├── rule_pipeline.py    # Shared live/replay pure-signal pipeline
+│   │   ├── multi_factor/       # Daily cross-sectional satellite
+│   │   ├── event_driven/       # Scheduled-catalyst satellite
 │   │   ├── pairs.py            # Signal-only statistical pair analysis
 │   │   ├── regime.py           # Deterministic SPY strategy ranking
-│   │   ├── universe.py         # Risk-catalog constrained liquid universe
+│   │   ├── universe.py         # Separate fixed Swing, Day, and Algo universes
 │   │   ├── registry.py         # Equal strategy-family evaluation interface
 │   │   ├── state_machine.py    # Per-strategy ticker entry/position/exit lifecycle
-│   │   ├── regime_advisor.py   # Optional bounded local Ollama ranking advice
+│   │   ├── regime_advisor.py   # Optional bounded API-model strategy ordering advice
 │   │   └── runner.py           # Alpaca scan + shared executor handoff
 │   ├── tools/
 │   │   ├── api.py             # Hybrid dispatcher (paid → free fallback)

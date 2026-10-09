@@ -209,6 +209,8 @@ def _bracket_stop_gaps(
             continue
         order_class = str(parent.get("order_class") or "simple").lower()
         position_qty = _quantity(position.get("qty"))
+        position_size = abs(position_qty) if position_qty is not None else None
+        exit_side = "buy" if position_qty is not None and position_qty < 0 else "sell"
         if order_class == "simple":
             if regular_session and (
                 position_qty is None
@@ -225,12 +227,12 @@ def _bracket_stop_gaps(
             if not isinstance(leg, dict):
                 continue
             if (
-                str(leg.get("side", "")).lower() == "sell"
+                str(leg.get("side", "")).lower() == exit_side
                 and str(leg.get("status", "")).lower() == "pending_cancel"
             ):
                 pending_cancel.add(f"{symbol}:{str(leg.get('type') or 'unknown').lower()}")
             if (
-                str(leg.get("side", "")).lower() != "sell"
+                str(leg.get("side", "")).lower() != exit_side
                 or str(leg.get("type", "")).lower() not in {"stop", "stop_limit", "trailing_stop"}
                 or str(leg.get("status", "")).lower() not in OPEN_ORDER_STATUSES
             ):
@@ -240,9 +242,9 @@ def _bracket_stop_gaps(
             if qty is not None and filled is not None and qty >= filled:
                 active_stops.append(qty - filled)
         bracket_stop_covers_position = (
-            position_qty is not None
+            position_size is not None
             and len(active_stops) == 1
-            and active_stops[0] == position_qty
+            and active_stops[0] == position_size
         )
         replacement_oco_covers_position = (
             not bracket_stop_covers_position
@@ -424,10 +426,10 @@ def build_report(
     if positions is not None:
         unsupported_positions = sorted(
             symbol for symbol, position in positions.items()
-            if (quantity := _quantity(position.get("qty"))) is None or quantity <= 0
+            if (quantity := _quantity(position.get("qty"))) is None or quantity == 0
         )
         if unsupported_positions:
-            problems.append(_problem("unsupported_positions", "Algo account has non-long or invalid broker positions: " + ", ".join(unsupported_positions)))
+            problems.append(_problem("unsupported_positions", "Algo account has zero or invalid broker positions: " + ", ".join(unsupported_positions)))
     if positions is not None and state_available:
         owners = portfolio.get("position_owners") or {}
         states = portfolio.get("strategy_states") or {}

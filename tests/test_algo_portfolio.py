@@ -4,6 +4,8 @@ import risk_manager
 from src.config import ALGO_MODE_CONFIG, MODES, STRATEGY_CONFIG, get_mode_config
 from src.strategies import mean_reversion, momentum, opening_range_breakout, pairs, trend_following
 from src.strategies.regime import rank_strategies
+from src.strategies.signals import Signal
+import src.strategies.rule_pipeline as rule_pipeline
 from src.strategies.state_machine import COOLDOWN, ENTRY_PENDING, OPEN, RuleStrategyStateMachine
 
 
@@ -61,8 +63,11 @@ def _bars(closes, volumes=None):
 
 def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 20
-    assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 40
+    assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 15
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.05
+    assert ALGO_MODE_CONFIG["risk"]["allow_short_positions"] is True
+    assert ALGO_MODE_CONFIG["risk"]["max_short_positions"] == 5
+    assert ALGO_MODE_CONFIG["risk"]["max_short_exposure_pct"] == 0.20
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
     assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.15
     assert MODES["swing"]["risk"]["max_open_positions"] == 12
@@ -213,6 +218,52 @@ def test_trend_following_generates_a_fast_over_slow_crossover():
     assert (signal.ticker, signal.action, signal.strategy) == ("AAPL", "buy", "trend_following")
 
 
+def test_core_rules_emit_mirrored_short_entries():
+    trend_bars = _bars([110] * 21 + [100])
+    trend = trend_following.signal(
+        "AAPL", trend_bars, fast_period=9, slow_period=21, allow_short=True,
+    )
+    momentum_bars = _bars([100] * 20 + [94], [1_000] * 20 + [2_000])
+    momentum_signal = momentum.signal(
+        "AAPL", momentum_bars, lookback=5, minimum_return=0.04, allow_short=True,
+    )
+    mean_bars = _bars([100] * 20 + [110, 109])
+    mean_signal = mean_reversion.signal("AAPL", mean_bars, allow_short=True)
+    opening = [{"h": 100, "l": 95, "c": 99, "v": 100} for _ in range(6)]
+    orb = opening_range_breakout.signal(
+        "AAPL", opening + [{"h": 99, "l": 93, "c": 94, "v": 200}], allow_short=True,
+    )
+
+    assert trend is not None and trend.action == "short"
+    assert momentum_signal is not None and momentum_signal.action == "short"
+    assert mean_signal is not None and mean_signal.action == "short"
+    assert orb is not None and orb.action == "short"
+
+
+def test_algo_opening_rip_short_uses_mirrored_patient_filters():
+    from src.strategies.rule_pipeline import evaluate_rule_signal
+
+    bars = [
+        {"t": f"2026-10-07T13:{minute:02d}:00Z", "o": opening, "h": high,
+         "l": low, "c": close, "v": volume}
+        for minute, opening, high, low, close, volume in (
+            (30, 100, 100.5, 99.8, 100, 100),
+            (35, 100, 102, 99.9, 101, 100),
+            (40, 101, 103, 100.8, 102.1, 100),
+            (45, 102, 102.7, 101.8, 102.1, 100),
+            (50, 102.1, 102.4, 101.7, 102, 200),
+        )
+    ]
+
+    signal = evaluate_rule_signal(
+        "mean_reversion", "AAPL", bars,
+    )
+
+    assert signal is not None
+    assert signal.action == "short"
+    assert "opening rip" in signal.reason
+
+
 def test_momentum_requires_return_and_volume_confirmation():
     closes = [100] * 20 + [106]
     bars = _bars(closes, [1_000] * 20 + [2_000])
@@ -267,10 +318,35 @@ def test_regime_filter_prefers_trend_strategies_in_a_rising_market():
     assert "opening_range_breakout" in regime["active"]
 
 
+@pytest.mark.parametrize(
+    ("name", "flag"),
+    [("intraday_trend", "enable_intraday_trend"),
+     ("intraday_momentum", "enable_intraday_momentum")],
+)
+def test_legacy_five_minute_satellites_are_opt_in_and_smaller(name, flag, monkeypatch):
+    monkeypatch.setitem(STRATEGY_CONFIG, flag, False)
+    monkeypatch.setattr(
+        rule_pipeline, "evaluate_strategy",
+        lambda strategy, *_args, **_kwargs: Signal("AAPL", "buy", strategy, "test"),
+    )
+    assert rule_pipeline.evaluate_rule_signal(name, "AAPL", [], {"enabled": True}) is None
+
+    monkeypatch.setitem(STRATEGY_CONFIG, flag, True)
+    signal = rule_pipeline.evaluate_rule_signal(name, "AAPL", [], {"enabled": True})
+
+    assert signal is not None
+    assert signal.strategy == name
+    assert signal.strategy_group == "intraday_satellite"
+    assert signal.target_weight == pytest.approx(0.01)
+    assert signal.risk_multiplier == pytest.approx(0.25)
+
+
 def test_state_machine_owns_pending_and_open_positions_until_reconciled():
     states = {}
     owners = {}
-    machine = RuleStrategyStateMachine(states, owners)
+    machine = RuleStrategyStateMachine(
+        states, owners, minimum_hold_minutes={"momentum": 20},
+    )
     trade = {
         "strategy": "momentum",
         "ticker": "aapl",
@@ -287,11 +363,38 @@ def test_state_machine_owns_pending_and_open_positions_until_reconciled():
 
     assert states["momentum"]["AAPL"]["phase"] == OPEN
     assert owners["AAPL"] == "momentum"
-    assert machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:05:00Z")
+    assert not machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:05:00Z")
+    assert machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:25:00Z")
 
     machine.reconcile({}, [])
     assert states["momentum"]["AAPL"]["phase"] in {COOLDOWN, OPEN}
     assert "AAPL" not in owners
+
+
+def test_state_machine_reconciles_short_direction_and_enforces_minimum_hold():
+    states = {}
+    owners = {}
+    machine = RuleStrategyStateMachine(
+        states, owners, minimum_hold_minutes={"momentum": 20},
+    )
+    trade = {
+        "strategy": "momentum", "ticker": "AAPL", "action": "short",
+        "client_order_id": "momentum-aapl-short-1",
+        "signal_bar_time": "2026-10-07T14:00:00Z",
+        "stop_price": 101.0, "take_profit": 98.0,
+    }
+
+    machine.prepare(trade)
+    machine.reconcile({"AAPL": {"qty": -10}}, [])
+
+    assert states["momentum"]["AAPL"]["phase"] == OPEN
+    assert owners["AAPL"] == "momentum"
+    assert not machine.allows("momentum", "AAPL", "cover", "2026-10-07T14:20:00Z")
+    assert machine.allows("momentum", "AAPL", "cover", "2026-10-07T14:25:00Z")
+    assert not machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:25:00Z")
+
+    machine.prepare({**trade, "action": "cover", "signal_bar_time": "2026-10-07T14:25:00Z"})
+    assert states["momentum"]["AAPL"]["phase"] == "exit_pending"
 
 
 def test_strategy_state_machine_persists_software_stop_and_target():

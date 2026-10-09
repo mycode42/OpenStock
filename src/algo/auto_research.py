@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from contextlib import contextmanager
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
 import fcntl
 import json
@@ -29,6 +30,7 @@ from src.strategies.event_driven import EventCalendar
 from src.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.market_data import data_tier, regular_feed
 from src.strategies.multi_factor.features import aggregate_intraday_bars
+from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
 from src.strategies.universe import configured_universe
 
 
@@ -41,6 +43,28 @@ FEED = "sip"
 ADJUSTMENT = "split"
 MIN_COVERED_UNIVERSE = 20
 INITIAL_HISTORY_DATE = date(2015, 1, 1)
+CORE_STRATEGIES = (
+    "mean_reversion", "trend_following", "momentum", "opening_range_breakout",
+    "swing_mean_reversion",
+)
+ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 3
+COMBINED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 15
+CORE_RESEARCH_CONTROLS = {
+    "max_entries_per_day": 15,
+    "max_open_positions": 20,
+    "max_positions_per_strategy": 5,
+    "max_entries_per_strategy_per_day": {
+        "mean_reversion": 3, "momentum": 1,
+        "opening_range_breakout": 3, "trend_following": 1,
+        "swing_mean_reversion": 1,
+    },
+    "cooldown_minutes_by_strategy": {
+        "mean_reversion": 90, "momentum": 7200,
+        "opening_range_breakout": 60, "trend_following": 7200,
+        "swing_mean_reversion": 7200,
+    },
+    "one_orb_attempt_per_ticker_per_day": True,
+}
 
 
 def _parse_date(value: str) -> date:
@@ -266,6 +290,8 @@ def _summarize_walk_forward(report: dict, *, artifact: Path) -> dict:
         "event_calendar": report.get("event_calendar"),
         "candidate_profile_count": report.get("candidate_profile_count"),
         "fold_summary": report.get("fold_summary"),
+        "promotion_gate": report.get("promotion_gate"),
+        "transaction_cost_model": report.get("transaction_cost_model"),
         "selected_profile_fold_counts": dict(selected_counts),
         "satellite_sample_gate": report.get("candidate_frequency_target", {}).get(
             "minimum_confirmed_entries_per_enabled_satellite"
@@ -285,6 +311,165 @@ def _summarize_walk_forward(report: dict, *, artifact: Path) -> dict:
     }
 
 
+def _isolated_direction_profiles(strategy: str, direction: str) -> list[dict]:
+    """Keep each fit to one core strategy and one entry direction."""
+    if strategy not in CORE_STRATEGIES or direction not in {"long", "short"}:
+        raise ValueError("isolated optimization requires a core strategy and long/short direction")
+    allow = {"allow_long": direction == "long", "allow_short": direction == "short"}
+    if strategy == "mean_reversion":
+        variants = [
+            ("live_opening_dip", dict(ALGO_DEFAULT_PARAMETERS[strategy])),
+            ("patient_opening_dip", {
+                "signal_model": "opening_dip", "minimum_dip_pct": 0.018,
+                "minimum_rip_pct": 0.018, "minimum_bounce_pct": 0.0025,
+                "minimum_fade_pct": 0.0025, "minimum_volume_ratio": 1.4,
+                "entry_window_minutes": 45, "higher_low_bars": 1, "lower_high_bars": 1,
+            }),
+            ("bollinger_reversal", {
+                "signal_model": "bollinger", "window": 20, "band_width": 2.0,
+                "entry_rsi": 30, "exit_rsi": 58,
+                "short_entry_rsi": 68, "short_exit_rsi": 42,
+            }),
+        ]
+    elif strategy == "trend_following":
+        variants = [
+            ("live_daily_sma_20_50", dict(ALGO_DEFAULT_PARAMETERS[strategy])),
+            ("daily_ema_20_50", {
+                "average_type": "ema", "fast_period": 20, "slow_period": 50,
+                "minimum_slope_pct": 0.002,
+            }),
+            ("daily_sma_20_60_strict_slope", {
+                "average_type": "sma", "fast_period": 20, "slow_period": 60,
+                "minimum_slope_pct": 0.004,
+            }),
+        ]
+    elif strategy == "momentum":
+        variants = [
+            ("live_daily_5_10_20", dict(ALGO_DEFAULT_PARAMETERS[strategy])),
+            ("daily_5_10_rank2", {
+                "lookbacks": [5, 10], "top_n": 2,
+                "minimum_score_spread": 0.03,
+            }),
+            ("patient_daily_10_20_rank2", {
+                "lookbacks": [10, 20], "top_n": 2,
+                "minimum_score_spread": 0.05,
+            }),
+        ]
+    elif strategy == "swing_mean_reversion":
+        variants = [
+            ("live_cyclical_6pct", dict(ALGO_DEFAULT_PARAMETERS[strategy])),
+            ("persistent_8pct", {"stretch_pct": 0.08, "minimum_stretch_days": 2}),
+            ("patient_8pct_3days", {"stretch_pct": 0.08, "minimum_stretch_days": 3}),
+        ]
+    else:
+        variants = [
+            ("live_30_minute_range", dict(ALGO_DEFAULT_PARAMETERS[strategy])),
+            ("confirmed_30_minute_range", {
+                "opening_range_bars": 6, "post_range_delay_bars": 2,
+                "minimum_volume_ratio": 1.5, "breakout_buffer_pct": 0.001,
+            }),
+            ("strict_30_minute_range", {
+                "opening_range_bars": 6, "post_range_delay_bars": 3,
+                "minimum_volume_ratio": 2.5, "breakout_buffer_pct": 0.0025,
+            }),
+        ]
+
+    profiles = []
+    for variant, parameters in variants:
+        if strategy in {"trend_following", "momentum", "swing_mean_reversion"}:
+            parameters = {**parameters, "direction_mode": f"{direction}_only"}
+        else:
+            parameters = {**parameters, **allow}
+        profiles.append({
+            "name": "baseline" if variant.startswith("live_") else f"{strategy}_{direction}_{variant}",
+            "strategies": [strategy],
+            "parameters": {strategy: parameters},
+            "controls": CORE_RESEARCH_CONTROLS,
+        })
+    return profiles
+
+
+def _run_isolated_direction_job(payload: tuple) -> tuple[str, dict]:
+    """Run one strategy/direction candidate bank in a single fold worker."""
+    strategy, direction, symbols, start, end, db, profiles_path, artifact_path = payload
+    from src.algo.walk_forward import build_parser as build_walk_forward_parser, run_walk_forward
+
+    argv = [
+        "--symbols", ",".join(symbols), "--start", start, "--end", end,
+        "--profiles", str(profiles_path), "--feed", FEED, "--adjustment", ADJUSTMENT,
+        "--train-days", "756", "--test-days", "63", "--step-days", "63",
+        "--min-train-trades", "10", "--max-train-drawdown-pct", "12",
+        "--max-candidate-ticker-days-per-session", str(ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION),
+        "--workers", "1", "--db", str(db),
+    ]
+    args = build_walk_forward_parser().parse_args(argv)
+    report = run_walk_forward(args)
+    _atomic_json(Path(artifact_path), report)
+    return f"{strategy}.{direction}", _summarize_walk_forward(report, artifact=Path(artifact_path))
+
+
+def _run_isolated_core_research(
+    *, symbols: list[str], start: date, end: date, db: str, output_dir: Path,
+    run_date: date, workers: int,
+) -> dict:
+    """Tune every core side alone before running the combined-portfolio WFA."""
+    from src.algo.walk_forward import _read_profiles
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    temporary_profiles: list[Path] = []
+    jobs = []
+    for strategy in CORE_STRATEGIES:
+        for direction in ("long", "short"):
+            handle = tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", prefix=f"{strategy}-{direction}-",
+                suffix=".json", dir=output_dir, delete=False,
+            )
+            profile_path = Path(handle.name)
+            temporary_profiles.append(profile_path)
+            profiles = _isolated_direction_profiles(strategy, direction)
+            json.dump(profiles, handle, indent=2)
+            handle.write("\n")
+            handle.close()
+            # Validate the generated candidates before launching worker processes.
+            _read_profiles(str(profile_path))
+            artifact = output_dir / f"{run_date.isoformat()}-{strategy}-{direction}-walk-forward.json"
+            jobs.append((strategy, direction, symbols, start.isoformat(), end.isoformat(), db, profile_path, artifact))
+
+    workers_used = min(max(1, workers), len(jobs), os.cpu_count() or 1)
+    results = {}
+    try:
+        with ProcessPoolExecutor(max_workers=workers_used) as executor:
+            futures = [executor.submit(_run_isolated_direction_job, job) for job in jobs]
+            for completed, future in enumerate(as_completed(futures), start=1):
+                key, report = future.result()
+                results[key] = report
+                print(
+                    f"Completed isolated Algo optimization {completed}/{len(jobs)}: {key}",
+                    file=sys.stderr, flush=True,
+                )
+    finally:
+        for profile_path in temporary_profiles:
+            profile_path.unlink(missing_ok=True)
+
+    ordered_results = {
+        f"{strategy}.{direction}": results[f"{strategy}.{direction}"]
+        for strategy in CORE_STRATEGIES for direction in ("long", "short")
+    }
+    return {
+        "status": "completed",
+        "strategy_count": len(CORE_STRATEGIES),
+        "direction_count": 2,
+        "candidate_profiles_per_strategy_direction": 3,
+        "worker_count": workers_used,
+        "selection_policy": (
+            "Each fit contains exactly one core strategy and one entry direction. "
+            "Only training-window metrics select a profile; later sessions remain out of sample. "
+            "No candidate changes live settings."
+        ),
+        "results": ordered_results,
+    }
+
+
 def _combined_portfolio_replay(
     store: SQLiteBarStore,
     *,
@@ -293,7 +478,7 @@ def _combined_portfolio_replay(
     end: date,
     event_calendar: EventCalendar | None,
 ) -> dict:
-    """Compare the four core rules with the six-strategy confirmation portfolio."""
+    """Compare the rule portfolio with its bounded Multi Factor/Event satellites."""
     if end < start:
         raise ValueError("combined replay end must not be before start")
     warmup_days = multi_factor_warmup_days({})
@@ -520,10 +705,17 @@ def run_daily_research(args) -> dict:
                 end=end, event_calendar=event_calendar,
             )
 
+    isolated_walk_forward = None
     walk_forward = None
     omitted_event_profiles: list[str] = []
     if not args.factor_only:
         from src.algo.walk_forward import build_parser as build_walk_forward_parser, run_walk_forward
+
+        isolated_walk_forward = _run_isolated_core_research(
+            symbols=covered_symbols, start=start, end=end, db=str(args.db),
+            output_dir=Path(args.output_dir), run_date=datetime.now(ET).date(),
+            workers=args.workers,
+        )
 
         wf_output = Path(args.output_dir) / f"{datetime.now(ET).date().isoformat()}-walk-forward.json"
         profiles_path, temporary_profiles, omitted_event_profiles = (
@@ -540,7 +732,10 @@ def run_daily_research(args) -> dict:
                 "--train-days", "756", "--test-days", "63", "--step-days", "63",
                 "--min-train-trades", "10", "--max-train-drawdown-pct", "12",
                 "--min-satellite-confirmed-entries", "3",
-                "--max-candidate-ticker-days-per-session", "3",
+                # The portfolio can surface several candidates from each
+                # core strategy before global entry limits are applied.
+                "--max-candidate-ticker-days-per-session",
+                str(COMBINED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION),
                 "--workers", str(args.workers), "--db", str(args.db),
             ]
             if event_calendar is not None:
@@ -565,6 +760,34 @@ def run_daily_research(args) -> dict:
     else:
         factor_review = "not_eligible_to_advance; retain equal weights pending stronger out-of-sample evidence"
     data_freshness = "fresh" if latest_age_days <= 4 else "stale"
+    combined_gate = (walk_forward or {}).get("promotion_gate") or {}
+    combined_gate_passed = bool(combined_gate.get("promotable"))
+    isolated_gate_results = [
+        result.get("promotion_gate", {})
+        for result in (isolated_walk_forward or {}).get("results", {}).values()
+    ]
+    isolated_gate_pass_count = sum(bool(result.get("promotable")) for result in isolated_gate_results)
+    if combined_gate_passed:
+        rule_strategy_proposal = (
+            "A single fixed profile passed the chronological after-cost promotion gate; owner review is still required."
+        )
+    elif walk_forward and walk_forward.get("folds"):
+        rule_strategy_proposal = (
+            "No fixed profile passed the chronological after-cost promotion gate; training selections remain research-only."
+        )
+    else:
+        rule_strategy_proposal = "No rule strategy profile was eligible for review."
+    if isolated_walk_forward and isolated_gate_pass_count:
+        isolated_strategy_proposal = (
+            f"{isolated_gate_pass_count} isolated strategy/direction candidates passed the promotion gate; "
+            "review those only, then compare the combined portfolio."
+        )
+    elif isolated_walk_forward:
+        isolated_strategy_proposal = (
+            "No isolated strategy/direction candidate passed the promotion gate; keep all candidates research-only."
+        )
+    else:
+        isolated_strategy_proposal = "No isolated core direction optimization was run."
 
     return {
         "status": "completed",
@@ -585,13 +808,12 @@ def run_daily_research(args) -> dict:
         "factor_portfolio_holdouts": factor_replays,
         "historical_event_calendar": event_calendar_report,
         "combined_portfolio_replays": combined_replays,
+        "isolated_core_direction_walk_forward": isolated_walk_forward,
         "rule_strategy_walk_forward": walk_forward,
         "walk_forward_profiles_omitted_due_to_event_data": omitted_event_profiles,
         "recommendation": {
-            "rule_strategy_proposal": (
-                "Review the latest training-selected profile and its chronological holdout record."
-                if walk_forward and walk_forward.get("folds") else "No rule strategy profile was eligible for review."
-            ),
+            "rule_strategy_proposal": rule_strategy_proposal,
+            "isolated_core_direction_proposal": isolated_strategy_proposal,
             "multi_factor_status": factor_review,
             "multi_factor_proposal": (
                 "Review current_candidate_weights; adoption still requires your approval and a forward paper shadow run."

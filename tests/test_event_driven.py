@@ -1,218 +1,195 @@
-from datetime import date, datetime, time, timedelta, timezone
-from pathlib import Path
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from src.algo.backtest import AlgoPortfolioBacktest
 import src.algo.backtest as backtest_module
-from src.algo.state_store import empty_portfolio, validate_portfolio
-from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig, ScheduledEvent
+from src.strategies.event_driven import (
+    EventCalendar, EventSignalGenerator, EventStrategyConfig, ScheduledEvent,
+)
+from src.strategies.event_driven.reactions import daily_event_reaction
 from src.strategies.registry import validate_parameter_profile
-from src.strategies.signals import Signal
 
 
 ET = ZoneInfo("America/New_York")
 
 
-def _at(day: date, hour: int, minute: int) -> datetime:
-    return datetime.combine(day, time(hour, minute), tzinfo=ET)
-
-
-def _event(*, ticker="AAPL", event_type="earnings", day=date(2025, 9, 5), known_hour=8, known_minute=30):
-    scheduled = _at(day, known_hour, known_minute)
-    start = _at(day, 9, 30) if known_hour < 9 else scheduled
+def _event(day: date, ticker: str = "AAPL", event_type: str = "earnings") -> ScheduledEvent:
+    scheduled = datetime.combine(day, time(8, 30), tzinfo=ET)
+    reaction_start = datetime.combine(day, time(9, 30), tzinfo=ET)
     return ScheduledEvent(
         event_id=f"{event_type}-{ticker}-{day.isoformat()}", event_type=event_type,
         ticker=ticker, scheduled_at=scheduled, known_at=scheduled,
-        reaction_start_at=start, reaction_end_at=start + timedelta(minutes=90),
-        source="test-fixture",
+        reaction_start_at=reaction_start,
+        reaction_end_at=reaction_start + timedelta(days=3), source="test fixture",
     )
 
 
-def _reaction_bars(day=date(2025, 9, 5)):
-    records = []
-    for minute, opening, high, low, close, volume in (
-        (30, 100.0, 101.0, 99.0, 100.5, 100),
-        (35, 100.6, 102.0, 100.0, 101.5, 100),
-        (40, 101.5, 103.0, 101.0, 102.5, 100),
-        (45, 102.5, 104.0, 102.0, 103.5, 200),
-        (50, 103.5, 104.5, 103.0, 104.2, 120),
-    ):
-        timestamp = _at(day, 9, minute).astimezone(timezone.utc).isoformat()
-        records.append({
-            "t": timestamp, "o": opening, "h": high, "l": low,
-            "c": close, "v": volume, "vw": close - 0.1,
-        })
-    return records
+def _daily_bars(day: date, *, gap: float = 0.03, move: float = 0.02) -> list[dict]:
+    bars = []
+    cursor = day - timedelta(days=35)
+    close = 100.0
+    while cursor < day:
+        if cursor.weekday() < 5:
+            bars.append({
+                "date": cursor.isoformat(), "o": close, "h": close + 0.5,
+                "l": close - 0.5, "c": close, "v": 1_000,
+            })
+        cursor += timedelta(days=1)
+    opened = close * (1 + gap)
+    final = opened * (1 + move)
+    bars.append({
+        "date": day.isoformat(), "o": opened, "h": max(opened, final) + 1,
+        "l": min(opened, final) - 1, "c": final, "v": 2_500,
+    })
+    return bars
 
 
-def test_calendar_filters_on_known_at_and_reaction_window():
-    event = _event()
-    calendar = EventCalendar([event])
-
-    assert not calendar.active_for("AAPL", _at(date(2025, 9, 5), 8, 0))
-    assert calendar.active_for("AAPL", _at(date(2025, 9, 5), 9, 50)) == (event,)
-    assert not calendar.active_for("MSFT", _at(date(2025, 9, 5), 9, 50))
+def _as_of(day: date) -> datetime:
+    return datetime.combine(day + timedelta(days=1), time(10), tzinfo=ET)
 
 
-def test_calendar_freshness_allows_long_weekends_and_expires_stale_snapshots():
-    event = _event(day=date(2025, 9, 5), known_hour=16)
-    calendar = EventCalendar([event])
-
-    weekend_check = _at(date(2025, 9, 8), 8, 0)
-    stale_check = _at(date(2025, 9, 10), 10, 0)
-
-    assert calendar.freshness(weekend_check)["fresh"] is True
-    assert calendar.freshness(stale_check)["fresh"] is False
-
-
-def test_historical_example_calendar_loads_and_enforces_macro_proxy():
-    path = Path(__file__).resolve().parents[1] / "examples" / "event_calendar_2025.csv"
-    calendar = EventCalendar.from_csv(path)
-
-    assert len(calendar.events) == 4
-    assert sum(event.is_earnings for event in calendar.events) == 1
-    with pytest.raises(ValueError, match="macro event rows must target SPY"):
-        _event(event_type="nfp", ticker="AAPL")
-
-
-def test_earnings_reaction_requires_gap_range_break_volume_and_is_size_capped():
-    event = _event()
-    generator = EventSignalGenerator(
-        EventCalendar([event]), EventStrategyConfig.from_dict({"enabled": True}),
-    )
-    bars = _reaction_bars()
-    as_of = _at(date(2025, 9, 5), 9, 50)
-
-    signal = generator.generate(
-        "AAPL", bars[:4], as_of=as_of, universe={"AAPL"}, regime="trending_up",
-        previous_close=97.0, strategy_state={},
+def test_daily_earnings_continuation_emits_risk_sized_long():
+    day = date(2025, 9, 4)
+    event = _event(day)
+    signal = daily_event_reaction(
+        event, "AAPL", _daily_bars(day), as_of=_as_of(day),
+        config=EventStrategyConfig(enabled=True),
     )
 
     assert signal is not None
     assert signal.action == "buy"
-    assert signal.strategy == "event_driven"
+    assert signal.strategy_group == "swing_satellite"
+    assert signal.exit_mode == "follow_through"
+    assert signal.maximum_holding_sessions == 2
+    assert signal.target_weight == pytest.approx(0.0125)
     assert signal.event_id == event.event_id
-    assert signal.stop_pct == 0.02
-    assert signal.target_weight == 0.025
-    assert generator.generate(
-        "AAPL", bars[:4], as_of=as_of, universe={"AAPL"}, regime="volatile",
-        previous_close=97.0, strategy_state={},
+
+
+def test_event_outcome_can_emit_shorts_and_reaction_fades_in_any_regime():
+    day = date(2025, 9, 4)
+    event = _event(day)
+    generator = EventSignalGenerator(
+        EventCalendar([event]), EventStrategyConfig(enabled=True),
+    )
+    short = generator.generate(
+        "AAPL", _daily_bars(day, gap=0.03, move=-0.025), as_of=_as_of(day),
+        universe={"AAPL"}, regime="trending_up", strategy_state={},
+    )
+    long = daily_event_reaction(
+        event, "AAPL", _daily_bars(day, gap=-0.03, move=0.025),
+        as_of=_as_of(day), config=EventStrategyConfig(enabled=True),
+    )
+
+    assert short is not None and short.action == "short"
+    assert short.exit_mode == "reaction"
+    assert short.maximum_holding_sessions == 1
+    assert short.stop_pct == pytest.approx(0.025)
+    assert long is not None and long.action == "buy"
+    assert long.exit_mode == "reaction"
+
+
+def test_event_signal_uses_only_completed_unique_daily_rows():
+    day = date(2025, 9, 4)
+    event = _event(day)
+    bars = _daily_bars(day)
+    same_session = datetime.combine(day, time(16), tzinfo=ET)
+    assert daily_event_reaction(
+        event, "AAPL", bars, as_of=same_session,
+        config=EventStrategyConfig(enabled=True),
+    ) is None
+    assert daily_event_reaction(
+        event, "AAPL", [*bars, bars[-1]], as_of=_as_of(day),
+        config=EventStrategyConfig(enabled=True),
     ) is None
 
 
-def test_event_proposal_cooldown_applies_across_tickers():
-    first_event = _event(ticker="AAPL")
-    second_event = _event(ticker="MSFT")
+def test_event_calendar_records_cooldown_after_a_proposal():
+    day = date(2025, 9, 4)
+    event = _event(day)
     generator = EventSignalGenerator(
-        EventCalendar([first_event, second_event]),
-        EventStrategyConfig.from_dict({"enabled": True}),
+        EventCalendar([event]), EventStrategyConfig(enabled=True),
     )
-    now = _at(date(2025, 9, 5), 9, 50)
     state = {}
-    first = generator.generate(
-        "AAPL", _reaction_bars()[:4], as_of=now, universe={"AAPL", "MSFT"},
-        regime="trending_up", previous_close=97.0, strategy_state=state,
+    signal = generator.generate(
+        "AAPL", _daily_bars(day), as_of=_as_of(day), universe={"AAPL"},
+        regime="trending_up", strategy_state=state,
     )
-    assert first is not None
-    generator.record_proposal(first, as_of=now, strategy_state=state)
-
-    second = generator.generate(
-        "MSFT", _reaction_bars()[:4], as_of=now, universe={"AAPL", "MSFT"},
-        regime="trending_up", previous_close=97.0, strategy_state=state,
-    )
-
-    assert second is None
-    assert generator.diagnostics()["filter_rejected"]["portfolio_cooldown"] == 1
-
-    portfolio = empty_portfolio()
-    portfolio["strategy_states"] = {"event_driven": state}
-    validate_portfolio(portfolio)
+    assert signal is not None
+    generator.record_proposal(signal, as_of=_as_of(day), strategy_state=state)
+    assert generator.generate(
+        "AAPL", _daily_bars(day), as_of=_as_of(day), universe={"AAPL"},
+        regime="trending_up", strategy_state=state,
+    ) is None
 
 
-def test_event_profile_validates_limits_and_flags():
-    profile = validate_parameter_profile({"event_driven": {"enabled": True}})
-    assert profile["event_driven"]["max_entries_per_week"] == 3
+def test_event_config_and_profile_keep_frequency_and_holding_bounded():
+    settings = validate_parameter_profile({"event_driven": {"enabled": True}})["event_driven"]
+    assert settings["follow_through_sessions"] == 2
+    assert settings["max_positions"] == 2
     with pytest.raises(ValueError, match="max_entries_per_week"):
-        validate_parameter_profile({"event_driven": {"max_entries_per_week": 8}})
+        EventStrategyConfig.from_dict({"max_entries_per_week": 8})
 
 
-def test_event_satellite_confirms_a_core_entry_through_risk_manager(monkeypatch):
-    day = date(2025, 9, 5)
-    event = _event(day=day)
-    prior_day_bar = {
-        "t": _at(day - timedelta(days=1), 15, 55).astimezone(timezone.utc).isoformat(),
-        "o": 96.8, "h": 97.2, "l": 96.5, "c": 97.0, "v": 100,
-    }
-    bars = [prior_day_bar, *_reaction_bars(day)]
-    daily_days = []
-    cursor = day - timedelta(days=1)
-    while len(daily_days) < 25:
+@pytest.mark.parametrize(
+    ("gap", "move", "action"),
+    [(0.03, 0.02, "buy"), (0.03, -0.025, "short")],
+)
+def test_daily_event_proposal_reaches_the_backtest_risk_manager(monkeypatch, gap, move, action):
+    event_day = date(2025, 9, 4)
+    replay_day = date(2025, 9, 5)
+    event = _event(event_day)
+    bars = []
+    cursor = event_day - timedelta(days=35)
+    close = 100.0
+    while cursor < event_day:
         if cursor.weekday() < 5:
-            daily_days.append(cursor)
-        cursor -= timedelta(days=1)
-    daily_days.reverse()
+            bars.append({
+                "t": datetime.combine(cursor, time(15, 55), tzinfo=ET).isoformat(),
+                "o": close, "h": close + 0.5, "l": close - 0.5,
+                "c": close, "v": 1_000,
+            })
+        cursor += timedelta(days=1)
+    event_daily = _daily_bars(event_day, gap=gap, move=move)[-1]
+    bars.append({
+        "t": datetime.combine(event_day, time(15, 55), tzinfo=ET).isoformat(),
+        **{key: event_daily[key] for key in ("o", "h", "l", "c", "v")},
+    })
+    # Swing satellites are ineligible during the first 15 minutes; the event
+    # setup must still reach the coordinator and risk manager after that gate.
+    for minute, price in ((45, 103.5), (50, 104.0)):
+        bars.append({
+            "t": datetime.combine(replay_day, time(9, minute), tzinfo=ET).isoformat(),
+            "o": price, "h": price + 0.2, "l": price - 0.2, "c": price, "v": 100,
+        })
     spy_daily = [
-        {"t": f"{session.isoformat()}T20:00:00Z", "c": 100 + index * 0.2}
-        for index, session in enumerate(daily_days)
+        {"t": f"2025-08-{index + 1:02d}T20:00:00Z", "c": 100 + index * 0.1}
+        for index in range(25)
     ]
-    profile = {"event_driven": {"enabled": True}}
     monkeypatch.setattr(
-        backtest_module, "evaluate_rule_signal",
-        lambda strategy, ticker, history, parameters=None: (
-            Signal(ticker, "buy", "momentum", "test core setup", 0.7)
-            if strategy == "momentum" and len(history) == 4 else None
-        ),
+        backtest_module, "rank_strategies",
+        lambda *_args, **_kwargs: {
+            "regime": "range_bound", "active": ["event_driven"],
+            "ranked": [{"strategy": "event_driven", "score": 0.5}],
+        },
     )
-    validate_calls = []
-    real_validate = backtest_module.validate_trade
+    risk_calls = []
+    validate = backtest_module.validate_trade
     monkeypatch.setattr(
         backtest_module, "validate_trade",
-        lambda **kwargs: validate_calls.append(kwargs) or real_validate(**kwargs),
+        lambda **kwargs: risk_calls.append(kwargs) or validate(**kwargs),
     )
+
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
-        start=day.isoformat(), end=day.isoformat(), feed="sip", data_adjustment="raw",
-        profile=profile, strategies=["momentum", "event_driven"], event_calendar=EventCalendar([event]),
+        start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
+        data_adjustment="raw", profile={"event_driven": {"enabled": True}},
+        strategies=["event_driven"], event_calendar=EventCalendar([event]),
     )
-
     report = replay.run()
 
-    assert report["entry_count"] == 1
-    assert report["entry_count_by_strategy"]["momentum"] == 1
-    assert report["satellite_confirmed_entries"] == {"event_driven": 1}
-    assert len(validate_calls) == 1
-    assert validate_calls[0]["mode"] == "algo"
-    trade = report["open_positions"][0]
-    assert trade["ticker"] == "AAPL"
-    assert trade["strategy"] == "momentum"
-    assert trade["entry_at"] == _at(day, 9, 50).astimezone(timezone.utc).isoformat()
-    assert report["event_strategy_diagnostics"]["signals"] == 1
-
-
-def test_event_driven_cannot_open_a_position_without_a_core_rule():
-    day = date(2025, 9, 5)
-    event = _event(day=day)
-    bars = [*_reaction_bars(day)]
-    daily_days = []
-    cursor = day - timedelta(days=1)
-    while len(daily_days) < 25:
-        if cursor.weekday() < 5:
-            daily_days.append(cursor)
-        cursor -= timedelta(days=1)
-    daily_days.reverse()
-    spy_daily = [
-        {"t": f"{session.isoformat()}T20:00:00Z", "c": 100 + index * 0.2}
-        for index, session in enumerate(daily_days)
-    ]
-    replay = AlgoPortfolioBacktest(
-        symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
-        start=day.isoformat(), end=day.isoformat(), feed="sip", data_adjustment="raw",
-        profile={"event_driven": {"enabled": True}}, strategies=["event_driven"],
-        event_calendar=EventCalendar([event]),
-    )
-
-    report = replay.run()
-
-    assert report["entry_count"] == 0
+    assert report["entry_count_by_strategy"]["event_driven"] == 1
+    assert report["open_positions"][0]["strategy"] == "event_driven"
+    assert risk_calls and risk_calls[0]["action"] == action
+    assert risk_calls[0]["mode"] == "algo"

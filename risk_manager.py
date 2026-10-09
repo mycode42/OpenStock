@@ -176,12 +176,7 @@ def _count_algo_new_entries_today(
     positions: dict[str, dict],
     session_date: str,
 ) -> int:
-    """Count today's filled or pending buys that opened a flat ticker.
-
-    Rebuild each ticker's start-of-session share count from current positions
-    and Alpaca fill activities, then replay fills and today's submitted buys.
-    Scale-ins do not consume the quota; a buy after a completed exit does.
-    """
+    """Count today's filled or pending long and short openings using signed qty."""
     fills_by_order: dict[str, float] = {}
     today_fills: list[tuple[str, datetime, str, float, str]] = []
     filled_delta: dict[str, float] = {}
@@ -212,7 +207,7 @@ def _count_algo_new_entries_today(
         signed_qty = qty if side == "buy" else -qty
         filled_delta[ticker] = filled_delta.get(ticker, 0.0) + signed_qty
 
-    today_buy_order_ids: set[str] = set()
+    today_order_ids: set[str] = set()
     events_by_ticker: dict[str, list[tuple[datetime, str, float, bool, str]]] = {}
 
     for order in orders:
@@ -238,51 +233,80 @@ def _count_algo_new_entries_today(
             "canceled", "expired", "rejected", "filled", "done_for_day",
             "replaced", "stopped", "suspended", "calculated",
         }
-        if side == "buy":
-            filled_qty = max(fills_by_order.get(order_id, 0.0), reported_filled)
-            if filled_qty <= 0 and not pending:
-                continue
-            missing_fill_qty = max(0.0, reported_filled - fills_by_order.get(order_id, 0.0))
-            filled_delta[ticker] = filled_delta.get(ticker, 0.0) + missing_fill_qty
-            projected_qty = max(filled_qty, order_qty if pending else filled_qty)
-            events_by_ticker.setdefault(ticker, []).append((timestamp, "buy", projected_qty, True, order_id))
-            if order_id:
-                today_buy_order_ids.add(order_id)
-        elif reported_filled > fills_by_order.get(order_id, 0.0):
-            missing_fill_qty = reported_filled - fills_by_order.get(order_id, 0.0)
-            filled_delta[ticker] = filled_delta.get(ticker, 0.0) - missing_fill_qty
-            filled_at = order.get("filled_at") or order.get("updated_at") or submitted_at
-            try:
-                filled_timestamp = datetime.fromisoformat(str(filled_at).replace("Z", "+00:00"))
-                if filled_timestamp.tzinfo is None:
-                    filled_timestamp = filled_timestamp.replace(tzinfo=timezone.utc)
-            except (TypeError, ValueError):
-                filled_timestamp = timestamp
-            events_by_ticker.setdefault(ticker, []).append((filled_timestamp, "sell", missing_fill_qty, False, order_id))
+        filled_qty = max(fills_by_order.get(order_id, 0.0), reported_filled)
+        if filled_qty <= 0 and not pending:
+            continue
+        missing_fill_qty = max(0.0, reported_filled - fills_by_order.get(order_id, 0.0))
+        if missing_fill_qty:
+            delta = missing_fill_qty if side == "buy" else -missing_fill_qty
+            filled_delta[ticker] = filled_delta.get(ticker, 0.0) + delta
+        projected_qty = max(filled_qty, order_qty if pending else filled_qty)
+        events_by_ticker.setdefault(ticker, []).append((timestamp, side, projected_qty, True, order_id))
+        if order_id:
+            today_order_ids.add(order_id)
 
-    # Today's buy orders are represented once at submission time above;
-    # remaining fills still adjust holdings when the order was submitted
-    # before this session (for example, a prior-day protective exit).
+    # Prior-session orders (including protective bracket legs) can fill today.
     for ticker, timestamp, side, qty, order_id in today_fills:
-        if side == "buy" and order_id in today_buy_order_ids:
+        if order_id and order_id in today_order_ids:
             continue
         events_by_ticker.setdefault(ticker, []).append((timestamp, side, qty, False, order_id))
 
     entries = 0
     for ticker, events in events_by_ticker.items():
         current_qty = float((positions.get(ticker) or {}).get("qty", 0) or 0)
-        starting_qty = max(0.0, current_qty - filled_delta.get(ticker, 0.0))
-        running_qty = starting_qty
-        counted_order_ids: set[str] = set()
+        running_qty = current_qty - filled_delta.get(ticker, 0.0)
         for _, side, qty, countable, order_id in sorted(events, key=lambda event: event[0]):
-            if side == "buy":
-                if countable and running_qty <= 0 and order_id not in counted_order_ids:
-                    entries += 1
-                    counted_order_ids.add(order_id)
-                running_qty += qty
-            else:
-                running_qty = max(0.0, running_qty - qty)
+            if countable and abs(running_qty) < 1e-9:
+                entries += 1
+            running_qty += qty if side == "buy" else -qty
     return entries
+
+
+def _pending_short_exposure(open_orders: list[dict], positions: dict[str, dict]) -> dict[str, float]:
+    """Reserve remaining opening sell-short orders by ticker."""
+    exposure: dict[str, float] = {}
+    terminal = {"canceled", "expired", "rejected", "filled", "done_for_day", "replaced", "stopped"}
+    for order in open_orders:
+        if str(order.get("side", "")).lower() != "sell":
+            continue
+        symbol = str(order.get("symbol") or "").upper()
+        if not symbol:
+            raise ValueError("Open sell order has no symbol")
+        intent = str(order.get("position_intent") or "").lower()
+        position_qty = float((positions.get(symbol) or {}).get("qty", 0) or 0)
+        if intent == "sell_to_close" or (not intent and position_qty > 0):
+            continue
+        if str(order.get("status", "")).lower() in terminal:
+            continue
+        quantity = max(0.0, float(order.get("qty") or 0) - float(order.get("filled_qty") or 0))
+        if quantity <= 0:
+            continue
+        prices = [
+            float(value) for value in (
+                order.get("limit_price"), order.get("filled_avg_price"),
+                (positions.get(symbol) or {}).get("current_price"),
+            ) if value not in (None, "") and float(value) > 0
+        ]
+        if not prices:
+            raise ValueError(f"Open short order for {symbol} has no usable price")
+        exposure[symbol] = exposure.get(symbol, 0.0) + quantity * max(prices) * 1.02
+    return exposure
+
+
+def _easy_to_borrow_symbols(mode: str) -> set[str]:
+    """Read Alpaca's current easy-to-borrow symbols; unknown/HTB names fail closed."""
+    assets = _api("assets?status=active&asset_class=us_equity", mode=mode)
+    if not isinstance(assets, list):
+        raise ValueError("Alpaca asset response was not a list")
+    return {
+        str(asset.get("symbol", "")).upper()
+        for asset in assets
+        if isinstance(asset, dict)
+        and asset.get("symbol")
+        and asset.get("tradable") is True
+        and asset.get("shortable") is True
+        and str(asset.get("borrow_status", "")).lower() == "easy_to_borrow"
+    }
 
 
 def _get_algo_fill_activities(session_start: str, mode: str) -> list[dict]:
@@ -420,7 +444,7 @@ def get_portfolio_state(mode: str = None) -> dict:
             "pct_of_equity": (market_value / equity) if equity else 0,
         }
         sector = ticker_sector.get(sym, "other")
-        sector_alloc[sector] = sector_alloc.get(sector, 0) + market_value
+        sector_alloc[sector] = sector_alloc.get(sector, 0) + abs(market_value)
 
     is_algo = mode == "algo"
     now_et = datetime.now(MARKET_TZ)
@@ -459,6 +483,7 @@ def get_portfolio_state(mode: str = None) -> dict:
             entry_count_today = _count_algo_new_entries_today(
                 orders, fills, positions, session_date,
             )
+            trade_count_today = entry_count_today
         else:
             entry_count_today = trade_count_today
     except Exception as exc:
@@ -469,13 +494,22 @@ def get_portfolio_state(mode: str = None) -> dict:
         entry_count_error = f"Could not read today's {mode} order history"
 
     pending_buy_value_by_ticker: dict[str, float] = {}
+    pending_short_value_by_ticker: dict[str, float] = {}
     pending_exposure_available = True
     pending_exposure_error = None
+    easy_to_borrow_symbols: set[str] = set()
+    shortability_available = False
     try:
+        open_orders = _get_open_orders(mode)
         pending_buy_value_by_ticker = _pending_buy_exposure(
-            _get_open_orders(mode), positions,
+            open_orders, positions,
         )
+        if mode == "algo":
+            pending_short_value_by_ticker = _pending_short_exposure(open_orders, positions)
         for symbol, value in pending_buy_value_by_ticker.items():
+            sector = ticker_sector.get(symbol, "other")
+            sector_alloc[sector] = sector_alloc.get(sector, 0.0) + value
+        for symbol, value in pending_short_value_by_ticker.items():
             sector = ticker_sector.get(symbol, "other")
             sector_alloc[sector] = sector_alloc.get(sector, 0.0) + value
     except Exception as exc:
@@ -483,12 +517,23 @@ def get_portfolio_state(mode: str = None) -> dict:
         pending_exposure_available = False
         pending_exposure_error = f"Could not value {mode} open buy orders"
 
+    if mode == "algo":
+        try:
+            easy_to_borrow_symbols = _easy_to_borrow_symbols(mode)
+            shortability_available = True
+        except Exception as exc:
+            log.warning("Could not verify %s shortability: %s", mode, exc)
+
     pending_buy_reservation = sum(pending_buy_value_by_ticker.values())
     available_cash = cash - pending_buy_reservation
     pending_new_symbols = {
         symbol for symbol in pending_buy_value_by_ticker
         if float((positions.get(symbol) or {}).get("qty", 0)) == 0
     }
+    pending_new_symbols.update(
+        symbol for symbol in pending_short_value_by_ticker
+        if float((positions.get(symbol) or {}).get("qty", 0)) == 0
+    )
 
     broker_account_id = str(account.get("id") or account.get("account_number") or "")
     weekly_pnl_pct = _estimate_weekly_pnl(
@@ -504,6 +549,7 @@ def get_portfolio_state(mode: str = None) -> dict:
         "available_cash_pct": available_cash / equity if equity else 0.0,
         "pending_buy_reservation": pending_buy_reservation,
         "pending_buy_value_by_ticker": pending_buy_value_by_ticker,
+        "pending_short_value_by_ticker": pending_short_value_by_ticker,
         "pending_new_symbols": sorted(pending_new_symbols),
         "pending_exposure_available": pending_exposure_available,
         "pending_exposure_error": pending_exposure_error,
@@ -511,11 +557,13 @@ def get_portfolio_state(mode: str = None) -> dict:
         "weekly_pnl_pct": weekly_pnl_pct,
         "positions": positions,
         "sector_alloc": sector_alloc,
+        "shortability_available": shortability_available,
+        "easy_to_borrow_symbols": sorted(easy_to_borrow_symbols),
         "trade_count_today": trade_count_today,
         "entry_count_today": entry_count_today,
         "entry_count_available": entry_count_available,
         "entry_count_error": entry_count_error,
-        "open_position_count": len([p for p in positions.values() if p["qty"] > 0]) + len(pending_new_symbols),
+        "open_position_count": len([p for p in positions.values() if p["qty"] != 0]) + len(pending_new_symbols),
     }
 
 
@@ -527,14 +575,15 @@ def stage_approved_trade(
     entry_price: float,
     mode: str = None,
 ) -> dict:
-    """Reserve an approved long entry before validating the next batch signal.
+    """Reserve an approved long or short entry before validating the next signal.
 
     execute_trades.py can receive multiple strategy signals at once. Staging
     successful or dry-run entries prevents each signal from being checked
     against the same pre-batch cash, position, and sector totals.
     """
     state = deepcopy(portfolio_state)
-    if action.lower() != "buy" or qty <= 0 or entry_price <= 0:
+    action = action.lower()
+    if action not in {"buy", "short"} or qty <= 0 or entry_price <= 0:
         return state
     if mode is None:
         mode = os.environ.get("TRADING_MODE", "swing")
@@ -545,23 +594,25 @@ def stage_approved_trade(
     existing = positions.get(ticker)
     previous_value = float((existing or {}).get("market_value", 0) or 0)
     previous_qty = float((existing or {}).get("qty", 0) or 0)
+    signed_qty = int(qty) if action == "buy" else -int(qty)
+    signed_value = trade_value if action == "buy" else -trade_value
     positions[ticker] = {
         **(existing or {}),
         "symbol": ticker,
-        "qty": previous_qty + int(qty),
-        "market_value": previous_value + trade_value,
+        "qty": previous_qty + signed_qty,
+        "market_value": previous_value + signed_value,
         "current_price": float(entry_price),
-        "pct_of_equity": (previous_value + trade_value) / equity if equity else 0,
+        "pct_of_equity": (previous_value + signed_value) / equity if equity else 0,
     }
-    cash = float(state.get("cash", 0) or 0) - trade_value
+    cash = float(state.get("cash", 0) or 0) + (trade_value if action == "short" else -trade_value)
     state["cash"] = cash
     state["cash_pct"] = cash / equity if equity else 0
-    is_new_position = (existing is None or previous_qty <= 0) and ticker not in set(
+    is_new_position = (existing is None or previous_qty == 0) and ticker not in set(
         state.get("pending_new_symbols") or []
     )
     if is_new_position:
         state["open_position_count"] = int(state.get("open_position_count", 0)) + 1
-    available_cash = float(state.get("available_cash", cash) or 0) - trade_value
+    available_cash = float(state.get("available_cash", cash) or 0) + (trade_value if action == "short" else -trade_value)
     state["available_cash"] = available_cash
     state["available_cash_pct"] = available_cash / equity if equity else 0
     previous_trade_count = state.get("trade_count_today")
@@ -789,10 +840,18 @@ def validate_trade(
     if action not in ("buy", "short"):
         return ValidationResult(approved=False, reason=f"Unknown action '{action}'", rule="unknown_action")
 
-    # The strategy portfolio is long-only. Failing closed avoids creating an
-    # uncovered short through an incompletely modelled short-risk path.
     if action == "short":
-        return ValidationResult(False, "New short entries are disabled.", "short_disabled")
+        if mode != "algo" or not risk.get("allow_short_positions", False):
+            return ValidationResult(False, "New short entries are disabled for this mode.", "short_disabled")
+        if portfolio_state is None:
+            try:
+                portfolio_state = get_portfolio_state(mode=mode)
+            except Exception as exc:
+                return ValidationResult(False, f"Could not verify shortability and portfolio state: {exc}", "portfolio_fetch_failed")
+        if not portfolio_state.get("shortability_available", False):
+            return ValidationResult(False, "Alpaca shortability data is unavailable; refusing the short.", "shortability_unavailable")
+        if ticker.upper() not in set(portfolio_state.get("easy_to_borrow_symbols") or []):
+            return ValidationResult(False, f"{ticker.upper()} is not confirmed easy to borrow by Alpaca.", "not_easy_to_borrow")
 
     try:
         entry_price = float(entry_price)
@@ -904,14 +963,26 @@ def validate_trade(
         return ValidationResult(approved=False, reason=msg, rule="weekly_circuit_breaker")
 
     existing_position = portfolio_state["positions"].get(ticker.upper())
-    has_pending_buy = ticker.upper() in (portfolio_state.get("pending_buy_value_by_ticker") or {})
-    is_new_position = (existing_position is None or existing_position.get("qty", 0) == 0) and not has_pending_buy
+    existing_qty = float((existing_position or {}).get("qty", 0) or 0)
+    if action == "buy" and existing_qty < 0:
+        return ValidationResult(False, "Close the short position before opening a long position.", "opposing_position_open")
+    if action == "short" and existing_qty > 0:
+        return ValidationResult(False, "Close the long position before opening a short position.", "opposing_position_open")
+    pending_buy = ticker.upper() in (portfolio_state.get("pending_buy_value_by_ticker") or {})
+    pending_short = ticker.upper() in (portfolio_state.get("pending_short_value_by_ticker") or {})
+    if action == "buy" and pending_short:
+        return ValidationResult(False, "An opening short order is already pending for this ticker.", "opposing_order_pending")
+    if action == "short" and pending_buy:
+        return ValidationResult(False, "An opening long order is already pending for this ticker.", "opposing_order_pending")
+    if abs(existing_qty) <= 1e-9 and ((action == "buy" and pending_buy) or (action == "short" and pending_short)):
+        return ValidationResult(False, "An opening order is already pending for this ticker.", "entry_order_pending")
+    is_new_position = abs(existing_qty) <= 1e-9 and not (pending_buy or pending_short)
 
     # ── Rule 6: Max trades / new entries per day ────────────────────────────
     if mode == "algo":
-        # Algo's quota counts only buys that open a flat ticker. Scale-ins and
-        # exits do not use entry slots; Rule 9 still caps their total size.
-        if action == "buy" and is_new_position:
+        # Algo's quota counts buys or shorts that open a flat ticker. Scale-ins
+        # and exits do not use entry slots; Rule 9 still caps total size.
+        if action in {"buy", "short"} and is_new_position:
             entry_count = portfolio_state.get(
                 "entry_count_today", portfolio_state.get("trade_count_today")
             )
@@ -922,7 +993,7 @@ def validate_trade(
                 return ValidationResult(approved=False, reason=msg, rule="entry_count_unavailable")
             if entry_count >= risk["max_trades_per_day"]:
                 msg = (
-                    f"BLOCKED: Algo max {risk['max_trades_per_day']} new buy entries/day reached "
+                    f"BLOCKED: Algo max {risk['max_trades_per_day']} new entries/day reached "
                     f"({entry_count} already today)."
                 )
                 log.warning(msg)
@@ -951,9 +1022,9 @@ def validate_trade(
 
     # ── Rule 8: Min cash reserve ────────────────────────────────────────────
     cash_available = float(portfolio_state.get("available_cash", portfolio_state["cash"]))
-    cash_after = cash_available - trade_value
+    cash_after = cash_available + trade_value if action == "short" else cash_available - trade_value
     cash_pct_after = (cash_after / equity) if equity else 0
-    if cash_pct_after < risk["min_cash_pct"]:
+    if action == "buy" and cash_pct_after < risk["min_cash_pct"]:
         msg = (
             f"BLOCKED: Trade would reduce cash to {cash_pct_after*100:.1f}% "
             f"(minimum {risk['min_cash_pct']*100:.0f}%). "
@@ -964,9 +1035,12 @@ def validate_trade(
 
     # ── Rule 9: Max position size (per-ticker or mode default) ─────────────
     effective_max_pct = ticker_max_pct.get(ticker.upper(), risk["max_position_pct"])
-    existing_value = float((existing_position or {}).get("market_value", 0)) + float(
-        (portfolio_state.get("pending_buy_value_by_ticker") or {}).get(ticker.upper(), 0)
+    current_ticker_value = abs(float((existing_position or {}).get("market_value", 0) or 0))
+    pending_value_map = (
+        portfolio_state.get("pending_short_value_by_ticker", {}) if action == "short"
+        else portfolio_state.get("pending_buy_value_by_ticker", {})
     )
+    existing_value = current_ticker_value + float(pending_value_map.get(ticker.upper(), 0) or 0)
     new_total_value = existing_value + trade_value
     position_pct = new_total_value / equity if equity else 0
 
@@ -978,6 +1052,32 @@ def validate_trade(
         )
         log.warning(msg)
         return ValidationResult(approved=False, reason=msg, rule="max_position_size")
+
+    if action == "short":
+        short_positions = {
+            symbol for symbol, position in portfolio_state["positions"].items()
+            if float((position or {}).get("qty", 0) or 0) < 0
+        }
+        short_positions.update(
+            symbol for symbol in (portfolio_state.get("pending_short_value_by_ticker") or {})
+            if symbol not in portfolio_state["positions"]
+        )
+        if is_new_position and ticker.upper() not in short_positions and len(short_positions) >= int(risk.get("max_short_positions", 0)):
+            return ValidationResult(False, "Algo maximum short position count reached.", "max_short_positions")
+        short_exposure = sum(
+            abs(float((position or {}).get("market_value", 0) or 0))
+            for position in portfolio_state["positions"].values()
+            if float((position or {}).get("qty", 0) or 0) < 0
+        ) + sum(float(value or 0) for value in (portfolio_state.get("pending_short_value_by_ticker") or {}).values())
+        short_exposure += trade_value
+        max_short_exposure = equity * float(risk.get("max_short_exposure_pct", 0))
+        if short_exposure > max_short_exposure:
+            return ValidationResult(
+                False,
+                f"Short exposure would reach {short_exposure / equity:.1%} of equity "
+                f"(max {float(risk.get('max_short_exposure_pct', 0)):.0%}).",
+                "max_short_exposure_pct",
+            )
 
     # ── Rule 10: Max sector allocation ─────────────────────────────────────
     sector = ticker_sector.get(ticker.upper(), "other")
@@ -1007,11 +1107,17 @@ def validate_trade(
                     symbol.upper()
                     for symbol, position in portfolio_state["positions"].items()
                     if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
-                    and float(position.get("qty", 0) or 0) > 0
+                    and abs(float(position.get("qty", 0) or 0)) > 0
                 }
                 tactical_symbols.update(
                     symbol.upper()
                     for symbol, value in (portfolio_state.get("pending_buy_value_by_ticker") or {}).items()
+                    if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
+                    and float(value or 0) > 0
+                )
+                tactical_symbols.update(
+                    symbol.upper()
+                    for symbol, value in (portfolio_state.get("pending_short_value_by_ticker") or {}).items()
                     if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
                     and float(value or 0) > 0
                 )
@@ -1027,10 +1133,15 @@ def validate_trade(
                 v for k, v in portfolio_state["positions"].items()
                 if k in tactical_tickers or k in MOONSHOTS
             ]
-            total_tactical = sum(p.get("market_value", 0) for p in tactical_positions)
+            total_tactical = sum(abs(float(p.get("market_value", 0) or 0)) for p in tactical_positions)
             total_tactical += sum(
                 value for symbol, value in
                 (portfolio_state.get("pending_buy_value_by_ticker") or {}).items()
+                if symbol in tactical_tickers or symbol in MOONSHOTS
+            )
+            total_tactical += sum(
+                value for symbol, value in
+                (portfolio_state.get("pending_short_value_by_ticker") or {}).items()
                 if symbol in tactical_tickers or symbol in MOONSHOTS
             )
             new_total = total_tactical + trade_value

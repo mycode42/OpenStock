@@ -1,4 +1,4 @@
-"""Price and volume confirmed momentum rules"""
+"""Price and volume confirmed long and short momentum rules."""
 
 from __future__ import annotations
 
@@ -14,6 +14,10 @@ def signal(
     lookback: int = 20,
     minimum_return: float = 0.04,
     minimum_volume_ratio: float = 1.2,
+    minimum_short_return: float | None = None,
+    minimum_short_volume_ratio: float | None = None,
+    allow_long: bool = True,
+    allow_short: bool = False,
 ) -> Signal | None:
     values = closes(bars)
     if len(values) < max(lookback + 1, 21):
@@ -30,11 +34,20 @@ def signal(
     momentum_return = current / values[-lookback - 1] - 1
     if position_qty > 0 and (current < average or momentum_return < 0):
         return Signal(ticker, "sell", "momentum", "momentum or 20-bar trend turned negative", 0.65)
-    if position_qty <= 0 and current > average and momentum_return >= minimum_return and volume_ratio >= minimum_volume_ratio:
+    if position_qty < 0 and (current > average or momentum_return > 0):
+        return Signal(ticker, "cover", "momentum", "downside momentum or 20-bar trend turned positive", 0.65)
+    short_return = minimum_return if minimum_short_return is None else minimum_short_return
+    short_volume = minimum_volume_ratio if minimum_short_volume_ratio is None else minimum_short_volume_ratio
+    if position_qty == 0 and allow_long and current > average and momentum_return >= minimum_return and volume_ratio >= minimum_volume_ratio:
         return Signal(
             ticker, "buy", "momentum",
             f"{lookback}-bar return {momentum_return:.1%}; volume {volume_ratio:.2f}x average",
             min(0.95, 0.6 + momentum_return),
         )
+    if position_qty == 0 and allow_short and current < average and momentum_return <= -short_return and volume_ratio >= short_volume:
+        return Signal(
+            ticker, "short", "momentum",
+            f"{lookback}-bar return {momentum_return:.1%}; volume {volume_ratio:.2f}x average",
+            min(0.95, 0.6 + abs(momentum_return)),
+        )
     return None
-

@@ -101,3 +101,12 @@ def test_extended_hours_executor_sends_plain_limit_day_order(monkeypatch):
         "symbol": "AAPL", "qty": "3", "side": "buy", "type": "limit",
         "time_in_force": "day", "limit_price": "225.1", "extended_hours": True,
     }
+
+    submitted.clear()
+    cover = execute_trades.place_order(
+        "AAPL", "cover", 3, order_type="limit", limit_price=225.10,
+        extended_hours=True,
+    )
+    assert cover["success"]
+    assert submitted["side"] == "buy"
+    assert submitted["position_intent"] == "buy_to_close"

@@ -51,7 +51,7 @@ def _journal_entries(path: Path, account_id: str | None = None) -> tuple[dict[st
         if not isinstance(row, dict):
             errors.append(f"Malformed trade journal row {line_number}")
             continue
-        if row.get("trading_mode") != "algo" or str(row.get("action", "")).lower() != "buy":
+        if row.get("trading_mode") != "algo" or str(row.get("action", "")).lower() not in {"buy", "short"}:
             continue
         if account_id is not None and row.get("account_id") != account_id:
             continue
@@ -123,15 +123,16 @@ def _current_episode(position: dict, filled_orders: list[dict]) -> tuple[list[di
         current_qty = _decimal(position.get("qty") or 0)
     except ValueError as exc:
         return [], str(exc)
-    if current_qty <= 0:
-        return [], "Algo supports positive long positions only"
+    if current_qty == 0:
+        return [], "Broker position quantity is zero"
     remaining = current_qty
     episode_reverse = []
     for order in reversed(filled_orders):
         filled = _decimal(order["filled_qty"])
-        remaining += filled if order["side"] == "sell" else -filled
+        delta = filled if order["side"] == "buy" else -filled
+        remaining -= delta
         episode_reverse.append(order)
-        if remaining < 0:
+        if remaining != 0 and (remaining > 0) != (current_qty > 0):
             return [], "Broker fills cannot reconstruct the current position"
         if remaining == 0:
             episode = list(reversed(episode_reverse))
@@ -143,19 +144,30 @@ def _current_episode(position: dict, filled_orders: list[dict]) -> tuple[list[di
     average = Decimal(0)
     for order in episode:
         filled = _decimal(order["filled_qty"])
-        if order["side"] == "buy":
+        delta = filled if order["side"] == "buy" else -filled
+        if quantity == 0:
             try:
                 price = _decimal(order.get("filled_avg_price"))
             except ValueError:
                 return [], "An entry fill has no valid average price"
             if price <= 0:
                 return [], "An entry fill has no valid average price"
-            average = (average * quantity + price * filled) / (quantity + filled)
-            quantity += filled
+            quantity = delta
+            average = price
+        elif (quantity > 0) == (delta > 0):
+            try:
+                price = _decimal(order.get("filled_avg_price"))
+            except ValueError:
+                return [], "An entry fill has no valid average price"
+            if price <= 0:
+                return [], "An entry fill has no valid average price"
+            average = (average * abs(quantity) + price * abs(delta)) / (abs(quantity) + abs(delta))
+            quantity += delta
         else:
-            quantity -= filled
-            if quantity < 0:
-                return [], "A sell exceeds the reconstructed long position"
+            next_quantity = quantity + delta
+            if next_quantity != 0 and (next_quantity > 0) != (quantity > 0):
+                return [], "A fill crosses through flat and changes position direction"
+            quantity = next_quantity
             if quantity == 0:
                 average = Decimal(0)
     if quantity != current_qty:
@@ -176,11 +188,12 @@ def _bracket_levels(entry_order_id: str, nested_orders: list[dict], quantity: De
     legs = parent.get("legs") or []
     stops = []
     targets = []
+    exit_side = "buy" if quantity < 0 else "sell"
     for leg in legs:
-        if leg.get("side") != "sell" or leg.get("status") not in OPEN_ORDER_STATUSES:
+        if leg.get("side") != exit_side or leg.get("status") not in OPEN_ORDER_STATUSES:
             continue
         try:
-            if _decimal(leg.get("qty") or 0) != quantity:
+            if _decimal(leg.get("qty") or 0) != abs(quantity):
                 continue
             if leg.get("type") in {"stop", "stop_limit"}:
                 price = _decimal(leg.get("stop_price"))
@@ -239,7 +252,9 @@ def _resolve_execution_incidents(
             and order.get("client_order_id") == client_id
             and (not order_id or str(order.get("id") or "") == str(order_id))
             and str(order.get("symbol") or "").upper() == symbol
-            and str(order.get("side") or "").lower() == "sell"
+            and str(order.get("side") or "").lower() == (
+                "buy" if _decimal((positions.get(symbol) or {}).get("qty") or 0) < 0 else "sell"
+            )
             and str(order.get("status") or "").lower() in OPEN_ORDER_STATUSES
         ]
         if matches:
@@ -285,8 +300,8 @@ def reconcile_startup(
             qty = _decimal(position.get("qty") or 0)
         except ValueError:
             qty = Decimal(0)
-        if qty <= 0:
-            uncertain[ticker] = "Algo supports positive long positions only"
+        if qty == 0:
+            uncertain[ticker] = "Broker position quantity is zero"
             machine.quarantine_position(ticker, uncertain[ticker])
             continue
         prior_owner = machine.position_owners.get(ticker)
@@ -321,9 +336,9 @@ def reconcile_startup(
                     isinstance(exact, dict)
                     and str(exact.get("id")) == prior_state["entry_order_id"]
                     and str(exact.get("symbol", "")).upper() == ticker
-                    and exact.get("side") == "buy"
+                    and exact.get("side") == ("buy" if qty > 0 else "sell")
                     and exact.get("status") == "filled"
-                    and _decimal(exact.get("filled_qty") or 0) == qty
+                    and _decimal(exact.get("filled_qty") or 0) == abs(qty)
                     and abs(_decimal(exact.get("filled_avg_price")) - _decimal(position.get("avg_entry_price"))) <= Decimal("0.02")
                 )
             except ValueError:
@@ -342,9 +357,10 @@ def reconcile_startup(
             else:
                 machine.quarantine_position(ticker, reason)
             continue
-        entry_orders = [order for order in episode if order.get("side") == "buy"]
+        entry_side = "buy" if qty > 0 else "sell"
+        entry_orders = [order for order in episode if order.get("side") == entry_side]
         if len(entry_orders) != 1:
-            uncertain[ticker] = "Current episode has multiple entry buys; manual attribution is required"
+            uncertain[ticker] = "Current episode has multiple opening orders; manual attribution is required"
             machine.quarantine_position(ticker, uncertain[ticker])
             continue
         entry = entry_orders[0]
@@ -405,6 +421,8 @@ def reconcile_startup(
                             "journal_broker_match" if prior_entry is None else "coordinator"),
                     stop_price=stop,
                     take_profit=target,
+                    entry_action="buy" if qty > 0 else "short",
+                    entry_at=entry.get("filled_at") or entry.get("submitted_at"),
                 )
             except ValueError as exc:
                 uncertain[ticker] = str(exc)

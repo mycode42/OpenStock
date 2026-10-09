@@ -107,10 +107,11 @@ def _same_decision(recovery: dict, entry_id: str, qty: Decimal, stop: Decimal, t
 
 
 def _lookup_matches(order: dict, symbol: str, recovery: dict) -> bool:
+    expected_side = str(recovery.get("side") or "sell").lower()
     return (
         str(order.get("client_order_id") or "") == recovery.get("client_order_id")
         and str(order.get("symbol") or "").upper() == symbol
-        and str(order.get("side") or "").lower() == "sell"
+        and str(order.get("side") or "").lower() == expected_side
         and str(order.get("type") or "").lower() == "limit"
         and str(order.get("order_class") or "").lower() == "oco"
         and _amount(order.get("qty")) == _amount(recovery.get("qty"))
@@ -122,7 +123,9 @@ def _lookup_matches(order: dict, symbol: str, recovery: dict) -> bool:
     )
 
 
-def _fresh_inside_quote(broker, symbol: str, stop: Decimal, target: Decimal, now: datetime) -> Decimal | None:
+def _fresh_inside_quote(
+    broker, symbol: str, stop: Decimal, target: Decimal, now: datetime, *, is_short: bool = False,
+) -> Decimal | None:
     quote = broker.latest_quotes([symbol], feed=regular_feed()).get(symbol)
     if not isinstance(quote, dict):
         return None
@@ -132,11 +135,11 @@ def _fresh_inside_quote(broker, symbol: str, stop: Decimal, target: Decimal, now
     valid = bool(
         age is not None and -5 <= age <= 30
         and bid is not None and ask is not None
-        and bid > stop + Decimal("0.01")
-        and ask < target - Decimal("0.01")
+        and (ask < stop - Decimal("0.01") and bid > target + Decimal("0.01") if is_short else
+             bid > stop + Decimal("0.01") and ask < target - Decimal("0.01"))
         and ask >= bid
     )
-    return bid if valid else None
+    return (ask if is_short else bid) if valid else None
 
 
 def recover_broker_protection(
@@ -201,15 +204,17 @@ def recover_broker_protection(
             continue
         entry_id = state.get("entry_order_id")
         qty = _amount(by_symbol[symbol].get("qty"))
+        is_short = qty is not None and qty < 0
+        quantity = abs(qty) if qty is not None else None
         stop = _price(state.get("stop_price"))
         target = _price(state.get("take_profit"))
         if (
             not isinstance(entry_id, str) or not entry_id
-            or qty is None or qty <= 0 or qty != qty.to_integral_value()
+            or quantity is None or quantity <= 0 or quantity != quantity.to_integral_value()
             or (startup.get("verified_entries") or {}).get(symbol) != entry_id
             or _amount((startup.get("verified_quantities") or {}).get(symbol)) != qty
             or _amount(state.get("last_known_qty")) != qty
-            or stop is None or target is None or stop >= target
+            or stop is None or target is None or ((stop <= target) if is_short else (stop >= target))
         ):
             report["waiting"].append(f"{symbol}: current entry, quantity, or exit levels differ from broker-verified state")
             continue
@@ -232,7 +237,7 @@ def recover_broker_protection(
             continue
         entry_class = str(entry_nested.get("order_class") or "simple").lower()
         if (
-            str(entry_nested.get("side") or "").lower() != "buy"
+            str(entry_nested.get("side") or "").lower() != ("sell" if is_short else "buy")
             or entry_class not in {"bracket", "simple"}
             or (entry_class == "bracket" and not isinstance(entry_nested.get("legs"), list))
         ):
@@ -297,7 +302,7 @@ def recover_broker_protection(
             report["errors"].append(f"{symbol}: exact OCO exists but client-ID lookup disagrees")
             continue
 
-        same = isinstance(recovery, dict) and _same_decision(recovery, entry_id, qty, stop, target)
+        same = isinstance(recovery, dict) and _same_decision(recovery, entry_id, quantity, stop, target)
         previous_age = _age_seconds(now, recovery.get("last_submission_at") or recovery.get("prepared_at")) if client_id else None
         if client_id and (previous_age is None or previous_age < RETRY_SECONDS):
             report["waiting"].append(f"{symbol}: waiting for prior OCO decision to settle")
@@ -313,29 +318,31 @@ def recover_broker_protection(
             if attempt > MAX_DECISIONS:
                 report["errors"].append(f"{symbol}: replacement OCO was rejected too many times")
                 continue
-            client_id = _decision_id(symbol, entry_id, qty, stop, target, attempt)
+            client_id = _decision_id(symbol, entry_id, quantity, stop, target, attempt)
             recovery = {
-                "entry_order_id": entry_id, "qty": str(qty),
+                "entry_order_id": entry_id, "qty": str(quantity),
                 "stop_price": str(stop), "take_profit": str(target),
+                "side": "buy" if is_short else "sell",
                 "client_order_id": client_id, "order_id": None,
                 "decision_attempt": attempt, "submission_attempts": 0,
                 "status": "prepared", "prepared_at": now.isoformat(),
             }
 
-        quote_bid = _fresh_inside_quote(broker, symbol, stop, target, now)
-        if quote_bid is None:
+        quote_reference = _fresh_inside_quote(broker, symbol, stop, target, now, is_short=is_short)
+        if quote_reference is None:
             report["waiting"].append(f"{symbol}: no fresh quote strictly inside persisted stop and target")
             continue
 
         recovery["submission_attempts"] = int(recovery.get("submission_attempts") or 0) + 1
+        recovery["side"] = "buy" if is_short else "sell"
         recovery["last_submission_at"] = now.isoformat()
         recovery["status"] = "submission_unknown"
         state["protection_recovery"] = recovery
         save()  # Durable intent and exact client ID precede any broker POST.
         trade = {
-            "ticker": symbol, "action": "sell", "qty": int(qty),
+            "ticker": symbol, "action": "cover" if is_short else "sell", "qty": int(quantity),
             "order_type": "oco", "stop_price": float(stop),
-            "take_profit": float(target), "entry_price": float(quote_bid),
+            "take_profit": float(target), "entry_price": float(quote_reference),
             "strategy": owner, "client_order_id": client_id,
             "reasoning": "restore broker stop and take-profit coverage for an owned Algo holding",
         }

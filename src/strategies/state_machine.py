@@ -8,7 +8,8 @@ Unverified broker holdings are QUARANTINED until their entry is attributable.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 
 FLAT = "flat"
@@ -18,6 +19,7 @@ EXIT_PENDING = "exit_pending"
 COOLDOWN = "cooldown"
 QUARANTINED = "quarantined"
 PENDING_PHASES = {ENTRY_PENDING, EXIT_PENDING}
+ET = ZoneInfo("America/New_York")
 
 
 def _state_for(states: dict, strategy: str, ticker: str) -> dict:
@@ -41,6 +43,12 @@ def _state_for(states: dict, strategy: str, ticker: str) -> dict:
         "quarantine_reason": None,
         "submission_outcome": None,
         "last_known_qty": None,
+        "entry_action": None,
+        "opened_at": None,
+        "cooldown_until": None,
+        "entry_day": None,
+        "entries_today": 0,
+        "orb_attempt_day": None,
     }
     state = states.setdefault(strategy, {}).setdefault(ticker, {})
     for key, value in defaults.items():
@@ -66,9 +74,35 @@ def _recent_transition(state: dict, seconds: int = 180) -> bool:
 class RuleStrategyStateMachine:
     """Reconcile broker state and enforce legal per-strategy transitions."""
 
-    def __init__(self, states: dict, position_owners: dict[str, str]):
+    def __init__(
+        self, states: dict, position_owners: dict[str, str], *,
+        cooldown_minutes: dict[str, int] | None = None,
+        minimum_hold_minutes: dict[str, int] | None = None,
+        max_entries_per_day: dict[str, int] | None = None,
+        max_positions_per_strategy: int | None = None,
+        max_positions_per_strategy_by_strategy: dict[str, int] | None = None,
+        one_orb_attempt_per_ticker_per_day: bool = False,
+    ):
+        from src.config import get_mode_config
+
+        risk = get_mode_config("algo")["risk"]
         self.states = states
         self.position_owners = position_owners
+        self.cooldown_minutes = dict(cooldown_minutes if cooldown_minutes is not None else risk.get("cooldown_minutes_by_strategy", {}))
+        self.minimum_hold_minutes = dict(minimum_hold_minutes if minimum_hold_minutes is not None else risk.get("minimum_hold_minutes_by_strategy", {}))
+        self.max_entries_per_day = dict(max_entries_per_day if max_entries_per_day is not None else risk.get("max_entries_per_strategy_per_day", {}))
+        self.max_positions_per_strategy = (
+            max_positions_per_strategy if max_positions_per_strategy is not None
+            else risk.get("max_positions_per_strategy")
+        )
+        self.max_positions_per_strategy_by_strategy = dict(
+            max_positions_per_strategy_by_strategy
+            if max_positions_per_strategy_by_strategy is not None
+            else risk.get("max_positions_per_strategy_by_strategy", {})
+        )
+        self.one_orb_attempt_per_ticker_per_day = (
+            one_orb_attempt_per_ticker_per_day or risk.get("one_orb_attempt_per_ticker_per_day", False)
+        )
         normalized = {}
         for ticker, owner in position_owners.items():
             symbol = str(ticker).upper()
@@ -117,12 +151,13 @@ class RuleStrategyStateMachine:
                 None,
             )
 
-            if quantity > 0:
+            if quantity != 0:
                 owner_state["last_known_qty"] = quantity
                 if owner_state.get("phase") == EXIT_PENDING and (matching_order or _recent_transition(owner_state)):
                     continue
                 if owner_state.get("phase") == ENTRY_PENDING:
-                    entry_order = matching_order if matching_order and matching_order.get("side") == "buy" else None
+                    expected_side = "sell" if owner_state.get("entry_action") == "short" else "buy"
+                    entry_order = matching_order if matching_order and matching_order.get("side") == expected_side else None
                     if entry_order and entry_order.get("id"):
                         owner_state["entry_order_id"] = str(entry_order["id"])
                         owner_state["entry_client_order_id"] = entry_order.get("client_order_id")
@@ -138,6 +173,8 @@ class RuleStrategyStateMachine:
                     "client_order_id": None,
                     "order_id": None,
                 })
+                if not owner_state.get("opened_at"):
+                    owner_state["opened_at"] = self._opened_at_from_signal(owner_state) or datetime.now(timezone.utc).isoformat()
                 _touch(owner_state)
                 continue
 
@@ -160,7 +197,10 @@ class RuleStrategyStateMachine:
                     "cooldown_bar": owner_state.get("last_signal_bar"),
                     "stop_price": None,
                     "take_profit": None,
+                    "entry_action": None,
+                    "opened_at": None,
                 })
+                self._set_cooldown(owner, owner_state)
                 _touch(owner_state)
             self.position_owners.pop(ticker, None)
             owner_state["last_known_qty"] = None
@@ -182,16 +222,23 @@ class RuleStrategyStateMachine:
                         "stop_price": None,
                         "take_profit": None,
                     })
+                    self._set_cooldown(strategy, state)
                     _touch(state)
                 if state.get("phase") not in PENDING_PHASES:
                     continue
-                if ticker in normalized_positions and state.get("pending_action") == "buy":
+                if ticker in normalized_positions and state.get("pending_action") in {"buy", "short"}:
+                    quantity = float((normalized_positions[ticker] or {}).get("qty", 0) or 0)
+                    expects_short = state.get("pending_action") == "short"
+                    if (quantity < 0) != expects_short:
+                        continue
                     if state.get("order_id") and not state.get("entry_order_id"):
                         state["entry_order_id"] = str(state["order_id"])
                         state["entry_client_order_id"] = state.get("client_order_id")
                         state["entry_source"] = "coordinator"
                     state["phase"] = OPEN
                     state["owner"] = strategy
+                    state["last_known_qty"] = quantity
+                    state["opened_at"] = self._opened_at_from_signal(state) or datetime.now(timezone.utc).isoformat()
                     state["pending_action"] = None
                     state["client_order_id"] = None
                     state["order_id"] = None
@@ -213,6 +260,7 @@ class RuleStrategyStateMachine:
                     state["cooldown_bar"] = state.get("last_signal_bar")
                     state["stop_price"] = None
                     state["take_profit"] = None
+                    self._set_cooldown(strategy, state)
                     if self.position_owners.get(ticker) == strategy:
                         self.position_owners.pop(ticker, None)
                 else:
@@ -220,6 +268,7 @@ class RuleStrategyStateMachine:
                     state["owner"] = strategy if ticker in normalized_positions else None
                     if state["phase"] == COOLDOWN:
                         state["cooldown_bar"] = state.get("last_signal_bar")
+                        self._set_cooldown(strategy, state)
                 state["pending_action"] = None
                 state["client_order_id"] = None
                 state["order_id"] = None
@@ -228,7 +277,7 @@ class RuleStrategyStateMachine:
         # A strategy-owned position may predate this state file. Seed an OPEN
         # machine so its rule module can continue to produce exits.
         for ticker, position in normalized_positions.items():
-            if float(position.get("qty", 0) or 0) <= 0:
+            if float(position.get("qty", 0) or 0) == 0:
                 continue
             owner = self.position_owners.get(ticker)
             if owner:
@@ -237,6 +286,28 @@ class RuleStrategyStateMachine:
                 if state.get("phase") not in PENDING_PHASES:
                     state.update({"phase": OPEN, "owner": owner, "pending_action": None})
 
+    @staticmethod
+    def _parse_time(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        except (TypeError, ValueError):
+            return None
+
+    def _set_cooldown(self, strategy: str, state: dict) -> None:
+        minutes = int(self.cooldown_minutes.get(strategy, 0))
+        state["cooldown_until"] = (
+            (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+            if minutes else None
+        )
+
+    @classmethod
+    def _opened_at_from_signal(cls, state: dict) -> str | None:
+        signal_time = cls._parse_time(state.get("last_signal_bar"))
+        return (signal_time + timedelta(minutes=5)).isoformat() if signal_time else None
+
     def allows(self, strategy: str, ticker: str, action: str, bar_time: str | None) -> bool:
         ticker = ticker.upper()
         action = action.lower()
@@ -244,18 +315,58 @@ class RuleStrategyStateMachine:
         phase = state.get("phase", FLAT)
         if phase in PENDING_PHASES:
             return False
-        if action == "buy":
+        current_time = self._parse_time(bar_time)
+        if action in {"buy", "short"}:
             if ticker in self.position_owners:
                 return False
             if phase == COOLDOWN and bar_time == state.get("cooldown_bar"):
                 return False
-            return phase in {FLAT, COOLDOWN}
-        if action == "sell":
-            return (
+            if phase not in {FLAT, COOLDOWN}:
+                return False
+            cooldown_until = self._parse_time(state.get("cooldown_until"))
+            if phase == COOLDOWN and cooldown_until and current_time and current_time < cooldown_until:
+                return False
+            if current_time:
+                session_day = current_time.astimezone(ET).date().isoformat()
+                entries_today = sum(
+                    int(item.get("entries_today", 0) or 0)
+                    for by_symbol in self.states.values() for item in by_symbol.values()
+                    if item.get("strategy") == strategy and item.get("entry_day") == session_day
+                )
+                if entries_today >= int(self.max_entries_per_day.get(strategy, 10**9)):
+                    return False
+                if (
+                    strategy == "opening_range_breakout"
+                    and self.one_orb_attempt_per_ticker_per_day
+                    and state.get("orb_attempt_day") == session_day
+                ):
+                    return False
+            position_cap = self.max_positions_per_strategy_by_strategy.get(
+                strategy, self.max_positions_per_strategy,
+            )
+            if position_cap is not None and sum(
+                owner == strategy for owner in self.position_owners.values()
+            ) >= position_cap:
+                return False
+            return True
+        if action in {"sell", "cover"}:
+            if not (
                 phase == OPEN
                 and self.position_owners.get(ticker) == strategy
                 and bar_time != state.get("last_signal_bar")
-            )
+            ):
+                return False
+            quantity = float(state.get("last_known_qty") or 0)
+            if action == "sell" and quantity < 0:
+                return False
+            if action == "cover" and quantity > 0:
+                return False
+            minimum_minutes = int(self.minimum_hold_minutes.get(strategy, 0))
+            opened_at = self._parse_time(state.get("opened_at") or state.get("last_signal_bar"))
+            if minimum_minutes and opened_at and current_time:
+                if (current_time - opened_at).total_seconds() < minimum_minutes * 60:
+                    return False
+            return True
         return False
 
     def allows_protective_exit(self, strategy: str, ticker: str) -> bool:
@@ -270,6 +381,8 @@ class RuleStrategyStateMachine:
         source: str = "journal_broker_match",
         stop_price: float | None = None,
         take_profit: float | None = None,
+        entry_action: str = "buy",
+        entry_at: str | None = None,
     ) -> None:
         """Attach a current broker holding only after its exact entry ID is proved."""
         ticker = ticker.upper()
@@ -299,6 +412,8 @@ class RuleStrategyStateMachine:
             "entry_order_id": str(entry_order_id),
             "entry_client_order_id": entry_client_order_id,
             "entry_source": source,
+            "entry_action": entry_action,
+            "opened_at": entry_at or state.get("opened_at") or self._opened_at_from_signal(state),
             "quarantine_reason": None,
         })
         if state.get("stop_price") is None and stop_price is not None:
@@ -330,16 +445,17 @@ class RuleStrategyStateMachine:
         strategy = str(trade.get("strategy", "unspecified"))
         ticker = str(trade.get("ticker", "")).upper()
         action = str(trade.get("action", "")).lower()
-        if action not in {"buy", "sell"} or not ticker or not strategy:
-            raise ValueError("Rule transition requires a buy/sell, strategy, and ticker")
+        if action not in {"buy", "sell", "short", "cover"} or not ticker or not strategy:
+            raise ValueError("Rule transition requires a trade action, strategy, and ticker")
+        is_entry = action in {"buy", "short"}
         current_owner = self.position_owners.get(ticker)
-        if action == "buy" and current_owner is not None:
+        if is_entry and current_owner is not None:
             raise ValueError(f"Cannot prepare a new entry for owned {ticker}")
-        if action == "sell" and current_owner != strategy:
+        if not is_entry and current_owner != strategy:
             raise ValueError(f"Cannot exit {ticker} for non-owner {strategy}")
         state = _state_for(self.states, strategy, ticker)
         state.update({
-            "phase": ENTRY_PENDING if action == "buy" else EXIT_PENDING,
+            "phase": ENTRY_PENDING if is_entry else EXIT_PENDING,
             "strategy": strategy,
             "ticker": ticker,
             "owner": strategy,
@@ -349,15 +465,25 @@ class RuleStrategyStateMachine:
             "last_signal_bar": trade.get("signal_bar_time"),
             "submission_outcome": "pending",
         })
-        if action == "buy":
+        if is_entry:
             state["stop_price"] = trade.get("stop_price")
             state["take_profit"] = trade.get("take_profit")
             state["entry_order_id"] = None
             state["entry_client_order_id"] = trade.get("client_order_id")
             state["entry_source"] = "coordinator"
+            state["entry_action"] = action
+            state["opened_at"] = None
             state["quarantine_reason"] = None
+            signal_time = self._parse_time(trade.get("signal_bar_time"))
+            session_day = signal_time.astimezone(ET).date().isoformat() if signal_time else None
+            if session_day != state.get("entry_day"):
+                state["entry_day"] = session_day
+                state["entries_today"] = 0
+            state["entries_today"] = int(state.get("entries_today", 0) or 0) + 1
+            if strategy == "opening_range_breakout":
+                state["orb_attempt_day"] = session_day
         _touch(state)
-        if action == "buy":
+        if is_entry:
             self.position_owners[ticker] = strategy
 
     def resolve(self, trade: dict, result: dict | None) -> None:
@@ -374,7 +500,7 @@ class RuleStrategyStateMachine:
         if successful:
             state["order_id"] = result.get("order_id")
             state["submission_outcome"] = "accepted"
-            if action == "buy":
+            if action in {"buy", "short"}:
                 self.position_owners[ticker] = strategy
                 if result.get("order_id"):
                     state["entry_order_id"] = str(result["order_id"])
@@ -394,7 +520,8 @@ class RuleStrategyStateMachine:
             _touch(state)
             return
 
-        if action == "buy":
+        if action in {"buy", "short"}:
+            self._set_cooldown(strategy, state)
             state.update({
                 "phase": COOLDOWN,
                 "owner": None,
@@ -404,6 +531,8 @@ class RuleStrategyStateMachine:
                 "entry_order_id": None,
                 "entry_client_order_id": None,
                 "entry_source": None,
+                "entry_action": None,
+                "opened_at": None,
             })
             if self.position_owners.get(ticker) == strategy:
                 self.position_owners.pop(ticker, None)

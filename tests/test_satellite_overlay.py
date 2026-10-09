@@ -46,3 +46,26 @@ def test_overlay_disable_flags_leave_core_sizing_unchanged():
     )
 
     assert result == signal
+
+
+def test_satellites_confirm_short_core_signals_only_in_the_same_direction():
+    signal = {
+        "ticker": "AAPL", "action": "short", "strategy": "momentum",
+        "strength": 0.7, "rank_score": 0.9,
+    }
+    result = apply_satellite_confirmations(
+        signal,
+        factor_signal={"action": "short", "direction": "short", "rank": 20, "score": -1.1},
+        event_signal={"action": "short", "event_id": "earnings-2026-10", "reason": "gap-down continuation"},
+    )
+
+    assert result["action"] == "short"
+    assert result["strategy"] == "momentum"
+    assert result["satellite_confirmations"] == ["multi_factor", "event_driven"]
+    assert result["event_id"] == "earnings-2026-10"
+
+    mismatch = apply_satellite_confirmations(
+        signal, factor_signal={"action": "buy", "direction": "long"},
+        event_signal={"action": "buy"},
+    )
+    assert mismatch == signal

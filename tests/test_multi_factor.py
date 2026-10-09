@@ -11,11 +11,15 @@ from src.config import STRATEGY_CONFIG, get_mode_config
 from src.strategies.multi_factor import (
     FactorRanker,
     MultiFactorConfig,
+    MultiFactorSignal,
     SignalGenerator,
 )
 from src.strategies.multi_factor.features import FactorCalculator
 from src.strategies.registry import validate_parameter_profile
-from src.strategies.runner import _make_trade, _multi_factor_rebalance_signals
+from src.strategies.regime import rank_strategies
+from src.strategies.runner import (
+    _make_trade, _multi_factor_rebalance_signals, _multi_factor_satellite_signals,
+)
 
 
 def _daily_closes(symbol: str, *, count: int = 140, end: date = date(2026, 10, 2), growth: float = 0.001):
@@ -90,14 +94,78 @@ def test_signal_generator_emits_targets_and_sells_held_names_outside_ranked_univ
 
     assert diagnostics["minimum_universe_met"] is True
     assert by_symbol["AAA"].action == "buy"
-    assert by_symbol["AAA"].target_weight == 1
+    assert by_symbol["AAA"].target_weight == pytest.approx(0.02)
     assert by_symbol["OLD"].action == "sell"
     assert all(signal.direction != "short" for signal in signals)
 
 
-def test_generated_trade_proposal_still_passes_through_risk_manager():
+def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
+    config = MultiFactorConfig(
+        top_n=1,
+        min_universe=3,
+        momentum_lookbacks={"momentum_1m": 5},
+        volatility_lookback=10,
+        factor_weights={"momentum_1m": 1},
+    )
+    bars = {
+        "AAA": _daily_closes("AAA", growth=0.01),
+        "BBB": _daily_closes("BBB", growth=0.002),
+        "CCC": _daily_closes("CCC", growth=-0.002),
+    }
+
+    signals, diagnostics = SignalGenerator(config).generate(
+        bars, symbols=list(bars), as_of=date(2026, 10, 1),
+        session=date(2026, 10, 2), regime="trending_down",
+    )
+    by_symbol = {signal.ticker: signal for signal in signals}
+
+    assert diagnostics["selected_long_count"] == 0
+    assert diagnostics["selected_short_count"] == 1
+    assert by_symbol["CCC"].action == "short"
+    assert by_symbol["CCC"].direction == "short"
+
+
+def test_multi_factor_stays_active_as_a_bearish_satellite():
+    spy = [
+        {"t": f"2026-09-{index + 1:02d}T20:00:00Z", "c": 200 - index}
+        for index in range(25)
+    ]
+    regime = rank_strategies(spy, mode="algo")
+
+    assert regime["regime"] == "trending_down"
+    assert "multi_factor" in regime["active"]
+
+
+def test_factor_satellite_direction_modes_are_explicit():
+    assert MultiFactorConfig(direction_mode="long_only").direction_mode == "long_only"
+    assert MultiFactorConfig(direction_mode="long_short").direction_mode == "long_short"
+    with pytest.raises(ValueError, match="direction_mode"):
+        MultiFactorConfig(direction_mode="auto")
+
+
+def test_intraday_tilt_only_scales_an_existing_daily_factor_target():
+    generator = SignalGenerator(MultiFactorConfig(enable_intraday_tilt=True))
+    daily_target = MultiFactorSignal(
+        ticker="AAPL", strategy="multi_factor", action="buy", direction="long",
+        score=1.2, rank=1, target_weight=0.02, as_of="2026-10-01",
+        rebalance_key="2026-W40", factor_values={}, factor_zscores={}, reason="daily rank",
+    )
+    adjusted = generator.apply_intraday_size_tilt(
+        [daily_target],
+        {"AAPL": [{"c": 100}, {"c": 100}, {"c": 99.5}]},
+    )
+
+    assert len(adjusted) == 1
+    assert adjusted[0].action == "buy"
+    assert adjusted[0].ticker == "AAPL"
+    assert adjusted[0].target_weight == pytest.approx(0.01)
+    assert generator.apply_intraday_size_tilt([], {"AAPL": [{"c": 100}]}) == []
+
+
+@pytest.mark.parametrize("action", ["buy", "short"])
+def test_generated_trade_proposal_still_passes_through_risk_manager(action):
     signal = {
-        "ticker": "AAPL", "action": "buy", "strategy": "multi_factor",
+        "ticker": "AAPL", "action": action, "strategy": "multi_factor",
         "reason": "weekly factor rank 1", "target_weight": 0.2,
     }
     risk = get_mode_config("algo")["risk"]
@@ -110,6 +178,7 @@ def test_generated_trade_proposal_still_passes_through_risk_manager():
         "positions": {}, "sector_alloc": {}, "open_position_count": 0,
         "entry_count_today": 0, "entry_count_available": True,
         "pending_buy_value_by_ticker": {}, "pending_exposure_available": True,
+        "shortability_available": True, "easy_to_borrow_symbols": ["AAPL"],
     }
     result = validate_trade(
         ticker=trade["ticker"], action=trade["action"], qty=trade["qty"],
@@ -148,8 +217,8 @@ def test_value_factor_uses_only_fundamentals_available_by_as_of_date():
 def test_multi_factor_profile_is_validated_with_the_algo_registry():
     profile = validate_parameter_profile({"multi_factor": {"top_n": 3}})
     assert profile["multi_factor"]["top_n"] == 3
-    with pytest.raises(ValueError, match="long_only"):
-        validate_parameter_profile({"multi_factor": {"long_only": False}})
+    short_profile = validate_parameter_profile({"multi_factor": {"direction_mode": "long_short"}})
+    assert short_profile["multi_factor"]["direction_mode"] == "long_short"
 
 
 def test_warmup_covers_the_longest_configured_momentum_horizon():
@@ -207,13 +276,32 @@ def test_live_rebalance_ranks_cross_sectional_input_and_persists_weekly_key():
     )
 
     assert diagnostics["minimum_universe_met"] is True
-    assert sum(signal.action == "buy" for signal in signals.values()) == 5
+    assert sum(signal.action == "buy" for signal in signals.values()) == 3
     assert all(
         states["multi_factor"][symbol]["last_rebalance_period"] == diagnostics["rebalance_key"]
         for symbol in symbols
     )
     assert repeated == {}
     assert repeated_diagnostics is None
+
+
+def test_bearish_factor_short_recommendation_persists_for_live_overlay():
+    symbols = [f"S{index:02d}" for index in range(20)]
+    daily_bars = {
+        symbol: _daily_closes(symbol, growth=(index - 10) * 0.0003)
+        for index, symbol in enumerate(symbols)
+    }
+    states = {}
+    session = date(2026, 10, 2)
+    signals, diagnostics = _multi_factor_rebalance_signals(
+        states, daily_bars, symbols, {}, session, regime="trending_down",
+    )
+
+    assert diagnostics["selected_short_count"] > 0
+    assert all(signal.action == "short" for signal in signals.values())
+    confirmations = _multi_factor_satellite_signals(states, symbols, session)
+    assert confirmations
+    assert all(signal["action"] == "short" and signal["direction"] == "short" for signal in confirmations.values())
 
 
 @pytest.mark.parametrize("values", [

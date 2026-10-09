@@ -317,6 +317,7 @@ def test_daemon_degraded_bar_scan_pauses_buys_but_keeps_owned_exit(monkeypatch):
     window = SimpleNamespace(
         name="overnight", trade_date="2026-10-08", extended_hours=True,
         bar_feed="boats", quote_feed="overnight",
+        regular_open=None, regular_close=None,
     )
     daemon._scan_strategy_portfolio(portfolio, window=window)
 
@@ -356,6 +357,7 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
     window = SimpleNamespace(
         name="regular", trade_date="2026-10-08", extended_hours=False,
         bar_feed="sip", quote_feed="sip",
+        regular_open=None, regular_close=None,
     )
     daemon._scan_strategy_portfolio(portfolio, window=window)
 
@@ -417,6 +419,7 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
     window = SimpleNamespace(
         name="regular", trade_date="2026-10-08", extended_hours=False,
         bar_feed="sip", quote_feed="sip",
+        regular_open=None, regular_close=None,
     )
     monkeypatch.setattr(daemon, "_state_path", lambda: snapshot)
     # A process may start while host monotonic uptime is still below the scan

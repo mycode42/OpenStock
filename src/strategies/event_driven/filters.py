@@ -37,7 +37,8 @@ class EventFilter:
             return self._reject("symbol_mismatch")
         if event.known_at > as_of or event.scheduled_at > as_of:
             return self._reject("not_yet_known_or_occurred")
-        if not event.reaction_start_at <= as_of <= event.reaction_end_at:
+        configured_end = event.reaction_start_at + timedelta(days=self.config.reaction_window_days)
+        if not event.reaction_start_at <= as_of <= configured_end:
             return self._reject("outside_reaction_window")
         if regime == "volatile" and self.config.disable_in_volatile:
             return self._reject("volatile_regime")

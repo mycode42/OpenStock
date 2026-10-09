@@ -115,6 +115,14 @@ STRATEGY_CONFIG = {
     "take_profit_r_multiple": 2.0,
     "pairs_min_correlation": 0.80,
     "pairs_entry_z": 2.0,
+    # The archived five-minute Algo rules are kept behind independent opt-in
+    # switches and cannot run as part of the default swing portfolio.
+    "enable_intraday_trend": False,
+    "enable_intraday_momentum": False,
+    "intraday_satellite_position_pct": 0.01,
+    "intraday_satellite_risk_multiplier": 0.25,
+    "algo_multi_factor_enabled": True,
+    "algo_event_driven_enabled": True,
 }
 
 # Algo has its own fixed universe while signal and portfolio behavior are
@@ -156,13 +164,97 @@ ALGO_MODE_CONFIG = {
         "daily_loss_limit": 0.02,
         "weekly_loss_limit": 0.05,
         "no_buy_if_down_pct": 0.02,
-        "max_trades_per_day": 40,
+        "max_trades_per_day": 15,
         "max_open_positions": 20,
+        "max_positions_per_strategy": 5,
+        "max_positions_per_strategy_by_strategy": {
+            "trend_following": 4, "momentum": 4, "swing_mean_reversion": 4,
+            "mean_reversion": 5, "opening_range_breakout": 5,
+            "intraday_trend": 1, "intraday_momentum": 1,
+            "multi_factor": 4, "event_driven": 2,
+        },
+        "max_short_positions": 5,
+        "max_short_exposure_pct": 0.20,
+        "allow_short_positions": True,
+        "short_disabled_in_bull_regime": True,
+        "range_regime_short_risk_multiplier": 0.75,
+        "minimum_hold_minutes_by_strategy": {
+            "mean_reversion": 20,
+            "trend_following": 0,
+            "momentum": 0,
+            "swing_mean_reversion": 0,
+            "intraday_trend": 20,
+            "intraday_momentum": 20,
+            "multi_factor": 0, "event_driven": 0,
+            "opening_range_breakout": 15,
+        },
+        "cooldown_minutes_by_strategy": {
+            "mean_reversion": 90,
+            "trend_following": 5 * 24 * 60,
+            "momentum": 5 * 24 * 60,
+            "swing_mean_reversion": 5 * 24 * 60,
+            "intraday_trend": 60,
+            "intraday_momentum": 60,
+            "multi_factor": 5 * 24 * 60,
+            "event_driven": 5 * 24 * 60,
+            "opening_range_breakout": 60,
+        },
+        "max_entries_per_strategy_per_day": {
+            "mean_reversion": 3,
+            "trend_following": 1,
+            "momentum": 1,
+            "swing_mean_reversion": 1,
+            "intraday_trend": 1,
+            "intraday_momentum": 1,
+            "multi_factor": 1, "event_driven": 1,
+            "opening_range_breakout": 3,
+        },
+        "strategy_group_limits": {
+            "swing": {
+                "strategies": ["trend_following", "momentum", "swing_mean_reversion"],
+                "max_open_positions": 10, "max_entries_per_day": 3,
+            },
+            "intraday_core": {
+                "strategies": ["mean_reversion", "opening_range_breakout"],
+                "max_open_positions": 6, "max_entries_per_day": 6,
+            },
+            "intraday_satellites": {
+                "strategies": ["intraday_trend", "intraday_momentum"],
+                "max_open_positions": 2, "max_entries_per_day": 2,
+            },
+            "swing_satellites": {
+                "strategies": ["multi_factor", "event_driven"],
+                "max_open_positions": 6, "max_entries_per_day": 2,
+            },
+        },
+        "one_orb_attempt_per_ticker_per_day": True,
         "min_cash_pct": 0.15,
         "max_tactical_pct": 0.04,
         "max_tactical_positions": 2,
         "flatten_eod": False,
         "allow_leveraged_etfs": False,
+    },
+}
+
+# Portfolio-level coordinator is deliberately stricter than risk_manager.
+# Risk-manager limits remain the final approval layer after coordinator sizing.
+ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
+    "max_name_pct": 0.08,
+    "max_gross_pct": 1.00,
+    "max_net_long_pct": 0.60,
+    "max_net_short_pct": 0.40,
+    "max_daily_entries": 10,
+    "max_intraday_entries": 3,
+    "swing_open_delay_minutes": 15,
+    "intraday_close_cutoff_minutes": 15,
+    "allow_opposite_netting": False,
+    "allow_intraday_overnight": False,
+    "regime_throttle_enabled": True,
+    "sector_caps": {
+        "core_tech": 0.30,
+        "diversifiers": 0.25,
+        "hedge": 0.25,
+        "tactical": 0.15,
     },
 }
 

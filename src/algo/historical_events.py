@@ -42,7 +42,7 @@ BLS_YEAR_URL = "https://www.bls.gov/schedule/{year}/home.htm"
 FED_YEAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomchistorical{year}.htm"
 FED_CALENDARS_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 SEC_MIN_INTERVAL_SECONDS = 0.12
-REACTION_WINDOW = timedelta(minutes=90)
+REACTION_WINDOW = timedelta(days=2)
 DEFAULT_OUTPUT = ROOT / "data" / "research" / "event_calendar_historical.csv"
 SOURCE_CACHE = ROOT / "data" / "research" / "event_sources"
 

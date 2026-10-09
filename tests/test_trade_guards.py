@@ -223,6 +223,40 @@ def test_short_entries_and_overcovers_are_blocked():
     assert risk_manager.validate_trade("AAPL", "cover", 5, 100, short_state, mode="swing").approved
 
 
+def test_algo_short_entry_requires_easy_to_borrow_and_respects_gross_caps():
+    state = _state(
+        cash=25_000,
+        shortability_available=True,
+        easy_to_borrow_symbols=["AAPL"],
+    )
+    allowed = risk_manager.validate_trade("AAPL", "short", 40, 100, state, mode="algo")
+    assert allowed.approved
+
+    hard_to_borrow = risk_manager.validate_trade(
+        "AAPL", "short", 40, 100,
+        {**state, "easy_to_borrow_symbols": []}, mode="algo",
+    )
+    assert hard_to_borrow.rule == "not_easy_to_borrow"
+
+    full_book = _state(
+        positions={"AVGO": {"symbol": "AVGO", "qty": -180, "market_value": -18_000}},
+        sector_alloc={"core_tech": 18_000},
+        open_position_count=1,
+        shortability_available=True,
+        easy_to_borrow_symbols=["AAPL"],
+    )
+    over_cap = risk_manager.validate_trade("AAPL", "short", 30, 100, full_book, mode="algo")
+    assert over_cap.rule == "max_short_exposure_pct"
+
+
+def test_algo_short_entries_fail_closed_when_borrow_status_is_unavailable():
+    result = risk_manager.validate_trade(
+        "AAPL", "short", 1, 100,
+        {**_state(), "shortability_available": False}, mode="algo",
+    )
+    assert result.rule == "shortability_unavailable"
+
+
 def test_algo_tactical_satellites_are_limited_to_two_positions():
     risk_manager._universe_cache.pop("algo", None)
     state = _state(
@@ -239,6 +273,21 @@ def test_algo_tactical_satellites_are_limited_to_two_positions():
 
     assert blocked_new_name.rule == "max_tactical_positions"
     assert allowed_scale_in.approved
+
+    short_state = _state(
+        positions={
+            "PLTR": {"symbol": "PLTR", "qty": -10, "market_value": -1_000},
+            "CRM": {"symbol": "CRM", "qty": -10, "market_value": -1_000},
+        },
+        sector_alloc={"tactical": 2_000},
+        open_position_count=2,
+        shortability_available=True,
+        easy_to_borrow_symbols=["PANW"],
+    )
+    blocked_short_satellite = risk_manager.validate_trade(
+        "PANW", "short", 1, 100, short_state, mode="algo",
+    )
+    assert blocked_short_satellite.rule == "max_tactical_positions"
 
 def test_uncatalogued_entry_cannot_skip_sector_limits():
     for mode in ("swing", "day", "algo"):
@@ -264,6 +313,7 @@ def test_limit_bracket_keeps_entry_limit_and_sell_bracket_is_rejected(monkeypatc
         "time_in_force": "gtc", "order_class": "bracket",
         "stop_loss": {"stop_price": "95.0"},
         "take_profit": {"limit_price": "110.0"}, "limit_price": "100.0",
+        "position_intent": "buy_to_open",
     }]
 
     sell = execute_trades.place_order(
@@ -273,6 +323,42 @@ def test_limit_bracket_keeps_entry_limit_and_sell_bracket_is_rejected(monkeypatc
     assert not sell["success"]
     assert "use OCO" in sell["error"]
     assert len(submitted) == 1
+
+
+def test_algo_short_entry_submits_sell_side_bracket_with_mirrored_levels(monkeypatch):
+    monkeypatch.setattr(execute_trades, "_active_mode", "algo")
+    submitted = []
+
+    def submit(order, order_type):
+        submitted.append(order)
+        return {"success": True, "order_id": "short-bracket-1", "broker_status": "new"}
+
+    monkeypatch.setattr(execute_trades, "_submit_broker_order", submit)
+    result = execute_trades.place_order(
+        "AAPL", "short", 10, order_type="market", entry_price=100,
+        stop_price=102, take_profit=96,
+    )
+
+    assert result["success"]
+    assert submitted == [{
+        "symbol": "AAPL", "qty": "10", "side": "sell", "type": "market",
+        "time_in_force": "gtc", "order_class": "bracket",
+        "stop_loss": {"stop_price": "102.0"},
+        "take_profit": {"limit_price": "96.0"},
+        "position_intent": "sell_to_open",
+    }]
+
+    invalid = execute_trades.place_order(
+        "AAPL", "short", 10, order_type="market", entry_price=100,
+        stop_price=96, take_profit=102,
+    )
+    assert not invalid["success"]
+    assert len(submitted) == 1
+
+    cover = execute_trades.place_order("AAPL", "cover", 10, order_type="market")
+    assert cover["success"]
+    assert submitted[-1]["side"] == "buy"
+    assert submitted[-1]["position_intent"] == "buy_to_close"
 
 def test_unknown_order_type_never_becomes_market_order(monkeypatch):
     monkeypatch.setattr(

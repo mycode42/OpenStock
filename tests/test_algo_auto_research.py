@@ -43,10 +43,13 @@ def _synthetic_daily_history(session_count: int = 2700) -> dict[str, list[dict]]
 
 def test_auto_research_profiles_are_bounded_and_have_strategy_cooldowns():
     profiles = _read_profiles("autoresearch/algo-daily-profiles.json")
-    assert len(profiles) == 8
+    assert len(profiles) == 12
     assert all(profile["controls"]["max_entries_per_day"] == 15 for profile in profiles)
     assert all("cooldown_minutes_by_strategy" in profile["controls"] for profile in profiles)
-    expected = {"mean_reversion", "momentum", "opening_range_breakout", "trend_following", "multi_factor", "event_driven"}
+    expected = {
+        "mean_reversion", "momentum", "opening_range_breakout", "trend_following",
+        "multi_factor", "event_driven", "swing_mean_reversion",
+    }
     assert all(set(profile["strategies"]) == expected for profile in profiles)
     by_name = {profile["name"]: profile for profile in profiles}
     baseline_overlay = by_name["baseline"]["parameters"]["satellite_overlay"]
@@ -55,6 +58,26 @@ def test_auto_research_profiles_are_bounded_and_have_strategy_cooldowns():
     assert by_name["multi_factor_satellite"]["parameters"]["satellite_overlay"]["multi_factor_enabled"]
     assert by_name["event_driven_satellite"]["parameters"]["satellite_overlay"]["event_driven_enabled"]
     assert by_name["combined_six_strategy_satellites"]["parameters"]["event_driven"]["enabled"]
+    assert by_name["combined_isolated_style_balanced_with_satellites"]["parameters"]["multi_factor"]["direction_mode"] == "regime_dependent"
+
+
+def test_isolated_optimizer_uses_one_direction_and_simple_candidate_sets():
+    assert auto_research.ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION == 3
+    assert auto_research.COMBINED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION == 15
+    for strategy in auto_research.CORE_STRATEGIES:
+        for direction in ("long", "short"):
+            profiles = auto_research._isolated_direction_profiles(strategy, direction)
+            assert len(profiles) == 3
+            assert profiles[0]["name"] == "baseline"
+            assert all(profile["strategies"] == [strategy] for profile in profiles)
+            for profile in profiles:
+                settings = profile["parameters"][strategy]
+                if strategy in {"trend_following", "momentum", "swing_mean_reversion"}:
+                    assert settings["direction_mode"] == f"{direction}_only"
+                else:
+                    assert settings["allow_long"] is (direction == "long")
+                    assert settings["allow_short"] is (direction == "short")
+                assert profile["controls"]["max_entries_per_day"] == 15
 
 
 def test_combined_replay_compares_core_with_all_six_as_overlays(monkeypatch):
@@ -94,6 +117,17 @@ def test_walk_forward_exposes_a_minimum_satellite_sample_gate():
     ])
 
     assert args.min_satellite_confirmed_entries == 3
+
+
+def test_walk_forward_summary_exposes_promotion_gate_and_costs(tmp_path):
+    gate = {"promotable": False, "checks": {"neighbor_parameter_stability": False}}
+    costs = {"spread_bps": 3, "commission_per_share_each_side": 0.005}
+    summary = auto_research._summarize_walk_forward(
+        {"folds": [], "promotion_gate": gate, "transaction_cost_model": costs},
+        artifact=tmp_path / "walk-forward.json",
+    )
+    assert summary["promotion_gate"] == gate
+    assert summary["transaction_cost_model"] == costs
 
 
 def test_auto_research_uses_the_configured_fixed_algo_universe():

@@ -94,6 +94,8 @@ def _scan_strategy_portfolio(
         session_name=window.name,
         trading_date=window.trade_date,
         extended_hours=window.extended_hours,
+        regular_open=getattr(window, "regular_open", None),
+        regular_close=getattr(window, "regular_close", None),
         data_feed=window.bar_feed,
         quote_feed=window.quote_feed,
         overnight_tradable_tickers=set(
@@ -145,12 +147,11 @@ def _scan_strategy_portfolio(
 
     trades = [
         trade for trade in result.get("trades", [])
-        if not (portfolio["entries_paused"] and str(trade.get("action", "")).lower() == "buy")
+        if not (portfolio["entries_paused"] and str(trade.get("action", "")).lower() in {"buy", "short"})
     ]
-    if any(str(trade.get("action", "")).lower() == "sell" for trade in trades):
-        # A sell can fail while the executor still returns normal JSON.
-        # Defer buys until its outcome has been examined on this scan.
-        trades = [trade for trade in trades if str(trade.get("action", "")).lower() == "sell"]
+    if any(str(trade.get("action", "")).lower() in {"sell", "cover"} for trade in trades):
+        # Defer all entries until the reducing orders have been examined.
+        trades = [trade for trade in trades if str(trade.get("action", "")).lower() in {"sell", "cover"}]
     if trades:
         machine = RuleStrategyStateMachine(
             portfolio["strategy_states"], portfolio["position_owners"],
@@ -163,7 +164,7 @@ def _scan_strategy_portfolio(
             execution = execute_strategy_trades(trades, mode="algo", dry_run=dry_run)
         except Exception as exc:
             for trade in trades:
-                if not dry_run and str(trade.get("action") or "").lower() == "sell":
+                if not dry_run and str(trade.get("action") or "").lower() in {"sell", "cover"}:
                     record_incident(
                         portfolio, kind="exit_submission", ticker=trade["ticker"],
                         client_order_id=trade.get("client_order_id"),
@@ -190,11 +191,11 @@ def _scan_strategy_portfolio(
                 trade,
                 result,
             )
-            if not dry_run and str(trade.get("action") or "").lower() == "sell" and not (
+            if not dry_run and str(trade.get("action") or "").lower() in {"sell", "cover"} and not (
                 result and result.get("status") == "submitted" and result.get("order_id")
                 and result.get("success") is not False
             ):
-                reason = (result or {}).get("error") or (result or {}).get("reason") or "executor did not confirm a sell order"
+                reason = (result or {}).get("error") or (result or {}).get("reason") or "executor did not confirm a position-reducing order"
                 record_incident(
                     portfolio, kind="exit_submission", ticker=trade["ticker"],
                     client_order_id=trade.get("client_order_id"),
