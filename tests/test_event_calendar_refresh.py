@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from src.algo.event_calendar_refresh import _earnings_event, _macro_events
+from src.algo.research.event_calendar_refresh import _earnings_event, _macro_events
 from src.strategies.event_driven.config import EventStrategyConfig
 from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
 

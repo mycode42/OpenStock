@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from src.strategies import (
-    mean_reversion, momentum, opening_range_breakout, swing_mean_reversion,
-    swing_momentum, swing_trend_following, trend_following,
-)
+from src.strategies import mean_reversion, momentum, opening_range_breakout, trend_following
+from src.strategies.mean_reversion import swing as swing_mean_reversion
+from src.strategies.momentum import swing as swing_momentum
+from src.strategies.trend_following import swing as swing_trend_following
 from src.strategies.event_driven.config import EventStrategyConfig
 from src.strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
 from src.strategies.satellite_overlay import SatelliteOverlayConfig
-from src.strategies.swing_mean_reversion import SwingMeanReversionConfig
-from src.strategies.swing_momentum import SwingMomentumConfig
-from src.strategies.swing_trend_following import SwingTrendConfig
+from src.strategies.mean_reversion.swing import SwingMeanReversionConfig
+from src.strategies.momentum.swing import SwingMomentumConfig
+from src.strategies.trend_following.swing import SwingTrendConfig
 
 
 RULE_MODULES = {

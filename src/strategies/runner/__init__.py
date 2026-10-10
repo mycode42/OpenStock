@@ -27,10 +27,10 @@ load_dotenv()
 from src.config import STRATEGY_CONFIG, get_mode_config
 from src.strategies import pairs
 from src.algo.config import ALGO_SIGNAL_DATA_CONFIG
-from src.strategies import runner_data as _runner_data
-from src.strategies import runner_factors as _runner_factors
-from src.strategies import runner_sizing as _runner_sizing
-from src.strategies import runner_scan as _runner_scan
+from . import data as _runner_data
+from . import factors as _runner_factors
+from . import sizing as _runner_sizing
+from . import scan as _runner_scan
 from src.strategies.regime import rank_strategies
 from src.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
 from src.strategies.regime_advisor import apply_regime_advisory
@@ -40,7 +40,7 @@ from src.strategies.rule_pipeline import evaluate_rule_signal
 from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
 from src.strategies.state_machine import RuleStrategyStateMachine
 from src.strategies.universe import configured_universe, load_algo_universe
-from src.strategies.swing_momentum import generate_signals as generate_swing_momentum_signals
+from src.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from src.strategies.satellite_overlay import (
     CORE_STRATEGIES, SATELLITE_STRATEGIES, SatelliteOverlayConfig,
     apply_satellite_confirmations,
@@ -87,7 +87,7 @@ def _fetch_latest_quotes(*args, **kwargs):
 
 
 def execute_trades(trades: list[dict], *, mode: str, dry_run: bool = False) -> dict:
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[3]
     command = [sys.executable, str(repo_root / "execute_trades.py"), "--mode", mode]
     if dry_run:
         command.append("--dry-run")

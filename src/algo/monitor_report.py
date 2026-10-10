@@ -269,6 +269,16 @@ def build_report() -> dict:
         raw_weekly_pnl = account_state.get("weekly_pnl_pct")
         weekly_pnl_pct = float(raw_weekly_pnl) if raw_weekly_pnl is not None else None
         risk_summary = {
+            "equity": round(float(account_state.get("equity", 0) or 0), 2),
+            "daily_baseline_equity": (
+                round(float(account_state["daily_baseline_equity"]), 2)
+                if account_state.get("daily_baseline_equity") is not None else None
+            ),
+            "daily_baseline_available": account_state.get("daily_baseline_equity") is not None,
+            "daily_pnl_dollars": (
+                round(float(account_state["daily_pnl_dollars"]), 2)
+                if account_state.get("daily_pnl_dollars") is not None else None
+            ),
             "entry_orders_today": account_state.get("entry_count_today"),
             "entry_order_cap": risk["max_trades_per_day"],
             "entry_count_available": account_state.get("entry_count_available", True),
@@ -279,6 +289,16 @@ def build_report() -> dict:
             "cash_pct": round(float(account_state.get("cash_pct", 0) or 0) * 100, 2),
             "daily_pnl_pct": round(daily_pnl_pct * 100, 2),
             "weekly_pnl_pct": round(weekly_pnl_pct * 100, 2) if weekly_pnl_pct is not None else None,
+            "weekly_baseline_equity": (
+                round(float(account_state["weekly_baseline_equity"]), 2)
+                if account_state.get("weekly_baseline_equity") is not None else None
+            ),
+            "weekly_baseline_date": account_state.get("weekly_baseline_date"),
+            "weekly_baseline_kind": account_state.get("weekly_baseline_kind"),
+            "weekly_pnl_dollars": (
+                round(float(account_state["weekly_pnl_dollars"]), 2)
+                if account_state.get("weekly_pnl_dollars") is not None else None
+            ),
             "weekly_baseline_available": weekly_pnl_pct is not None,
             "daily_loss_breaker": daily_pnl_pct <= -float(risk["daily_loss_limit"]),
             "no_buy_breaker": daily_pnl_pct <= -float(risk["no_buy_if_down_pct"]),

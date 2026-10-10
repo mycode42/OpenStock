@@ -1,4 +1,4 @@
-from src.algo.historical_events import _FedCalendarRows, _meeting_decision_date
+from src.algo.research.historical_events import _FedCalendarRows, _meeting_decision_date
 
 
 def test_fed_calendar_rows_capture_year_and_cross_month_meetings():

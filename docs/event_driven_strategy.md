@@ -35,7 +35,7 @@ enables the event satellite; the standalone `EventStrategyConfig` remains off
 by default. Macro events use SPY from the fixed Algo universe. Other strategies
 stay limited to that same configured universe.
 
-Run `poetry run python -m src.algo.event_calendar_refresh` to refresh
+Run `poetry run python -m src.algo.research.event_calendar_refresh` to refresh
 `data/event_calendar.csv`. The `algo-event-calendar` OpenClaw job runs this at
 04:05 ET on weekdays. It reads the configured fixed Algo universe, obtains scheduled
 earnings and pre/post-market classifications from Nasdaq's public earnings

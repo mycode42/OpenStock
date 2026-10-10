@@ -49,6 +49,13 @@ METRICS = (
 
 NEIGHBOR_THRESHOLDS = {
     "trend_following": {"minimum_slope_pct": (0.001, 0.0, 0.03)},
+    "intraday_trend": {"minimum_slope_pct": (0.001, 0.0, 0.1)},
+    "intraday_momentum": {
+        "minimum_return": (0.005, 0.0, 1.0),
+        "minimum_volume_ratio": (0.1, 0.1, 20.0),
+        "minimum_short_return": (0.005, 0.0, 1.0),
+        "minimum_short_volume_ratio": (0.1, 0.1, 20.0),
+    },
     "momentum": {"minimum_score_spread": (0.01, 0.01, 0.50), "minimum_average_dollar_volume": (1_000_000, 1_000_000, 1_000_000_000)},
     "mean_reversion": {
         "minimum_dip_pct": (0.001, 0.0, 0.5), "minimum_bounce_pct": (0.0005, 0.0, 0.1),
@@ -271,6 +278,7 @@ def _run_portfolio(
     unknown_borrow_penalty_bps: float, borrow_availability: dict[tuple[str, str], bool],
     profile: dict, strategies: list[str] | None, controls: dict,
     event_calendar: EventCalendar | None = None,
+    research_runtime_overrides: dict[str, bool] | None = None,
 ) -> dict:
     return AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
@@ -281,6 +289,7 @@ def _run_portfolio(
         short_borrow_annual_pct=short_borrow_annual_pct,
         unknown_borrow_penalty_bps=unknown_borrow_penalty_bps,
         borrow_availability=borrow_availability, force_close_at_end=True,
+        research_runtime_overrides=research_runtime_overrides,
     ).run()
 
 
@@ -318,6 +327,7 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
             slippage_bps=args.slippage_bps, **cost_args, profile=candidate["parameters"],
             strategies=candidate["strategies"], controls=candidate["controls"],
             event_calendar=event_calendar,
+            research_runtime_overrides=getattr(args, "research_runtime_overrides", None),
         )
         enabled_satellites = _enabled_satellites(candidate)
         confirmed_entries = report.get("satellite_confirmed_entries", {})
@@ -377,6 +387,7 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
         slippage_bps=args.slippage_bps, **cost_args, profile=selected["parameters"],
         strategies=selected["strategies"], controls=selected["controls"],
         event_calendar=event_calendar,
+        research_runtime_overrides=getattr(args, "research_runtime_overrides", None),
     )
     neighbor_tests = []
     for neighbor in parameter_neighbors(selected["parameters"]):
@@ -387,6 +398,7 @@ def _run_fold_job(payload: tuple[int, dict, list[str], list[dict], list[dict], a
             slippage_bps=args.slippage_bps, **cost_args,
             profile=neighbor["parameters"], strategies=selected["strategies"],
             controls=selected["controls"], event_calendar=event_calendar,
+            research_runtime_overrides=getattr(args, "research_runtime_overrides", None),
         )
         neighbor_tests.append({
             "parameter_key": neighbor["parameter_key"],
@@ -553,6 +565,7 @@ def run_walk_forward(args) -> dict:
         "initial_sessions_skipped_for_regime_warmup": warmup_sessions_skipped,
         "regime_warmup_daily_bars": MIN_REGIME_DAILY_BARS,
         "candidate_profile_count": len(profiles),
+        "research_runtime_overrides": getattr(args, "research_runtime_overrides", None) or {},
         "event_calendar": {
             "path": str(Path(args.event_calendar).resolve()) if getattr(args, "event_calendar", None) else None,
             **(event_calendar.diagnostics() if event_calendar else {"loaded_events": 0}),

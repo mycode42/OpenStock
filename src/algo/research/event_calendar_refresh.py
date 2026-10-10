@@ -63,7 +63,7 @@ MACRO_RELEASES = (
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def _coordinator_universe() -> list[str]:

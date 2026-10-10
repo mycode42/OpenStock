@@ -404,7 +404,8 @@ def get_portfolio_state(mode: str = None) -> dict:
               Reads TRADING_MODE env if not specified.
 
     Returns a dict with:
-      equity, cash, cash_pct, daily_pnl_pct, weekly_pnl_pct,
+      equity and its daily/weekly dollar baselines and P&L, cash, cash_pct,
+      daily_pnl_pct, weekly_pnl_pct,
       positions (symbol → position dict),
       sector_alloc (sector → $ value),
       trade_count_today (all nonterminal buy orders),
@@ -426,6 +427,12 @@ def get_portfolio_state(mode: str = None) -> dict:
     last_equity = float(account.get("last_equity", equity))
 
     daily_pnl_pct = ((equity - last_equity) / last_equity) if last_equity else 0.0
+    daily_baseline_equity = (
+        last_equity if math.isfinite(last_equity) and last_equity > 0 else None
+    )
+    daily_pnl_dollars = (
+        equity - daily_baseline_equity if daily_baseline_equity is not None else None
+    )
     cash_pct = (cash / equity) if equity else 0.0
 
     positions: dict[str, dict] = {}
@@ -536,13 +543,23 @@ def get_portfolio_state(mode: str = None) -> dict:
     )
 
     broker_account_id = str(account.get("id") or account.get("account_number") or "")
+    weekly_baseline = _find_weekly_equity_baseline(
+        mode=mode, account_id=broker_account_id, session_day=session_day,
+    )
+    weekly_baseline_equity = weekly_baseline["equity"] if weekly_baseline else None
     weekly_pnl_pct = _estimate_weekly_pnl(
         equity, mode=mode, account_id=broker_account_id, session_day=session_day,
+    )
+    weekly_pnl_dollars = (
+        equity - weekly_baseline_equity
+        if weekly_baseline_equity is not None else None
     )
 
     return {
         "account_id": broker_account_id,
         "equity": equity,
+        "daily_baseline_equity": daily_baseline_equity,
+        "daily_pnl_dollars": daily_pnl_dollars,
         "cash": cash,
         "cash_pct": cash_pct,
         "available_cash": available_cash,
@@ -555,6 +572,10 @@ def get_portfolio_state(mode: str = None) -> dict:
         "pending_exposure_error": pending_exposure_error,
         "daily_pnl_pct": daily_pnl_pct,
         "weekly_pnl_pct": weekly_pnl_pct,
+        "weekly_baseline_equity": weekly_baseline_equity,
+        "weekly_baseline_date": weekly_baseline["date"] if weekly_baseline else None,
+        "weekly_baseline_kind": weekly_baseline["kind"] if weekly_baseline else None,
+        "weekly_pnl_dollars": weekly_pnl_dollars,
         "positions": positions,
         "sector_alloc": sector_alloc,
         "shortability_available": shortability_available,
@@ -724,20 +745,12 @@ def capture_account_inception_baseline(mode: str, *, now: datetime | None = None
     return baseline
 
 
-def _estimate_weekly_pnl(
-    current_equity: float,
-    mode: str = None,
-    *,
-    account_id: str | None = None,
-    session_day: date | None = None,
-) -> float | None:
-    """Return week-to-date P&L from the preceding week's last tagged close.
-
-    Without a close from the same broker account, the entry breaker cannot
-    know the actual week-to-date loss and must fail closed.
-    """
+def _find_weekly_equity_baseline(
+    *, mode: str, account_id: str | None, session_day: date | None = None,
+) -> dict | None:
+    """Return the account-bound weekly equity baseline and its provenance."""
     mode = mode or "swing"
-    if not account_id or not math.isfinite(current_equity) or current_equity <= 0:
+    if not account_id:
         return None
     today = session_day or datetime.now(MARKET_TZ).date()
     week_start = today - timedelta(days=today.weekday())
@@ -757,7 +770,11 @@ def _estimate_weekly_pnl(
                 and math.isfinite(starting_equity)
                 and starting_equity > 0
             ):
-                return (current_equity - starting_equity) / starting_equity
+                return {
+                    "date": week_start.isoformat(),
+                    "equity": starting_equity,
+                    "kind": "account_inception",
+                }
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             continue
     baselines: list[tuple[date, float]] = []
@@ -780,8 +797,30 @@ def _estimate_weekly_pnl(
             continue
     if not baselines:
         return None
-    baseline_equity = max(baselines, key=lambda row: row[0])[1]
-    return (current_equity - baseline_equity) / baseline_equity
+    baseline_date, baseline_equity = max(baselines, key=lambda row: row[0])
+    return {
+        "date": baseline_date.isoformat(),
+        "equity": baseline_equity,
+        "kind": "close_snapshot",
+    }
+
+
+def _estimate_weekly_pnl(
+    current_equity: float,
+    mode: str = None,
+    *,
+    account_id: str | None = None,
+    session_day: date | None = None,
+) -> float | None:
+    """Return week-to-date P&L from the same account's tagged baseline."""
+    if not math.isfinite(current_equity) or current_equity <= 0:
+        return None
+    baseline = _find_weekly_equity_baseline(
+        mode=mode or "swing", account_id=account_id, session_day=session_day,
+    )
+    if baseline is None:
+        return None
+    return (current_equity - baseline["equity"]) / baseline["equity"]
 
 
 def validate_trade(

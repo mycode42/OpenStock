@@ -1,8 +1,8 @@
 from datetime import date, timedelta
 import math
 
-from src.algo import auto_research
-from src.algo.factor_research import _feature_panel, train_factor_model
+from src.algo.research import auto_research
+from src.algo.research.factor_research import _feature_panel, train_factor_model
 from src.algo.walk_forward import _read_profiles, build_parser as build_walk_forward_parser
 
 

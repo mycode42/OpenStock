@@ -287,7 +287,7 @@ def scan(
     event_strategy_available = False
     event_calendar_status = "disabled_by_config"
     if mode == "algo" and event_satellite_enabled:
-        default_calendar = Path(__file__).resolve().parents[2] / "data" / "event_calendar.csv"
+        default_calendar = Path(__file__).resolve().parents[3] / "data" / "event_calendar.csv"
         calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
         try:
             event_calendar = EventCalendar.from_csv(calendar_path)

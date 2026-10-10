@@ -32,7 +32,7 @@ from src.strategies.universe import configured_universe
 
 
 LOG = logging.getLogger("historical_events")
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"

@@ -120,19 +120,30 @@ Extended-hours entries have software-managed stops and targets. The coordinator 
 
 `src.algo.backtest` replays the deterministic Algo regime selector, strategy rules, shared sizing, and hard risk validator over stored regular-session 5-minute bars. It fills signals no earlier than the next bar open, models adverse slippage, and reports its assumptions with every run. It is research-only and cannot submit orders.
 
-`src.algo.auto_research` is a separate weekday research job for Algo. It uses the fixed 22-symbol Algo universe, refreshes Plus SIP split-adjusted bars, fits non-negative Ridge factor weights from purged 21-session forward labels, and runs chronological walk-forward profiles for the five core rules plus Multi Factor and Event Driven confirmation overlays. The profile set compares a core-only baseline, bounded core-rule variants, each satellite separately, and both satellites together. A training profile with an enabled satellite must produce at least three confirmed entries per training fold to pass the sample gate. The job also compares the five-core-rule portfolio against the same portfolio with two confirmation satellites on 2024–2025 and the available 2026 forward period. The job never edits live settings, reloads the service, or submits orders. Its Telegram report is a review request: a candidate requires your explicit approval before any live-system change.
+`src.algo.research.auto_research` is the scheduled weekday Algo research entry point. It refreshes Plus SIP split-adjusted bars, fingerprints the data and configuration, then discovers and walk-forward optimizes each of the seven strategy/flavor profiles independently. Compatible versioned artifacts are reused; missing or stale strategy jobs run in parallel. The resulting fixed strategy artifacts are replayed together through the live `PortfolioCoordinator` and risk limits without retraining inside the replay. One report records the per-stage timings, artifact reuse, training selections, promotion gates, and portfolio results. The workflow is research-only: it does not edit live settings, reload the service, or submit orders. The scheduler remains the entry point at `python -m src.algo.research.auto_research`.
+
+The independent three-stage strategy workflow supports all seven core rule
+strategies, with separate swing and intraday implementations where applicable:
+`python -m src.algo.research research`, `optimize`, and `portfolio`. It compares
+bounded signal profiles, selects them on walk-forward training windows, then
+replays the combined out-of-sample portfolio through the same Algo coordinator
+and risk settings. The standalone `intraday_trend` and `intraday_momentum`
+strategies remain disabled in live config and are enabled only inside research
+when explicitly requested. Multi Factor and Event Driven remain confirmation
+overlays. See [the research workflow guide](src/algo/research/README.md) for
+commands, candidate coverage, and validation limits.
 
 Historical scheduled-event inputs are rebuilt into `data/research/algo-auto/event-calendar-historical.csv`: issuer earnings dates use SEC EDGAR 8-K Item 2.02 filing acceptance times (ETFs are excluded), while CPI/NFP and FOMC dates use official BLS and Federal Reserve archives. Macro reactions become visible no earlier than their scheduled release, and all reaction windows align to stored regular-session bars. This is a conservative historical reaction ledger, not an intraday news feed; event profiles are skipped and reported if a valid full-range calendar cannot be built or reused. Historical fixed-universe membership remains a survivorship limitation.
 
 Rebuild the event history against the locally stored SIP bars with:
 
 ```bash
-poetry run python -m src.algo.historical_events --start 2016-01-01
+poetry run python -m src.algo.research.historical_events --start 2016-01-01
 ```
 
 ```bash
 # Small local smoke run; scheduled execution also refreshes recent Plus SIP bars.
-poetry run python -m src.algo.auto_research --no-refresh --factor-only
+poetry run python -m src.algo.research.auto_research --no-refresh --factor-only
 ```
 
 The local SQLite market store defaults to `data/algo_market.sqlite3`. Feed, adjustment, symbol, interval, and timestamp are separate keys. Historical IEX rows remain segregated from the SIP dataset; Plus research and live defaults use SIP, and fetching the same feed again updates overlapping bars. When multi-factor is included, fetch, replay, slippage, and walk-forward commands default to split-adjusted bars; an explicit `--adjustment` overrides this, and fetch/run must use the same adjustment key. The fetch command stores 180 days of SPY daily bars for regime warmup and requests 260 calendar days of symbol-bar warmup for the default factor horizons. `--profile` increases that span when the selected factor profile needs more history:

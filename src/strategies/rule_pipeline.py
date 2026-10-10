@@ -9,9 +9,9 @@ from src.strategies.indicators import closes, moving_average
 from src.strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from src.strategies.signals import Signal
 from src.strategies.swing_common import SwingSignal
-from src.strategies.swing_mean_reversion import SwingMeanReversionConfig
-from src.strategies.swing_momentum import SwingMomentumConfig
-from src.strategies.swing_trend_following import SwingTrendConfig
+from src.strategies.mean_reversion.swing import SwingMeanReversionConfig
+from src.strategies.momentum.swing import SwingMomentumConfig
+from src.strategies.trend_following.swing import SwingTrendConfig
 
 
 ET = ZoneInfo("America/New_York")
@@ -180,6 +180,7 @@ def evaluate_rule_signal(
     name: str, ticker: str, bars: list[dict], parameters: dict | None = None,
     *, position_qty: float = 0, entry_at: str | None = None,
     entry_price: float | None = None, position_target: float | None = None,
+    runtime_enabled_override: bool | None = None,
 ) -> Signal | None:
     """Apply configured rule filters, then delegate to the production signal module."""
     if name not in RULE_PARAMETERS:
@@ -187,7 +188,11 @@ def evaluate_rule_signal(
     if name in {"intraday_trend", "intraday_momentum"}:
         from src.config import STRATEGY_CONFIG
         flag = "enable_intraday_trend" if name == "intraday_trend" else "enable_intraday_momentum"
-        if not STRATEGY_CONFIG.get(flag, False):
+        runtime_enabled = (
+            STRATEGY_CONFIG.get(flag, False)
+            if runtime_enabled_override is None else runtime_enabled_override
+        )
+        if not runtime_enabled:
             return None
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
     # Stop distances are live risk settings, not research-tunable signal
@@ -204,14 +209,14 @@ def evaluate_rule_signal(
 
     if name == "swing_mean_reversion":
         config = SwingMeanReversionConfig.from_dict(rule_params)
-        from src.strategies.swing_mean_reversion import signal as swing_signal
+        from src.strategies.mean_reversion.swing import signal as swing_signal
         return swing_signal(
             ticker, bars, position_qty=position_qty, parameters=config.to_dict(),
             entry_at=entry_at, entry_price=entry_price, position_target=position_target,
         )
 
     if name == "trend_following":
-        from src.strategies.swing_trend_following import signal as swing_trend_signal
+        from src.strategies.trend_following.swing import signal as swing_trend_signal
         config = SwingTrendConfig.from_dict(rule_params)
         return swing_trend_signal(
             ticker, bars, position_qty=position_qty, parameters=config.to_dict(),
