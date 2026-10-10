@@ -9,7 +9,7 @@ from src.algo.backtest import DAILY_WARMUP_DAYS, AlgoPortfolioBacktest
 from src.algo.config import get_algo_research_controls
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
-from src.strategies.universe import configured_universe
+from src.algo.strategies.universe import configured_universe
 
 from .live_manifest import live_configuration_manifest
 from .profiles import candidate_profiles, profile_search_manifest

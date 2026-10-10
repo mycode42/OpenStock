@@ -6,7 +6,7 @@ does not read headlines or earnings-surprise values.
 
 ## Module layout
 
-- `src/strategies/event_driven/models.py`: validated event records.
+- `src/algo/strategies/event_driven/models.py`: validated event records.
 - `calendar.py`: point-in-time CSV calendar reader.
 - `filters.py`: universe, regime, cooldown, and weekly activity limits.
 - `reactions.py`: earnings gap continuation and macro breakout rules.

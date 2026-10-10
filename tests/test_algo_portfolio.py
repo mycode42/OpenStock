@@ -2,12 +2,12 @@ import pytest
 
 import risk_manager
 from src.config import ALGO_MODE_CONFIG, MODES, STRATEGY_CONFIG, get_mode_config
-from src.strategies import mean_reversion, momentum, opening_range_breakout, pairs, trend_following
-from src.strategies.regime import rank_strategies
-from src.strategies.signals import Signal
-from src.strategies.runner import _make_trade, _update_trailing_stop
-import src.strategies.rule_pipeline as rule_pipeline
-from src.strategies.state_machine import COOLDOWN, ENTRY_PENDING, OPEN, RuleStrategyStateMachine
+from src.algo.strategies import mean_reversion, momentum, opening_range_breakout, pairs, trend_following
+from src.algo.strategies.regime import rank_strategies
+from src.algo.strategies.signals import Signal
+from src.algo.strategies.runner import _make_trade, _update_trailing_stop
+import src.algo.strategies.rule_pipeline as rule_pipeline
+from src.algo.strategies.state_machine import COOLDOWN, ENTRY_PENDING, OPEN, RuleStrategyStateMachine
 
 
 SESSION_DATE = "2026-10-07"
@@ -331,7 +331,7 @@ def test_core_rules_emit_mirrored_short_entries():
 
 
 def test_algo_opening_rip_short_uses_mirrored_patient_filters():
-    from src.strategies.rule_pipeline import evaluate_rule_signal
+    from src.algo.strategies.rule_pipeline import evaluate_rule_signal
 
     bars = [
         {"t": f"2026-10-07T13:{minute:02d}:00Z", "o": opening, "h": high,

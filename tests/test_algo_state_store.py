@@ -13,7 +13,7 @@ import pytest
 from src.algo import daemon
 from src.algo.reconciliation import reconcile_startup
 from src.algo.state_store import AlgoStateStore, StateCorruptionError, empty_portfolio
-from src.strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, OPEN, RuleStrategyStateMachine
+from src.algo.strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, OPEN, RuleStrategyStateMachine
 
 def _legacy(path: Path, portfolio: dict) -> bytes:
     original = json.dumps({"market_state": "REGULAR", "strategy_portfolio": portfolio}).encode()

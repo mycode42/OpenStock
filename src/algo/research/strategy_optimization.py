@@ -11,7 +11,7 @@ import tempfile
 from src.algo.backtest import read_borrow_availability
 from src.algo.market_store import DEFAULT_DB
 from src.market_data import data_tier, regular_feed
-from src.strategies.universe import configured_universe
+from src.algo.strategies.universe import configured_universe
 
 from .files import _atomic_json
 from .live_manifest import live_configuration_manifest

@@ -23,9 +23,9 @@ import requests
 from dotenv import load_dotenv
 
 from src.algo.alpaca import AlgoAlpaca
-from src.strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
-from src.strategies.event_driven.models import ScheduledEvent
-from src.strategies.universe import configured_universe
+from src.algo.strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
+from src.algo.strategies.event_driven.models import ScheduledEvent
+from src.algo.strategies.universe import configured_universe
 
 
 LOG = logging.getLogger("algo_event_calendar")

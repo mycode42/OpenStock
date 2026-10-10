@@ -6,13 +6,13 @@ import pytest
 
 from src.algo.backtest import AlgoPortfolioBacktest
 import src.algo.backtest as backtest_module
-from src.strategies.event_driven import (
+from src.algo.strategies.event_driven import (
     EventCalendar, EventSignalGenerator, EventStrategyConfig, ScheduledEvent,
 )
-from src.strategies.event_driven.reactions import daily_event_reaction
-from src.strategies.event_driven.reactions import EventSignal
-from src.strategies.signals import Signal
-from src.strategies.registry import validate_parameter_profile
+from src.algo.strategies.event_driven.reactions import daily_event_reaction
+from src.algo.strategies.event_driven.reactions import EventSignal
+from src.algo.strategies.signals import Signal
+from src.algo.strategies.registry import validate_parameter_profile
 
 
 ET = ZoneInfo("America/New_York")

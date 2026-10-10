@@ -6,18 +6,18 @@ from risk_manager import validate_trade
 from src.algo.backtest import multi_factor_warmup_days
 from src.algo.state_store import validate_portfolio
 from src.algo.walk_forward import _read_profiles
-from src.strategies.multi_factor.diagnostics import information_coefficient, turnover
+from src.algo.strategies.multi_factor.diagnostics import information_coefficient, turnover
 from src.config import STRATEGY_CONFIG, get_mode_config
-from src.strategies.multi_factor import (
+from src.algo.strategies.multi_factor import (
     FactorRanker,
     MultiFactorConfig,
     MultiFactorSignal,
     SignalGenerator,
 )
-from src.strategies.multi_factor.features import FactorCalculator
-from src.strategies.registry import validate_parameter_profile
-from src.strategies.regime import rank_strategies
-from src.strategies.runner import (
+from src.algo.strategies.multi_factor.features import FactorCalculator
+from src.algo.strategies.registry import validate_parameter_profile
+from src.algo.strategies.regime import rank_strategies
+from src.algo.strategies.runner import (
     _make_trade, _multi_factor_rebalance_signals, _multi_factor_satellite_signals,
 )
 

@@ -14,8 +14,8 @@ from pathlib import Path
 
 from src.algo.incidents import open_incident_symbols, resolve_incident
 from src.algo.protection import verified_recovery_oco
-from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
-from src.strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
 
 
 OPEN_ORDER_STATUSES = {"new", "held", "accepted", "pending_new", "partially_filled", "accepted_for_bidding"}

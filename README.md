@@ -31,7 +31,9 @@ Multi-agent AI trading system with separate Swing, Day, and Algo paper accounts.
 
 ## Three Trading Routes
 
-Swing and Day are agent-driven routes. Algo runs as a separate continuous service. Account-aware scripts accept `--mode swing|day|algo` where supported and use the matching credentials. Swing and Day positions are not tagged by strategy inside Alpaca. Keep their accounts separate: Day's daily flatten closes every position and order in its selected account.
+Swing and Day are the original agent-driven Swarm Trader routes. Algo is a separate continuous strategy service. Their decision loops, schedules, and persisted state are separate; sharing this repository and its Alpaca integration does not combine their strategies. Swing and Day analyst agents and command-line workflows remain in the Swarm Trader code. Algo-only coordinator, rules, backtests, and research live under `src/algo/`, including `src/algo/strategies/`.
+
+The routes share broker plumbing only: `src/accounts.py` selects credentials by explicit mode, `execute_trades.py` submits risk-checked orders, and `risk_manager.py` applies the selected mode's limits. Each automation and service must pass its own `--mode`; the Algo coordinator has its own state database and execution lease, and does not use Swing/Day's `trading_mode.json`. Separate account IDs keep account-wide actions, especially Day flattening, from affecting another route.
 
 ### Mode Selection
 
@@ -160,7 +162,7 @@ Replay currently covers regular hours only. It uses a fixed supplied symbol list
 
 #### Multi Factor confirmation satellite
 
-The Algo-only `src.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It computes long and short ranks for research diagnostics. In the live portfolio, only same-ticker, same-direction evidence confirms a core-rule proposal; it cannot open or own a position. Factor-only backtest runs report ranking and IC diagnostics without creating standalone positions.
+The Algo-only `src.algo.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It computes long and short ranks for research diagnostics. In the live portfolio, only same-ticker, same-direction evidence confirms a core-rule proposal; it cannot open or own a position. Factor-only backtest runs report ranking and IC diagnostics without creating standalone positions.
 
 Features use completed daily bars through the prior session. Live settings are centralized in `ALGO_DEFAULT_PARAMETERS["multi_factor"]`; research profiles can override the validated fields without changing live settings. The simulator aggregates stored regular-session 5-minute bars and fetches 260 calendar days of warmup by default, extending it for longer configured horizons. The fixed universe supplied to a backtest must contain enough names with the required history to meet `min_universe` (20 by default). Value is disabled by default; if enabled, it requires earnings-yield observations with an `available_at` timestamp, and observations published after the rebalance cutoff are ignored. No price-only value proxy is substituted.
 
@@ -276,17 +278,17 @@ Swing and Day scans use the fixed, mode-specific lists shown below. They remain 
 
 ```bash
 # Swing/Day strategy diagnostics
-poetry run python -m src.strategies.runner --mode swing
-poetry run python -m src.strategies.runner --mode day
+poetry run python -m src.algo.strategies.runner --mode swing
+poetry run python -m src.algo.strategies.runner --mode day
 
 # Preview proposed trades through the existing risk validation path
-poetry run python -m src.strategies.runner --mode swing --execute --dry-run
+poetry run python -m src.algo.strategies.runner --mode swing --execute --dry-run
 
 # The continuous Algo-account portfolio mode is launched by systemd:
 poetry run python -m src.algo.daemon --mode algo
 
 # Submit eligible Day orders through the shared executor
-poetry run python -m src.strategies.runner --mode day --execute
+poetry run python -m src.algo.strategies.runner --mode day --execute
 ```
 
 The deterministic SPY filter activates trend following, momentum, mean reversion, and opening-range breakout according to regime. Strategy modules return one common signal shape and send compatible orders through the shared executor with risk-based sizing and stop/target prices. Strategy ownership and protection checks remain active regardless of which strategies the current regime selects for new entries.
@@ -474,7 +476,7 @@ Tracks:
 
 > Adapted from [karpathy/autoresearch](https://github.com/karpathy/autoresearch) for paper trading research.
 
-The legacy `autoresearch-run` job still runs five LLM-driven experiments against `autoresearch/strategy.py` for Swing/Day after market close. Algo has a separate deterministic AutoResearch pipeline described below; it does not edit Python source or share the legacy experiment log.
+The legacy `autoresearch-run` job runs 50 LLM-driven experiments against `autoresearch/strategy.py` after market close. Its experiment history remains in `autoresearch/experiments/log.jsonl`; the scheduled run captures its console output in `/tmp/autoresearch-latest.log` for the report job. Algo has a separate deterministic AutoResearch pipeline described below; it does not edit Python source or share the legacy experiment log.
 
 | | Karpathy's autoresearch | Swarm Trader AutoResearch |
 |---|---|---|
@@ -692,6 +694,8 @@ Create your own — see `src/agents/mordecai.py` as a template. Register in `src
 
 Swing and Day use dedicated OpenClaw agents for scheduled analysis and reports. The Algo daemon trades independently; its OpenClaw agent reports service health, persisted strategy ownership, scan freshness, regime, account risk, and broker-confirmed order events. The report agent does not place trades. All trader jobs use `America/New_York` so market-time schedules follow daylight saving changes.
 
+The six Swing/Day decision prompts use the original [Swarm Trader OpenClaw instructions](https://github.com/zhound420/swarm-trader#automation-with-openclaw). Their existing New York schedules are preserved. Mode-specific commands pass `--mode swing` or `--mode day` so one agent cannot route an account-wide action through the other mode. The extra `day-brunch` and `day-afternoon` trade-analysis jobs are disabled; account recovery, flatten guards, and close snapshots remain active.
+
 Deterministic Gateway command jobs provide the operational guards:
 
 - `day-open-recovery` repeats the verified Day account cleanup from 9:30 through 9:34 AM ET. The first Day agent report starts at 9:35 AM, and new Day buys require that day's successful recovery receipt.
@@ -705,7 +709,7 @@ The four Algo report jobs cover premarket, morning, midday, and close. Report jo
 openclaw cron list --all --json
 ```
 
-The legacy `autoresearch-run` loop remains Day-only and uses five LLM-driven iterations. Algo has a separate fixed-candidate research pipeline and report; neither job changes live settings automatically.
+The legacy `autoresearch-run` loop remains separate from Algo. It runs 50 LLM-driven iterations and writes `/tmp/autoresearch-latest.log` for its report job. Algo has its own fixed-candidate research pipeline and report; neither research workflow changes live settings automatically.
 
 ---
 
@@ -760,29 +764,15 @@ swarm-trader/
 │   ├── day_recovery.py        # Daily, account-bound verified opening receipt
 │   ├── market_calendar.py     # Broker-calendar Day deadlines and early closes
 │   ├── fill_analytics.py      # Read-only broker FILL FIFO realized P&L
-│   ├── algo/                 # One coordinator, SQLite state, reconciliation, health
-│   │   ├── daemon.py          # Continuous coordinator and execution lease
-│   │   ├── state_store.py     # Authoritative SQLite strategy/owner state
-│   │   ├── reconciliation.py  # Exact broker and journal ownership checks
-│   │   ├── healthcheck.py     # Read-only daemon, state, broker protection check
-│   │   └── sessions.py       # ET broker sessions and BOATS/overnight feeds
-│   ├── strategies/             # Pure rules, coordination, per-strategy state, regime
-│   │   ├── mean_reversion.py   # Intraday open-dip strategy
-│   │   ├── swing_mean_reversion.py # Separate multi-day cyclical strategy
-│   │   ├── swing_trend_following.py # Daily trend strategy
-│   │   ├── swing_momentum.py   # Daily cross-sectional momentum
-│   │   ├── opening_range_breakout.py # 30-minute ORB rule
-│   │   ├── portfolio_coordinator.py # Shared exposure, entry, and session gates
-│   │   ├── rule_pipeline.py    # Shared live/replay pure-signal pipeline
-│   │   ├── multi_factor/       # Daily cross-sectional satellite
-│   │   ├── event_driven/       # Scheduled-catalyst satellite
-│   │   ├── pairs.py            # Signal-only statistical pair analysis
-│   │   ├── regime.py           # Deterministic SPY strategy ranking
-│   │   ├── universe.py         # Separate fixed Swing, Day, and Algo universes
-│   │   ├── registry.py         # Equal strategy-family evaluation interface
-│   │   ├── state_machine.py    # Per-strategy ticker entry/position/exit lifecycle
-│   │   ├── regime_advisor.py   # Optional bounded API-model strategy ordering advice
-│   │   └── runner.py           # Alpaca scan + shared executor handoff
+│   ├── algo/                   # Algo-only runtime, strategy, replay, and research code
+│   │   ├── daemon.py           # Continuous coordinator and execution lease
+│   │   ├── state_store.py      # Algo-only SQLite strategy/owner state
+│   │   ├── reconciliation.py   # Exact broker and journal ownership checks
+│   │   ├── healthcheck.py      # Read-only Algo service and protection checks
+│   │   ├── sessions.py         # ET broker sessions and BOATS/overnight feeds
+│   │   ├── strategies/         # Algo rules, portfolio coordinator, satellites
+│   │   ├── backtest/           # Research-only portfolio replay
+│   │   └── research/           # Algo-only walk-forward and AutoResearch
 │   ├── tools/
 │   │   ├── api.py             # Hybrid dispatcher (paid → free fallback)
 │   │   ├── api_free.py        # Free data layer (SEC EDGAR + yfinance)

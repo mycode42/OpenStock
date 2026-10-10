@@ -7,8 +7,8 @@ import pytest
 import requests
 
 from src.config import ALGO_MODE_CONFIG, get_mode_config
-from src.strategies import runner, universe as strategy_universe
-from src.strategies.signals import Signal
+from src.algo.strategies import runner, universe as strategy_universe
+from src.algo.strategies.signals import Signal
 
 
 ET = ZoneInfo("America/New_York")

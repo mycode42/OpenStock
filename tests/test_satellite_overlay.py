@@ -1,6 +1,6 @@
 import pytest
 
-from src.strategies.satellite_overlay import SatelliteOverlayConfig, apply_satellite_confirmations
+from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig, apply_satellite_confirmations
 
 
 def test_satellites_amplify_a_core_entry_without_owning_it():

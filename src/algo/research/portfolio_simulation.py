@@ -16,7 +16,7 @@ from src.algo.backtest import (
 )
 from src.algo.config import ALGO_RUNTIME_CONFIG
 from src.algo.market_store import SQLiteBarStore
-from src.strategies.event_driven import EventCalendar
+from src.algo.strategies.event_driven import EventCalendar
 
 from .live_manifest import live_configuration_manifest
 from .settings import LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT

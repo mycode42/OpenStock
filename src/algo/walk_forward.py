@@ -25,9 +25,9 @@ from src.algo.backtest import (
 )
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
-from src.strategies.event_driven import EventCalendar, EventStrategyConfig
-from src.strategies.registry import validate_parameter_profile
-from src.strategies.satellite_overlay import SatelliteOverlayConfig
+from src.algo.strategies.event_driven import EventCalendar, EventStrategyConfig
+from src.algo.strategies.registry import validate_parameter_profile
+from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
 
 
 ET = ZoneInfo("America/New_York")

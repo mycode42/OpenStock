@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.algo.sessions import get_trading_window, next_session_start
-from src.strategies.universe import _overnight_tradable
+from src.algo.strategies.universe import _overnight_tradable
 
 
 ET = ZoneInfo("America/New_York")

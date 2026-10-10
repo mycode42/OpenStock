@@ -34,7 +34,7 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.strategies.universe import configured_universe
+from src.config import get_mode_config
 
 load_dotenv()
 
@@ -61,8 +61,18 @@ FLATTEN_TIME = "15:45"          # Force-close all positions at this ET time
 MAX_CONCURRENT_POSITIONS = 5    # Max simultaneous open positions
 
 # AutoResearch reads the same fixed membership as the live mode configs.
-DAY_TRADE_TICKERS = configured_universe("day")["tickers"]
-SWING_TICKERS = configured_universe("swing")["tickers"]
+def _configured_tickers(mode: str) -> list[str]:
+    """Read the selected Swarm Trader universe without importing Algo code."""
+    return list(dict.fromkeys(
+        str(ticker).upper().strip()
+        for bucket in get_mode_config(mode)["universe"].values()
+        for ticker in bucket.get("tickers", [])
+        if str(ticker).strip()
+    ))
+
+
+DAY_TRADE_TICKERS = _configured_tickers("day")
+SWING_TICKERS = _configured_tickers("swing")
 
 
 # ---------------------------------------------------------------------------

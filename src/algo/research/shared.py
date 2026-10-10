@@ -21,9 +21,9 @@ from src.algo.backtest import (
 )
 from src.algo.research.factor_research import train_factor_model
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
-from src.strategies.event_driven import EventCalendar
-from src.strategies.satellite_overlay import SatelliteOverlayConfig
+from src.algo.strategies.event_driven import EventCalendar
+from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.market_data import data_tier, regular_feed
-from src.strategies.multi_factor.features import aggregate_intraday_bars
-from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
-from src.strategies.universe import configured_universe
+from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.universe import configured_universe

@@ -6,8 +6,8 @@ from datetime import date
 from zoneinfo import ZoneInfo
 
 from src.config import get_mode_config
-from src.strategies.multi_factor.config import MultiFactorConfig
-from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
 
 ET = ZoneInfo("America/New_York")
 

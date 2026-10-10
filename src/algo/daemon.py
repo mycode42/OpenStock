@@ -23,10 +23,10 @@ from src.algo.sessions import ET, get_trading_window, next_session_start
 from src.algo.state_store import AlgoStateStore, StateStoreError
 from src.algo.config import ALGO_SERVICE_CONFIG
 from src.config import STRATEGY_CONFIG
-from src.strategies.runner import execute_trades as execute_strategy_trades
-from src.strategies.runner import scan as scan_strategy_portfolio
-from src.strategies.state_machine import RuleStrategyStateMachine
-from src.strategies.universe import configured_universe, load_algo_universe
+from src.algo.strategies.runner import execute_trades as execute_strategy_trades
+from src.algo.strategies.runner import scan as scan_strategy_portfolio
+from src.algo.strategies.state_machine import RuleStrategyStateMachine
+from src.algo.strategies.universe import configured_universe, load_algo_universe
 
 
 LOG = logging.getLogger("swarm_trader.algo")

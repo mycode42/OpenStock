@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
 
 
 SCHEMA_VERSION = 1

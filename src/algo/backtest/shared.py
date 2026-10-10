@@ -23,24 +23,24 @@ from risk_manager import _get_universe_maps, validate_trade
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
 from src.config import STRATEGY_CONFIG, get_mode_config
 from src.market_data import data_tier, regular_feed
-from src.strategies.registry import (
+from src.algo.strategies.registry import (
     ALGO_DEFAULT_PARAMETERS,
     validate_parameter_profile,
 )
-from src.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
-from src.strategies.regime import rank_strategies
-from src.strategies.runner import _make_trade
-from src.strategies.rule_pipeline import evaluate_rule_signal
-from src.strategies.multi_factor.config import MultiFactorConfig
-from src.strategies.multi_factor.diagnostics import information_coefficient, turnover
-from src.strategies.multi_factor.features import aggregate_intraday_bars
-from src.strategies.multi_factor.signals import SignalGenerator
-from src.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
-from src.strategies.satellite_overlay import (
+from src.algo.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
+from src.algo.strategies.regime import rank_strategies
+from src.algo.strategies.runner import _make_trade
+from src.algo.strategies.rule_pipeline import evaluate_rule_signal
+from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from src.algo.strategies.multi_factor.diagnostics import information_coefficient, turnover
+from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
+from src.algo.strategies.multi_factor.signals import SignalGenerator
+from src.algo.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
+from src.algo.strategies.satellite_overlay import (
     CORE_STRATEGIES, SATELLITE_STRATEGIES, SatelliteOverlayConfig,
     apply_satellite_confirmations,
 )
-from src.strategies.portfolio_coordinator import (
+from src.algo.strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES, PortfolioCoordinator, PortfolioCoordinatorConfig,
     strategy_priority, throttle_signal,
 )

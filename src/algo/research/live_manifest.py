@@ -10,7 +10,7 @@ from src.algo.config import (
     ALGO_ENTRY_LIMITS, ALGO_MODE_CONFIG, ALGO_PORTFOLIO_COORDINATOR_CONFIG,
     ALGO_RUNTIME_CONFIG, get_algo_research_controls,
 )
-from src.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
 
 
 def live_configuration_manifest(strategies: list[str] | tuple[str, ...]) -> dict:

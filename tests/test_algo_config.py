@@ -7,7 +7,7 @@ from src.algo.config import (
     get_algo_research_controls,
 )
 from src.config import ALGO_MODE_CONFIG as LEGACY_ALGO_MODE_CONFIG
-from src.strategies.portfolio_coordinator import PortfolioCoordinatorConfig
+from src.algo.strategies.portfolio_coordinator import PortfolioCoordinatorConfig
 
 
 def test_algo_daily_entry_budgets_are_shared_by_live_and_research():

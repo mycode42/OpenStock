@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 
 from src.algo.backtest import AlgoPortfolioBacktest
 from src.algo.walk_forward import evaluate_promotion_gate, parameter_neighbors
-from src.strategies.portfolio_coordinator import (
+from src.algo.strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig, choose_priority, throttle_signal,
 )
 

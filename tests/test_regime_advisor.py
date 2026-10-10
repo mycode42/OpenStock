@@ -1,4 +1,4 @@
-from src.strategies.regime_advisor import apply_regime_advisory
+from src.algo.strategies.regime_advisor import apply_regime_advisory
 
 
 def test_advisor_cannot_revive_strategy_blocked_by_spy_filter(monkeypatch):
@@ -6,7 +6,7 @@ def test_advisor_cannot_revive_strategy_blocked_by_spy_filter(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "OpenAI")
     monkeypatch.setenv("LLM_MODEL", "gpt-6-luna")
     monkeypatch.setattr(
-        "src.strategies.regime_advisor._openai_suggestion",
+        "src.algo.strategies.regime_advisor._openai_suggestion",
         lambda *args, **kwargs: (["trend_following", "event_driven"], None),
     )
     deterministic = {
@@ -30,7 +30,7 @@ def test_advisor_timeout_falls_back_to_the_deterministic_active_set(monkeypatch)
     monkeypatch.setenv("STRATEGY_REGIME_LLM_ENABLED", "true")
     monkeypatch.setenv("LLM_PROVIDER", "OpenAI")
     monkeypatch.setattr(
-        "src.strategies.regime_advisor._openai_suggestion",
+        "src.algo.strategies.regime_advisor._openai_suggestion",
         lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError()),
     )
     deterministic = {

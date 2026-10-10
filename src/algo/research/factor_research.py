@@ -13,9 +13,9 @@ from datetime import date
 
 import numpy as np
 
-from src.strategies.multi_factor.config import MultiFactorConfig
-from src.strategies.multi_factor.diagnostics import information_coefficient
-from src.strategies.multi_factor.ranking import FactorRanker
+from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from src.algo.strategies.multi_factor.diagnostics import information_coefficient
+from src.algo.strategies.multi_factor.ranking import FactorRanker
 
 
 FACTORS = ("momentum_1m", "momentum_3m", "momentum_6m", "low_volatility")

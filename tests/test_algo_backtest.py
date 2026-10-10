@@ -8,9 +8,9 @@ import src.algo.backtest as backtest_module
 from src.algo.market_store import SQLiteBarStore
 from src.algo.slippage_sensitivity import parse_slippage_grid
 from src.algo.walk_forward import _trim_sessions_without_regime_warmup, walk_forward_windows
-from src.strategies.rule_pipeline import evaluate_rule_signal
-from src.strategies.registry import validate_parameter_profile
-from src.strategies.signals import Signal
+from src.algo.strategies.rule_pipeline import evaluate_rule_signal
+from src.algo.strategies.registry import validate_parameter_profile
+from src.algo.strategies.signals import Signal
 
 
 def _utc(day: date, hour: int, minute: int) -> str:

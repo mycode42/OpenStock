@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from src.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
 
 from .settings import CORE_RESEARCH_CONTROLS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS
 
