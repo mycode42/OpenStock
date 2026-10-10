@@ -126,6 +126,16 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         # consume the same point-in-time daily aggregates. Each caller filters
         # strictly through the last completed session.
         self.daily_stock_bars = all_daily_bars
+        # Daily strategy history grows once per session, then is reused across
+        # all 5-minute events that session. This avoids rebuilding a years-long
+        # history for every symbol on every intraday bar.
+        self._daily_history_cache_day: date | None = None
+        self._daily_history_cache: dict[str, list[dict]] = {
+            symbol: [] for symbol in all_daily_bars
+        }
+        self._daily_history_indices: dict[str, int] = {
+            symbol: 0 for symbol in all_daily_bars
+        }
         self.daily_stock_series = {
             symbol: (
                 [date.fromisoformat(row["date"]) for row in rows],

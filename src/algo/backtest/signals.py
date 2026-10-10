@@ -134,10 +134,31 @@ class ReplaySignalsMixin:
         return self.previous_closes_by_day.get((ticker.upper(), trading_day))
 
     def _completed_daily_history(self, ticker: str, trading_day: date) -> list[dict]:
-        return [
-            row for row in self.daily_stock_bars.get(ticker.upper(), [])
-            if date.fromisoformat(str(row.get("date", ""))[:10]) < trading_day
-        ]
+        if (
+            self._daily_history_cache_day is not None
+            and trading_day < self._daily_history_cache_day
+        ):
+            # Keep direct, out-of-order calls correct too. The replay itself is
+            # chronological, so this reset is only needed by callers that move
+            # the requested session backwards.
+            for history in self._daily_history_cache.values():
+                history.clear()
+            self._daily_history_indices = {
+                symbol: 0 for symbol in self.daily_stock_bars
+            }
+        self._daily_history_cache_day = trading_day
+        key = ticker.upper()
+        history = self._daily_history_cache.setdefault(key, [])
+        rows = self.daily_stock_bars.get(key, [])
+        index = self._daily_history_indices.get(key, 0)
+        while index < len(rows):
+            row = rows[index]
+            if date.fromisoformat(str(row.get("date", ""))[:10]) >= trading_day:
+                break
+            history.append(row)
+            index += 1
+        self._daily_history_indices[key] = index
+        return history
 
     def _signal_for(
         self, ticker: str, history: list[dict], active: list[str], ranked: dict,
