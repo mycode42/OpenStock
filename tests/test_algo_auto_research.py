@@ -43,12 +43,12 @@ def _synthetic_daily_history(session_count: int = 2700) -> dict[str, list[dict]]
 
 def test_auto_research_profiles_are_bounded_and_have_strategy_cooldowns():
     profiles = _read_profiles("autoresearch/algo-daily-profiles.json")
-    assert len(profiles) == 12
+    assert len(profiles) == 11
     assert all(profile["controls"]["max_entries_per_day"] == 10 for profile in profiles)
     assert all("cooldown_minutes_by_strategy" in profile["controls"] for profile in profiles)
     expected = {
-        "mean_reversion", "momentum", "opening_range_breakout", "trend_following",
-        "multi_factor", "event_driven", "swing_mean_reversion",
+        "mean_reversion", "momentum", "trend_following", "swing_mean_reversion",
+        "swing_momentum", "swing_trend_following", "multi_factor", "event_driven",
     }
     assert all(set(profile["strategies"]) == expected for profile in profiles)
     by_name = {profile["name"]: profile for profile in profiles}
@@ -85,6 +85,14 @@ def test_combined_replay_compares_core_with_all_six_as_overlays(monkeypatch):
 
     class Store:
         def bars(self, symbols, **kwargs):
+            if symbols == ["SPY"] and kwargs.get("timeframe") == "1Day":
+                sessions = _sessions(date(2023, 11, 1), 22)
+                return {
+                    "SPY": [
+                        {"t": f"{session.isoformat()}T16:00:00+00:00"}
+                        for session in sessions
+                    ]
+                }
             return {symbol: [] for symbol in symbols}
 
     class Replay:

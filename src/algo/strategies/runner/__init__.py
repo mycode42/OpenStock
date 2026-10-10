@@ -141,11 +141,13 @@ def scan(
 
 
 def main() -> int:
-    raise SystemExit(
+    print(
         "The Algo scanner requires coordinator-owned lifecycle state. "
         "Run the service with `python -m src.algo.daemon`; "
-        "Swing and Day workflows use their Swarm Trader agents."
+        "Swing and Day workflows use their Swarm Trader agents.",
+        file=sys.stderr,
     )
+    raise SystemExit(2)
 
 
 if __name__ == "__main__":

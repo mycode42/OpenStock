@@ -41,6 +41,10 @@ DAY_DEFAULT_PARAMETERS = {
 ALGO_DEFAULT_PARAMETERS = {
     "trend_following": SwingTrendConfig().to_dict(),
     "momentum": SwingMomentumConfig().to_dict(),
+    # Explicit research-only swing names keep the bank's horizon labels
+    # unambiguous while the live Algo runner retains its existing identifiers.
+    "swing_trend_following": SwingTrendConfig().to_dict(),
+    "swing_momentum": SwingMomentumConfig().to_dict(),
     "mean_reversion": {
         "signal_model": "opening_dip",
         "minimum_dip_pct": 0.014,
@@ -65,6 +69,8 @@ ALGO_DEFAULT_PARAMETERS = {
 PARAMETER_KEYS = {
     "trend_following": set(SwingTrendConfig.__dataclass_fields__),
     "momentum": set(SwingMomentumConfig.__dataclass_fields__),
+    "swing_trend_following": set(SwingTrendConfig.__dataclass_fields__),
+    "swing_momentum": set(SwingMomentumConfig.__dataclass_fields__),
     "mean_reversion": {
         "window", "band_width", "entry_rsi", "exit_rsi", "signal_model",
         "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes",
@@ -114,6 +120,12 @@ def validate_parameter_profile(profile: dict) -> dict:
             normalized[strategy] = SwingTrendConfig.from_dict(values).to_dict()
             continue
         if strategy == "momentum":
+            normalized[strategy] = SwingMomentumConfig.from_dict(values).to_dict()
+            continue
+        if strategy == "swing_trend_following":
+            normalized[strategy] = SwingTrendConfig.from_dict(values).to_dict()
+            continue
+        if strategy == "swing_momentum":
             normalized[strategy] = SwingMomentumConfig.from_dict(values).to_dict()
             continue
         if strategy == "satellite_overlay":
@@ -184,6 +196,7 @@ def validate_parameter_profile(profile: dict) -> dict:
 def evaluate(
     name: str, mode: str, ticker: str, bars: list[dict], position_qty: float = 0,
     parameters: dict | None = None,
+    *, runtime_enabled_override: bool | None = None,
 ):
     """Call a strategy module with defaults matched to its bar interval."""
     if mode == "algo" and name == "momentum":
@@ -197,7 +210,11 @@ def evaluate(
         from src.config import STRATEGY_CONFIG
 
         flag = "enable_intraday_trend" if name == "intraday_trend" else "enable_intraday_momentum"
-        if not STRATEGY_CONFIG.get(flag, False):
+        runtime_enabled = (
+            STRATEGY_CONFIG.get(flag, False)
+            if runtime_enabled_override is None else runtime_enabled_override
+        )
+        if not runtime_enabled:
             return None
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
         if not values.get("enabled", False):

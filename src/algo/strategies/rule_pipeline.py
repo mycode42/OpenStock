@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from src.algo.strategies.indicators import closes, moving_average
@@ -18,6 +19,8 @@ ET = ZoneInfo("America/New_York")
 RULE_PARAMETERS = {
     "trend_following": set(SwingTrendConfig.__dataclass_fields__),
     "momentum": set(SwingMomentumConfig.__dataclass_fields__),
+    "swing_trend_following": set(SwingTrendConfig.__dataclass_fields__),
+    "swing_momentum": set(SwingMomentumConfig.__dataclass_fields__),
     "intraday_trend": {"enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "allow_long", "allow_short"},
     "intraday_momentum": {"enabled", "lookback", "minimum_return", "minimum_volume_ratio", "minimum_short_return",
                            "minimum_short_volume_ratio", "max_extension_pct", "allow_long", "allow_short"},
@@ -31,6 +34,25 @@ RULE_PARAMETERS = {
 
 def _parameters(name: str, values: dict) -> dict:
     return {key: value for key, value in values.items() if key in RULE_PARAMETERS[name]}
+
+
+@lru_cache(maxsize=128)
+def _cached_trend_config(items: tuple[tuple[str, type, object], ...]) -> SwingTrendConfig:
+    return SwingTrendConfig.from_dict({key: value for key, _, value in items})
+
+
+def _trend_config(parameters: dict) -> SwingTrendConfig:
+    items = tuple(sorted(
+        ((key, type(value), value) for key, value in parameters.items()),
+        key=lambda item: item[0],
+    ))
+    try:
+        hash(items)
+    except TypeError:
+        # Preserve the config validator's normal error path for malformed,
+        # unhashable parameter values.
+        return SwingTrendConfig.from_dict(parameters)
+    return _cached_trend_config(items)
 
 
 def _intraday_satellite(signal: Signal | None, name: str) -> SwingSignal | None:
@@ -185,6 +207,7 @@ def evaluate_rule_signal(
     """Apply configured rule filters, then delegate to the production signal module."""
     if name not in RULE_PARAMETERS:
         return None
+    runtime_enabled = None
     if name in {"intraday_trend", "intraday_momentum"}:
         from src.config import STRATEGY_CONFIG
         flag = "enable_intraday_trend" if name == "intraday_trend" else "enable_intraday_momentum"
@@ -215,15 +238,15 @@ def evaluate_rule_signal(
             entry_at=entry_at, entry_price=entry_price, position_target=position_target,
         )
 
-    if name == "trend_following":
+    if name in {"trend_following", "swing_trend_following"}:
         from src.algo.strategies.trend_following.swing import signal as swing_trend_signal
-        config = SwingTrendConfig.from_dict(rule_params)
+        config = _trend_config(rule_params)
         return swing_trend_signal(
-            ticker, bars, position_qty=position_qty, parameters=config.to_dict(),
+            ticker, bars, position_qty=position_qty, parameters=config,
             entry_at=entry_at, entry_price=entry_price,
         )
 
-    if name == "momentum":
+    if name in {"momentum", "swing_momentum"}:
         # The swing momentum implementation ranks the full universe in one pass.
         return None
 
@@ -241,7 +264,10 @@ def evaluate_rule_signal(
             signal = _confirmed_trend(ticker, bars, legacy_params, confirmation)
             return _intraday_satellite(signal, name)
 
-    signal = evaluate_strategy(name, "algo", ticker, bars, position_qty, parameters=rule_params)
+    evaluation_kwargs = {"parameters": rule_params}
+    if runtime_enabled is not None:
+        evaluation_kwargs["runtime_enabled_override"] = runtime_enabled
+    signal = evaluate_strategy(name, "algo", ticker, bars, position_qty, **evaluation_kwargs)
     if signal is None or name not in {"intraday_trend", "intraday_momentum"}:
         return signal
     if not params.get("enabled", False):

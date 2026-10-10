@@ -858,7 +858,7 @@ def validate_trade(
     if mode == "algo" and action in {"buy", "short"} and strategy in {"multi_factor", "event_driven"}:
         return ValidationResult(
             False,
-            "Multi Factor and Event Driven are confirmation-only and cannot own positions.",
+            "Multi Factor and Event Driven are confirmation-only and cannot own entries.",
             "satellite_confirmation_only",
         )
 

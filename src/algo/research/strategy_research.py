@@ -10,6 +10,7 @@ from src.algo.config import get_algo_research_controls
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
 from src.algo.strategies.universe import configured_universe
+from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
 
 from .live_manifest import live_configuration_manifest
 from .profiles import candidate_profiles, profile_search_manifest
@@ -48,6 +49,8 @@ def run_strategy_research(args) -> dict:
     available = [symbol for symbol in symbols if intraday.get(symbol)]
     if not available:
         raise ValueError(f"No stored 5-minute {FEED} bars for the supplied symbols")
+    intraday_by_symbol = {symbol: intraday[symbol] for symbol in available}
+    daily_bars = aggregate_intraday_bars(intraday_by_symbol)
 
     variants = candidate_profiles(args.strategy)
     runtime_overrides = (
@@ -57,7 +60,8 @@ def run_strategy_research(args) -> dict:
     for candidate in variants:
         replay = AlgoPortfolioBacktest(
             symbols=available,
-            intraday_bars={symbol: intraday[symbol] for symbol in available},
+            intraday_bars=intraday_by_symbol,
+            preaggregated_daily_bars=daily_bars,
             spy_daily_bars=spy_daily,
             start=start.isoformat(), end=end.isoformat(), feed=FEED,
             data_adjustment=ADJUSTMENT, slippage_bps=args.slippage_bps,

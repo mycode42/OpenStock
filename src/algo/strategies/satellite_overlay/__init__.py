@@ -9,6 +9,7 @@ import math
 CORE_STRATEGIES = frozenset({
     "mean_reversion", "swing_mean_reversion", "momentum",
     "opening_range_breakout", "trend_following",
+    "swing_momentum", "swing_trend_following",
     "intraday_trend", "intraday_momentum",
 })
 SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})

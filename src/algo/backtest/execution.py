@@ -5,6 +5,11 @@ from __future__ import annotations
 from .shared import *
 from .shared import _get_universe_maps
 
+try:
+    from ._execution_cy import build_timeline as _build_timeline_cy
+except ImportError:
+    _build_timeline_cy = None
+
 
 class ReplayExecutionMixin:
     @staticmethod
@@ -25,6 +30,11 @@ class ReplayExecutionMixin:
         return cls._timestamp(bar) + timedelta(minutes=BAR_MINUTES) <= ingested.astimezone(timezone.utc)
 
     def _timeline(self) -> dict[datetime, dict[str, dict]]:
+        if _build_timeline_cy is not None:
+            return _build_timeline_cy(
+                self.symbols, self.intraday_bars, self.start, self.end,
+                ET, BAR_MINUTES,
+            )
         events: dict[datetime, dict[str, dict]] = defaultdict(dict)
         for ticker in self.symbols:
             for bar in self.intraday_bars.get(ticker, []):
@@ -75,7 +85,11 @@ class ReplayExecutionMixin:
         if self.short_borrow_annual_pct <= 0:
             return
         for ticker, position in self.positions.items():
-            if position.qty >= 0 or position.strategy in INTRADAY_STRATEGIES:
+            intraday_strategies = (
+                RESEARCH_INTRADAY_STRATEGIES
+                if self.profile_bank_horizons else INTRADAY_STRATEGIES
+            )
+            if position.qty >= 0 or position.strategy in intraday_strategies:
                 continue
             mark = self.last_prices.get(ticker, position.entry_price)
             fee = abs(position.qty) * mark * self.short_borrow_annual_pct / 252

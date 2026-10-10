@@ -11,21 +11,76 @@ from zoneinfo import ZoneInfo
 
 from src.algo.strategies.multi_factor.config import MultiFactorConfig
 
+try:
+    from src.algo.strategies.multi_factor._features_cy import aggregate_intraday_bars as _aggregate_intraday_bars_cy
+except ImportError:  # The extension is optional until the package build compiles it.
+    _aggregate_intraday_bars_cy = None
+
 
 ET = ZoneInfo("America/New_York")
 BAR_MINUTES = 5
 
 
-def aggregate_intraday_bars(bars_by_symbol: dict[str, list[dict]]) -> dict[str, list[dict]]:
-    """Aggregate complete regular-session 5-minute bars into daily OHLCV."""
+def _aggregate_unordered_symbol(raw_symbol: str, bars: list[dict]) -> list[dict]:
+    """Preserve timestamp-sorted semantics for callers with unordered bars."""
+    sessions: dict[date, list[tuple[datetime, dict]]] = defaultdict(list)
+    for bar in bars:
+        try:
+            stamp = datetime.fromisoformat(str(bar["t"]).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                stamp = stamp.replace(tzinfo=timezone.utc)
+            local = stamp.astimezone(ET)
+            local_time = local.time().replace(tzinfo=None)
+            if not time(9, 30) <= local_time < time(16, 0):
+                continue
+            ingested_at = bar.get("_ingested_at")
+            if ingested_at:
+                ingested = datetime.fromisoformat(str(ingested_at).replace("Z", "+00:00"))
+                if ingested.tzinfo is None:
+                    ingested = ingested.replace(tzinfo=timezone.utc)
+                if stamp.astimezone(timezone.utc) + timedelta(minutes=BAR_MINUTES) > ingested.astimezone(timezone.utc):
+                    continue
+            values = {key: float(bar[key]) for key in ("o", "h", "l", "c")}
+            volume = float(bar.get("v", 0) or 0)
+            if (
+                any(not math.isfinite(value) or value <= 0 for value in values.values())
+                or not math.isfinite(volume) or volume < 0
+                or values["h"] < max(values["o"], values["c"], values["l"])
+                or values["l"] > min(values["o"], values["c"], values["h"])
+            ):
+                continue
+            sessions[local.date()].append((stamp, {**values, "v": volume}))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+    daily = []
+    for session, rows in sorted(sessions.items()):
+        rows.sort(key=lambda item: item[0])
+        candles = [row for _, row in rows]
+        daily.append({
+            "date": session.isoformat(),
+            "o": candles[0]["o"], "h": max(row["h"] for row in candles),
+            "l": min(row["l"] for row in candles), "c": candles[-1]["c"],
+            "v": sum(row["v"] for row in candles),
+        })
+    return daily
+
+
+def _aggregate_intraday_bars_python(bars_by_symbol: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Python fallback for ordered and unordered regular-session bars."""
     output = {}
     for raw_symbol, bars in bars_by_symbol.items():
-        sessions: dict[date, list[tuple[datetime, dict]]] = defaultdict(list)
+        sessions: dict[date, dict] = {}
+        previous_stamp: datetime | None = None
+        unordered = False
         for bar in bars:
             try:
                 stamp = datetime.fromisoformat(str(bar["t"]).replace("Z", "+00:00"))
                 if stamp.tzinfo is None:
                     stamp = stamp.replace(tzinfo=timezone.utc)
+                if previous_stamp is not None and stamp < previous_stamp:
+                    unordered = True
+                    break
+                previous_stamp = stamp
                 local = stamp.astimezone(ET)
                 local_time = local.time().replace(tzinfo=None)
                 if not time(9, 30) <= local_time < time(16, 0):
@@ -37,32 +92,60 @@ def aggregate_intraday_bars(bars_by_symbol: dict[str, list[dict]]) -> dict[str, 
                         ingested = ingested.replace(tzinfo=timezone.utc)
                     if stamp.astimezone(timezone.utc) + timedelta(minutes=BAR_MINUTES) > ingested.astimezone(timezone.utc):
                         continue
-                values = {key: float(bar[key]) for key in ("o", "h", "l", "c")}
+                opening = float(bar["o"])
+                high = float(bar["h"])
+                low = float(bar["l"])
+                close = float(bar["c"])
                 volume = float(bar.get("v", 0) or 0)
                 if (
-                    any(not math.isfinite(value) or value <= 0 for value in values.values())
+                    not math.isfinite(opening) or opening <= 0
+                    or not math.isfinite(high) or high <= 0
+                    or not math.isfinite(low) or low <= 0
+                    or not math.isfinite(close) or close <= 0
                     or not math.isfinite(volume) or volume < 0
-                    or values["h"] < max(values["o"], values["c"], values["l"])
-                    or values["l"] > min(values["o"], values["c"], values["h"])
+                    or high < max(opening, close, low)
+                    or low > min(opening, close, high)
                 ):
                     continue
-                sessions[local.date()].append((stamp, {**values, "v": volume}))
+                session = local.date()
+                state = sessions.get(session)
+                if state is None:
+                    sessions[session] = {
+                        "first_stamp": stamp, "open": opening,
+                        "last_stamp": stamp, "close": close,
+                        "high": high, "low": low, "volume": volume,
+                    }
+                else:
+                    state["high"] = max(state["high"], high)
+                    state["low"] = min(state["low"], low)
+                    state["volume"] += volume
+                    if stamp < state["first_stamp"]:
+                        state["first_stamp"] = stamp
+                        state["open"] = opening
+                    if stamp >= state["last_stamp"]:
+                        state["last_stamp"] = stamp
+                        state["close"] = close
             except (KeyError, TypeError, ValueError, OverflowError):
                 continue
-        daily = []
-        for session, rows in sorted(sessions.items()):
-            rows.sort(key=lambda item: item[0])
-            candles = [row for _, row in rows]
-            daily.append({
-                "date": session.isoformat(),
-                "o": candles[0]["o"],
-                "h": max(row["h"] for row in candles),
-                "l": min(row["l"] for row in candles),
-                "c": candles[-1]["c"],
-                "v": sum(row["v"] for row in candles),
-            })
-        output[raw_symbol.upper()] = daily
+        if unordered:
+            output[raw_symbol.upper()] = _aggregate_unordered_symbol(raw_symbol, bars)
+            continue
+        output[raw_symbol.upper()] = [
+            {
+                "date": session.isoformat(), "o": state["open"],
+                "h": state["high"], "l": state["low"],
+                "c": state["close"], "v": state["volume"],
+            }
+            for session, state in sorted(sessions.items())
+        ]
     return output
+
+
+def aggregate_intraday_bars(bars_by_symbol: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """Aggregate complete regular-session 5-minute bars into daily OHLCV."""
+    if _aggregate_intraday_bars_cy is not None:
+        return _aggregate_intraday_bars_cy(bars_by_symbol, ET, _aggregate_unordered_symbol)
+    return _aggregate_intraday_bars_python(bars_by_symbol)
 
 
 def _bar_date(bar: dict[str, Any]) -> date | None:

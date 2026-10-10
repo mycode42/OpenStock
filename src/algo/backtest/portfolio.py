@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .shared import *
 from .shared import _get_universe_maps
 from .config import validate_research_controls
 from .models import Position
 from .execution import ReplayExecutionMixin
-from .signals import ReplaySignalsMixin
+try:
+    from ._signals_cy import ReplaySignalsMixin
+except ImportError:
+    from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin
 from .replay import ReplayLoopMixin
+from src.algo.strategies.swing_common import CachedDailyBarHistory
 
 
 class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportingMixin, ReplayLoopMixin):
@@ -39,6 +45,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         coordinator_config: PortfolioCoordinatorConfig | None = None,
         force_close_at_end: bool = False,
         research_runtime_overrides: dict[str, bool] | None = None,
+        preaggregated_daily_bars: dict[str, list[dict]] | None = None,
         _signal_evaluator=None,
         _trade_validator=None,
         _regime_ranker=None,
@@ -77,6 +84,11 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.commission_per_share = float(commission_per_share)
         self.short_borrow_annual_pct = float(short_borrow_annual_pct)
         self.unknown_borrow_penalty_bps = float(unknown_borrow_penalty_bps)
+        self.profile = validate_parameter_profile(profile or {})
+        self.strategy_filter = validate_strategy_filter(strategies)
+        self.profile_bank_horizons = bool(self.strategy_filter) and {
+            "swing_momentum", "swing_trend_following",
+        }.issubset(self.strategy_filter)
         self.borrow_availability = {
             (str(ticker).upper(), str(day)): bool(available)
             for (ticker, day), available in (borrow_availability or {}).items()
@@ -84,11 +96,53 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.borrow_coverage: Counter[str] = Counter()
         self.borrow_cost_total = 0.0
         self.commission_total = 0.0
+        coordinator_config = coordinator_config or PortfolioCoordinatorConfig.from_dict()
+        if self.profile_bank_horizons:
+            coordinator_config = replace(
+                coordinator_config,
+                intraday_strategy_ids=tuple(RESEARCH_INTRADAY_STRATEGIES),
+                swing_strategy_ids=tuple(RESEARCH_SWING_STRATEGIES),
+                swing_core_strategy_ids=tuple(RESEARCH_SWING_CORE_STRATEGIES),
+                swing_trend_strategy_ids=("swing_trend_following",),
+            )
         self.coordinator = PortfolioCoordinator(coordinator_config)
         self.force_close_at_end = bool(force_close_at_end)
-        self.risk = get_mode_config("algo")["risk"]
-        self.profile = validate_parameter_profile(profile or {})
-        self.strategy_filter = validate_strategy_filter(strategies)
+        self.risk = deepcopy(get_mode_config("algo")["risk"])
+        if self.profile_bank_horizons:
+            # The daily profile bank separates the unprefixed intraday rules
+            # from their explicitly named swing variants.
+            for risk_key in (
+                "stop_loss_pct_by_strategy", "trailing_stop_pct_by_strategy",
+                "trailing_activation_pct_by_strategy", "max_positions_per_strategy_by_strategy",
+                "minimum_hold_minutes_by_strategy", "cooldown_minutes_by_strategy",
+                "max_entries_per_strategy_per_day",
+            ):
+                values = self.risk.get(risk_key, {})
+                if "trend_following" in values:
+                    values["swing_trend_following"] = values["trend_following"]
+                if "momentum" in values:
+                    values["swing_momentum"] = values["momentum"]
+            for research_name, intraday_name in (
+                ("trend_following", "intraday_trend"),
+                ("momentum", "intraday_momentum"),
+            ):
+                for risk_key in (
+                    "stop_loss_pct_by_strategy", "trailing_stop_pct_by_strategy",
+                    "trailing_activation_pct_by_strategy",
+                ):
+                    values = self.risk.get(risk_key, {})
+                    if intraday_name in values:
+                        values[research_name] = values[intraday_name]
+            groups = self.risk.get("strategy_group_limits", {})
+            if "swing" in groups:
+                groups["swing"]["strategies"] = [
+                    "swing_trend_following", "swing_momentum", "swing_mean_reversion",
+                ]
+            if "intraday_core" in groups:
+                groups["intraday_core"]["strategies"] = list(dict.fromkeys([
+                    *groups["intraday_core"].get("strategies", []),
+                    "trend_following", "momentum",
+                ]))
         self.research_runtime_overrides = dict(research_runtime_overrides or {})
         unknown_runtime_overrides = set(self.research_runtime_overrides) - {
             "intraday_trend", "intraday_momentum",
@@ -97,10 +151,13 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             not isinstance(value, bool) for value in self.research_runtime_overrides.values()
         ):
             raise ValueError("research runtime overrides must be boolean intraday strategy enable flags")
+        profile_satellites = self.profile.get("satellite_overlay", {})
         self.satellite_config = SatelliteOverlayConfig.from_dict({
-            "multi_factor_enabled": STRATEGY_CONFIG.get("algo_multi_factor_enabled", True),
-            "event_driven_enabled": STRATEGY_CONFIG.get("algo_event_driven_enabled", True),
-            **self.profile.get("satellite_overlay", {}),
+            **profile_satellites,
+            "multi_factor_enabled": bool(STRATEGY_CONFIG.get("algo_multi_factor_enabled", True))
+            and bool(profile_satellites.get("multi_factor_enabled", True)),
+            "event_driven_enabled": bool(STRATEGY_CONFIG.get("algo_event_driven_enabled", True))
+            and bool(profile_satellites.get("event_driven_enabled", True)),
         })
         self.research_controls = validate_research_controls(research_controls)
         self.event_calendar = event_calendar or EventCalendar()
@@ -116,7 +173,11 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
         )
         self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(self.profile.get("multi_factor")))
-        all_daily_bars = aggregate_intraday_bars(intraday_bars)
+        all_daily_bars = (
+            preaggregated_daily_bars
+            if preaggregated_daily_bars is not None
+            else aggregate_intraday_bars(intraday_bars)
+        )
         self.previous_closes_by_day: dict[tuple[str, date], float] = {}
         for symbol, rows in all_daily_bars.items():
             for index, row in enumerate(rows):
@@ -131,7 +192,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         # history for every symbol on every intraday bar.
         self._daily_history_cache_day: date | None = None
         self._daily_history_cache: dict[str, list[dict]] = {
-            symbol: [] for symbol in all_daily_bars
+            symbol: CachedDailyBarHistory() for symbol in all_daily_bars
         }
         self._daily_history_indices: dict[str, int] = {
             symbol: 0 for symbol in all_daily_bars

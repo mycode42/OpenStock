@@ -66,8 +66,9 @@ def _multi_factor_satellite_signals(
     selected_symbols: list[str],
     session: date,
 ) -> dict[str, dict]:
-    """Read this period's factor targets as confirmation evidence only."""
-    generator = SignalGenerator(MultiFactorConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor")))
+    """Read this period's targets for confirmations and bounded direct entries."""
+    config = MultiFactorConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor"))
+    generator = SignalGenerator(config)
     period = generator.rebalance_key(session)
     by_symbol = strategy_states.get("multi_factor", {})
     output = {}
@@ -83,6 +84,10 @@ def _multi_factor_satellite_signals(
             "direction": direction,
             "rank": state.get("factor_rank"),
             "score": state.get("factor_score"),
+            "target_weight": config.max_position_pct,
+            "stop_pct": config.hard_stop_pct,
+            "risk_multiplier": config.risk_multiplier,
+            "strategy_group": "swing_satellite",
             "reason": "current-period cross-sectional factor target",
         }
     return output

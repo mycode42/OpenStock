@@ -33,7 +33,7 @@ class ReplayLoopMixin:
         last_day: date | None = None
         factor_signals_for_day: dict[str, dict] = {}
         factor_signals_date: date | None = None
-        momentum_signals_for_day: dict[str, object] = {}
+        swing_momentum_signals_for_day: dict[str, object] = {}
         event_times = list(events)
         for index, timestamp in enumerate(event_times):
             bars = events[timestamp]
@@ -42,31 +42,32 @@ class ReplayLoopMixin:
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
                 factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
+                momentum_strategy = "swing_momentum" if self.profile_bank_horizons else "momentum"
                 held_momentum = {
                     ticker: {
                         "qty": position.qty, "entry_at": position.entry_at,
                         "entry_price": position.entry_price,
                     }
                     for ticker, position in self.positions.items()
-                    if position.strategy == "momentum"
+                    if position.strategy == momentum_strategy
                 }
                 try:
-                    momentum_signals_for_day, _ = generate_swing_momentum_signals(
+                    swing_momentum_signals_for_day, _ = generate_swing_momentum_signals(
                         self.daily_stock_bars, symbols=self.symbols,
                         as_of=trading_day - timedelta(days=1),
                         regime=str(self._current_regime.get("regime", "unknown")),
                         held_positions=held_momentum,
                         parameters={
-                            **ALGO_DEFAULT_PARAMETERS["momentum"],
-                            **(self.profile.get("momentum") or {}),
-                            "hard_stop_pct": self.risk["stop_loss_pct_by_strategy"]["momentum"],
-                            "trailing_stop_pct": self.risk["trailing_stop_pct_by_strategy"]["momentum"],
-                            "trailing_activation_pct": self.risk["trailing_activation_pct_by_strategy"]["momentum"],
+                            **ALGO_DEFAULT_PARAMETERS[momentum_strategy],
+                            **(self.profile.get(momentum_strategy) or {}),
+                            "hard_stop_pct": self.risk["stop_loss_pct_by_strategy"][momentum_strategy],
+                            "trailing_stop_pct": self.risk["trailing_stop_pct_by_strategy"][momentum_strategy],
+                            "trailing_activation_pct": self.risk["trailing_activation_pct_by_strategy"][momentum_strategy],
                         },
                     )
                 except Exception as exc:
-                    self.rejections[f"signal_error:momentum:{type(exc).__name__}"] += 1
-                    momentum_signals_for_day = {}
+                    self.rejections[f"signal_error:{momentum_strategy}:{type(exc).__name__}"] += 1
+                    swing_momentum_signals_for_day = {}
                 if factor_diagnostics is not None:
                     self.latest_multi_factor_signals = (
                         {
@@ -118,7 +119,7 @@ class ReplayLoopMixin:
                     ticker, history, regime.get("active", []), ranked, timestamp,
                     factor_signal=factor_support,
                     position_qty=position.qty if position is not None else 0,
-                    momentum_signals=momentum_signals_for_day,
+                    swing_momentum_signals=swing_momentum_signals_for_day,
                 )
                 if signal:
                     if position is not None:
@@ -129,7 +130,14 @@ class ReplayLoopMixin:
             # Resolve same-bar capacity consistently for baseline and research runs.
             candidates.sort(
                 key=lambda item: (
-                    strategy_priority(str(item[2].get("strategy", ""))),
+                    strategy_priority(
+                        str(item[2].get("strategy", "")),
+                        **({
+                            "intraday_strategy_ids": RESEARCH_INTRADAY_STRATEGIES,
+                            "swing_core_strategy_ids": RESEARCH_SWING_CORE_STRATEGIES,
+                            "swing_strategy_ids": RESEARCH_SWING_STRATEGIES,
+                        } if self.profile_bank_horizons else {}),
+                    ),
                     -float(item[2].get("rank_score", 0)),
                     -float(item[2].get("strength", 0)),
                     item[0],
@@ -147,7 +155,10 @@ class ReplayLoopMixin:
                 self._charge_daily_borrow()
                 if not self.coordinator.config.allow_intraday_overnight:
                     self._flatten_positions(
-                        bars, timestamp, strategies=set(INTRADAY_STRATEGIES),
+                        bars, timestamp, strategies=set(
+                            RESEARCH_INTRADAY_STRATEGIES
+                            if self.profile_bank_horizons else INTRADAY_STRATEGIES
+                        ),
                         reason="coordinator_intraday_eod_flatten",
                     )
                 if index + 1 == len(event_times) and self.force_close_at_end:

@@ -23,7 +23,7 @@ ALGO_RUNTIME_CONFIG = {
     "intraday_satellite_position_pct": 0.01,
     "intraday_satellite_risk_multiplier": 0.25,
     "algo_multi_factor_enabled": True,
-    "algo_event_driven_enabled": True,
+    "algo_event_driven_enabled": False,
 }
 ALGO_SIGNAL_DATA_CONFIG = {
     "signal_bar_max_age_minutes": 15,
@@ -73,6 +73,8 @@ ALGO_MODE_CONFIG = {
             "opening_range_breakout": 0.011,
             "trend_following": 0.06,
             "momentum": 0.06,
+            "swing_trend_following": 0.06,
+            "swing_momentum": 0.06,
             "swing_mean_reversion": 0.07,
             "intraday_trend": 0.011,
             "intraday_momentum": 0.011,
@@ -82,6 +84,8 @@ ALGO_MODE_CONFIG = {
             "opening_range_breakout": 0.008,
             "trend_following": 0.045,
             "momentum": 0.045,
+            "swing_trend_following": 0.045,
+            "swing_momentum": 0.045,
             "swing_mean_reversion": 0.05,
             "intraday_trend": 0.008,
             "intraday_momentum": 0.008,
@@ -91,6 +95,8 @@ ALGO_MODE_CONFIG = {
             "opening_range_breakout": 0.005,
             "trend_following": 0.02,
             "momentum": 0.02,
+            "swing_trend_following": 0.02,
+            "swing_momentum": 0.02,
             "swing_mean_reversion": 0.02,
             "intraday_trend": 0.005,
             "intraday_momentum": 0.005,
@@ -103,6 +109,7 @@ ALGO_MODE_CONFIG = {
         "max_positions_per_strategy": 5,
         "max_positions_per_strategy_by_strategy": {
             "trend_following": 4, "momentum": 4, "swing_mean_reversion": 4,
+            "swing_trend_following": 4, "swing_momentum": 4,
             "mean_reversion": 5, "opening_range_breakout": 5,
             "intraday_trend": 1, "intraday_momentum": 1,
         },
@@ -115,6 +122,8 @@ ALGO_MODE_CONFIG = {
             "mean_reversion": 20,
             "trend_following": 0,
             "momentum": 0,
+            "swing_trend_following": 0,
+            "swing_momentum": 0,
             "swing_mean_reversion": 0,
             "intraday_trend": 20,
             "intraday_momentum": 20,
@@ -125,6 +134,8 @@ ALGO_MODE_CONFIG = {
             "mean_reversion": 90,
             "trend_following": 5 * 24 * 60,
             "momentum": 5 * 24 * 60,
+            "swing_trend_following": 5 * 24 * 60,
+            "swing_momentum": 5 * 24 * 60,
             "swing_mean_reversion": 5 * 24 * 60,
             "intraday_trend": 60,
             "intraday_momentum": 60,
@@ -136,6 +147,9 @@ ALGO_MODE_CONFIG = {
             "mean_reversion": 3,
             "trend_following": 1,
             "momentum": 1,
+            "swing_trend_following": 1,
+            "swing_momentum": 1,
+            "multi_factor": 1,
             "swing_mean_reversion": 1,
             "intraday_trend": 1,
             "intraday_momentum": 1,
@@ -143,7 +157,10 @@ ALGO_MODE_CONFIG = {
         },
         "strategy_group_limits": {
             "swing": {
-                "strategies": ["trend_following", "momentum", "swing_mean_reversion"],
+                "strategies": [
+                    "trend_following", "momentum", "swing_mean_reversion",
+                    "swing_trend_following", "swing_momentum",
+                ],
                 "max_open_positions": 10, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_swing_entries,
             },
             "intraday_core": {

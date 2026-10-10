@@ -25,6 +25,7 @@ from src.config import STRATEGY_CONFIG, get_mode_config
 from src.market_data import data_tier, regular_feed
 from src.algo.strategies.registry import (
     ALGO_DEFAULT_PARAMETERS,
+    evaluate as evaluate_strategy,
     validate_parameter_profile,
 )
 from src.algo.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
@@ -41,7 +42,9 @@ from src.algo.strategies.satellite_overlay import (
     apply_satellite_confirmations,
 )
 from src.algo.strategies.portfolio_coordinator import (
-    INTRADAY_STRATEGIES, PortfolioCoordinator, PortfolioCoordinatorConfig,
+    INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES,
+    RESEARCH_SWING_CORE_STRATEGIES, RESEARCH_SWING_STRATEGIES,
+    PortfolioCoordinator, PortfolioCoordinatorConfig,
     strategy_priority, throttle_signal,
 )
 

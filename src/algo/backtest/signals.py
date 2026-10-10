@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from .shared import *
 from .shared import _get_universe_maps
+from src.algo.strategies.swing_common import CachedDailyBarHistory
 from .shared import _make_trade
 
 
@@ -120,7 +123,9 @@ class ReplaySignalsMixin:
                 continue
         completed.sort(key=self._timestamp)
         return self._regime_ranker(
-            completed, mode="algo", event_enabled=self.event_satellite_enabled,
+            completed,
+            mode="algo_research" if self.profile_bank_horizons else "algo",
+            event_enabled=self.event_satellite_enabled,
             event_disable_in_volatile=self.event_config.disable_in_volatile,
             intraday_trend_enabled=bool(self.research_runtime_overrides.get(
                 "intraday_trend", STRATEGY_CONFIG.get("enable_intraday_trend", False),
@@ -148,7 +153,10 @@ class ReplaySignalsMixin:
             }
         self._daily_history_cache_day = trading_day
         key = ticker.upper()
-        history = self._daily_history_cache.setdefault(key, [])
+        history = self._daily_history_cache.get(key)
+        if history is None:
+            history = CachedDailyBarHistory()
+            self._daily_history_cache[key] = history
         rows = self.daily_stock_bars.get(key, [])
         index = self._daily_history_indices.get(key, 0)
         while index < len(rows):
@@ -163,7 +171,7 @@ class ReplaySignalsMixin:
     def _signal_for(
         self, ticker: str, history: list[dict], active: list[str], ranked: dict,
         timestamp: datetime, factor_signal: dict | None = None, position_qty: float = 0,
-        momentum_signals: dict[str, object] | None = None,
+        swing_momentum_signals: dict[str, object] | None = None,
     ) -> dict | None:
         options = []
         held = self.positions.get(ticker)
@@ -182,12 +190,18 @@ class ReplaySignalsMixin:
             ):
                 continue
             try:
-                if strategy == "momentum":
-                    signal = (momentum_signals or {}).get(ticker)
+                if strategy == "swing_momentum" or (
+                    strategy == "momentum" and not self.profile_bank_horizons
+                ):
+                    signal = (swing_momentum_signals or {}).get(ticker)
+                    if signal is not None:
+                        signal = replace(signal, strategy=strategy)
                 else:
                     daily_strategy = strategy in {
-                        "trend_following", "momentum", "swing_mean_reversion",
+                        "swing_trend_following", "swing_momentum", "swing_mean_reversion",
                     }
+                    if not self.profile_bank_horizons and strategy == "trend_following":
+                        daily_strategy = True
                     signal_bars = (
                         self._completed_daily_history(ticker, timestamp.astimezone(ET).date())
                         if daily_strategy else history
@@ -199,9 +213,21 @@ class ReplaySignalsMixin:
                         "entry_price": held.entry_price if held is not None else None,
                         "position_target": held.take_profit if held is not None else None,
                     }
-                    if strategy in self.research_runtime_overrides:
+                    evaluation_name = strategy
+                    if self.profile_bank_horizons:
+                        evaluation_name = {
+                            "trend_following": "intraday_trend",
+                            "momentum": "intraday_momentum",
+                        }.get(strategy, strategy)
+                    if self.profile_bank_horizons and strategy in {"trend_following", "momentum"}:
+                        signal_kwargs["runtime_enabled_override"] = True
+                    elif strategy in self.research_runtime_overrides:
                         signal_kwargs["runtime_enabled_override"] = self.research_runtime_overrides[strategy]
-                    signal = self._signal_evaluator(strategy, ticker, signal_bars, **signal_kwargs)
+                    signal = self._signal_evaluator(evaluation_name, ticker, signal_bars, **signal_kwargs)
+                    if signal is not None and evaluation_name != strategy:
+                        signal = replace(signal, strategy=strategy)
+                    elif signal is not None and strategy == "swing_trend_following":
+                        signal = replace(signal, strategy=strategy)
             except Exception as exc:
                 self.rejections[f"signal_error:{strategy}:{type(exc).__name__}"] += 1
                 continue
@@ -219,12 +245,27 @@ class ReplaySignalsMixin:
                 self.candidate_setups_by_strategy[(self.day_key or "", strategy)] += 1
             item = signal.to_dict()
             item["rank_score"] = ranked.get(strategy, 0)
-            item["timeframe"] = "1Day" if strategy in {
-                "trend_following", "momentum", "swing_mean_reversion",
-            } else "5Min"
+            daily_timeframe = strategy in {
+                "swing_trend_following", "swing_momentum", "swing_mean_reversion",
+            } or (
+                not self.profile_bank_horizons
+                and strategy in {"trend_following", "momentum"}
+            )
+            item["timeframe"] = "1Day" if daily_timeframe else "5Min"
             options.append(item)
 
         allowed_satellites = set(self._current_regime.get("satellites", []))
+        if (
+            not position_qty and factor_signal is not None
+            and factor_signal.get("action") in {"buy", "short"}
+            and "multi_factor" in allowed_satellites
+            and self.multi_factor_enabled
+            and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
+        ):
+            item = dict(factor_signal)
+            item["rank_score"] = -float(item.get("rank") or 1)
+            item["timeframe"] = "1Day"
+            options.append(item)
         if (
             factor_signal is not None
             and "multi_factor" in allowed_satellites
@@ -232,8 +273,7 @@ class ReplaySignalsMixin:
             and position_qty and held is not None and held.strategy == "multi_factor"
             and factor_signal.get("action") in {"sell", "cover"}
         ):
-            # Preserve exit management for any legacy satellite-owned holding;
-            # factor entry signals are evidence only and never enter options.
+            # Preserve exit management for any legacy satellite-owned holding.
             options.append({**factor_signal, "rank_score": -1.0, "timeframe": "1Day"})
 
         event_evidence = None
@@ -294,8 +334,8 @@ class ReplaySignalsMixin:
             return
         action = str(signal["action"])
         strategy = str(signal["strategy"])
-        if strategy in SATELLITE_STRATEGIES:
-            self.rejections["satellite_confirmation_only"] += 1
+        if strategy == "event_driven":
+            self.rejections["event_driven_disabled"] += 1
             return
         controls = self.research_controls
         entries_today = self.entry_counts[self.day_key]
@@ -391,6 +431,7 @@ class ReplaySignalsMixin:
         current_equity = self._equity()
         signal, throttle_note = throttle_signal(
             signal, str(regime.get("regime", "unknown")), self.coordinator.config,
+            **({"swing_trend_strategy_ids": {"swing_trend_following"}} if self.profile_bank_horizons else {}),
         )
         if throttle_note:
             self.rejections[f"coordinator_regime_throttle:{strategy}"] += 1
@@ -401,11 +442,16 @@ class ReplaySignalsMixin:
         state = self._risk_state()
         intraday_entries = sum(
             count for (day, name), count in self.entry_counts_by_strategy.items()
-            if day == self.day_key and name in INTRADAY_STRATEGIES
+            if day == self.day_key and name in (
+                RESEARCH_INTRADAY_STRATEGIES if self.profile_bank_horizons else INTRADAY_STRATEGIES
+            )
         )
         swing_entries = sum(
             count for (day, name), count in self.entry_counts_by_strategy.items()
-            if day == self.day_key and name in {"trend_following", "momentum", "swing_mean_reversion"}
+            if day == self.day_key and name in (
+                RESEARCH_SWING_CORE_STRATEGIES if self.profile_bank_horizons
+                else {"trend_following", "momentum", "swing_mean_reversion"}
+            )
         )
         coordinator_book = self.coordinator.new_book(
             equity=float(state["equity"]),

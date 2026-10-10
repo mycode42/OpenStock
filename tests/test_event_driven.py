@@ -198,10 +198,14 @@ def test_event_satellite_alone_does_not_create_a_backtest_order(monkeypatch, gap
 
 
 def test_event_confirmation_keeps_one_core_owned_order(monkeypatch):
+    monkeypatch.setitem(backtest_module.STRATEGY_CONFIG, "algo_event_driven_enabled", True)
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={"AAPL": []}, spy_daily_bars=[],
         start="2025-09-05", end="2025-09-05", feed="sip", data_adjustment="raw",
-        profile={"event_driven": {"enabled": True}},
+        profile={
+            "event_driven": {"enabled": True},
+            "satellite_overlay": {"event_driven_enabled": True},
+        },
     )
     replay.day_key = "2025-09-05"
     replay._current_regime = {
@@ -219,7 +223,7 @@ def test_event_confirmation_keeps_one_core_owned_order(monkeypatch):
     signal = replay._signal_for(
         "AAPL", [], ["momentum"], {"momentum": 0.8},
         datetime(2025, 9, 5, 10, 0, tzinfo=ET),
-        momentum_signals={"AAPL": Signal("AAPL", "buy", "momentum", "daily rank", 0.8)},
+        swing_momentum_signals={"AAPL": Signal("AAPL", "buy", "momentum", "daily rank", 0.8)},
     )
     risk_calls = []
     monkeypatch.setattr(

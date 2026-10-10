@@ -448,8 +448,8 @@ class RuleStrategyStateMachine:
         if action not in {"buy", "sell", "short", "cover"} or not ticker or not strategy:
             raise ValueError("Rule transition requires a trade action, strategy, and ticker")
         is_entry = action in {"buy", "short"}
-        if is_entry and strategy in {"multi_factor", "event_driven"}:
-            raise ValueError("Multi Factor and Event Driven are confirmation-only and cannot own positions")
+        if is_entry and strategy == "event_driven":
+            raise ValueError("Event Driven entries are disabled")
         current_owner = self.position_owners.get(ticker)
         if is_entry and current_owner is not None:
             raise ValueError(f"Cannot prepare a new entry for owned {ticker}")

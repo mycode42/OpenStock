@@ -32,7 +32,7 @@ from src.algo.research.replays import (
     _run_portfolio_replay_job,
 )
 from src.algo.research.files import _research_lock, _atomic_json
-from src.algo.research.pipeline import run_daily_research, build_parser, main
+from .nightly import run_daily_research, build_parser, main
 from src.algo.research.data import _refresh_incremental as _refresh_incremental_impl
 from src.algo.research.replays import _combined_portfolio_replay as _combined_portfolio_replay_impl
 

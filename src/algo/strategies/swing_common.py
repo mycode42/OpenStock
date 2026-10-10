@@ -12,6 +12,11 @@ from src.algo.strategies.signals import Signal
 
 ET = ZoneInfo("America/New_York")
 
+try:
+    from src.algo.strategies._swing_common_cy import clean_daily_bars as _clean_daily_bars_cy
+except ImportError:
+    _clean_daily_bars_cy = None
+
 
 class SwingSignal(Signal):
     """Signal with sizing and bracket metadata understood by the Algo runner."""
@@ -35,20 +40,89 @@ class SwingSignal(Signal):
         return result
 
 
+def _clean_daily_bar(bar: dict[str, Any]) -> tuple[date, dict[str, Any], float] | None:
+    raw = bar.get("date", bar.get("t"))
+    try:
+        session = raw if isinstance(raw, date) and not isinstance(raw, datetime) else date.fromisoformat(str(raw)[:10])
+        close = float(bar["c"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if math.isfinite(close) and close > 0:
+        return session, bar, close
+    return None
+
+
+def _clean_daily_bars_uncached(bars: list[dict[str, Any]]) -> list[tuple[date, dict[str, Any], float]]:
+    if _clean_daily_bars_cy is not None:
+        return _clean_daily_bars_cy(bars)
+    rows = []
+    previous_session = None
+    already_sorted = True
+    for bar in bars:
+        row = _clean_daily_bar(bar)
+        if row is not None:
+            if previous_session is not None and row[0] < previous_session:
+                already_sorted = False
+            previous_session = row[0]
+            rows.append(row)
+    if not already_sorted:
+        rows.sort(key=lambda item: item[0])
+    return rows
+
+
+class CachedDailyBarHistory(list[dict[str, Any]]):
+    """Append-only replay history that reuses its normalized daily rows."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._cleaned_rows: list[tuple[date, dict[str, Any], float]] | None = []
+        self._signal_results: dict[tuple[Any, ...], Any] = {}
+
+    def append(self, bar: dict[str, Any]) -> None:
+        super().append(bar)
+        self._signal_results.clear()
+        if self._cleaned_rows is None:
+            return
+        row = _clean_daily_bar(bar)
+        if row is None:
+            return
+        if self._cleaned_rows and row[0] < self._cleaned_rows[-1][0]:
+            # Replay histories are chronological; retain the generic helper's
+            # sorting behavior if a caller appends an earlier session.
+            self._cleaned_rows = None
+            return
+        self._cleaned_rows.append(row)
+
+    def extend(self, bars) -> None:
+        for bar in bars:
+            self.append(bar)
+
+    def clear(self) -> None:
+        super().clear()
+        self._cleaned_rows = []
+        self._signal_results.clear()
+
+    def cleaned_rows(self) -> list[tuple[date, dict[str, Any], float]]:
+        if self._cleaned_rows is None:
+            self._cleaned_rows = _clean_daily_bars_uncached(self)
+        # Preserve clean_daily_bars' independent, mutable result for callers.
+        return self._cleaned_rows.copy()
+
+    def cached_signal(self, key: tuple[Any, ...]) -> tuple[bool, Any]:
+        try:
+            return True, self._signal_results[key]
+        except KeyError:
+            return False, None
+
+    def remember_signal(self, key: tuple[Any, ...], result: Any) -> None:
+        self._signal_results[key] = result
+
+
 def clean_daily_bars(bars: list[dict[str, Any]]) -> list[tuple[date, dict[str, Any], float]]:
     """Return valid daily rows sorted oldest first."""
-    rows = []
-    for bar in bars:
-        raw = bar.get("date", bar.get("t"))
-        try:
-            session = raw if isinstance(raw, date) and not isinstance(raw, datetime) else date.fromisoformat(str(raw)[:10])
-            close = float(bar["c"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if math.isfinite(close) and close > 0:
-            rows.append((session, bar, close))
-    rows.sort(key=lambda item: item[0])
-    return rows
+    if isinstance(bars, CachedDailyBarHistory):
+        return bars.cleaned_rows()
+    return _clean_daily_bars_uncached(bars)
 
 
 def entry_session(value: str | None) -> date | None:

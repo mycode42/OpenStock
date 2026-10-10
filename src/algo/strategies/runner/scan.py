@@ -475,6 +475,14 @@ def scan(
             if name in CORE_STRATEGIES
             or name in {"intraday_trend", "intraday_momentum"}
         ]
+        factor_target = factor_confirmation_signals.get(ticker)
+        if (
+            mode == "algo" and owner is None and position_qty == 0
+            and satellite_config.multi_factor_enabled
+            and "multi_factor" in allowed_satellites
+            and factor_target is not None
+        ):
+            candidates.append("multi_factor")
         # Existing satellite-owned holdings remain exit-manageable. A flat
         # ticker never receives a satellite entry candidate.
         if owner in SATELLITE_STRATEGIES and position_qty != 0:
@@ -564,7 +572,10 @@ def scan(
                 )
             if strategy_name == "multi_factor":
                 signal = multi_factor_signals.get(ticker)
-                if signal is None or signal.action not in {"buy", "short", "sell", "cover"}:
+                if signal is None and owner is None and position_qty == 0:
+                    signal = factor_confirmation_signals.get(ticker)
+                signal_action = signal.get("action") if isinstance(signal, dict) else getattr(signal, "action", None)
+                if signal is None or signal_action not in {"buy", "short", "sell", "cover"}:
                     continue
             elif strategy_name == "event_driven":
                 if event_signal is None:
@@ -609,9 +620,10 @@ def scan(
             expected_exit = "cover" if position_qty < 0 else "sell"
             if signal is None or (owner and signal.action != expected_exit):
                 continue
-            item = signal.to_dict()
+            item = dict(signal) if isinstance(signal, dict) else signal.to_dict()
             item["rank_score"] = (
-                -1.0 if strategy_name in {"multi_factor", "event_driven"}
+                -float(item.get("rank") or 1) if strategy_name == "multi_factor"
+                else -1.0 if strategy_name == "event_driven"
                 else rank_score.get(strategy_name, 0)
             )
             item["signal_bar_time"] = signal_bar_time

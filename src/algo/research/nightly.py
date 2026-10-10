@@ -39,7 +39,8 @@ from .settings import (
 )
 
 
-NIGHTLY_PIPELINE_VERSION = "algo-research-layers-v1"
+NIGHTLY_PIPELINE_VERSION = "algo-research-layers-v2"
+MAX_WALK_FORWARD_WORKERS_PER_STRATEGY = 4
 _RESEARCH_COSTS = {
     "slippage_bps": 5.0,
     "spread_bps": 3.0,
@@ -372,16 +373,14 @@ def _run_strategy_stages(
             ))
 
     if jobs:
-        worker_count = min(max(1, workers), len(jobs), os.cpu_count() or 1)
-        with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            futures = [executor.submit(_run_strategy_job, job) for job in jobs]
-            for completed, future in enumerate(as_completed(futures), start=1):
-                strategy, result = future.result()
-                statuses[strategy].update(result)
-                print(
-                    f"Completed nightly strategy stages {completed}/{len(jobs)}: {strategy}",
-                    file=sys.stderr, flush=True,
-                )
+        completed = 0
+        for strategy, result in _run_strategy_jobs_in_batches(jobs, workers=workers):
+            statuses[strategy].update(result)
+            completed += 1
+            print(
+                f"Completed nightly strategy stages {completed}/{len(jobs)}: {strategy}",
+                file=sys.stderr, flush=True,
+            )
 
     try:
         _validate_cohort_artifacts(statuses)
@@ -400,20 +399,38 @@ def _run_strategy_stages(
             )
             for strategy in RESEARCHABLE_STRATEGIES
         ]
-        worker_count = min(max(1, workers), len(alignment_jobs), os.cpu_count() or 1)
-        with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            futures = [executor.submit(_run_strategy_job, job) for job in alignment_jobs]
-            for future in as_completed(futures):
-                strategy, result = future.result()
-                statuses[strategy].update(result)
+        for strategy, result in _run_strategy_jobs_in_batches(
+            alignment_jobs, workers=workers,
+        ):
+            statuses[strategy].update(result)
         _validate_cohort_artifacts(statuses)
     return statuses
+
+
+def _run_strategy_jobs_in_batches(jobs: list[tuple], *, workers: int) -> list[tuple[str, dict]]:
+    """Share the CPU budget between strategy jobs and each job's walk-forward folds."""
+    if not jobs:
+        return []
+    worker_budget = min(max(1, workers), os.cpu_count() or 1)
+    fold_workers = min(MAX_WALK_FORWARD_WORKERS_PER_STRATEGY, worker_budget)
+    strategy_concurrency = min(
+        len(jobs), max(1, (worker_budget + fold_workers - 1) // fold_workers),
+    )
+    results = []
+    for offset in range(0, len(jobs), strategy_concurrency):
+        batch = jobs[offset:offset + strategy_concurrency]
+        batch_fold_workers = min(fold_workers, max(1, worker_budget // len(batch)))
+        batch_payloads = [(*job, batch_fold_workers) for job in batch]
+        with ProcessPoolExecutor(max_workers=len(batch_payloads)) as executor:
+            futures = [executor.submit(_run_strategy_job, payload) for payload in batch_payloads]
+            results.extend(future.result() for future in as_completed(futures))
+    return results
 
 
 def _run_strategy_job(payload: tuple) -> tuple[str, dict]:
     (
         strategy, context, symbols, database, research_path, optimization_path,
-        research_reused, optimization_reused,
+        research_reused, optimization_reused, walk_forward_workers,
     ) = payload
     from .strategy_optimization import run_strategy_optimization
     from .strategy_research import run_strategy_research
@@ -453,7 +470,7 @@ def _run_strategy_job(payload: tuple) -> tuple[str, dict]:
             train_days=STRATEGY_TRAIN_DAYS, test_days=STRATEGY_TEST_DAYS,
             step_days=STRATEGY_STEP_DAYS, min_train_trades=STRATEGY_MIN_TRAIN_TRADES,
             max_train_drawdown_pct=STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
-            workers=1, slippage_bps=_OPTIMIZATION_COSTS["slippage_bps"],
+            workers=walk_forward_workers, slippage_bps=_OPTIMIZATION_COSTS["slippage_bps"],
             spread_bps=_OPTIMIZATION_COSTS["spread_bps"],
             commission_per_share=_OPTIMIZATION_COSTS["commission_per_share"],
             short_borrow_annual_pct=_OPTIMIZATION_COSTS["short_borrow_annual_pct"],
@@ -479,6 +496,7 @@ def _run_strategy_job(payload: tuple) -> tuple[str, dict]:
     return strategy, {
         "research_reused": research_reused,
         "optimization_reused": optimization_reused,
+        "walk_forward_workers": walk_forward_workers,
         "research_artifact": str(research_path.resolve()),
         "optimization_artifact": str(optimization_path.resolve()),
         "latest_training_selection": optimization_artifact.get("latest_training_selection"),
@@ -630,7 +648,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    parser.add_argument("--workers", type=int, default=8, help="strategy jobs and portfolio folds share this worker limit")
+    parser.add_argument(
+        "--workers", type=int, default=8,
+        help="CPU budget shared by concurrent strategy jobs and their walk-forward folds",
+    )
     parser.add_argument("--no-refresh", action="store_true", help="use existing bars without fetching recent SIP history")
     parser.add_argument("--factor-only", action="store_true", help="fit the factor model without strategy or portfolio stages")
     parser.add_argument("--force", action="store_true", help="create a fresh cohort and recompute every stage")

@@ -23,6 +23,15 @@ SWING_STRATEGIES = frozenset({
     "trend_following", "momentum", "swing_mean_reversion", "multi_factor", "event_driven",
 })
 SWING_CORE_STRATEGIES = frozenset({"trend_following", "momentum", "swing_mean_reversion"})
+RESEARCH_INTRADAY_STRATEGIES = frozenset({
+    *INTRADAY_STRATEGIES, "trend_following", "momentum",
+})
+RESEARCH_SWING_CORE_STRATEGIES = frozenset({
+    "swing_trend_following", "swing_momentum", "swing_mean_reversion",
+})
+RESEARCH_SWING_STRATEGIES = frozenset({
+    *RESEARCH_SWING_CORE_STRATEGIES, "multi_factor", "event_driven",
+})
 SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})
 
 
@@ -43,6 +52,10 @@ class PortfolioCoordinatorConfig:
     allow_intraday_overnight: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_intraday_overnight"]
     regime_throttle_enabled: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_throttle_enabled"]
     sector_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["sector_caps"]))
+    intraday_strategy_ids: tuple[str, ...] = tuple(INTRADAY_STRATEGIES)
+    swing_strategy_ids: tuple[str, ...] = tuple(SWING_STRATEGIES)
+    swing_core_strategy_ids: tuple[str, ...] = tuple(SWING_CORE_STRATEGIES)
+    swing_trend_strategy_ids: tuple[str, ...] = ("trend_following",)
 
     @classmethod
     def from_dict(cls, values: Mapping | None = None) -> "PortfolioCoordinatorConfig":
@@ -85,6 +98,17 @@ class PortfolioCoordinatorConfig:
             for value in self.sector_caps.values()
         ):
             raise ValueError("sector caps must be finite fractions in (0, 1]")
+        strategy_sets = (
+            self.intraday_strategy_ids, self.swing_strategy_ids,
+            self.swing_core_strategy_ids, self.swing_trend_strategy_ids,
+        )
+        if any(
+            not isinstance(names, tuple)
+            or any(not isinstance(name, str) or not name for name in names)
+            or len(set(names)) != len(names)
+            for names in strategy_sets
+        ):
+            raise ValueError("coordinator strategy horizon identifiers are invalid")
 
 
 @dataclass(frozen=True)
@@ -95,13 +119,19 @@ class CoordinationDecision:
     reduced_from_qty: int | None = None
 
 
-def strategy_priority(strategy: str) -> int:
+def strategy_priority(
+    strategy: str, *, intraday_strategy_ids=None, swing_core_strategy_ids=None,
+    swing_strategy_ids=None,
+) -> int:
     """Lower numbers have precedence when proposals compete for shared capacity."""
-    if strategy in {"trend_following", "swing_mean_reversion", "momentum"}:
+    swing_core = SWING_CORE_STRATEGIES if swing_core_strategy_ids is None else swing_core_strategy_ids
+    intraday = INTRADAY_STRATEGIES if intraday_strategy_ids is None else intraday_strategy_ids
+    if strategy in swing_core:
         return 0
-    if strategy in INTRADAY_STRATEGIES:
+    if strategy in intraday:
         return 1
-    if strategy in SATELLITE_STRATEGIES:
+    satellites = SATELLITE_STRATEGIES if swing_strategy_ids is None else set(swing_strategy_ids) & SATELLITE_STRATEGIES
+    if strategy in satellites:
         return 2
     return 3
 
@@ -130,7 +160,10 @@ def choose_priority(proposals: list[dict]) -> tuple[dict, list[dict]]:
     return winner, losers
 
 
-def throttle_signal(signal: dict, regime: str, config: PortfolioCoordinatorConfig) -> tuple[dict, str | None]:
+def throttle_signal(
+    signal: dict, regime: str, config: PortfolioCoordinatorConfig, *,
+    swing_trend_strategy_ids=None,
+) -> tuple[dict, str | None]:
     """Apply the two requested half-size regime throttles without changing signals."""
     if not config.regime_throttle_enabled:
         return signal, None
@@ -138,7 +171,10 @@ def throttle_signal(signal: dict, regime: str, config: PortfolioCoordinatorConfi
     strong_trend = regime in {"trending_up", "trending_down"}
     if strategy == "swing_mean_reversion" and strong_trend:
         reason = f"regime throttle: cyclical mean reversion halved in {regime}"
-    elif strategy == "trend_following" and regime == "range_bound":
+    elif strategy in (
+        config.swing_trend_strategy_ids
+        if swing_trend_strategy_ids is None else swing_trend_strategy_ids
+    ) and regime == "range_bound":
         reason = "regime throttle: swing trend halved in range_bound"
     else:
         return signal, None
@@ -225,7 +261,7 @@ class CoordinatorBook:
         ticker = str(proposal.get("ticker", "")).upper()
         strategy = str(proposal.get("strategy", ""))
         if strategy in SATELLITE_STRATEGIES:
-            return self._reject(proposal, "satellite strategies are confirmation-only and cannot own positions")
+            return self._reject(proposal, f"{strategy} is confirmation-only")
         qty = proposal.get("qty")
         price = proposal.get("entry_price")
         if not ticker or isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
@@ -241,7 +277,7 @@ class CoordinatorBook:
         session_name = session or "regular"
         if session_name == "overnight" and not STRATEGY_CONFIG.get("overnight_entries_enabled", False):
             return self._reject(proposal, "overnight entries are disabled by configuration")
-        is_intraday = strategy in INTRADAY_STRATEGIES
+        is_intraday = strategy in self.config.intraday_strategy_ids
         if is_intraday and session_name != "regular" and not self.config.allow_intraday_overnight:
             return self._reject(proposal, "intraday strategies are regular-session only")
         if is_intraday:
@@ -251,7 +287,7 @@ class CoordinatorBook:
             close_at = close_at.astimezone(ET)
             if local >= close_at - timedelta(minutes=self.config.intraday_close_cutoff_minutes):
                 return self._reject(proposal, "intraday entry cutoff reached; position must have time to flatten")
-        if strategy in SWING_STRATEGIES and session_name == "regular":
+        if strategy in self.config.swing_strategy_ids and session_name == "regular":
             open_at = session_open or local.replace(hour=9, minute=30, second=0, microsecond=0)
             if open_at.tzinfo is None:
                 open_at = open_at.replace(tzinfo=ET)
@@ -275,7 +311,7 @@ class CoordinatorBook:
             return self._reject(proposal, "shared daily entry budget is exhausted")
         if is_intraday and self.intraday_entries_today >= self.config.max_intraday_entries:
             return self._reject(proposal, "shared intraday entry slice is exhausted")
-        if strategy in SWING_CORE_STRATEGIES and self.swing_entries_today >= self.config.max_swing_entries:
+        if strategy in self.config.swing_core_strategy_ids and self.swing_entries_today >= self.config.max_swing_entries:
             return self._reject(proposal, "shared swing entry slice is exhausted")
 
         gross = sum(abs(value) for value in self.name_signed.values())
@@ -315,7 +351,7 @@ class CoordinatorBook:
         self.entries_today += 1
         if is_intraday:
             self.intraday_entries_today += 1
-        if strategy in SWING_CORE_STRATEGIES:
+        if strategy in self.config.swing_core_strategy_ids:
             self.swing_entries_today += 1
         if strategy == "swing_mean_reversion" and regime in {"trending_up", "trending_down"}:
             approved["coordinator_regime_throttle"] = "half_size_in_strong_trend"
@@ -343,4 +379,7 @@ class PortfolioCoordinator:
 __all__ = [
     "CoordinatorBook", "CoordinationDecision", "PortfolioCoordinator",
     "PortfolioCoordinatorConfig", "choose_priority", "strategy_priority", "throttle_signal",
+    "INTRADAY_STRATEGIES", "SWING_STRATEGIES", "SWING_CORE_STRATEGIES",
+    "RESEARCH_INTRADAY_STRATEGIES", "RESEARCH_SWING_CORE_STRATEGIES",
+    "RESEARCH_SWING_STRATEGIES",
 ]

@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass
 import math
 
 from src.algo.strategies.swing_common import (
-    SwingSignal, clean_daily_bars, held_sessions, position_entry_price,
+    CachedDailyBarHistory, SwingSignal, clean_daily_bars, held_sessions,
+    position_entry_price,
 )
 
 
@@ -87,12 +88,11 @@ def _average(values: list[float], period: int, average_type: str) -> float | Non
     return result
 
 
-def signal(
+def _signal_uncached(
     ticker: str, bars: list[dict], *, position_qty: float = 0,
-    parameters: dict | None = None, entry_at: str | None = None,
+    config: SwingTrendConfig, entry_at: str | None = None,
     entry_price: float | None = None,
 ) -> SwingSignal | None:
-    config = SwingTrendConfig.from_dict(parameters)
     if not config.enabled:
         return None
     rows = clean_daily_bars(bars)
@@ -160,6 +160,32 @@ def signal(
             risk_multiplier=config.risk_multiplier,
         )
     return None
+
+
+def signal(
+    ticker: str, bars: list[dict], *, position_qty: float = 0,
+    parameters: dict | SwingTrendConfig | None = None, entry_at: str | None = None,
+    entry_price: float | None = None,
+) -> SwingSignal | None:
+    config = parameters if isinstance(parameters, SwingTrendConfig) else SwingTrendConfig.from_dict(parameters)
+    cache_key = ("trend_following", ticker, config, position_qty, entry_at, entry_price)
+    cached_history = bars if isinstance(bars, CachedDailyBarHistory) else None
+    if cached_history is not None:
+        try:
+            hash(cache_key)
+        except TypeError:
+            cached_history = None
+        else:
+            found, result = cached_history.cached_signal(cache_key)
+            if found:
+                return result
+    result = _signal_uncached(
+        ticker, bars, position_qty=position_qty, config=config,
+        entry_at=entry_at, entry_price=entry_price,
+    )
+    if cached_history is not None:
+        cached_history.remember_signal(cache_key, result)
+    return result
 
 
 __all__ = ["SwingTrendConfig", "signal"]
