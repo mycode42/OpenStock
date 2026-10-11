@@ -11,7 +11,7 @@ import sys
 import requests
 
 from src.algo.market_store import DEFAULT_DB
-from src.algo.config import ALGO_RUNTIME_CONFIG
+from src.config import get_algo_runtime_settings
 
 from .files import _atomic_json
 from .adaptive import add_cli_commands as _add_adaptive_commands
@@ -87,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio.add_argument("--event-calendar", help="point-in-time historical event calendar CSV")
     portfolio.add_argument(
         "--multi-factor-overlay", action=argparse.BooleanOptionalAction,
-        default=bool(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_enabled", True)),
+        default=get_algo_runtime_settings().algo_multi_factor_enabled,
         help="include the Multi Factor core strategy in this replay (enabled by default to match Algo runtime config)",
     )
     portfolio.add_argument("--workers", type=int, default=8)

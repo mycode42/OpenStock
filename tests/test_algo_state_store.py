@@ -327,6 +327,39 @@ def test_daemon_degraded_bar_scan_pauses_buys_but_keeps_owned_exit(monkeypatch):
     assert portfolio["last_scan_status"] == "degraded"
     assert portfolio["strategy_states"]["momentum"]["AAPL"]["phase"] == EXIT_PENDING
 
+def test_daemon_scan_returns_scan_report_after_order_submission(monkeypatch):
+    portfolio = _owned_portfolio()
+    portfolio["startup_reconciliation"] = {"status": "verified", "entries_paused": False}
+    scan_report = {
+        "universe": {"tickers": ["AAPL", "MSFT"]},
+        "market_regime": {"regime": "trending_up", "active": ["momentum"]},
+        "signals": [], "scan_errors": [], "entries_paused": False,
+        "entry_pause_reasons": [], "unowned_positions": [],
+        "data_status": {"historical_bars": "ok"},
+        "trades": [{
+            "ticker": "MSFT", "strategy": "momentum", "action": "buy",
+            "qty": 1, "client_order_id": "buy-msft",
+        }],
+    }
+    monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **_kwargs: scan_report)
+    monkeypatch.setattr(
+        daemon, "execute_strategy_trades",
+        lambda trades, **_kwargs: {"results": [{
+            "ticker": "MSFT", "action": "buy", "status": "submitted",
+            "success": True, "order_id": "entry-msft",
+        }]},
+    )
+    window = SimpleNamespace(
+        name="regular", trade_date="2026-10-08", extended_hours=False,
+        bar_feed="sip", quote_feed="sip", regular_open=None, regular_close=None,
+    )
+
+    returned = daemon._scan_strategy_portfolio(portfolio, window=window)
+
+    assert returned is scan_report
+    assert returned["universe"]["tickers"] == ["AAPL", "MSFT"]
+    assert portfolio["last_execution"]["results"][0]["order_id"] == "entry-msft"
+
 def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_proves_order(monkeypatch, tmp_path):
     portfolio = _owned_portfolio()
     portfolio["startup_reconciliation"] = {"status": "verified", "entries_paused": False}

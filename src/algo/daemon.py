@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -25,12 +26,20 @@ from src.algo.config import ALGO_SERVICE_CONFIG
 from src.config import STRATEGY_CONFIG
 from src.algo.strategies.runner import execute_trades as execute_strategy_trades
 from src.algo.strategies.runner import scan as scan_strategy_portfolio
-from src.algo.strategies.state_machine import RuleStrategyStateMachine
+from src.algo.strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
 from src.algo.strategies.universe import configured_universe, load_algo_universe
 
 
 LOG = logging.getLogger("swarm_trader.algo")
 STOP = False
+
+
+@dataclass(frozen=True)
+class ReconciliationOrders:
+    all_orders: list[dict]
+    nested_orders: list[dict]
+    exact_entry_orders: dict[str, dict]
+    exact_incident_orders: dict[str, dict]
 
 
 def _state_path() -> Path:
@@ -46,6 +55,108 @@ def _load_portfolio_state(path: Path) -> dict:
 
 def _save(path: Path, market_state: str, portfolio_state: dict) -> None:
     AlgoStateStore(path).save(market_state, portfolio_state)
+
+
+def _load_reconciliation_orders(portfolio: dict, broker) -> ReconciliationOrders:
+    """Load order history and exact references needed for safe reconciliation."""
+    all_orders = broker.orders("all")
+    recent_order_ids = {str(order.get("id")) for order in all_orders}
+    exact_entry_orders = {}
+    if len(all_orders) >= 500:
+        for ticker, owner in portfolio["position_owners"].items():
+            state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
+            entry_id = state.get("entry_order_id")
+            if entry_id and entry_id not in recent_order_ids:
+                try:
+                    exact_entry_orders[entry_id] = broker.order(entry_id)
+                except Exception as exc:
+                    LOG.warning("[ALGO] Exact entry lookup failed for %s: %s", ticker, exc)
+
+    nested_page = broker.orders("all", nested=True)
+    if not isinstance(nested_page, list):
+        raise ValueError("Broker nested order history is malformed")
+    exact_nested: dict[str, dict] = {}
+    for ticker, owner in portfolio["position_owners"].items():
+        state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
+        relevant_ids = [state.get("entry_order_id")]
+        recovery = state.get("protection_recovery") or {}
+        if isinstance(recovery, dict):
+            relevant_ids.append(recovery.get("order_id"))
+            if recovery.get("client_order_id") and not recovery.get("order_id"):
+                found = broker.order_by_client_id(recovery["client_order_id"])
+                if found:
+                    relevant_ids.append(found.get("id"))
+        for order_id in relevant_ids:
+            if not order_id or order_id in exact_nested:
+                continue
+            exact = broker.order(str(order_id), nested=True)
+            if not isinstance(exact, dict) or str(exact.get("id") or "") != str(order_id):
+                raise ValueError(f"Exact nested broker order {order_id} is unavailable")
+            exact_nested[str(order_id)] = exact
+    nested_orders = list(exact_nested.values()) + [
+        order for order in nested_page
+        if isinstance(order, dict) and str(order.get("id") or "") not in exact_nested
+    ]
+
+    exact_incident_orders = {}
+    incident = portfolio.get("execution_incident") or {}
+    for event in (incident.get("events") or {}).values():
+        if not isinstance(event, dict) or not event.get("client_order_id"):
+            continue
+        found = broker.order_by_client_id(event["client_order_id"])
+        if found:
+            exact_incident_orders[event["client_order_id"]] = found
+    return ReconciliationOrders(
+        all_orders=all_orders,
+        nested_orders=nested_orders,
+        exact_entry_orders=exact_entry_orders,
+        exact_incident_orders=exact_incident_orders,
+    )
+
+
+def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, window) -> float:
+    """Reconcile persisted ownership and protection against one broker snapshot."""
+    try:
+        orders = _load_reconciliation_orders(portfolio, broker)
+        report = reconcile_startup(
+            portfolio,
+            positions=broker.positions(),
+            all_orders=orders.all_orders,
+            nested_orders=orders.nested_orders,
+            open_orders=broker.orders("open"),
+            journal_path=state_path.parent / "trade_journal.jsonl",
+            exact_entry_orders=orders.exact_entry_orders,
+            exact_incident_orders=orders.exact_incident_orders,
+            require_broker_stops=window.name == "regular",
+        )
+        if not report["unprotected_positions"]:
+            portfolio["protection_recovery_status"] = {
+                "status": "not_needed", "checked_at": datetime.now(ET).isoformat(),
+                "submitted": [], "verified": [], "waiting": [], "errors": [],
+            }
+        store.save(window.name.upper(), portfolio)
+        checked_monotonic = time.monotonic()
+        startup_verified = report["status"] == "verified"
+        if startup_verified:
+            LOG.info(
+                "[ALGO] Startup reconciliation verified %d positions; recovered %d owners",
+                len(report["verified_positions"]), len(report["recovered_owners"]),
+            )
+        else:
+            LOG.error("[ALGO] Startup reconciliation degraded: %s", "; ".join(report["entry_pause_reasons"]))
+        return checked_monotonic
+    except Exception as exc:
+        portfolio["entries_paused"] = True
+        portfolio["entry_pause_reasons"] = [f"startup broker reconciliation unavailable: {type(exc).__name__}: {exc}"]
+        portfolio["startup_reconciliation"] = {
+            "status": "error", "entries_paused": True,
+            "entry_pause_reasons": portfolio["entry_pause_reasons"],
+            "checked_at": datetime.now(ET).isoformat(),
+        }
+        store.save("DEGRADED", portfolio)
+        checked_monotonic = time.monotonic()
+        LOG.exception("[ALGO] Startup reconciliation failed; new entries paused")
+        return checked_monotonic
 
 
 def _status(path: Path) -> None:
@@ -87,7 +198,7 @@ def _scan_strategy_portfolio(
     dry_run: bool = False,
 ) -> dict:
     """Evaluate the selected strategies and execute via the shared risk path."""
-    result = scan_strategy_portfolio(
+    scan_result = scan_strategy_portfolio(
         mode="algo",
         universe_result=portfolio.get("universe") or {"tickers": []},
         position_owners=portfolio.setdefault("position_owners", {}),
@@ -104,38 +215,38 @@ def _scan_strategy_portfolio(
         ),
         multi_factor_shadow=portfolio.setdefault("multi_factor_shadow", {}),
     )
-    portfolio["market_regime"] = result.get("market_regime", {"regime": "unknown"})
+    portfolio["market_regime"] = scan_result.get("market_regime", {"regime": "unknown"})
     portfolio["active_strategies"] = list(portfolio["market_regime"].get("active", []))
-    portfolio["last_signals"] = result.get("signals", [])
-    portfolio["multi_factor_execution_mode"] = result.get("multi_factor_execution_mode", "live")
-    portfolio["multi_factor_parameter_profile"] = result.get("multi_factor_parameter_profile")
-    portfolio["multi_factor_shadow_summary"] = result.get("multi_factor_shadow_summary")
-    portfolio["multi_factor_shadow_last_events"] = result.get("multi_factor_shadow_trades", [])
+    portfolio["last_signals"] = scan_result.get("signals", [])
+    portfolio["multi_factor_execution_mode"] = scan_result.get("multi_factor_execution_mode", "live")
+    portfolio["multi_factor_parameter_profile"] = scan_result.get("multi_factor_parameter_profile")
+    portfolio["multi_factor_shadow_summary"] = scan_result.get("multi_factor_shadow_summary")
+    portfolio["multi_factor_shadow_last_events"] = scan_result.get("multi_factor_shadow_trades", [])
     portfolio["last_scan_at"] = datetime.now(ET).isoformat()
     portfolio["last_execution"] = None
-    portfolio["scan_errors"] = list(result.get("scan_errors") or [])
-    portfolio["data_status"] = result.get("data_status") or {}
+    portfolio["scan_errors"] = list(scan_result.get("scan_errors") or [])
+    portfolio["data_status"] = scan_result.get("data_status") or {}
     historical_status = portfolio["data_status"].get("historical_bars")
     portfolio["last_scan_status"] = "degraded" if portfolio["scan_errors"] or historical_status != "ok" else "ok"
     if portfolio["last_scan_status"] == "ok":
         portfolio["last_successful_scan_at"] = portfolio["last_scan_at"]
     startup = portfolio.get("startup_reconciliation") or {}
     startup_reasons = startup.get("entry_pause_reasons") or []
-    scan_reasons = result.get("entry_pause_reasons") or []
+    scan_reasons = scan_result.get("entry_pause_reasons") or []
     portfolio["entry_pause_reasons"] = list(dict.fromkeys([*startup_reasons, *scan_reasons]))
-    portfolio["entries_paused"] = bool(startup.get("entries_paused") or result.get("entries_paused"))
+    portfolio["entries_paused"] = bool(startup.get("entries_paused") or scan_result.get("entries_paused"))
     if historical_status != "ok":
         portfolio["entries_paused"] = True
         reason = f"historical bar scan is {historical_status or 'unavailable'}"
         if reason not in portfolio["entry_pause_reasons"]:
             portfolio["entry_pause_reasons"].append(reason)
-    portfolio["unowned_positions"] = sorted(set(startup.get("unowned_positions") or []) | set(result.get("unowned_positions") or []))
+    portfolio["unowned_positions"] = sorted(set(startup.get("unowned_positions") or []) | set(scan_result.get("unowned_positions") or []))
     if portfolio["unowned_positions"] and not portfolio["entries_paused"]:
         portfolio["entries_paused"] = True
         portfolio["entry_pause_reasons"].append("Algo has unattributed broker holdings")
     unproven_owners = sorted(
         ticker for ticker, owner in portfolio["position_owners"].items()
-        if (portfolio["strategy_states"].get(owner) or {}).get(ticker, {}).get("phase") in {"entry_pending", "open", "exit_pending"}
+        if (portfolio["strategy_states"].get(owner) or {}).get(ticker, {}).get("phase") in ACTIVE_PHASES
         and not (portfolio["strategy_states"].get(owner) or {}).get(ticker, {}).get("entry_order_id")
     )
     if unproven_owners:
@@ -152,7 +263,7 @@ def _scan_strategy_portfolio(
         )
 
     trades = [
-        trade for trade in result.get("trades", [])
+        trade for trade in scan_result.get("trades", [])
         if not (portfolio["entries_paused"] and str(trade.get("action", "")).lower() in {"buy", "short"})
     ]
     if any(str(trade.get("action", "")).lower() in {"sell", "cover"} for trade in trades):
@@ -192,20 +303,20 @@ def _scan_strategy_portfolio(
             if isinstance(item, dict)
         }
         for trade in trades:
-            result = results_by_symbol_action.get((trade["ticker"].upper(), trade["action"].lower()))
+            order_result = results_by_symbol_action.get((trade["ticker"].upper(), trade["action"].lower()))
             machine.resolve(
                 trade,
-                result,
+                order_result,
             )
             if not dry_run and str(trade.get("action") or "").lower() in {"sell", "cover"} and not (
-                result and result.get("status") == "submitted" and result.get("order_id")
-                and result.get("success") is not False
+                order_result and order_result.get("status") == "submitted" and order_result.get("order_id")
+                and order_result.get("success") is not False
             ):
-                reason = (result or {}).get("error") or (result or {}).get("reason") or "executor did not confirm a position-reducing order"
+                reason = (order_result or {}).get("error") or (order_result or {}).get("reason") or "executor did not confirm a position-reducing order"
                 record_incident(
                     portfolio, kind="exit_submission", ticker=trade["ticker"],
                     client_order_id=trade.get("client_order_id"),
-                    order_id=(result or {}).get("order_id"), reason=str(reason),
+                    order_id=(order_result or {}).get("order_id"), reason=str(reason),
                 )
                 portfolio["entries_paused"] = True
                 portfolio["last_scan_status"] = "degraded"
@@ -214,7 +325,7 @@ def _scan_strategy_portfolio(
                     portfolio["entry_pause_reasons"].append(issue)
         if persist_before_execution:
             persist_before_execution()
-    return result
+    return scan_result
 
 
 def run_loop(
@@ -242,7 +353,6 @@ def run_loop(
     last_reconciliation_monotonic: float | None = None
     last_recovery_monotonic: float | None = None
     last_window_name: str | None = None
-    startup_verified = False
     last_loop_error: str | None = None
 
     try:
@@ -281,89 +391,9 @@ def run_loop(
                     last_reconciliation_monotonic is None
                     or time.monotonic() - last_reconciliation_monotonic >= retry_seconds
                 ):
-                    try:
-                        all_orders = broker.orders("all")
-                        recent_order_ids = {str(order.get("id")) for order in all_orders}
-                        exact_entry_orders = {}
-                        if len(all_orders) >= 500:
-                            for ticker, owner in portfolio["position_owners"].items():
-                                state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
-                                entry_id = state.get("entry_order_id")
-                                if entry_id and entry_id not in recent_order_ids:
-                                    try:
-                                        exact_entry_orders[entry_id] = broker.order(entry_id)
-                                    except Exception as exc:
-                                        LOG.warning("[ALGO] Exact entry lookup failed for %s: %s", ticker, exc)
-                        nested_page = broker.orders("all", nested=True)
-                        if not isinstance(nested_page, list):
-                            raise ValueError("Broker nested order history is malformed")
-                        exact_nested: dict[str, dict] = {}
-                        for ticker, owner in portfolio["position_owners"].items():
-                            state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
-                            relevant_ids = [state.get("entry_order_id")]
-                            recovery = state.get("protection_recovery") or {}
-                            if isinstance(recovery, dict):
-                                relevant_ids.append(recovery.get("order_id"))
-                                if recovery.get("client_order_id") and not recovery.get("order_id"):
-                                    found = broker.order_by_client_id(recovery["client_order_id"])
-                                    if found:
-                                        relevant_ids.append(found.get("id"))
-                            for order_id in relevant_ids:
-                                if not order_id or order_id in exact_nested:
-                                    continue
-                                exact = broker.order(str(order_id), nested=True)
-                                if not isinstance(exact, dict) or str(exact.get("id") or "") != str(order_id):
-                                    raise ValueError(f"Exact nested broker order {order_id} is unavailable")
-                                exact_nested[str(order_id)] = exact
-                        nested_orders = list(exact_nested.values()) + [
-                            order for order in nested_page
-                            if isinstance(order, dict) and str(order.get("id") or "") not in exact_nested
-                        ]
-                        exact_incident_orders = {}
-                        incident = portfolio.get("execution_incident") or {}
-                        for event in (incident.get("events") or {}).values():
-                            if not isinstance(event, dict) or not event.get("client_order_id"):
-                                continue
-                            found = broker.order_by_client_id(event["client_order_id"])
-                            if found:
-                                exact_incident_orders[event["client_order_id"]] = found
-                        report = reconcile_startup(
-                            portfolio,
-                            positions=broker.positions(),
-                            all_orders=all_orders,
-                            nested_orders=nested_orders,
-                            open_orders=broker.orders("open"),
-                            journal_path=state_path.parent / "trade_journal.jsonl",
-                            exact_entry_orders=exact_entry_orders,
-                            exact_incident_orders=exact_incident_orders,
-                            require_broker_stops=window.name == "regular",
-                        )
-                        if not report["unprotected_positions"]:
-                            portfolio["protection_recovery_status"] = {
-                                "status": "not_needed", "checked_at": datetime.now(ET).isoformat(),
-                                "submitted": [], "verified": [], "waiting": [], "errors": [],
-                            }
-                        store.save(window.name.upper(), portfolio)
-                        last_reconciliation_monotonic = time.monotonic()
-                        startup_verified = report["status"] == "verified"
-                        if startup_verified:
-                            LOG.info(
-                                "[ALGO] Startup reconciliation verified %d positions; recovered %d owners",
-                                len(report["verified_positions"]), len(report["recovered_owners"]),
-                            )
-                        else:
-                            LOG.error("[ALGO] Startup reconciliation degraded: %s", "; ".join(report["entry_pause_reasons"]))
-                    except Exception as exc:
-                        portfolio["entries_paused"] = True
-                        portfolio["entry_pause_reasons"] = [f"startup broker reconciliation unavailable: {type(exc).__name__}: {exc}"]
-                        portfolio["startup_reconciliation"] = {
-                            "status": "error", "entries_paused": True,
-                            "entry_pause_reasons": portfolio["entry_pause_reasons"],
-                            "checked_at": datetime.now(ET).isoformat(),
-                        }
-                        store.save("DEGRADED", portfolio)
-                        last_reconciliation_monotonic = time.monotonic()
-                        LOG.exception("[ALGO] Startup reconciliation failed; new entries paused")
+                    last_reconciliation_monotonic = _reconcile_broker_state(
+                        portfolio, broker, store, state_path, window,
+                    )
 
                 # Restore broker-hosted protection before the strategy scan
                 # can consider new entries or software exits. A stale OCO
@@ -389,7 +419,6 @@ def run_loop(
                         if recovery.get("errors"):
                             LOG.error("[ALGO] Broker stop repair degraded: %s", "; ".join(recovery["errors"]))
                         if recovery.get("verified"):
-                            startup_verified = False
                             last_reconciliation_monotonic = None
                     except Exception as exc:
                         reason = f"broker stop repair unavailable: {type(exc).__name__}: {exc}"
@@ -468,12 +497,11 @@ def run_loop(
                         if result.get("universe", {}).get("tickers"):
                             portfolio["universe"] = result["universe"]
                         if any(
-                            state.get("phase") in {"entry_pending", "open", "exit_pending"}
+                            state.get("phase") in ACTIVE_PHASES
                             and not state.get("entry_order_id")
                             for by_symbol in portfolio["strategy_states"].values()
                             for state in by_symbol.values()
                         ):
-                            startup_verified = False
                             last_reconciliation_monotonic = None
                     except Exception as exc:
                         portfolio["active_strategies"] = []

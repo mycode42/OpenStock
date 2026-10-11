@@ -6,7 +6,10 @@ from src.algo.config import (
     ALGO_PORTFOLIO_COORDINATOR_CONFIG,
     get_algo_research_controls,
 )
-from src.config import ALGO_MODE_CONFIG as LEGACY_ALGO_MODE_CONFIG
+from src.config import (
+    ALGO_MODE_CONFIG as LEGACY_ALGO_MODE_CONFIG, STRATEGY_CONFIG,
+    get_algo_runtime_settings,
+)
 from src.algo.strategies.portfolio_coordinator import PortfolioCoordinatorConfig
 
 
@@ -35,3 +38,27 @@ def test_research_controls_are_detached_from_live_risk_config():
     controls["max_entries_per_strategy_per_day"]["momentum"] = 99
 
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["momentum"] == 1
+
+
+def test_catalog_groups_preserve_risk_and_coordinator_membership():
+    groups = ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]
+
+    assert groups["swing"]["strategies"] == [
+        "trend_following", "momentum", "swing_mean_reversion",
+        "swing_trend_following", "swing_momentum", "multi_factor",
+    ]
+    assert groups["intraday_core"]["strategies"] == [
+        "mean_reversion", "opening_range_breakout",
+    ]
+    assert groups["intraday_satellites"]["strategies"] == [
+        "intraday_trend", "intraday_momentum",
+    ]
+    assert set(PortfolioCoordinatorConfig().swing_core_strategy_ids) == {
+        "trend_following", "momentum", "swing_mean_reversion", "multi_factor",
+    }
+
+
+def test_typed_runtime_settings_keep_legacy_runtime_overrides(monkeypatch):
+    monkeypatch.setitem(STRATEGY_CONFIG, "enable_intraday_trend", True)
+
+    assert get_algo_runtime_settings().enable_intraday_trend is True

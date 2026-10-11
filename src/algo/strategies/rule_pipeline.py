@@ -6,9 +6,11 @@ from datetime import datetime
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
+from src.algo.strategies.catalog import STRATEGY_CATALOG
 from src.algo.strategies.indicators import closes, moving_average
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from src.algo.strategies.signals import Signal
+from src.config import get_algo_runtime_settings
 from src.algo.strategies.swing_common import SwingSignal
 from src.algo.strategies.mean_reversion.swing import SwingMeanReversionConfig
 from src.algo.strategies.momentum.swing import SwingMomentumConfig
@@ -58,13 +60,12 @@ def _trend_config(parameters: dict) -> SwingTrendConfig:
 def _intraday_satellite(signal: Signal | None, name: str) -> SwingSignal | None:
     if signal is None:
         return None
-    from src.config import STRATEGY_CONFIG
-
+    runtime_settings = get_algo_runtime_settings()
     return SwingSignal(
         signal.ticker, signal.action, name, signal.reason, signal.strength,
         stop_pct=0.01, strategy_group="intraday_satellite",
-        target_weight=float(STRATEGY_CONFIG.get("intraday_satellite_position_pct", 0.01)),
-        risk_multiplier=float(STRATEGY_CONFIG.get("intraday_satellite_risk_multiplier", 0.25)),
+        target_weight=runtime_settings.intraday_satellite_position_pct,
+        risk_multiplier=runtime_settings.intraday_satellite_risk_multiplier,
     )
 
 
@@ -209,12 +210,10 @@ def evaluate_rule_signal(
         return None
     runtime_enabled = None
     if name in {"intraday_trend", "intraday_momentum"}:
-        from src.config import STRATEGY_CONFIG
-        flag = "enable_intraday_trend" if name == "intraday_trend" else "enable_intraday_momentum"
-        runtime_enabled = (
-            STRATEGY_CONFIG.get(flag, False)
-            if runtime_enabled_override is None else runtime_enabled_override
-        )
+        runtime_enabled = runtime_enabled_override
+        runtime_setting = STRATEGY_CATALOG[name].runtime_setting
+        if runtime_enabled is None and runtime_setting:
+            runtime_enabled = getattr(get_algo_runtime_settings(), runtime_setting)
         if not runtime_enabled:
             return None
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}

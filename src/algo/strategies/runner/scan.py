@@ -2,6 +2,76 @@
 
 from __future__ import annotations
 
+from typing import Any, TypedDict
+
+
+class ScanDependencies(TypedDict):
+    """Facade-provided collaborators used by the scan orchestration."""
+
+    ALGO_DEFAULT_PARAMETERS: Any
+    ALGO_RULE_MODULES: Any
+    ALGO_SIGNAL_DATA_CONFIG: Any
+    ACTIVE_PHASES: Any
+    CORE_STRATEGIES: Any
+    ET: Any
+    EventCalendar: Any
+    EventSignalGenerator: Any
+    EventStrategyConfig: Any
+    INTRADAY_STRATEGIES: Any
+    LOG: Any
+    MAX_SPY_DAILY_AGE_DAYS: Any
+    MultiFactorConfig: Any
+    PAIR_DATA_SYMBOLS: Any
+    Path: Any
+    PortfolioCoordinator: Any
+    PortfolioCoordinatorConfig: Any
+    RULE_MODULES: Any
+    RuleStrategyStateMachine: Any
+    SATELLITE_STRATEGIES: Any
+    STRATEGY_CATALOG: Any
+    STRATEGY_CONFIG: Any
+    SatelliteOverlayConfig: Any
+    __file__: Any
+    _completed_daily: Any
+    _completed_intraday: Any
+    _current_portfolio: Any
+    _fetch_bars: Any
+    _fetch_latest_quotes: Any
+    _latest_bar_age_seconds: Any
+    _make_trade: Any
+    _multi_factor_rebalance_signals: Any
+    _multi_factor_current_targets: Any
+    _multi_factor_parameters_for_session: Any
+    process_multi_factor_shadow_orders: Any
+    _positive_price_level: Any
+    _update_trailing_stop: Any
+    apply_regime_advisory: Any
+    apply_satellite_confirmations: Any
+    choose_priority: Any
+    configured_universe: Any
+    date: Any
+    datetime: Any
+    evaluate_rule_signal: Any
+    evaluate_strategy: Any
+    feeds_for_session: Any
+    generate_swing_momentum_signals: Any
+    get_mode_config: Any
+    get_algo_runtime_settings: Any
+    hashlib: Any
+    historical_delay_seconds: Any
+    load_algo_universe: Any
+    load_event_context: Any
+    os: Any
+    pairs: Any
+    rank_strategies: Any
+    regular_feed: Any
+    throttle_signal: Any
+    timedelta: Any
+    timezone: Any
+    _is_protective_sell_order: Any
+    strategy_priority: Any
+
+
 def scan(
     mode: str = "swing",
     *,
@@ -18,14 +88,15 @@ def scan(
     quote_feed: str | None = None,
     overnight_tradable_tickers: set[str] | None = None,
     multi_factor_shadow: dict | None = None,
-    _dependencies: dict,
+    _dependencies: ScanDependencies,
 ) -> dict:
     """Run one complete scan using the compatibility facade dependencies."""
     # Binding the facade namespace here keeps legacy monkeypatches and adapters effective.
     ALGO_DEFAULT_PARAMETERS = _dependencies["ALGO_DEFAULT_PARAMETERS"]
-    ALGO_RUNTIME_CONFIG = _dependencies["ALGO_RUNTIME_CONFIG"]
+    ALGO_RUNTIME_SETTINGS = _dependencies["get_algo_runtime_settings"]()
     ALGO_RULE_MODULES = _dependencies["ALGO_RULE_MODULES"]
     ALGO_SIGNAL_DATA_CONFIG = _dependencies["ALGO_SIGNAL_DATA_CONFIG"]
+    ACTIVE_PHASES = _dependencies["ACTIVE_PHASES"]
     CORE_STRATEGIES = _dependencies["CORE_STRATEGIES"]
     ET = _dependencies["ET"]
     EventCalendar = _dependencies["EventCalendar"]
@@ -42,6 +113,7 @@ def scan(
     RULE_MODULES = _dependencies["RULE_MODULES"]
     RuleStrategyStateMachine = _dependencies["RuleStrategyStateMachine"]
     SATELLITE_STRATEGIES = _dependencies["SATELLITE_STRATEGIES"]
+    STRATEGY_CATALOG = _dependencies["STRATEGY_CATALOG"]
     STRATEGY_CONFIG = _dependencies["STRATEGY_CONFIG"]
     SatelliteOverlayConfig = _dependencies["SatelliteOverlayConfig"]
     __file__ = _dependencies["__file__"]
@@ -72,6 +144,7 @@ def scan(
     hashlib = _dependencies["hashlib"]
     historical_delay_seconds = _dependencies["historical_delay_seconds"]
     load_algo_universe = _dependencies["load_algo_universe"]
+    load_event_context = _dependencies["load_event_context"]
     os = _dependencies["os"]
     pairs = _dependencies["pairs"]
     rank_strategies = _dependencies["rank_strategies"]
@@ -96,7 +169,7 @@ def scan(
         quote_feed = quote_feed or data_feed
     mode_config = get_mode_config(mode)
     multi_factor_execution_mode = str(
-        ALGO_RUNTIME_CONFIG.get("algo_multi_factor_execution_mode", "live")
+        ALGO_RUNTIME_SETTINGS.algo_multi_factor_execution_mode
     ).strip().lower() if mode == "algo" else "live"
     if multi_factor_execution_mode not in {"live", "shadow"}:
         multi_factor_execution_mode = "shadow"
@@ -115,8 +188,8 @@ def scan(
     event_config = EventStrategyConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("event_driven"))
     satellite_config = SatelliteOverlayConfig.from_dict({
         **(ALGO_DEFAULT_PARAMETERS.get("satellite_overlay") or {}),
-        "multi_factor_enabled": STRATEGY_CONFIG.get("algo_multi_factor_enabled", True),
-        "event_driven_enabled": STRATEGY_CONFIG.get("algo_event_driven_enabled", True),
+        "multi_factor_enabled": ALGO_RUNTIME_SETTINGS.algo_multi_factor_enabled,
+        "event_driven_enabled": ALGO_RUNTIME_SETTINGS.algo_event_driven_enabled,
     })
     event_satellite_enabled = event_config.enabled and satellite_config.event_driven_enabled
     excluded = {str(symbol).upper() for symbol in (excluded_symbols or set())}
@@ -129,7 +202,7 @@ def scan(
     if mode == "algo" and not selected_symbols:
         entry_pause_reasons.append("the Algo universe is empty")
     if mode == "algo" and session_name == "overnight" and not bool(
-        STRATEGY_CONFIG.get("overnight_entries_enabled", False)
+        ALGO_RUNTIME_SETTINGS.overnight_entries_enabled
     ):
         entry_pause_reasons.append("overnight entries are disabled by configuration")
 
@@ -164,7 +237,7 @@ def scan(
     if strategy_states is not None:
         for by_symbol in strategy_states.values():
             for symbol, state in by_symbol.items():
-                if state.get("phase") in {"entry_pending", "open", "exit_pending"}:
+                if state.get("phase") in ACTIVE_PHASES:
                     held_symbol_set.add(str(symbol).upper())
     held_symbols = sorted(held_symbol_set if mode == "algo" else held_symbol_set - excluded)
     strategy_symbols = list(dict.fromkeys(
@@ -296,41 +369,29 @@ def scan(
             if historical_status == "ok":
                 historical_status = "stale"
 
-    event_generator = None
-    event_calendar_diagnostics = EventCalendar().diagnostics()
-    event_strategy_available = False
-    event_calendar_status = "disabled_by_config"
-    if mode == "algo" and event_satellite_enabled:
-        default_calendar = Path(__file__).resolve().parents[4] / "data" / "event_calendar.csv"
-        calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
-        try:
-            event_calendar = EventCalendar.from_csv(calendar_path)
-            checked_at = datetime.now(timezone.utc)
-            freshness = event_calendar.freshness(checked_at)
-            event_calendar_diagnostics = event_calendar.diagnostics(checked_at)
-            if freshness["fresh"] and event_calendar.events:
-                event_generator = EventSignalGenerator(event_calendar, event_config)
-                event_strategy_available = True
-                event_calendar_status = "ready"
-            else:
-                event_calendar_status = "stale" if event_calendar.events else "empty"
-                reason = freshness["reason"] or "calendar is empty"
-                event_calendar_diagnostics["unavailable_reason"] = reason
-                scan_errors.append(f"event strategy calendar {event_calendar_status}: {reason}: {calendar_path}")
-        except (OSError, ValueError) as exc:
-            event_calendar_status = "unavailable"
-            scan_errors.append(f"event strategy calendar unavailable: {type(exc).__name__}: {exc}")
-    if event_generator is None and "event_driven" in set(owner_map.values()):
-        # Calendar failure or an entry-disable flag must not disable swing
-        # exits for an already-owned event position.
-        event_generator = EventSignalGenerator(EventCalendar(), event_config)
+    default_calendar = Path(__file__).resolve().parents[4] / "data" / "event_calendar.csv"
+    calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
+    event_context = load_event_context(
+        enabled=mode == "algo" and event_satellite_enabled,
+        owned_event_position="event_driven" in set(owner_map.values()),
+        event_config=event_config,
+        calendar_path=calendar_path,
+        checked_at=lambda: datetime.now(timezone.utc),
+        calendar_type=EventCalendar,
+        generator_type=EventSignalGenerator,
+    )
+    event_generator = event_context.generator
+    event_strategy_available = event_context.available
+    event_calendar_diagnostics = event_context.diagnostics
+    event_calendar_status = event_context.calendar_status
+    scan_errors.extend(event_context.errors)
     try:
         if mode == "algo":
             regime = rank_strategies(
                 daily_bars.get("SPY", []), mode=mode, event_enabled=event_strategy_available,
                 event_disable_in_volatile=event_config.disable_in_volatile,
-                intraday_trend_enabled=bool(STRATEGY_CONFIG.get("enable_intraday_trend", False)),
-                intraday_momentum_enabled=bool(STRATEGY_CONFIG.get("enable_intraday_momentum", False)),
+                intraday_trend_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_trend,
+                intraday_momentum_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_momentum,
             )
         else:
             regime = rank_strategies(daily_bars.get("SPY", []), mode=mode)
@@ -584,7 +645,8 @@ def scan(
             ):
                 continue
             signal_bar_time = symbol_bars[-1].get("t") if symbol_bars else None
-            if strategy_name in {"trend_following", "momentum", "swing_mean_reversion", "multi_factor", "event_driven"}:
+            strategy_spec = STRATEGY_CATALOG.get(strategy_name)
+            if strategy_spec is not None and strategy_spec.bar_interval == "1Day":
                 daily_signal_bars = daily_bars.get(ticker, [])
                 signal_bar_time = (
                     daily_signal_bars[-1].get("t", daily_signal_bars[-1].get("date"))
@@ -610,13 +672,17 @@ def scan(
             if signal is None and (strategy_name in RULE_MODULES or strategy_name in ALGO_RULE_MODULES):
                 try:
                     if mode == "algo":
-                        daily_strategy = strategy_name in {"trend_following", "swing_mean_reversion"}
+                        daily_strategy = bool(
+                            strategy_spec and strategy_spec.bar_interval == "1Day"
+                        )
                         if strategy_name == "momentum":
                             continue
-                        if strategy_name in {"intraday_trend", "intraday_momentum"}:
-                            flag = "enable_intraday_trend" if strategy_name == "intraday_trend" else "enable_intraday_momentum"
-                            if not STRATEGY_CONFIG.get(flag, False):
-                                continue
+                        if (
+                            strategy_spec is not None
+                            and strategy_spec.runtime_setting
+                            and not getattr(ALGO_RUNTIME_SETTINGS, strategy_spec.runtime_setting)
+                        ):
+                            continue
                         signal_bars = daily_bars.get(ticker, []) if daily_strategy else symbol_bars
                         protective_state = (strategy_states or {}).get(strategy_name, {}).get(ticker, {})
                         signal = evaluate_rule_signal(
@@ -648,13 +714,7 @@ def scan(
                 else rank_score.get(strategy_name, 0)
             )
             item["signal_bar_time"] = signal_bar_time
-            item["timeframe"] = (
-                "1Day" if strategy_name in {
-                    "trend_following", "momentum", "swing_mean_reversion",
-                    "multi_factor", "event_driven",
-                }
-                else "5Min"
-            )
+            item["timeframe"] = strategy_spec.bar_interval if strategy_spec else "5Min"
             if lifecycle and not lifecycle.allows(
                 strategy_name, ticker, signal_action, item["signal_bar_time"],
             ):
@@ -1066,7 +1126,7 @@ def scan(
             item["suppressed_reason"] = "position or strategy sizing produced zero shares"
 
     if mode == "algo" and multi_factor_execution_mode == "shadow" and shadow_coordinator_book is not None:
-        initial_capital = float(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_shadow_capital", 100_000))
+        initial_capital = ALGO_RUNTIME_SETTINGS.algo_multi_factor_shadow_capital
         shadow_trades = []
         multi_factor_shadow, shadow_trades, shadow_summary = process_multi_factor_shadow_orders(
             multi_factor_shadow, shadow_generated,
@@ -1074,8 +1134,8 @@ def scan(
             today=today, timestamp=now, initial_capital=initial_capital,
             max_entries_per_day=int(risk_config.get("max_entries_per_strategy_per_day", {}).get("multi_factor", 2)),
             max_positions=int(risk_config.get("max_positions_per_strategy_by_strategy", {}).get("multi_factor", 4)),
-            slippage_bps=float(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_shadow_slippage_bps", 5.0)),
-            commission_per_share=float(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_shadow_commission_per_share", 0.005)),
+            slippage_bps=ALGO_RUNTIME_SETTINGS.algo_multi_factor_shadow_slippage_bps,
+            commission_per_share=ALGO_RUNTIME_SETTINGS.algo_multi_factor_shadow_commission_per_share,
             quote_stale_seconds=freshness_limit,
             cooldown_minutes=int(risk_config.get("cooldown_minutes_by_strategy", {}).get("multi_factor", 0)),
             make_trade=_make_trade, risk=risk_config, universe=mode_config.get("universe", {}),

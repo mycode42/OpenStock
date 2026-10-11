@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import math
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 import requests
 
-from .shared import *
+from .config import DAILY_WARMUP_DAYS, ET
 from .config import multi_factor_warmup_days, validate_research_controls, validate_strategy_filter
+from src.algo.market_store import SQLiteBarStore, fetch_alpaca_bars
+from src.algo.strategies.event_driven import EventCalendar
+from src.algo.strategies.registry import validate_parameter_profile
+from src.market_data import data_tier, regular_feed
+
+
 def _split_symbols(value: str) -> list[str]:
     symbols = list(dict.fromkeys(item.strip().upper() for item in value.split(",") if item.strip()))
     if not symbols:

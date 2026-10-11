@@ -10,30 +10,16 @@ from typing import Mapping
 from zoneinfo import ZoneInfo
 
 from src.algo.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
-from src.config import STRATEGY_CONFIG, get_mode_config
+from src.algo.strategies.catalog import (
+    INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES,
+    RESEARCH_SWING_CORE_STRATEGIES, RESEARCH_SWING_STRATEGIES,
+    SATELLITE_STRATEGIES, SWING_CORE_STRATEGIES, SWING_STRATEGIES,
+)
+from src.config import get_algo_runtime_settings, get_mode_config
 
 
 LOG = logging.getLogger("strategy_runner")
 ET = ZoneInfo("America/New_York")
-
-INTRADAY_STRATEGIES = frozenset({
-    "mean_reversion", "opening_range_breakout", "intraday_trend", "intraday_momentum",
-})
-SWING_STRATEGIES = frozenset({
-    "trend_following", "momentum", "swing_mean_reversion", "multi_factor", "event_driven",
-})
-SWING_CORE_STRATEGIES = frozenset({"trend_following", "momentum", "swing_mean_reversion", "multi_factor"})
-RESEARCH_INTRADAY_STRATEGIES = frozenset({
-    *INTRADAY_STRATEGIES, "trend_following", "momentum",
-})
-RESEARCH_SWING_CORE_STRATEGIES = frozenset({
-    "swing_trend_following", "swing_momentum", "swing_mean_reversion", "multi_factor",
-})
-RESEARCH_SWING_STRATEGIES = frozenset({
-    *RESEARCH_SWING_CORE_STRATEGIES, "event_driven",
-})
-SATELLITE_STRATEGIES = frozenset({"event_driven"})
-
 
 @dataclass(frozen=True)
 class PortfolioCoordinatorConfig:
@@ -275,7 +261,7 @@ class CoordinatorBook:
 
         local = timestamp.astimezone(ET) if timestamp.tzinfo else timestamp.replace(tzinfo=ET)
         session_name = session or "regular"
-        if session_name == "overnight" and not STRATEGY_CONFIG.get("overnight_entries_enabled", False):
+        if session_name == "overnight" and not get_algo_runtime_settings().overnight_entries_enabled:
             return self._reject(proposal, "overnight entries are disabled by configuration")
         is_intraday = strategy in self.config.intraday_strategy_ids
         if is_intraday and session_name != "regular" and not self.config.allow_intraday_overnight:

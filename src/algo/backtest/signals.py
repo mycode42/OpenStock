@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from collections import defaultdict
 from dataclasses import replace
+from datetime import date, datetime, timedelta
+import statistics
 
-from .shared import *
-from .shared import _get_universe_maps
+from .config import BAR_MINUTES, ET
+from src.algo.strategies.catalog import (
+    CORE_STRATEGIES, INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES,
+    RESEARCH_SWING_CORE_STRATEGIES, RESEARCH_SWING_STRATEGIES,
+    STRATEGY_CATALOG,
+)
+from src.algo.strategies.multi_factor.diagnostics import information_coefficient, turnover
+from src.algo.strategies.portfolio_coordinator import throttle_signal
+from src.algo.strategies.satellite_overlay import apply_satellite_confirmations
+from src.algo.strategies.runner import _make_trade
 from src.algo.strategies.swing_common import CachedDailyBarHistory
-from .shared import _make_trade
 
 
 class ReplaySignalsMixin:
@@ -128,10 +139,10 @@ class ReplaySignalsMixin:
             event_enabled=self.event_satellite_enabled,
             event_disable_in_volatile=self.event_config.disable_in_volatile,
             intraday_trend_enabled=bool(self.research_runtime_overrides.get(
-                "intraday_trend", STRATEGY_CONFIG.get("enable_intraday_trend", False),
+                "intraday_trend", self.runtime_settings.enable_intraday_trend,
             )),
             intraday_momentum_enabled=bool(self.research_runtime_overrides.get(
-                "intraday_momentum", STRATEGY_CONFIG.get("enable_intraday_momentum", False),
+                "intraday_momentum", self.runtime_settings.enable_intraday_momentum,
             )),
         )
 
@@ -177,6 +188,7 @@ class ReplaySignalsMixin:
         held = self.positions.get(ticker)
         strategies = [held.strategy] if held is not None else active
         for strategy in strategies:
+            strategy_spec = STRATEGY_CATALOG.get(strategy)
             if self.strategy_filter is not None and strategy not in self.strategy_filter:
                 continue
             if strategy not in CORE_STRATEGIES:
@@ -185,12 +197,9 @@ class ReplaySignalsMixin:
             # core strategy, but it has no rule-pipeline evaluator.
             if strategy == "multi_factor":
                 continue
-            if strategy == "intraday_trend" and not self.research_runtime_overrides.get(
-                strategy, STRATEGY_CONFIG.get("enable_intraday_trend", False),
-            ):
-                continue
-            if strategy == "intraday_momentum" and not self.research_runtime_overrides.get(
-                strategy, STRATEGY_CONFIG.get("enable_intraday_momentum", False),
+            runtime_setting = strategy_spec.runtime_setting if strategy_spec else None
+            if runtime_setting and not self.research_runtime_overrides.get(
+                strategy, getattr(self.runtime_settings, runtime_setting),
             ):
                 continue
             try:
@@ -201,11 +210,11 @@ class ReplaySignalsMixin:
                     if signal is not None:
                         signal = replace(signal, strategy=strategy)
                 else:
-                    daily_strategy = strategy in {
-                        "swing_trend_following", "swing_momentum", "swing_mean_reversion",
-                    }
-                    if not self.profile_bank_horizons and strategy == "trend_following":
-                        daily_strategy = True
+                    daily_strategy = bool(
+                        strategy_spec
+                        and strategy_spec.bar_interval == "1Day"
+                        and not (self.profile_bank_horizons and strategy_spec.research_evaluator)
+                    )
                     signal_bars = (
                         self._completed_daily_history(ticker, timestamp.astimezone(ET).date())
                         if daily_strategy else history
@@ -218,12 +227,8 @@ class ReplaySignalsMixin:
                         "position_target": held.take_profit if held is not None else None,
                     }
                     evaluation_name = strategy
-                    if self.profile_bank_horizons:
-                        evaluation_name = {
-                            "trend_following": "intraday_trend",
-                            "momentum": "intraday_momentum",
-                        }.get(strategy, strategy)
-                    if self.profile_bank_horizons and strategy in {"trend_following", "momentum"}:
+                    if self.profile_bank_horizons and strategy_spec and strategy_spec.research_evaluator:
+                        evaluation_name = strategy_spec.research_evaluator
                         signal_kwargs["runtime_enabled_override"] = True
                     elif strategy in self.research_runtime_overrides:
                         signal_kwargs["runtime_enabled_override"] = self.research_runtime_overrides[strategy]
@@ -249,11 +254,10 @@ class ReplaySignalsMixin:
                 self.candidate_setups_by_strategy[(self.day_key or "", strategy)] += 1
             item = signal.to_dict()
             item["rank_score"] = ranked.get(strategy, 0)
-            daily_timeframe = strategy in {
-                "swing_trend_following", "swing_momentum", "swing_mean_reversion",
-            } or (
-                not self.profile_bank_horizons
-                and strategy in {"trend_following", "momentum"}
+            daily_timeframe = bool(
+                strategy_spec
+                and strategy_spec.bar_interval == "1Day"
+                and not (self.profile_bank_horizons and strategy_spec.research_evaluator)
             )
             item["timeframe"] = "1Day" if daily_timeframe else "5Min"
             options.append(item)

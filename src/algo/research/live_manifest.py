@@ -8,9 +8,10 @@ import json
 
 from src.algo.config import (
     ALGO_ENTRY_LIMITS, ALGO_MODE_CONFIG, ALGO_PORTFOLIO_COORDINATOR_CONFIG,
-    ALGO_RUNTIME_CONFIG, get_algo_research_controls,
+    get_algo_research_controls,
 )
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.config import get_algo_runtime_settings
 
 
 def live_configuration_manifest(strategies: list[str] | tuple[str, ...]) -> dict:
@@ -29,7 +30,7 @@ def live_configuration_manifest(strategies: list[str] | tuple[str, ...]) -> dict
             "max_intraday_core_entries": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
             "max_intraday_satellite_entries": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
         },
-        "runtime": deepcopy(ALGO_RUNTIME_CONFIG),
+        "runtime": get_algo_runtime_settings().as_legacy_dict(),
         "coordinator": deepcopy(ALGO_PORTFOLIO_COORDINATOR_CONFIG),
         "risk": deepcopy(ALGO_MODE_CONFIG["risk"]),
         "research_controls": get_algo_research_controls(),

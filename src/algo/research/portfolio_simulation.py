@@ -14,9 +14,10 @@ from src.algo.backtest import (
     DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days,
     read_borrow_availability,
 )
-from src.algo.config import ALGO_RUNTIME_CONFIG
 from src.algo.market_store import SQLiteBarStore
+from src.algo.strategies.catalog import STRATEGY_CATALOG
 from src.algo.strategies.event_driven import EventCalendar
+from src.config import get_algo_runtime_settings
 
 from .live_manifest import live_configuration_manifest
 from .settings import LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT
@@ -27,6 +28,7 @@ OPTIMIZATION_SCHEMA = "swarm_algo_strategy_optimization_v1"
 
 def run_coordinated_portfolio(args) -> dict:
     """Combine each strategy's training-selected profile, then replay its shared OOS folds."""
+    runtime_settings = get_algo_runtime_settings()
     strategies = _parse_strategies(args.strategies)
     if args.multi_factor_overlay:
         if "multi_factor" not in strategies:
@@ -37,8 +39,10 @@ def run_coordinated_portfolio(args) -> dict:
         raise ValueError("At least one strategy must remain enabled for the portfolio replay")
     disabled_intraday = [
         strategy for strategy in strategies
-        if strategy in {"intraday_trend", "intraday_momentum"}
-        and not ALGO_RUNTIME_CONFIG.get(f"enable_{strategy}", False)
+        if (
+            (runtime_setting := STRATEGY_CATALOG[strategy].runtime_setting)
+            and not getattr(runtime_settings, runtime_setting)
+        )
     ]
     if disabled_intraday and not args.enable_disabled_intraday:
         raise ValueError(
@@ -65,7 +69,7 @@ def run_coordinated_portfolio(args) -> dict:
     if not Path(db).is_file():
         raise ValueError(f"Market database recorded by artifacts does not exist: {db}")
 
-    event_requested = bool(ALGO_RUNTIME_CONFIG.get("algo_event_driven_enabled", True))
+    event_requested = runtime_settings.algo_event_driven_enabled
     event_report = {"status": "disabled_by_live_config"}
     event_path = None
     if args.event_calendar:

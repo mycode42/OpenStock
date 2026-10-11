@@ -5,14 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 
-
-CORE_STRATEGIES = frozenset({
-    "mean_reversion", "swing_mean_reversion", "momentum",
-    "opening_range_breakout", "trend_following",
-    "swing_momentum", "swing_trend_following",
-    "intraday_trend", "intraday_momentum", "multi_factor",
-})
-SATELLITE_STRATEGIES = frozenset({"event_driven"})
+from src.algo.strategies.catalog import CORE_STRATEGIES, SATELLITE_STRATEGIES
 
 
 @dataclass(frozen=True)

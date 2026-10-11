@@ -1,6 +1,13 @@
 # Algo research layers
 
 The scheduled pipeline entry point is `python -m src.algo.research.auto_research`.
+
+Strategy IDs, bar intervals, execution groups, portfolio-cap groups, runtime
+feature switches, and nightly workflow membership come from
+`src/algo/strategies/catalog.py`. `settings.py` keeps the scheduled pipeline's
+historical five-strategy `CORE_STRATEGIES` cohort explicit because that subset
+is a separate policy from the larger set of strategies available to research.
+
 For independent per-strategy work and a portfolio simulation built from those
 results, use `python -m src.algo.research`:
 

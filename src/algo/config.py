@@ -1,7 +1,10 @@
 """Central configuration for the dedicated Algo trading service."""
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from copy import deepcopy
+import math
+
+from src.algo.strategies.catalog import strategy_ids_for_group
 
 
 @dataclass(frozen=True)
@@ -16,20 +19,63 @@ class AlgoEntryLimits:
 
 
 ALGO_ENTRY_LIMITS = AlgoEntryLimits()
-ALGO_RUNTIME_CONFIG = {
-    "overnight_entries_enabled": False,
-    "enable_intraday_trend": False,
-    "enable_intraday_momentum": False,
-    "intraday_satellite_position_pct": 0.01,
-    "intraday_satellite_risk_multiplier": 0.25,
-    "algo_multi_factor_enabled": True,
+
+
+@dataclass(frozen=True)
+class AlgoRuntimeSettings:
+    """Typed source of truth for settings specific to the Algo service."""
+
+    overnight_entries_enabled: bool = False
+    enable_intraday_trend: bool = False
+    enable_intraday_momentum: bool = False
+    intraday_satellite_position_pct: float = 0.01
+    intraday_satellite_risk_multiplier: float = 0.25
+    algo_multi_factor_enabled: bool = True
     # Core-strategy candidates are measured in shadow mode before any order is routed.
-    "algo_multi_factor_execution_mode": "shadow",
-    "algo_multi_factor_shadow_capital": 100_000,
-    "algo_multi_factor_shadow_slippage_bps": 5.0,
-    "algo_multi_factor_shadow_commission_per_share": 0.005,
-    "algo_event_driven_enabled": False,
-}
+    algo_multi_factor_execution_mode: str = "shadow"
+    algo_multi_factor_shadow_capital: int = 100_000
+    algo_multi_factor_shadow_slippage_bps: float = 5.0
+    algo_multi_factor_shadow_commission_per_share: float = 0.005
+    algo_event_driven_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        for name in (
+            "overnight_entries_enabled", "enable_intraday_trend",
+            "enable_intraday_momentum", "algo_multi_factor_enabled",
+            "algo_event_driven_enabled",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be boolean")
+        if self.algo_multi_factor_execution_mode not in {"live", "shadow"}:
+            raise ValueError("algo_multi_factor_execution_mode must be live or shadow")
+        for name in (
+            "intraday_satellite_position_pct", "intraday_satellite_risk_multiplier",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a positive finite number")
+        if (
+            isinstance(self.algo_multi_factor_shadow_capital, bool)
+            or not isinstance(self.algo_multi_factor_shadow_capital, int)
+            or self.algo_multi_factor_shadow_capital <= 0
+        ):
+            raise ValueError("algo_multi_factor_shadow_capital must be a positive integer")
+        for name in (
+            "algo_multi_factor_shadow_slippage_bps",
+            "algo_multi_factor_shadow_commission_per_share",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a finite non-negative number")
+
+    def as_legacy_dict(self) -> dict:
+        """Return the compatibility mapping consumed by older integrations."""
+        return asdict(self)
+
+
+ALGO_RUNTIME_SETTINGS = AlgoRuntimeSettings()
+# Compatibility projection for callers that still consume runtime mappings.
+ALGO_RUNTIME_CONFIG = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
 ALGO_SIGNAL_DATA_CONFIG = {
     "signal_bar_max_age_minutes": 15,
     "delayed_signal_bar_max_age_minutes": 35,
@@ -166,18 +212,15 @@ ALGO_MODE_CONFIG = {
         },
         "strategy_group_limits": {
             "swing": {
-                "strategies": [
-                    "trend_following", "momentum", "swing_mean_reversion",
-                    "swing_trend_following", "swing_momentum", "multi_factor",
-                ],
+                "strategies": list(strategy_ids_for_group("swing")),
                 "max_open_positions": 10, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_swing_entries,
             },
             "intraday_core": {
-                "strategies": ["mean_reversion", "opening_range_breakout"],
+                "strategies": list(strategy_ids_for_group("intraday_core")),
                 "max_open_positions": 6, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
             },
             "intraday_satellites": {
-                "strategies": ["intraday_trend", "intraday_momentum"],
+                "strategies": list(strategy_ids_for_group("intraday_satellites")),
                 "max_open_positions": 2, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
             },
         },

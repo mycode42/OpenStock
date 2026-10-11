@@ -7,7 +7,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from src.algo.config import get_algo_research_controls
-from src.algo.config import ALGO_RUNTIME_CONFIG
+from src.algo.strategies.catalog import (
+    STRATEGY_CATALOG, strategy_ids_for_research_workflow,
+)
+from src.config import get_algo_runtime_settings
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -35,26 +38,25 @@ CORE_STRATEGIES = (
 # Core signal families are distinct by strategy horizon. Keep this expanded
 # research catalog separate from CORE_STRATEGIES, which preserves the nightly
 # pipeline's established set and behavior.
-INTRADAY_STRATEGIES = ("mean_reversion", "opening_range_breakout", "intraday_trend", "intraday_momentum")
-SWING_STRATEGIES = ("trend_following", "momentum", "swing_mean_reversion", "multi_factor")
+INTRADAY_STRATEGIES = strategy_ids_for_research_workflow("nightly_intraday")
+SWING_STRATEGIES = strategy_ids_for_research_workflow("nightly_swing")
 RESEARCHABLE_STRATEGIES = (*SWING_STRATEGIES, *INTRADAY_STRATEGIES)
-OVERLAY_STRATEGIES = ("event_driven",)
+OVERLAY_STRATEGIES = strategy_ids_for_research_workflow("overlay")
 LIVE_RESEARCH_STRATEGIES = tuple(
     strategy for strategy in RESEARCHABLE_STRATEGIES
-    if strategy not in {"intraday_trend", "intraday_momentum"}
-    or ALGO_RUNTIME_CONFIG.get(f"enable_{strategy}", False)
+    if (
+        not STRATEGY_CATALOG[strategy].runtime_setting
+        or getattr(get_algo_runtime_settings(), STRATEGY_CATALOG[strategy].runtime_setting)
+    )
 )
 
 STRATEGY_FLAVORS = {
-    "mean_reversion": "intraday",
-    "opening_range_breakout": "intraday",
-    "intraday_trend": "intraday",
-    "intraday_momentum": "intraday",
-    "trend_following": "swing",
-    "momentum": "swing",
-    "swing_mean_reversion": "swing",
-    "multi_factor": "swing",
-    "event_driven": "confirmation_overlay",
+    strategy: (
+        "confirmation_overlay"
+        if STRATEGY_CATALOG[strategy].role == "satellite"
+        else STRATEGY_CATALOG[strategy].horizon
+    )
+    for strategy in (*INTRADAY_STRATEGIES, *SWING_STRATEGIES, *OVERLAY_STRATEGIES)
 }
 
 ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION = 3

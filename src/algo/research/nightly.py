@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import requests
 
-from src.algo.config import ALGO_RUNTIME_CONFIG
+from src.config import get_algo_runtime_settings
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
 
@@ -63,6 +63,7 @@ _OPTIMIZATION_COSTS = {
 
 def run_daily_research(args) -> dict:
     """Run one versioned cohort, reusing compatible artifacts when possible."""
+    runtime_settings = get_algo_runtime_settings()
     total_started = perf_counter()
     if data_tier() != "algo_trader_plus" or regular_feed() != FEED:
         raise ValueError("Algo AutoResearch is restricted to Plus SIP data")
@@ -163,8 +164,8 @@ def run_daily_research(args) -> dict:
         "live_configuration_sha256": live_snapshot["sha256"],
         "strategy_configuration_sha256": live_hashes,
         "portfolio_strategies": list(LIVE_RESEARCH_STRATEGIES),
-        "multi_factor_enabled": bool(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_enabled", True)),
-        "event_driven_enabled": bool(ALGO_RUNTIME_CONFIG.get("algo_event_driven_enabled", True)),
+        "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled,
+        "event_driven_enabled": runtime_settings.algo_event_driven_enabled,
         "factor_only": bool(args.factor_only),
     }
     fingerprint = stable_hash(context)
@@ -333,7 +334,7 @@ def run_daily_research(args) -> dict:
             enable_disabled_intraday=False,
             artifact_dir=str(adaptive_coordinator_root if adaptive_portfolio_ready else cohort_dir / "optimization"),
             event_calendar=None,
-            multi_factor_overlay=bool(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_enabled", True)),
+            multi_factor_overlay=runtime_settings.algo_multi_factor_enabled,
             workers=max(1, args.workers), output_dir=str(portfolio_path),
         )
         portfolio_report = run_coordinated_portfolio(portfolio_args)

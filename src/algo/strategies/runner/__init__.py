@@ -16,18 +16,20 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from typing import cast
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.config import STRATEGY_CONFIG, get_mode_config
+from src.config import STRATEGY_CONFIG, get_algo_runtime_settings, get_mode_config
 from src.algo.strategies import pairs
-from src.algo.config import ALGO_RUNTIME_CONFIG, ALGO_SIGNAL_DATA_CONFIG
+from src.algo.config import ALGO_RUNTIME_CONFIG, ALGO_RUNTIME_SETTINGS, ALGO_SIGNAL_DATA_CONFIG
 from . import data as _runner_data
 from . import factors as _runner_factors
 from . import sizing as _runner_sizing
 from . import scan as _runner_scan
+from .event_context import load_event_context
 from src.algo.strategies.regime import rank_strategies
 from src.algo.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
 from src.algo.strategies.regime_advisor import apply_regime_advisory
@@ -35,13 +37,14 @@ from src.market_data import feeds_for_session, historical_delay_seconds, regular
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, ALGO_RULE_MODULES, RULE_MODULES, evaluate as evaluate_strategy
 from src.algo.strategies.rule_pipeline import evaluate_rule_signal
 from src.algo.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
-from src.algo.strategies.state_machine import RuleStrategyStateMachine
+from src.algo.strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
 from src.algo.strategies.universe import configured_universe, load_algo_universe
 from src.algo.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from src.algo.strategies.satellite_overlay import (
     CORE_STRATEGIES, SATELLITE_STRATEGIES, SatelliteOverlayConfig,
     apply_satellite_confirmations,
 )
+from src.algo.strategies.catalog import STRATEGY_CATALOG
 from src.algo.strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES, PortfolioCoordinator, PortfolioCoordinatorConfig,
     choose_priority, strategy_priority, throttle_signal,
@@ -140,7 +143,7 @@ def scan(
         quote_feed=quote_feed,
         overnight_tradable_tickers=overnight_tradable_tickers,
         multi_factor_shadow=multi_factor_shadow,
-        _dependencies=globals(),
+        _dependencies=cast(_runner_scan.ScanDependencies, globals()),
     )
 
 

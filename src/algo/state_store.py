@@ -17,12 +17,11 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.catalog import STRATEGY_IDS
+from src.algo.strategies.state_machine import ACTIVE_PHASES, PHASES
 
 
 SCHEMA_VERSION = 1
-PHASES = {"flat", "entry_pending", "open", "exit_pending", "cooldown", "quarantined"}
-ACTIVE_PHASES = {"entry_pending", "open", "exit_pending"}
 
 
 class StateStoreError(RuntimeError):
@@ -107,7 +106,7 @@ def validate_portfolio(portfolio: dict) -> None:
 
     seen_active: dict[str, str] = {}
     for strategy, by_symbol in states.items():
-        if strategy not in ALGO_DEFAULT_PARAMETERS or not isinstance(by_symbol, dict):
+        if strategy not in STRATEGY_IDS or not isinstance(by_symbol, dict):
             raise StateCorruptionError(f"Unknown or malformed Algo strategy: {strategy}")
         for ticker, state in by_symbol.items():
             if not isinstance(ticker, str) or not ticker or ticker != ticker.upper():
@@ -136,7 +135,7 @@ def validate_portfolio(portfolio: dict) -> None:
     for ticker, strategy in owners.items():
         if not isinstance(ticker, str) or not ticker or ticker != ticker.upper():
             raise StateCorruptionError(f"Malformed owned ticker: {ticker!r}")
-        if strategy not in ALGO_DEFAULT_PARAMETERS:
+        if strategy not in STRATEGY_IDS:
             raise StateCorruptionError(f"Unknown Algo position owner for {ticker}: {strategy!r}")
         state = (states.get(strategy) or {}).get(ticker)
         if not state or state.get("phase") not in ACTIVE_PHASES:

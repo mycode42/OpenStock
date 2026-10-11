@@ -9,16 +9,37 @@ Unverified broker holdings are QUARANTINED until their entry is attributable.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from zoneinfo import ZoneInfo
 
 
-FLAT = "flat"
-ENTRY_PENDING = "entry_pending"
-OPEN = "open"
-EXIT_PENDING = "exit_pending"
-COOLDOWN = "cooldown"
-QUARANTINED = "quarantined"
-PENDING_PHASES = {ENTRY_PENDING, EXIT_PENDING}
+class LifecyclePhase(str, Enum):
+    FLAT = "flat"
+    ENTRY_PENDING = "entry_pending"
+    OPEN = "open"
+    EXIT_PENDING = "exit_pending"
+    COOLDOWN = "cooldown"
+    QUARANTINED = "quarantined"
+
+
+PHASES = frozenset(phase.value for phase in LifecyclePhase)
+ACTIVE_PHASES = frozenset({
+    LifecyclePhase.ENTRY_PENDING.value,
+    LifecyclePhase.OPEN.value,
+    LifecyclePhase.EXIT_PENDING.value,
+})
+PENDING_PHASES = frozenset({
+    LifecyclePhase.ENTRY_PENDING.value, LifecyclePhase.EXIT_PENDING.value,
+})
+
+# Persisted state remains string-compatible; these names keep transitions
+# readable while LifecyclePhase owns the legal serialized values.
+FLAT = LifecyclePhase.FLAT.value
+ENTRY_PENDING = LifecyclePhase.ENTRY_PENDING.value
+OPEN = LifecyclePhase.OPEN.value
+EXIT_PENDING = LifecyclePhase.EXIT_PENDING.value
+COOLDOWN = LifecyclePhase.COOLDOWN.value
+QUARANTINED = LifecyclePhase.QUARANTINED.value
 ET = ZoneInfo("America/New_York")
 
 

@@ -4,8 +4,11 @@ import os
 
 from src.algo.config import (
     ALGO_MODE_CONFIG, ALGO_PORTFOLIO_COORDINATOR_CONFIG, ALGO_PORTFOLIO_UNIVERSE,
-    ALGO_RUNTIME_CONFIG, ALGO_SERVICE_CONFIG,
+    ALGO_RUNTIME_CONFIG, ALGO_RUNTIME_SETTINGS, ALGO_SERVICE_CONFIG,
+    AlgoRuntimeSettings,
 )
+
+_ALGO_RUNTIME_DEFAULTS = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
 
 # ===========================================================================
 # Swing/Day limits remain here. Dedicated Algo settings live in src.algo.config
@@ -120,6 +123,25 @@ STRATEGY_CONFIG = {
     "pairs_entry_z": 2.0,
     **ALGO_RUNTIME_CONFIG,
 }
+
+
+def get_algo_runtime_settings() -> AlgoRuntimeSettings:
+    """Return validated effective settings, including legacy config overrides.
+
+    Algo defaults live in the typed settings object. The historical mutable
+    mappings remain override surfaces for existing callers, without becoming
+    independent defaults or requiring a second settings definition.
+    """
+    values = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
+    # Preserve callers that still patch either legacy mapping. Only changed
+    # values act as overrides, so the untouched projection cannot mask a
+    # change made through the other compatibility surface.
+    for config in (ALGO_RUNTIME_CONFIG, STRATEGY_CONFIG):
+        values.update({
+            key: config[key] for key, default in _ALGO_RUNTIME_DEFAULTS.items()
+            if key in config and config[key] != default
+        })
+    return AlgoRuntimeSettings(**values)
 
 
 def resolve_mode(cli_mode: str = None) -> str:

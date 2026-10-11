@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from dataclasses import replace
+from copy import deepcopy
+from datetime import date, datetime
+import math
 
-from .shared import *
-from .shared import _get_universe_maps
-from .config import validate_research_controls
+from .config import validate_research_controls, validate_strategy_filter
 from .models import Position
 from .execution import ReplayExecutionMixin
 try:
@@ -15,7 +17,26 @@ except ImportError:
     from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin
 from .replay import ReplayLoopMixin
+from src.algo.strategies.catalog import (
+    RESEARCH_INTRADAY_STRATEGIES, RESEARCH_SWING_CORE_STRATEGIES,
+    RESEARCH_SWING_STRATEGIES,
+)
+from src.algo.strategies.event_driven import (
+    EventCalendar, EventSignalGenerator, EventStrategyConfig,
+)
+from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
+from src.algo.strategies.multi_factor.signals import SignalGenerator
+from src.algo.strategies.portfolio_coordinator import (
+    PortfolioCoordinator, PortfolioCoordinatorConfig,
+)
+from src.algo.strategies.regime import rank_strategies
+from src.algo.strategies.registry import validate_parameter_profile
+from src.algo.strategies.rule_pipeline import evaluate_rule_signal
+from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.algo.strategies.swing_common import CachedDailyBarHistory
+from src.config import get_algo_runtime_settings, get_mode_config
+from risk_manager import _get_universe_maps, validate_trade
 
 
 class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportingMixin, ReplayLoopMixin):
@@ -151,12 +172,14 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             not isinstance(value, bool) for value in self.research_runtime_overrides.values()
         ):
             raise ValueError("research runtime overrides must be boolean intraday strategy enable flags")
+        runtime_settings = get_algo_runtime_settings()
+        self.runtime_settings = runtime_settings
         profile_satellites = self.profile.get("satellite_overlay", {})
         self.satellite_config = SatelliteOverlayConfig.from_dict({
             **profile_satellites,
-            "multi_factor_enabled": bool(STRATEGY_CONFIG.get("algo_multi_factor_enabled", True))
+            "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled
             and bool(profile_satellites.get("multi_factor_enabled", True)),
-            "event_driven_enabled": bool(STRATEGY_CONFIG.get("algo_event_driven_enabled", True))
+            "event_driven_enabled": runtime_settings.algo_event_driven_enabled
             and bool(profile_satellites.get("event_driven_enabled", True)),
         })
         self.research_controls = validate_research_controls(research_controls)

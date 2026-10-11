@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from src.algo.strategies import mean_reversion, momentum, opening_range_breakout, trend_following
+from src.algo.strategies.catalog import STRATEGY_CATALOG, STRATEGY_IDS
 from src.algo.strategies.mean_reversion import swing as swing_mean_reversion
 from src.algo.strategies.momentum import swing as swing_momentum
 from src.algo.strategies.trend_following import swing as swing_trend_following
@@ -14,6 +15,7 @@ from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.algo.strategies.mean_reversion.swing import SwingMeanReversionConfig
 from src.algo.strategies.momentum.swing import SwingMomentumConfig
 from src.algo.strategies.trend_following.swing import SwingTrendConfig
+from src.config import get_algo_runtime_settings
 
 
 RULE_MODULES = {
@@ -65,6 +67,14 @@ ALGO_DEFAULT_PARAMETERS = {
     "intraday_trend": {"enabled": True, **DAY_DEFAULT_PARAMETERS["trend_following"]},
     "intraday_momentum": {"enabled": True, **DAY_DEFAULT_PARAMETERS["momentum"]},
 }
+
+_registered_strategy_ids = set(ALGO_DEFAULT_PARAMETERS) - {"satellite_overlay"}
+if _registered_strategy_ids != STRATEGY_IDS:
+    missing = sorted(_registered_strategy_ids - STRATEGY_IDS)
+    unconfigured = sorted(STRATEGY_IDS - _registered_strategy_ids)
+    raise RuntimeError(
+        f"Strategy catalog and parameter registry differ: missing={missing}, unconfigured={unconfigured}"
+    )
 
 PARAMETER_KEYS = {
     "trend_following": set(SwingTrendConfig.__dataclass_fields__),
@@ -207,13 +217,10 @@ def evaluate(
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
         return module.signal(ticker, bars, position_qty=position_qty, parameters=values)
     if mode == "algo" and name in {"intraday_trend", "intraday_momentum"}:
-        from src.config import STRATEGY_CONFIG
-
-        flag = "enable_intraday_trend" if name == "intraday_trend" else "enable_intraday_momentum"
-        runtime_enabled = (
-            STRATEGY_CONFIG.get(flag, False)
-            if runtime_enabled_override is None else runtime_enabled_override
-        )
+        flag = STRATEGY_CATALOG[name].runtime_setting
+        runtime_enabled = runtime_enabled_override
+        if runtime_enabled is None and flag:
+            runtime_enabled = getattr(get_algo_runtime_settings(), flag)
         if not runtime_enabled:
             return None
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}

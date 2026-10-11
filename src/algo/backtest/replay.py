@@ -2,8 +2,23 @@
 
 from __future__ import annotations
 
-from .shared import *
-from .shared import _get_universe_maps
+from copy import deepcopy
+from datetime import date, datetime, timedelta
+import hashlib
+import json
+import logging
+import math
+import statistics
+
+from .config import BAR_MINUTES, ET, MIN_REGIME_DAILY_BARS, STRATEGY_NAMES
+from src.algo.strategies.catalog import (
+    INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES,
+    RESEARCH_SWING_CORE_STRATEGIES, RESEARCH_SWING_STRATEGIES,
+)
+from src.algo.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
+from src.algo.strategies.portfolio_coordinator import strategy_priority
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.config import STRATEGY_CONFIG
 
 
 class ReplayLoopMixin:

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from .shared import *
-from .shared import _get_universe_maps
+from collections import defaultdict
+from datetime import datetime
+import math
+import statistics
+
+from .config import STRATEGY_NAMES
 
 
 class ReplayReportingMixin:
