@@ -124,6 +124,10 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
         data_adjustment="raw", initial_capital=100_000, slippage_bps=5,
     )
+    replay._regime_ranker = lambda *args, **kwargs: {
+        "regime": "range_bound", "active": ["mean_reversion"], "satellites": [],
+        "ranked": [{"strategy": "mean_reversion", "score": 1.0, "available": True}],
+    }
 
     report = replay.run()
 
@@ -267,6 +271,10 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
         data_adjustment="raw", research_controls={"max_entries_per_day": 1},
         strategies=["mean_reversion"],
     )
+    replay._regime_ranker = lambda *args, **kwargs: {
+        "regime": "range_bound", "active": ["mean_reversion"], "satellites": [],
+        "ranked": [{"strategy": "mean_reversion", "score": 1.0, "available": True}],
+    }
 
     report = replay.run()
 
