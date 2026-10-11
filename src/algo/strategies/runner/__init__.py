@@ -23,7 +23,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.config import STRATEGY_CONFIG, get_algo_runtime_settings, get_mode_config
-from src.algo.strategies import pairs
 from src.algo.config import ALGO_RUNTIME_CONFIG, ALGO_RUNTIME_SETTINGS, ALGO_SIGNAL_DATA_CONFIG
 from . import data as _runner_data
 from . import factors as _runner_factors
@@ -54,7 +53,6 @@ from .multi_factor_shadow import process_shadow_orders as process_multi_factor_s
 
 LOG = logging.getLogger("strategy_runner")
 ET = ZoneInfo("America/New_York")
-PAIR_DATA_SYMBOLS = sorted({symbol for pair in pairs.DEFAULT_PAIRS for symbol in pair})
 # Free-plan BOATS historical data is available only when the requested end is
 # at least 15 minutes old. Keep a small margin for clock differences.
 MAX_SPY_DAILY_AGE_DAYS = ALGO_SIGNAL_DATA_CONFIG["max_spy_daily_age_days"]

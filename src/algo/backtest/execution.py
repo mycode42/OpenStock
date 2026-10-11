@@ -8,7 +8,7 @@ import math
 
 from .config import BAR_MINUTES, ET, STRATEGY_NAMES
 from .models import Position
-from src.algo.strategies.catalog import INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES
+from src.algo.strategies.catalog import INTRADAY_STRATEGIES
 
 try:
     from ._execution_cy import build_timeline as _build_timeline_cy
@@ -35,26 +35,11 @@ class ReplayExecutionMixin:
         return cls._timestamp(bar) + timedelta(minutes=BAR_MINUTES) <= ingested.astimezone(timezone.utc)
 
     def _timeline(self) -> dict[datetime, dict[str, dict]]:
-        if _build_timeline_cy is not None:
-            return _build_timeline_cy(
-                self.symbols, self.intraday_bars, self.start, self.end,
-                ET, BAR_MINUTES,
-            )
-        events: dict[datetime, dict[str, dict]] = defaultdict(dict)
-        for ticker in self.symbols:
-            for bar in self.intraday_bars.get(ticker, []):
-                timestamp = self._timestamp(bar)
-                local = timestamp.astimezone(ET)
-                if not self.start <= local.date() <= self.end or not self._is_complete(bar):
-                    continue
-                local_time = local.time().replace(tzinfo=None)
-                if not time(9, 30) <= local_time < time(16, 0):
-                    continue
-                values = [float(bar[key]) for key in ("o", "h", "l", "c")]
-                if not all(math.isfinite(value) and value > 0 for value in values):
-                    continue
-                events[timestamp][ticker] = bar
-        return dict(sorted(events.items()))
+        if self.precomputed_timeline is not None:
+            return self.precomputed_timeline
+        return build_replay_timeline(
+            self.symbols, self.intraday_bars, self.start, self.end,
+        )
 
     def _equity(self) -> float:
         marked = self.cash + sum(
@@ -90,11 +75,7 @@ class ReplayExecutionMixin:
         if self.short_borrow_annual_pct <= 0:
             return
         for ticker, position in self.positions.items():
-            intraday_strategies = (
-                RESEARCH_INTRADAY_STRATEGIES
-                if self.profile_bank_horizons else INTRADAY_STRATEGIES
-            )
-            if position.qty >= 0 or position.strategy in intraday_strategies:
+            if position.qty >= 0 or position.strategy in INTRADAY_STRATEGIES:
                 continue
             mark = self.last_prices.get(ticker, position.entry_price)
             fee = abs(position.qty) * mark * self.short_borrow_annual_pct / 252
@@ -128,7 +109,6 @@ class ReplayExecutionMixin:
                 continue
             fill = self._fill_price(float(bar["c"]), action)
             self._close_position(ticker, fill, timestamp, reason)
-
     def _strategy_total_pnl(self) -> dict[str, float]:
         totals: dict[str, float] = defaultdict(float)
         for trade in self.closed_trades:
@@ -368,4 +348,29 @@ class ReplayExecutionMixin:
             "action": action,
             "signal_at": (timestamp + timedelta(minutes=BAR_MINUTES)).isoformat(),
         }
+
+
+def build_replay_timeline(
+    symbols: list[str], intraday_bars: dict[str, list[dict]], start: date, end: date,
+) -> dict[datetime, dict[str, dict]]:
+    """Build an event map for replays that share the same bars and date range."""
+    if _build_timeline_cy is not None:
+        return _build_timeline_cy(
+            symbols, intraday_bars, start, end, ET, BAR_MINUTES,
+        )
+    events: dict[datetime, dict[str, dict]] = defaultdict(dict)
+    for ticker in symbols:
+        for bar in intraday_bars.get(ticker, []):
+            timestamp = ReplayExecutionMixin._timestamp(bar)
+            local = timestamp.astimezone(ET)
+            if not start <= local.date() <= end or not ReplayExecutionMixin._is_complete(bar):
+                continue
+            local_time = local.time().replace(tzinfo=None)
+            if not time(9, 30) <= local_time < time(16, 0):
+                continue
+            values = [float(bar[key]) for key in ("o", "h", "l", "c")]
+            if not all(math.isfinite(value) and value > 0 for value in values):
+                continue
+            events[timestamp][ticker] = bar
+    return dict(sorted(events.items()))
 

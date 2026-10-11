@@ -33,6 +33,7 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
         coordinator_config=None, force_close_at_end=False,
         research_runtime_overrides=None,
         preaggregated_daily_bars=None,
+        precomputed_timeline=None,
     ):
         super().__init__(
             symbols=symbols, intraday_bars=intraday_bars, spy_daily_bars=spy_daily_bars,
@@ -47,6 +48,7 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
             force_close_at_end=force_close_at_end,
             research_runtime_overrides=research_runtime_overrides,
             preaggregated_daily_bars=preaggregated_daily_bars,
+            precomputed_timeline=precomputed_timeline,
             _signal_evaluator=lambda *args, **kwargs: evaluate_rule_signal(*args, **kwargs),
             _trade_validator=lambda **kwargs: validate_trade(**kwargs),
             _regime_ranker=lambda *args, **kwargs: rank_strategies(*args, **kwargs),

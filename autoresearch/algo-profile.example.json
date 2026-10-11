@@ -13,9 +13,5 @@
     "band_width": 2.0,
     "entry_rsi": 30,
     "exit_rsi": 58
-  },
-  "opening_range_breakout": {
-    "opening_range_bars": 6,
-    "minimum_volume_ratio": 1.25
   }
 }

@@ -11,8 +11,7 @@ from zoneinfo import ZoneInfo
 
 from src.algo.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
 from src.algo.strategies.catalog import (
-    INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES,
-    RESEARCH_SWING_CORE_STRATEGIES, RESEARCH_SWING_STRATEGIES,
+    INTRADAY_STRATEGIES,
     SATELLITE_STRATEGIES, SWING_CORE_STRATEGIES, SWING_STRATEGIES,
 )
 from src.config import get_algo_runtime_settings, get_mode_config
@@ -106,18 +105,14 @@ class CoordinationDecision:
 
 
 def strategy_priority(
-    strategy: str, *, intraday_strategy_ids=None, swing_core_strategy_ids=None,
-    swing_strategy_ids=None,
+    strategy: str,
 ) -> int:
     """Lower numbers have precedence when proposals compete for shared capacity."""
-    swing_core = SWING_CORE_STRATEGIES if swing_core_strategy_ids is None else swing_core_strategy_ids
-    intraday = INTRADAY_STRATEGIES if intraday_strategy_ids is None else intraday_strategy_ids
-    if strategy in swing_core:
+    if strategy in SWING_CORE_STRATEGIES:
         return 0
-    if strategy in intraday:
+    if strategy in INTRADAY_STRATEGIES:
         return 1
-    satellites = SATELLITE_STRATEGIES if swing_strategy_ids is None else set(swing_strategy_ids) & SATELLITE_STRATEGIES
-    if strategy in satellites:
+    if strategy in SATELLITE_STRATEGIES:
         return 2
     return 3
 
@@ -366,6 +361,4 @@ __all__ = [
     "CoordinatorBook", "CoordinationDecision", "PortfolioCoordinator",
     "PortfolioCoordinatorConfig", "choose_priority", "strategy_priority", "throttle_signal",
     "INTRADAY_STRATEGIES", "SWING_STRATEGIES", "SWING_CORE_STRATEGIES",
-    "RESEARCH_INTRADAY_STRATEGIES", "RESEARCH_SWING_CORE_STRATEGIES",
-    "RESEARCH_SWING_STRATEGIES",
 ]

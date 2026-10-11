@@ -102,8 +102,6 @@ def _read_research_controls(args) -> dict:
             controls[key] = value
         else:
             controls["max_entries_per_strategy_per_day"] = {"momentum": value}
-    if getattr(args, "research_one_orb_attempt_per_day", False):
-        controls["one_orb_attempt_per_ticker_per_day"] = True
     return validate_research_controls(controls)
 
 def fetch_dataset(args) -> dict:

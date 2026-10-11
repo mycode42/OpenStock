@@ -2,49 +2,23 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, time
+from collections import defaultdict
+from datetime import date, timedelta
 import json
 from pathlib import Path
 
-from .shared import *
-from .settings import *
+from .settings import ADJUSTMENT, FEED, INITIAL_HISTORY_DATE, MIN_COVERED_UNIVERSE
 from .files import _atomic_json
-from src.algo.backtest import MIN_REGIME_DAILY_BARS, _regular_session_bars
+from src.algo.backtest import _regular_session_bars
+from src.algo.market_store import SQLiteBarStore, fetch_alpaca_bars
+from src.algo.strategies.event_driven import EventCalendar
+from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
+from src.algo.strategies.universe import configured_universe
+from src.market_data import data_tier, regular_feed
 
 
 def _parse_date(value: str) -> date:
     return date.fromisoformat(str(value)[:10])
-
-
-def _replay_start_after_spy_warmup(
-    store: SQLiteBarStore, requested_start: date, end: date,
-) -> date:
-    """Advance an early replay until its regime warm-up bars exist in storage."""
-    requested_start = _parse_date(requested_start)
-    end = _parse_date(end)
-    bars = store.bars(
-        ["SPY"], feed=FEED, timeframe="1Day",
-        start=INITIAL_HISTORY_DATE.isoformat(), end=end.isoformat(),
-        adjustment=ADJUSTMENT,
-    ).get("SPY", [])
-    session_dates = set()
-    for bar in bars:
-        timestamp = datetime.fromisoformat(str(bar["t"]).replace("Z", "+00:00"))
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        session_dates.add(timestamp.astimezone(ET).date())
-    ordered_dates = sorted(session_dates)
-    if not ordered_dates:
-        raise ValueError("SPY split-adjusted SIP daily history is missing")
-    sessions_before_start = sum(session < requested_start for session in ordered_dates)
-    if sessions_before_start >= MIN_REGIME_DAILY_BARS:
-        return requested_start
-    if MIN_REGIME_DAILY_BARS >= len(ordered_dates):
-        raise ValueError(
-            f"Need {MIN_REGIME_DAILY_BARS} completed SPY daily bars before the replay; "
-            f"no warmed-up session is available from {requested_start} through {end}"
-        )
-    return ordered_dates[MIN_REGIME_DAILY_BARS]
 
 
 def load_algo_universe() -> tuple[list[str], dict]:

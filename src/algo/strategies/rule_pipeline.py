@@ -28,8 +28,6 @@ RULE_PARAMETERS = {
                            "minimum_short_volume_ratio", "max_extension_pct", "allow_long", "allow_short"},
     "mean_reversion": {"window", "band_width", "entry_rsi", "exit_rsi", "short_entry_rsi",
                        "short_exit_rsi", "allow_long", "allow_short"},
-    "opening_range_breakout": {"opening_range_bars", "minimum_volume_ratio", "post_range_delay_bars",
-                                "breakout_buffer_pct", "allow_long", "allow_short"},
     "swing_mean_reversion": set(SwingMeanReversionConfig.__dataclass_fields__),
 }
 

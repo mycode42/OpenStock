@@ -6,7 +6,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 
@@ -15,6 +14,7 @@ from src.algo.backtest import (
     read_borrow_availability,
 )
 from src.algo.market_store import SQLiteBarStore
+from src.algo.cpu import available_cpu_count
 from src.algo.strategies.catalog import STRATEGY_CATALOG
 from src.algo.strategies.event_driven import EventCalendar
 from src.config import get_algo_runtime_settings
@@ -23,7 +23,7 @@ from .live_manifest import live_configuration_manifest
 from .settings import LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT
 
 
-OPTIMIZATION_SCHEMA = "swarm_algo_strategy_optimization_v1"
+ADAPTIVE_COORDINATOR_SCHEMA = "swarm_algo_adaptive_coordinator_v1"
 
 
 def run_coordinated_portfolio(args) -> dict:
@@ -56,7 +56,7 @@ def run_coordinated_portfolio(args) -> dict:
     for strategy in strategies:
         path = artifact_root / strategy / "latest.json"
         if not path.is_file():
-            raise ValueError(f"Missing optimization artifact for {strategy}: {path}")
+            raise ValueError(f"Missing adaptive verification artifact for {strategy}: {path}")
         artifacts[strategy] = _read_artifact(path, strategy)
 
     common = _validate_artifacts(artifacts)
@@ -64,7 +64,7 @@ def run_coordinated_portfolio(args) -> dict:
     symbols = common["symbols"]
     db_paths = {artifact["source"]["database"] for artifact in artifacts.values()}
     if len(db_paths) != 1:
-        raise ValueError("Strategy optimization artifacts must use the same market database")
+        raise ValueError("Adaptive verification artifacts must use the same market database")
     db = next(iter(db_paths))
     if not Path(db).is_file():
         raise ValueError(f"Market database recorded by artifacts does not exist: {db}")
@@ -102,7 +102,7 @@ def run_coordinated_portfolio(args) -> dict:
         controls = None
         selected_profiles = {}
         for strategy, artifact in artifacts.items():
-            selected = artifact["optimization"]["folds"][index]
+            selected = artifact["verification"]["folds"][index]
             selected_params = selected.get("selected_parameters") or {}
             if set(selected_params) != {strategy}:
                 raise ValueError(
@@ -132,22 +132,22 @@ def run_coordinated_portfolio(args) -> dict:
         })
 
     cost_models = [
-        artifact["optimization"].get("transaction_cost_model", {})
+        artifact["verification"].get("transaction_cost_model", {})
         for artifact in artifacts.values()
     ]
     if any(model != cost_models[0] for model in cost_models[1:]):
-        raise ValueError("Strategy optimization artifacts use different transaction-cost models")
+        raise ValueError("Adaptive verification artifacts use different transaction-cost models")
     cost_model = cost_models[0]
     borrow_paths = {
         artifact["source"].get("borrow_availability") for artifact in artifacts.values()
     }
     if len(borrow_paths) != 1:
-        raise ValueError("Strategy optimization artifacts use different borrow-availability inputs")
+        raise ValueError("Adaptive verification artifacts use different borrow-availability inputs")
     borrow_path = next(iter(borrow_paths))
     if borrow_path and not Path(borrow_path).is_file():
         raise ValueError(f"Borrow-availability source recorded by artifacts does not exist: {borrow_path}")
 
-    worker_count = min(max(1, args.workers), len(fold_profiles), os.cpu_count() or 1)
+    worker_count = min(max(1, args.workers), len(fold_profiles), available_cpu_count())
     jobs = [
         (
             item, symbols, db, event_path, enabled_strategies,
@@ -182,7 +182,7 @@ def run_coordinated_portfolio(args) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(),
         "data": {
             "database": str(Path(db).resolve()),
-            "tier": artifacts[strategies[0]]["optimization"].get("data_tier_at_run"),
+            "tier": artifacts[strategies[0]]["verification"].get("data_tier_at_run"),
             "feed": common["feed"], "adjustment": common["adjustment"],
             "start": common["start"], "end": common["end"], "symbols": symbols,
         },
@@ -192,7 +192,7 @@ def run_coordinated_portfolio(args) -> dict:
                 "path": artifact["artifact_path"],
                 "sha256": artifact["sha256"],
                 "promotion_gate_passed": bool(
-                    artifact["optimization"].get("promotion_gate", {}).get("promotable")
+                    artifact["verification"].get("promotion_gate", {}).get("promotable")
                 ),
             }
             for strategy, artifact in artifacts.items()
@@ -226,7 +226,7 @@ def run_coordinated_portfolio(args) -> dict:
         "folds": results,
         "limitations": [
             "Each fold starts with fresh capital and no positions or risk state carry over between folds.",
-            "The universe is fixed to the symbol list shared by the strategy optimization artifacts.",
+            "The universe is fixed to the symbol list shared by the adaptive verification artifacts.",
             "A strategy's promotion gate is reported but does not suppress research-only "
             "portfolio simulation.",
             "The final artifact does not alter live settings or authorize deployment.",
@@ -308,16 +308,19 @@ def _read_artifact(path: Path, strategy: str) -> dict:
         artifact = json.loads(raw)
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Cannot read strategy artifact {path}: {exc}") from exc
-    if artifact.get("schema") != OPTIMIZATION_SCHEMA:
-        raise ValueError(f"Unsupported or incomplete optimization artifact: {path}")
-    if artifact.get("stage") != "strategy_optimization" or artifact.get("strategy") != strategy:
-        raise ValueError(f"Optimization artifact does not identify strategy {strategy}: {path}")
-    optimization = artifact.get("optimization")
-    if not isinstance(optimization, dict) or len(optimization.get("folds", [])) < 3:
-        raise ValueError(f"Optimization artifact has no qualifying walk-forward folds: {path}")
+    if not (
+        artifact.get("schema") == ADAPTIVE_COORDINATOR_SCHEMA
+        and artifact.get("stage") == "adaptive_verification_coordinator"
+        and artifact.get("strategy") == strategy
+    ):
+        raise ValueError(f"Unsupported adaptive verification artifact for {strategy}: {path}")
+
+    verification = artifact.get("verification")
+    if not isinstance(verification, dict) or len(verification.get("folds", [])) < 3:
+        raise ValueError(f"Adaptive verification artifact has fewer than three folds: {path}")
     source = artifact.get("source")
     if not isinstance(source, dict) or not source.get("database") or not source.get("symbols"):
-        raise ValueError(f"Optimization artifact is missing its source data manifest: {path}")
+        raise ValueError(f"Adaptive verification artifact is missing its source data manifest: {path}")
     return {
         **artifact,
         "artifact_path": str(path.resolve()),
@@ -327,9 +330,9 @@ def _read_artifact(path: Path, strategy: str) -> dict:
 
 def _validate_artifacts(artifacts: dict[str, dict]) -> dict:
     if not artifacts:
-        raise ValueError("At least one strategy optimization artifact is required")
+        raise ValueError("At least one adaptive verification artifact is required")
     first_strategy = next(iter(artifacts))
-    first = artifacts[first_strategy]["optimization"]
+    first = artifacts[first_strategy]["verification"]
     common = {
         "start": first.get("start"), "end": first.get("end"),
         "feed": first.get("feed"), "adjustment": first.get("data_adjustment"),
@@ -340,25 +343,25 @@ def _validate_artifacts(artifacts: dict[str, dict]) -> dict:
         for fold in common["folds"]
     ]
     if not expected_windows or any(any(value is None for value in window) for window in expected_windows):
-        raise ValueError("Optimization artifact contains an incomplete walk-forward window")
+        raise ValueError("Adaptive verification artifact contains an incomplete fold window")
     for strategy, artifact in artifacts.items():
-        report = artifact["optimization"]
+        report = artifact["verification"]
         for key, report_key in (
             ("start", "start"), ("end", "end"), ("feed", "feed"),
             ("adjustment", "data_adjustment"),
         ):
             if report.get(report_key) != common[key]:
-                raise ValueError(f"{strategy} optimization artifact has a different {key}")
+                raise ValueError(f"{strategy} adaptive verification artifact has a different {key}")
         if report.get("symbols") != common["symbols"]:
-            raise ValueError(f"{strategy} optimization artifact has a different symbol universe")
+            raise ValueError(f"{strategy} adaptive verification artifact has a different symbol universe")
         windows = [
             tuple(fold.get(key) for key in ("train_start", "train_end", "test_start", "test_end"))
             for fold in report.get("folds", [])
         ]
         if windows != expected_windows:
-            raise ValueError(f"{strategy} optimization folds do not align with the other strategies")
+            raise ValueError(f"{strategy} adaptive verification folds do not align with the other strategies")
         if report.get("data_tier_at_run") != first.get("data_tier_at_run"):
-            raise ValueError(f"{strategy} optimization artifact has a different data tier")
+            raise ValueError(f"{strategy} adaptive verification artifact has a different data tier")
     return common
 
 

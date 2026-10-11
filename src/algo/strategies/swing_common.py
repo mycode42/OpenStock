@@ -71,12 +71,20 @@ def _clean_daily_bars_uncached(bars: list[dict[str, Any]]) -> list[tuple[date, d
 
 
 class CachedDailyBarHistory(list[dict[str, Any]]):
-    """Append-only replay history that reuses its normalized daily rows."""
+    """Replay history that reuses normalized daily rows across signal calls."""
 
     def __init__(self) -> None:
         super().__init__()
         self._cleaned_rows: list[tuple[date, dict[str, Any], float]] | None = []
         self._signal_results: dict[tuple[Any, ...], Any] = {}
+
+    @classmethod
+    def from_bars(cls, bars: list[dict[str, Any]]) -> CachedDailyBarHistory:
+        """Wrap a fixed input history and normalize it lazily on first access."""
+        history = cls()
+        list.extend(history, bars)
+        history._cleaned_rows = None
+        return history
 
     def append(self, bar: dict[str, Any]) -> None:
         super().append(bar)

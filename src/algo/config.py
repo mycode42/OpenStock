@@ -121,7 +121,6 @@ ALGO_MODE_CONFIG = {
         "trailing_stop_pct": 0.04,
         "stop_loss_pct_by_strategy": {
             "mean_reversion": 0.011,
-            "opening_range_breakout": 0.011,
             "trend_following": 0.06,
             "momentum": 0.06,
             "swing_trend_following": 0.06,
@@ -133,7 +132,6 @@ ALGO_MODE_CONFIG = {
         },
         "trailing_stop_pct_by_strategy": {
             "mean_reversion": 0.008,
-            "opening_range_breakout": 0.008,
             "trend_following": 0.045,
             "momentum": 0.045,
             "swing_trend_following": 0.045,
@@ -145,7 +143,6 @@ ALGO_MODE_CONFIG = {
         },
         "trailing_activation_pct_by_strategy": {
             "mean_reversion": 0.005,
-            "opening_range_breakout": 0.005,
             "trend_following": 0.02,
             "momentum": 0.02,
             "swing_trend_following": 0.02,
@@ -165,7 +162,7 @@ ALGO_MODE_CONFIG = {
             "trend_following": 4, "momentum": 4, "swing_mean_reversion": 4,
             "swing_trend_following": 4, "swing_momentum": 4,
             "multi_factor": 4,
-            "mean_reversion": 5, "opening_range_breakout": 5,
+            "mean_reversion": 5,
             "intraday_trend": 1, "intraday_momentum": 1,
         },
         "max_short_positions": 5,
@@ -183,7 +180,6 @@ ALGO_MODE_CONFIG = {
             "intraday_trend": 20,
             "intraday_momentum": 20,
             "multi_factor": 0, "event_driven": 0,
-            "opening_range_breakout": 15,
         },
         "cooldown_minutes_by_strategy": {
             "mean_reversion": 90,
@@ -196,7 +192,6 @@ ALGO_MODE_CONFIG = {
             "intraday_momentum": 60,
             "multi_factor": 5 * 24 * 60,
             "event_driven": 5 * 24 * 60,
-            "opening_range_breakout": 60,
         },
         "max_entries_per_strategy_per_day": {
             "mean_reversion": 3,
@@ -208,7 +203,6 @@ ALGO_MODE_CONFIG = {
             "swing_mean_reversion": 1,
             "intraday_trend": 1,
             "intraday_momentum": 1,
-            "opening_range_breakout": 3,
         },
         "strategy_group_limits": {
             "swing": {
@@ -224,7 +218,6 @@ ALGO_MODE_CONFIG = {
                 "max_open_positions": 2, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
             },
         },
-        "one_orb_attempt_per_ticker_per_day": True,
         "min_cash_pct": 0.15,
         "max_tactical_pct": 0.04,
         "max_tactical_positions": 2,
@@ -272,5 +265,4 @@ def get_algo_research_controls() -> dict:
         "max_positions_per_strategy": risk["max_positions_per_strategy"],
         "max_entries_per_strategy_per_day": deepcopy(risk["max_entries_per_strategy_per_day"]),
         "cooldown_minutes_by_strategy": deepcopy(risk["cooldown_minutes_by_strategy"]),
-        "one_orb_attempt_per_ticker_per_day": risk["one_orb_attempt_per_ticker_per_day"],
     }

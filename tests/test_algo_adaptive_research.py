@@ -8,7 +8,7 @@ from src.algo.research.adaptive import (
     _search_space,
 )
 from src.algo.research.cli import build_parser
-from src.algo.research.nightly import _write_adaptive_optimization_artifact
+from src.algo.research.nightly import _write_adaptive_coordinator_artifact
 from src.algo.research.portfolio_simulation import _read_artifact, _validate_artifacts
 from src.algo.research.settings import (
     ADAPTIVE_WINDOW_DAYS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS,
@@ -162,11 +162,11 @@ def test_verified_adaptive_artifact_matches_portfolio_coordinator_schema(tmp_pat
     }
     summary = {"checks": {"overall_pass": False}}
 
-    path = _write_adaptive_optimization_artifact(detail, summary, tmp_path / "portfolio")
+    path = _write_adaptive_coordinator_artifact(detail, summary, tmp_path / "portfolio")
     artifact = _read_artifact(path, strategy)
     common = _validate_artifacts({strategy: artifact})
 
     assert common["start"] == "2016-01-04"
     assert len(common["folds"]) == 3
-    assert artifact["optimization"]["folds"][0]["selected_parameters"][strategy] == detail["folds"][0]["train_parameters"]
+    assert artifact["verification"]["folds"][0]["selected_parameters"][strategy] == detail["folds"][0]["train_parameters"]
     assert artifact["promotion_gate"]["promotable"] is False

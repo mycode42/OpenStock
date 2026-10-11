@@ -7,7 +7,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, time, timedelta, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -16,43 +15,34 @@ from types import SimpleNamespace
 import requests
 
 from src.config import get_algo_runtime_settings
+from src.algo.cpu import available_cpu_count
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
 from src.market_data import data_tier, regular_feed
 
 from .artifact_cache import (
     read_json, research_data_version, stable_hash,
-    valid_cohort_optimization, valid_cohort_research,
 )
 from .data import (
     _latest_dates, _load_daily_history, _refresh_incremental,
-    _replay_start_after_spy_warmup, load_algo_universe,
+    load_algo_universe,
 )
 from .files import _atomic_json, _research_lock
 from .live_manifest import live_configuration_manifest
-from .profiles import profile_search_manifest
 from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_HOLDOUT_DAYS, ADAPTIVE_VERIFICATION_STEP_DAYS,
     ADAPTIVE_VERIFICATION_TEST_DAYS, ADAPTIVE_WINDOW_DAYS,
     ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, LIVE_RESEARCH_STRATEGIES,
-    MIN_COVERED_UNIVERSE, RESEARCHABLE_STRATEGIES, STRATEGY_ARTIFACT_MAX_AGE_DAYS,
-    STRATEGY_DISCOVERY_END, STRATEGY_FLAVORS, STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
-    STRATEGY_MIN_TRAIN_TRADES, STRATEGY_OPTIMIZATION_START,
-    STRATEGY_STEP_DAYS, STRATEGY_TEST_DAYS, STRATEGY_TRAIN_DAYS,
+    MAX_ADAPTIVE_FOLD_WORKERS_PER_STRATEGY, MIN_COVERED_UNIVERSE,
+    RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS,
 )
 
 
-NIGHTLY_PIPELINE_VERSION = "algo-research-layers-v5-adaptive-all-strategies"
-MAX_WALK_FORWARD_WORKERS_PER_STRATEGY = 4
-_RESEARCH_COSTS = {
-    "slippage_bps": 5.0,
-    "spread_bps": 3.0,
-    "commission_per_share": 0.005,
-    "short_borrow_annual_pct": 3.0,
-    "unknown_borrow_penalty_bps": 25.0,
-    "force_close_at_end": False,
-}
-_OPTIMIZATION_COSTS = {
+NIGHTLY_PIPELINE_VERSION = "algo-research-layers-v7-adaptive-only"
+# Keep the adaptive policy version independent from nightly orchestration so
+# compatible dynamic-search artifacts survive cache and report changes.
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v5-adaptive-all-strategies"
+_ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
     "spread_bps": 3.0,
     "commission_per_share": 0.005,
@@ -95,36 +85,11 @@ def run_daily_research(args) -> dict:
         )
 
     cohort_end = _last_completed_friday(latest_end)
-    if history_start >= STRATEGY_DISCOVERY_END:
-        raise ValueError(
-            f"Strategy discovery needs stored history before {STRATEGY_DISCOVERY_END}; "
-            f"earliest common date is {history_start}"
-        )
-    if cohort_end < STRATEGY_OPTIMIZATION_START:
-        raise ValueError(
-            f"Strategy validation needs data from {STRATEGY_OPTIMIZATION_START}; "
-            f"latest completed weekly cutoff is {cohort_end}"
-        )
-
-    discovery_end = STRATEGY_DISCOVERY_END
-    discovery_start = _replay_start_after_spy_warmup(
-        store, history_start, discovery_end,
-    )
-    optimization_start = STRATEGY_OPTIMIZATION_START
-    optimization_end = cohort_end
     data_version = research_data_version(
-        database, start=history_start, end=optimization_end,
+        database, start=history_start, end=cohort_end,
         symbols=covered_symbols, feed=FEED, adjustment=ADJUSTMENT,
     )
     live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "multi_factor", "event_driven"])
-    live_hashes = {
-        strategy: live_configuration_manifest([strategy])["sha256"]
-        for strategy in RESEARCHABLE_STRATEGIES
-    }
-    search_versions = {
-        strategy: profile_search_manifest(strategy)["version"]
-        for strategy in RESEARCHABLE_STRATEGIES
-    }
     context = {
         "pipeline_version": NIGHTLY_PIPELINE_VERSION,
         "database": database,
@@ -132,20 +97,8 @@ def run_daily_research(args) -> dict:
         "adjustment": ADJUSTMENT,
         "symbols": covered_symbols,
         "history_start": history_start.isoformat(),
-        "data_end": optimization_end.isoformat(),
+        "data_end": cohort_end.isoformat(),
         "data_version": data_version,
-        "research": {
-            "start": discovery_start.isoformat(), "end": discovery_end.isoformat(),
-            "costs": _RESEARCH_COSTS,
-        },
-        "optimization": {
-            "start": optimization_start.isoformat(), "end": optimization_end.isoformat(),
-            "train_days": STRATEGY_TRAIN_DAYS, "test_days": STRATEGY_TEST_DAYS,
-            "step_days": STRATEGY_STEP_DAYS,
-            "min_train_trades": STRATEGY_MIN_TRAIN_TRADES,
-            "max_train_drawdown_pct": STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
-            "costs": _OPTIMIZATION_COSTS,
-        },
         "adaptive_pipeline": {
             "window_days_by_flavor": {
                 flavor: list(values) for flavor, values in ADAPTIVE_WINDOW_DAYS.items()
@@ -153,16 +106,14 @@ def run_daily_research(args) -> dict:
             "discovery_method": "bayes",
             "discovery_candidates": ADAPTIVE_DISCOVERY_CANDIDATES,
             "verification_start": history_start.isoformat(),
-            "verification_end": optimization_end.isoformat(),
+            "verification_end": cohort_end.isoformat(),
             "verification_candidates": ADAPTIVE_VERIFICATION_CANDIDATES,
             "verification_test_days": ADAPTIVE_VERIFICATION_TEST_DAYS,
             "verification_step_days": ADAPTIVE_VERIFICATION_STEP_DAYS,
             "verification_holdout_days": ADAPTIVE_VERIFICATION_HOLDOUT_DAYS,
         },
         "strategies": list(RESEARCHABLE_STRATEGIES),
-        "profile_search_versions": search_versions,
         "live_configuration_sha256": live_snapshot["sha256"],
-        "strategy_configuration_sha256": live_hashes,
         "portfolio_strategies": list(LIVE_RESEARCH_STRATEGIES),
         "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled,
         "event_driven_enabled": runtime_settings.algo_event_driven_enabled,
@@ -171,7 +122,7 @@ def run_daily_research(args) -> dict:
     fingerprint = stable_hash(context)
     if args.force:
         fingerprint = stable_hash({"context": context, "forced_at": datetime.now(timezone.utc).isoformat()})
-    run_id = f"week-{optimization_end:%Y%m%d}-{fingerprint[:16]}"
+    run_id = f"week-{cohort_end:%Y%m%d}-{fingerprint[:16]}"
     context["fingerprint"] = fingerprint
     context["run_id"] = run_id
 
@@ -192,7 +143,7 @@ def run_daily_research(args) -> dict:
     adaptive_verification = (
         _run_nightly_adaptive_verifications(
             database=database, symbols=covered_symbols,
-            start=history_start, end=optimization_end,
+            start=history_start, end=cohort_end,
             data_version=data_version,
             output_dir=adaptive_root, workers=args.workers, force=args.force,
         )
@@ -200,15 +151,15 @@ def run_daily_research(args) -> dict:
     )
     adaptive_verification_seconds = round(perf_counter() - adaptive_verification_started, 3)
     adaptive_shadow_discovery = (adaptive_discovery.get("strategies") or {}).get("multi_factor", {})
-    adaptive_coordinator_root = adaptive_root / "portfolio-optimization"
+    adaptive_coordinator_root = adaptive_root / "verification-coordinator"
     verification_statuses = adaptive_verification.get("strategies") or {}
     adaptive_portfolio_ready = all(
         (verification_statuses.get(strategy) or {}).get("coordinator_artifact")
         and Path((verification_statuses.get(strategy) or {})["coordinator_artifact"]).is_file()
         for strategy in LIVE_RESEARCH_STRATEGIES
     )
-    portfolio_source = "adaptive_short_window" if adaptive_portfolio_ready else "fixed_profile_fallback"
-    if not args.force and not args.factor_only:
+    portfolio_source = "adaptive_short_window"
+    if adaptive_portfolio_ready and not args.force and not args.factor_only:
         cached, _ = read_json(report_path)
         if (
             cached
@@ -237,7 +188,7 @@ def run_daily_research(args) -> dict:
                     strategy: {
                         "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
                         "verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                        "coordinator_optimization": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
+                        "coordinator_artifact": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
                         "verification_summary": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("summary"),
                     }
                     for strategy in RESEARCHABLE_STRATEGIES
@@ -258,7 +209,6 @@ def run_daily_research(args) -> dict:
             "seconds": adaptive_verification_seconds, "status": adaptive_verification.get("status"),
         },
     }
-    strategy_reports = {}
     factor_started = perf_counter()
     factor_path = cohort_dir / "factor_model.json"
     factor_cached, _ = read_json(factor_path)
@@ -267,7 +217,7 @@ def run_daily_research(args) -> dict:
         timings["factor_model"] = {"seconds": 0.0, "reused": True}
     else:
         history = _load_daily_history(
-            store, covered_symbols, start=history_start.isoformat(), end=optimization_end.isoformat(),
+            store, covered_symbols, start=history_start.isoformat(), end=cohort_end.isoformat(),
         )
         from .factor_research import train_factor_model
 
@@ -285,7 +235,7 @@ def run_daily_research(args) -> dict:
             "trade_or_order_actions": 0, "factor_model": factor_report,
             "factor_only": True,
             "data": _data_summary(
-                history_start, latest_end, optimization_end, latest_age_days,
+                history_start, latest_end, cohort_end, latest_age_days,
                 covered_symbols, symbols, missing, universe_meta, refresh_report,
             ),
             "adaptive_research": {
@@ -297,74 +247,67 @@ def run_daily_research(args) -> dict:
             "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
             "limitations": [
                 "Factor fitting is research-only and does not update live weights.",
-                "No strategy optimization or portfolio coordinator replay was requested.",
+                "No adaptive strategy discovery, verification, or portfolio replay was requested.",
             ],
         }
         _atomic_json(report_path, report)
         return report
 
-    stage_started = perf_counter()
-    strategy_reports = _run_strategy_stages(
-        context=context, cohort_dir=cohort_dir, output_root=root,
-        symbols=covered_symbols, database=database, workers=args.workers,
-        force=args.force,
-    )
-    timings["strategy_stages"] = {
-        "seconds": round(perf_counter() - stage_started, 3),
-        "worker_count": min(max(1, args.workers), len(strategy_reports), os.cpu_count() or 1),
-        "strategies": strategy_reports,
-    }
-
-    portfolio_started = perf_counter()
     portfolio_path = cohort_dir / "portfolio"
-    cached_portfolio, _ = read_json(portfolio_path / "latest.json")
-    if (
-        not args.force and cached_portfolio
-        and cached_portfolio.get("orchestration", {}).get("fingerprint") == fingerprint
-        and cached_portfolio.get("profile_selection_source") == portfolio_source
-    ):
-        portfolio_report = cached_portfolio
-        portfolio_reused = True
-        portfolio_source = cached_portfolio.get("profile_selection_source", portfolio_source)
-    else:
-        from .portfolio_simulation import run_coordinated_portfolio
+    portfolio_report = None
+    if adaptive_portfolio_ready:
+        portfolio_started = perf_counter()
+        cached_portfolio, _ = read_json(portfolio_path / "latest.json")
+        if (
+            not args.force and cached_portfolio
+            and cached_portfolio.get("orchestration", {}).get("fingerprint") == fingerprint
+            and cached_portfolio.get("profile_selection_source") == portfolio_source
+        ):
+            portfolio_report = cached_portfolio
+            portfolio_reused = True
+        else:
+            from .portfolio_simulation import run_coordinated_portfolio
 
-        portfolio_args = SimpleNamespace(
-            strategies=",".join(LIVE_RESEARCH_STRATEGIES),
-            enable_disabled_intraday=False,
-            artifact_dir=str(adaptive_coordinator_root if adaptive_portfolio_ready else cohort_dir / "optimization"),
-            event_calendar=None,
-            multi_factor_overlay=runtime_settings.algo_multi_factor_enabled,
-            workers=max(1, args.workers), output_dir=str(portfolio_path),
-        )
-        portfolio_report = run_coordinated_portfolio(portfolio_args)
-        portfolio_report["orchestration"] = {
-            "run_id": run_id, "fingerprint": fingerprint,
+            portfolio_args = SimpleNamespace(
+                strategies=",".join(LIVE_RESEARCH_STRATEGIES),
+                enable_disabled_intraday=False,
+                artifact_dir=str(adaptive_coordinator_root),
+                event_calendar=None,
+                multi_factor_overlay=runtime_settings.algo_multi_factor_enabled,
+                workers=max(1, args.workers), output_dir=str(portfolio_path),
+            )
+            portfolio_report = run_coordinated_portfolio(portfolio_args)
+            portfolio_report["orchestration"] = {
+                "run_id": run_id, "fingerprint": fingerprint,
+            }
+            portfolio_report["profile_selection_source"] = portfolio_source
+            _atomic_json(portfolio_path / "latest.json", portfolio_report)
+            _atomic_json(
+                portfolio_path / f"{cohort_end.isoformat()}-portfolio.json",
+                portfolio_report,
+            )
+            portfolio_reused = False
+        timings["portfolio_replay"] = {
+            "seconds": 0.0 if portfolio_reused else round(perf_counter() - portfolio_started, 3),
+            "reused": portfolio_reused,
         }
-        portfolio_report["profile_selection_source"] = portfolio_source
-        _atomic_json(portfolio_path / "latest.json", portfolio_report)
-        _atomic_json(
-            portfolio_path / f"{optimization_end.isoformat()}-portfolio.json",
-            portfolio_report,
-        )
-        portfolio_reused = False
-    timings["portfolio_replay"] = {
-        "seconds": 0.0 if portfolio_reused else round(perf_counter() - portfolio_started, 3),
-        "reused": portfolio_reused,
-    }
+    else:
+        timings["portfolio_replay"] = {
+            "seconds": 0.0, "status": "skipped",
+            "reason": "Adaptive verification is incomplete; portfolio replay was skipped.",
+        }
 
     factor_ic = (factor_report.get("adaptive_prequential_ic") or {}).get("mean_spearman_ic")
     report = {
         "schema": "swarm_algo_nightly_research_v2",
-        "status": "completed", "created_at": datetime.now(timezone.utc).isoformat(),
+        "status": "completed" if adaptive_portfolio_ready else "partial",
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "research_only": True, "live_configuration_changed": False,
         "trade_or_order_actions": 0,
         "data": _data_summary(
-            history_start, latest_end, optimization_end, latest_age_days,
+            history_start, latest_end, cohort_end, latest_age_days,
             covered_symbols, symbols, missing, universe_meta, refresh_report,
         ),
-        "research_window": context["research"],
-        "optimization_window": context["optimization"],
         "factor_model": factor_report,
         "adaptive_research": {
             "discovery": adaptive_discovery,
@@ -374,32 +317,20 @@ def run_daily_research(args) -> dict:
             strategy: {
                 "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
                 "verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                "coordinator_optimization": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
+                "coordinator_artifact": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
                 "verification_summary": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("summary"),
             }
             for strategy in RESEARCHABLE_STRATEGIES
         },
         "adaptive_shadow_discovery": adaptive_shadow_discovery,
-        "strategy_jobs": strategy_reports,
         "portfolio_coordinator_replay": portfolio_report,
-        "strategy_artifacts": {
-            strategy: {
-                "research": item["research_artifact"],
-                "optimization": item["optimization_artifact"],
-                "research_reused": item["research_reused"],
-                "optimization_reused": item["optimization_reused"],
-                "latest_training_selection": item["latest_training_selection"],
-                "promotion_gate": item["promotion_gate"],
-            }
-            for strategy, item in strategy_reports.items()
-        },
-        "portfolio_summary": portfolio_report.get("fold_summary"),
+        "portfolio_summary": (portfolio_report or {}).get("fold_summary"),
         "recommendation": {
-            "adaptive_strategy_profiles": (
-                "The nightly adaptive stage searches all eight strategies on their short-window ranges and verifies them with rolling out-of-sample folds; "
-                "review per-strategy status, summaries, and locked holdouts before changing live parameters."
+            "adaptive_research": (
+                "Dynamic discovery and rolling out-of-sample verification cover the active strategy set."
+                if adaptive_portfolio_ready
+                else "Adaptive verification is incomplete; portfolio replay was skipped."
             ),
-            "strategy_profiles": "Training-window selections were evaluated on later out-of-sample folds; review artifacts before any promotion.",
             "multi_factor": (
                 "The recent-regime Multi Factor candidate is routed to its shadow book only; broker execution remains disabled."
                 if factor_ic is not None and factor_ic > 0
@@ -415,6 +346,9 @@ def run_daily_research(args) -> dict:
             "The portfolio replay includes only strategies active in live config and available historical overlays.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
             "The artifacts are research evidence, not a performance forecast or deployment approval.",
+            *([] if adaptive_portfolio_ready else [
+                "Adaptive verification did not produce coordinator artifacts for every active strategy; the portfolio replay was skipped.",
+            ]),
         ],
     }
     _atomic_json(report_path, report)
@@ -444,7 +378,7 @@ def _run_nightly_adaptive_discoveries(
             and prior.get("schema") == "swarm_algo_adaptive_discovery_v1"
             and prior.get("strategy") == strategy
             and prior.get("window", {}).get("end") == latest_end.isoformat()
-            and window_search.get("pipeline_version") == NIGHTLY_PIPELINE_VERSION
+            and window_search.get("pipeline_version") == ADAPTIVE_PIPELINE_VERSION
             and window_search.get("configured_window_days") == options
             and window_search.get("candidate_count") == ADAPTIVE_DISCOVERY_CANDIDATES
             and window_search.get("data_version") == data_version
@@ -460,7 +394,7 @@ def _run_nightly_adaptive_discoveries(
             jobs.append((strategy, database, symbols, latest_end, data_version, output_dir, options))
 
     if jobs:
-        worker_count = min(max(1, workers), len(jobs), os.cpu_count() or 1)
+        worker_count = min(max(1, workers), len(jobs), available_cpu_count())
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
             futures = {
                 executor.submit(_run_nightly_adaptive_discovery_job, job): job[0]
@@ -502,7 +436,7 @@ def _run_nightly_adaptive_discovery_job(payload: tuple) -> dict:
         window_days=options[len(options) // 2], output_dir=str(output_dir),
     )
     report = run_window_ladder_discovery(
-        discovery_args, options, pipeline_version=NIGHTLY_PIPELINE_VERSION,
+        discovery_args, options, pipeline_version=ADAPTIVE_PIPELINE_VERSION,
         data_version=data_version,
     )
     detail, _ = read_json(report["latest_detail_artifact"])
@@ -552,8 +486,8 @@ def _run_nightly_adaptive_verifications(
             jobs.append((strategy, database, symbols, start, end, data_version, output_dir, options))
 
     if jobs:
-        budget = min(max(1, workers), os.cpu_count() or 1)
-        fold_workers = min(MAX_WALK_FORWARD_WORKERS_PER_STRATEGY, budget)
+        budget = min(max(1, workers), available_cpu_count())
+        fold_workers = min(MAX_ADAPTIVE_FOLD_WORKERS_PER_STRATEGY, budget)
         concurrency = min(len(jobs), max(1, (budget + fold_workers - 1) // fold_workers))
         for offset in range(0, len(jobs), concurrency):
             batch = jobs[offset:offset + concurrency]
@@ -583,8 +517,8 @@ def _run_nightly_adaptive_verifications(
         try:
             if not detail or not summary:
                 raise ValueError("adaptive verification detail or summary is missing")
-            artifact_path = _write_adaptive_optimization_artifact(
-                detail, summary, output_dir / "portfolio-optimization",
+            artifact_path = _write_adaptive_coordinator_artifact(
+                detail, summary, output_dir / "verification-coordinator",
             )
             status["coordinator_artifact"] = str(artifact_path.resolve())
             statuses[strategy] = status
@@ -605,8 +539,8 @@ def _run_nightly_adaptive_verifications(
     }
 
 
-def _write_adaptive_optimization_artifact(detail: dict, summary: dict, output_dir: Path) -> Path:
-    """Adapt verified short-window fold choices to the shared coordinator input schema."""
+def _write_adaptive_coordinator_artifact(detail: dict, summary: dict, output_dir: Path) -> Path:
+    """Adapt verified short-window fold choices to the coordinator input schema."""
     strategy = detail["strategy"]
     data = detail["data"]
     folds = []
@@ -643,39 +577,31 @@ def _write_adaptive_optimization_artifact(detail: dict, summary: dict, output_di
         "checks": summary.get("checks"),
     }
     artifact = {
-        "schema": "swarm_algo_strategy_optimization_v1",
-        "stage": "strategy_optimization",
+        "schema": "swarm_algo_adaptive_coordinator_v1",
+        "stage": "adaptive_verification_coordinator",
         "research_only": True,
         "live_configuration_changed": False,
         "trade_or_order_actions": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "strategy": strategy,
         "strategy_flavor": STRATEGY_FLAVORS[strategy],
-        "research_runtime_overrides": (
-            {strategy: True} if strategy in {"intraday_trend", "intraday_momentum"} else {}
-        ),
         "direction_scope": "both",
-        "profile_search": profile_search_manifest(strategy),
         "live_configuration": live_configuration_manifest([strategy]),
         "source": {
             "database": data["database"], "symbols": data["symbols"],
-            "borrow_availability": None,
-            "candidate_profiles": [],
-            "candidate_profiles_artifact": {
-                "path": str(detail_path.resolve()),
-                "sha256": hashlib.sha256(detail_bytes).hexdigest(),
-            },
+            "verification_artifact": str(detail_path.resolve()),
+            "verification_sha256": hashlib.sha256(detail_bytes).hexdigest(),
         },
-        "optimization": {
+        "verification": {
             "start": data["start"], "end": data["end"], "feed": data["feed"],
             "data_adjustment": data["adjustment"], "symbols": data["symbols"],
             "data_tier_at_run": data.get("data_tier"),
             "transaction_cost_model": {
-                "slippage_bps_each_side": _OPTIMIZATION_COSTS["slippage_bps"],
-                "spread_bps": _OPTIMIZATION_COSTS["spread_bps"],
-                "commission_per_share_each_side": _OPTIMIZATION_COSTS["commission_per_share"],
-                "short_borrow_annual_pct": _OPTIMIZATION_COSTS["short_borrow_annual_pct"],
-                "unknown_borrow_adverse_fill_penalty_bps": _OPTIMIZATION_COSTS["unknown_borrow_penalty_bps"],
+                "slippage_bps_each_side": _ADAPTIVE_COST_MODEL["slippage_bps"],
+                "spread_bps": _ADAPTIVE_COST_MODEL["spread_bps"],
+                "commission_per_share_each_side": _ADAPTIVE_COST_MODEL["commission_per_share"],
+                "short_borrow_annual_pct": _ADAPTIVE_COST_MODEL["short_borrow_annual_pct"],
+                "unknown_borrow_adverse_fill_penalty_bps": _ADAPTIVE_COST_MODEL["unknown_borrow_penalty_bps"],
             },
             "folds": folds, "promotion_gate": promotion,
             "adaptive_verification_summary": summary,
@@ -694,7 +620,7 @@ def _write_adaptive_optimization_artifact(detail: dict, summary: dict, output_di
         "promotion_gate": promotion,
     }
     latest = output_dir / "latest.json"
-    dated = output_dir / f"{run_date}-optimization.json"
+    dated = output_dir / f"{run_date}-adaptive-verification.json"
     _atomic_json(latest, artifact)
     _atomic_json(dated, artifact)
     return latest
@@ -711,7 +637,7 @@ def _adaptive_verification_is_reusable(
     data = detail.get("data") or {}
     return bool(
         detail.get("strategy") == strategy
-        and detail.get("adaptive_policy_version") == NIGHTLY_PIPELINE_VERSION
+        and detail.get("adaptive_policy_version") == ADAPTIVE_PIPELINE_VERSION
         and data.get("start") == start.isoformat()
         and data.get("end") == end.isoformat()
         and data.get("symbols") == symbols
@@ -749,7 +675,7 @@ def _run_nightly_adaptive_verification_job(payload: tuple) -> dict:
         holdout_days=ADAPTIVE_VERIFICATION_HOLDOUT_DAYS,
         workers=fold_workers, minimum_folds=3, minimum_oos_sharpe=0.0,
         maximum_average_decay=0.35, output_dir=str(output_dir),
-        adaptive_policy_version=NIGHTLY_PIPELINE_VERSION,
+        adaptive_policy_version=ADAPTIVE_PIPELINE_VERSION,
         data_version=data_version,
     )
     report = run_adaptive_walk_forward(walk_args)
@@ -763,319 +689,9 @@ def _run_nightly_adaptive_verification_job(payload: tuple) -> dict:
     }
 
 
-def _run_strategy_stages(
-    *, context: dict, cohort_dir: Path, output_root: Path,
-    symbols: list[str], database: str, workers: int, force: bool,
-) -> dict[str, dict]:
-    research_root = cohort_dir / "research"
-    optimization_root = cohort_dir / "optimization"
-    research_root.mkdir(parents=True, exist_ok=True)
-    optimization_root.mkdir(parents=True, exist_ok=True)
-
-    statuses = {}
-    jobs = []
-    for strategy in RESEARCHABLE_STRATEGIES:
-        research_path = research_root / strategy / "latest.json"
-        optimization_path = optimization_root / strategy / "latest.json"
-        research_artifact = None if force else valid_cohort_research(
-            research_path, strategy=strategy, fingerprint=context["fingerprint"],
-        )
-        research_reused = research_artifact is not None
-        if research_artifact is None and not force:
-            external = _load_standalone_research(
-                output_root, strategy=strategy, context=context,
-            )
-            if external is not None:
-                research_artifact = external
-                research_artifact["orchestration"] = _artifact_context(context)
-                _atomic_json(research_path, research_artifact)
-                research_reused = True
-
-        research_bytes = research_path.read_bytes() if research_path.is_file() else b""
-        optimization_artifact = None if force or not research_artifact else valid_cohort_optimization(
-            optimization_path, strategy=strategy,
-            fingerprint=context["fingerprint"], research_path=research_path,
-            research_bytes=research_bytes,
-        )
-        optimization_reused = optimization_artifact is not None
-        if optimization_artifact is None and not force and research_artifact is not None:
-            external_pair = _load_standalone_pair(
-                output_root, strategy=strategy, context=context,
-                research_artifact=research_artifact,
-            )
-            if external_pair is not None:
-                optimization_artifact = external_pair
-                optimization_artifact["orchestration"] = _artifact_context(context)
-                discovered = optimization_artifact["source"]["candidate_profiles_artifact"]
-                discovered["path"] = str(research_path.resolve())
-                discovered["sha256"] = hashlib.sha256(research_bytes).hexdigest()
-                _atomic_json(optimization_path, optimization_artifact)
-                optimization_reused = True
-
-        statuses[strategy] = {
-            "research_reused": research_reused,
-            "optimization_reused": optimization_reused,
-            "research_artifact": str(research_path.resolve()),
-            "optimization_artifact": str(optimization_path.resolve()),
-            "latest_training_selection": (
-                optimization_artifact.get("latest_training_selection")
-                if optimization_artifact else None
-            ),
-            "promotion_gate": optimization_artifact.get("promotion_gate") if optimization_artifact else None,
-        }
-        if not research_reused or not optimization_reused:
-            jobs.append((
-                strategy, context, symbols, database, research_path,
-                optimization_path, research_reused, optimization_reused,
-            ))
-
-    if jobs:
-        completed = 0
-        for strategy, result in _run_strategy_jobs_in_batches(jobs, workers=workers):
-            statuses[strategy].update(result)
-            completed += 1
-            print(
-                f"Completed nightly strategy stages {completed}/{len(jobs)}: {strategy}",
-                file=sys.stderr, flush=True,
-            )
-
-    try:
-        _validate_cohort_artifacts(statuses)
-    except ValueError as exc:
-        if "not cohort-aligned" not in str(exc):
-            raise
-        # Standalone optimization artifacts can be individually valid but
-        # come from different fold windows. Refit only the optimization stage
-        # for the whole cohort so the coordinator receives one aligned set.
-        alignment_jobs = [
-            (
-                strategy, context, symbols, database,
-                Path(statuses[strategy]["research_artifact"]),
-                Path(statuses[strategy]["optimization_artifact"]),
-                True, False,
-            )
-            for strategy in RESEARCHABLE_STRATEGIES
-        ]
-        for strategy, result in _run_strategy_jobs_in_batches(
-            alignment_jobs, workers=workers,
-        ):
-            statuses[strategy].update(result)
-        _validate_cohort_artifacts(statuses)
-    return statuses
-
-
-def _run_strategy_jobs_in_batches(jobs: list[tuple], *, workers: int) -> list[tuple[str, dict]]:
-    """Share the CPU budget between strategy jobs and each job's walk-forward folds."""
-    if not jobs:
-        return []
-    worker_budget = min(max(1, workers), os.cpu_count() or 1)
-    fold_workers = min(MAX_WALK_FORWARD_WORKERS_PER_STRATEGY, worker_budget)
-    strategy_concurrency = min(
-        len(jobs), max(1, (worker_budget + fold_workers - 1) // fold_workers),
-    )
-    results = []
-    for offset in range(0, len(jobs), strategy_concurrency):
-        batch = jobs[offset:offset + strategy_concurrency]
-        batch_fold_workers = min(fold_workers, max(1, worker_budget // len(batch)))
-        batch_payloads = [(*job, batch_fold_workers) for job in batch]
-        with ProcessPoolExecutor(max_workers=len(batch_payloads)) as executor:
-            futures = [executor.submit(_run_strategy_job, payload) for payload in batch_payloads]
-            results.extend(future.result() for future in as_completed(futures))
-    return results
-
-
-def _run_strategy_job(payload: tuple) -> tuple[str, dict]:
-    (
-        strategy, context, symbols, database, research_path, optimization_path,
-        research_reused, optimization_reused, walk_forward_workers,
-    ) = payload
-    from .strategy_optimization import run_strategy_optimization
-    from .strategy_research import run_strategy_research
-
-    research_path, optimization_path = Path(research_path), Path(optimization_path)
-    stage_context = _artifact_context(context)
-    timings = {}
-    if not research_reused:
-        research_args = SimpleNamespace(
-            strategy=strategy, symbols=",".join(symbols), db=database,
-            start=context["research"]["start"], end=context["research"]["end"],
-            slippage_bps=_RESEARCH_COSTS["slippage_bps"],
-            spread_bps=_RESEARCH_COSTS["spread_bps"],
-            commission_per_share=_RESEARCH_COSTS["commission_per_share"],
-            short_borrow_annual_pct=_RESEARCH_COSTS["short_borrow_annual_pct"],
-            unknown_borrow_penalty_bps=_RESEARCH_COSTS["unknown_borrow_penalty_bps"],
-            force_close_at_end=_RESEARCH_COSTS["force_close_at_end"],
-            created_at=datetime.now(timezone.utc).isoformat(),
-        )
-        stage_started = perf_counter()
-        report = run_strategy_research(research_args)
-        report["orchestration"] = stage_context
-        _atomic_json(research_path, report)
-        _atomic_json(
-            research_path.parent / f"{context['run_id']}-research.json", report,
-        )
-        timings["research_seconds"] = round(perf_counter() - stage_started, 3)
-
-    research_artifact, research_bytes = read_json(research_path)
-    if not research_artifact or research_bytes is None:
-        raise ValueError(f"Research artifact could not be read after completion: {research_path}")
-
-    if not optimization_reused:
-        optimization_args = SimpleNamespace(
-            strategy=strategy, symbols=",".join(symbols), db=database,
-            start=context["optimization"]["start"], end=context["optimization"]["end"],
-            train_days=STRATEGY_TRAIN_DAYS, test_days=STRATEGY_TEST_DAYS,
-            step_days=STRATEGY_STEP_DAYS, min_train_trades=STRATEGY_MIN_TRAIN_TRADES,
-            max_train_drawdown_pct=STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
-            workers=walk_forward_workers, slippage_bps=_OPTIMIZATION_COSTS["slippage_bps"],
-            spread_bps=_OPTIMIZATION_COSTS["spread_bps"],
-            commission_per_share=_OPTIMIZATION_COSTS["commission_per_share"],
-            short_borrow_annual_pct=_OPTIMIZATION_COSTS["short_borrow_annual_pct"],
-            unknown_borrow_penalty_bps=_OPTIMIZATION_COSTS["unknown_borrow_penalty_bps"],
-            borrow_availability=None, research_artifact=str(research_path.resolve()),
-            output_dir=str(optimization_path.parent.parent),
-        )
-        stage_started = perf_counter()
-        result = run_strategy_optimization(optimization_args)
-        optimization_path.parent.mkdir(parents=True, exist_ok=True)
-        dated_path = Path(result["dated_artifact"])
-        for path in (Path(result["artifact"]), dated_path):
-            stored, _ = read_json(path)
-            if not stored:
-                raise ValueError(f"Optimization artifact could not be read after completion: {path}")
-            stored["orchestration"] = stage_context
-            _atomic_json(path, stored)
-        timings["optimization_seconds"] = round(perf_counter() - stage_started, 3)
-
-    optimization_artifact, _ = read_json(optimization_path)
-    if not optimization_artifact:
-        raise ValueError(f"Optimization artifact could not be read after completion: {optimization_path}")
-    return strategy, {
-        "research_reused": research_reused,
-        "optimization_reused": optimization_reused,
-        "walk_forward_workers": walk_forward_workers,
-        "research_artifact": str(research_path.resolve()),
-        "optimization_artifact": str(optimization_path.resolve()),
-        "latest_training_selection": optimization_artifact.get("latest_training_selection"),
-        "promotion_gate": optimization_artifact.get("promotion_gate"),
-        **timings,
-    }
-
-
-def _load_standalone_research(output_root: Path, *, strategy: str, context: dict) -> dict | None:
-    source = output_root / "research" / strategy / "latest.json"
-    artifact, _ = read_json(source)
-    if not artifact:
-        return None
-    research = context["research"]
-    data = artifact.get("data") or {}
-    if (
-        artifact.get("schema") != "swarm_algo_strategy_research_v1"
-        or artifact.get("strategy") != strategy
-        or data.get("start") != research["start"]
-        or data.get("end") != research["end"]
-        or data.get("requested_symbols") != context["symbols"]
-        or data.get("database") != context["database"]
-        or artifact.get("profile_search", {}).get("version") != context["profile_search_versions"][strategy]
-        or artifact.get("live_configuration", {}).get("sha256") != context["strategy_configuration_sha256"][strategy]
-        or artifact.get("transaction_cost_model", {}).get("slippage_bps_each_side") != _RESEARCH_COSTS["slippage_bps"]
-        or artifact.get("transaction_cost_model", {}).get("spread_bps") != _RESEARCH_COSTS["spread_bps"]
-        or artifact.get("transaction_cost_model", {}).get("commission_per_share_each_side") != _RESEARCH_COSTS["commission_per_share"]
-        or artifact.get("transaction_cost_model", {}).get("short_borrow_annual_pct") != _RESEARCH_COSTS["short_borrow_annual_pct"]
-        or artifact.get("transaction_cost_model", {}).get("unknown_borrow_adverse_fill_penalty_bps") != _RESEARCH_COSTS["unknown_borrow_penalty_bps"]
-        or artifact.get("transaction_cost_model", {}).get("force_close_at_end") != _RESEARCH_COSTS["force_close_at_end"]
-        or not _artifact_is_recent(artifact)
-    ):
-        return None
-    return artifact
-
-
-def _load_standalone_pair(
-    output_root: Path, *, strategy: str, context: dict,
-    research_artifact: dict,
-) -> dict | None:
-    research_path = output_root / "research" / strategy / "latest.json"
-    optimization_path = output_root / "optimization" / strategy / "latest.json"
-    artifact, _ = read_json(optimization_path)
-    research_source, research_bytes = read_json(research_path)
-    if not artifact or not research_source or research_bytes is None:
-        return None
-    optimization = artifact.get("optimization") or {}
-    source = artifact.get("source") or {}
-    expected = context["optimization"]
-    discovered = source.get("candidate_profiles_artifact") or {}
-    costs = optimization.get("transaction_cost_model") or {}
-    if (
-        artifact.get("schema") != "swarm_algo_strategy_optimization_v1"
-        or artifact.get("strategy") != strategy
-        or optimization.get("start") != expected["start"]
-        or optimization.get("end") != expected["end"]
-        or optimization.get("feed") != context["feed"]
-        or optimization.get("data_adjustment") != context["adjustment"]
-        or optimization.get("symbols") != context["symbols"]
-        or source.get("database") != context["database"]
-        or source.get("symbols") != context["symbols"]
-        or artifact.get("profile_search", {}).get("version") != context["profile_search_versions"][strategy]
-        or artifact.get("live_configuration", {}).get("sha256") != context["strategy_configuration_sha256"][strategy]
-        or stable_hash(source.get("candidate_profiles")) != stable_hash(research_artifact.get("candidate_profiles"))
-        or discovered.get("sha256") != hashlib.sha256(research_bytes).hexdigest()
-        or costs.get("slippage_bps_each_side") != _OPTIMIZATION_COSTS["slippage_bps"]
-        or costs.get("spread_bps") != _OPTIMIZATION_COSTS["spread_bps"]
-        or costs.get("commission_per_share_each_side") != _OPTIMIZATION_COSTS["commission_per_share"]
-        or costs.get("short_borrow_annual_pct") != _OPTIMIZATION_COSTS["short_borrow_annual_pct"]
-        or costs.get("unknown_borrow_adverse_fill_penalty_bps") != _OPTIMIZATION_COSTS["unknown_borrow_penalty_bps"]
-        or not optimization.get("folds")
-        or not _artifact_is_recent(artifact)
-    ):
-        return None
-    return artifact
-
-
-def _artifact_is_recent(artifact: dict) -> bool:
-    try:
-        created = datetime.fromisoformat(str(artifact["created_at"]).replace("Z", "+00:00"))
-    except (KeyError, TypeError, ValueError):
-        return False
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
-    age = datetime.now(timezone.utc) - created.astimezone(timezone.utc)
-    return timedelta(0) <= age <= timedelta(days=STRATEGY_ARTIFACT_MAX_AGE_DAYS)
-
-
-def _validate_cohort_artifacts(statuses: dict[str, dict]) -> None:
-    expected_folds = None
-    expected_costs = None
-    for strategy in RESEARCHABLE_STRATEGIES:
-        path = Path(statuses[strategy]["optimization_artifact"])
-        artifact, _ = read_json(path)
-        if not artifact:
-            raise ValueError(f"Missing completed optimization artifact for {strategy}: {path}")
-        report = artifact.get("optimization") or {}
-        folds = [
-            tuple(item.get(name) for name in ("train_start", "train_end", "test_start", "test_end"))
-            for item in report.get("folds", [])
-        ]
-        costs = report.get("transaction_cost_model")
-        if expected_folds is None:
-            expected_folds, expected_costs = folds, costs
-        elif folds != expected_folds or costs != expected_costs:
-            raise ValueError(
-                f"Optimization artifacts are not cohort-aligned at {strategy}; "
-                "the mismatched strategy will be retrained on the next run."
-            )
-
-
 def _last_completed_friday(latest_session: date) -> date:
     days_since_friday = (latest_session.weekday() - 4) % 7
     return latest_session - timedelta(days=days_since_friday)
-
-
-def _artifact_context(context: dict) -> dict:
-    return {
-        "run_id": context["run_id"],
-        "fingerprint": context["fingerprint"],
-        "data_version": context["data_version"],
-    }
 
 
 def _data_summary(
@@ -1101,17 +717,17 @@ def _data_summary(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run versioned per-strategy Algo research and coordinator validation",
+        description="Run adaptive Algo discovery, rolling verification, and portfolio replay",
     )
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument(
-        "--workers", type=int, default=8,
-        help="CPU budget shared by concurrent strategy jobs and their walk-forward folds",
+        "--workers", type=int, default=min(8, available_cpu_count()),
+        help="CPU budget shared by adaptive discovery and verification workers",
     )
     parser.add_argument("--no-refresh", action="store_true", help="use existing bars without fetching recent SIP history")
-    parser.add_argument("--factor-only", action="store_true", help="fit the factor model without strategy or portfolio stages")
-    parser.add_argument("--force", action="store_true", help="create a fresh cohort and recompute every stage")
+    parser.add_argument("--factor-only", action="store_true", help="fit the factor model without adaptive or portfolio stages")
+    parser.add_argument("--force", action="store_true", help="create a fresh cohort and recompute dynamic research stages")
     return parser
 
 
@@ -1143,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
         "report": str((output_dir / "latest.json").resolve()),
         "run_id": report.get("orchestration", {}).get("run_id"),
         "range": [report["data"]["range_start"], report["data"].get("research_data_end")],
-        "strategies": len(report.get("strategy_jobs", {})),
+        "strategies": len(report.get("adaptive_strategy_artifacts", {})),
         "portfolio": report.get("portfolio_summary"),
         "cache_hit": report.get("orchestration", {}).get("cache_hit", False),
         "live_configuration_changed": False,

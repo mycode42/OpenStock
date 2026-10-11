@@ -36,7 +36,6 @@ def _mock_common(monkeypatch, *, positions=None, orders=None):
         runner, "_current_portfolio",
         lambda mode: ({"equity": "100000"}, positions or {}, orders or []),
     )
-    monkeypatch.setattr(runner.pairs, "candidates", lambda *args, **kwargs: [])
 
 
 def test_swing_and_day_use_their_fixed_configured_universes():

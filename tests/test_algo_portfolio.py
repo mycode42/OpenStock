@@ -2,7 +2,7 @@ import pytest
 
 import risk_manager
 from src.config import ALGO_MODE_CONFIG, MODES, STRATEGY_CONFIG, get_mode_config
-from src.algo.strategies import mean_reversion, momentum, opening_range_breakout, pairs, trend_following
+from src.algo.strategies import mean_reversion, momentum, trend_following
 from src.algo.strategies.regime import rank_strategies
 from src.algo.strategies.signals import Signal
 from src.algo.strategies.runner import _make_trade, _update_trailing_stop
@@ -327,15 +327,9 @@ def test_core_rules_emit_mirrored_short_entries():
     )
     mean_bars = _bars([100] * 20 + [110, 109])
     mean_signal = mean_reversion.signal("AAPL", mean_bars, allow_short=True)
-    opening = [{"h": 100, "l": 95, "c": 99, "v": 100} for _ in range(6)]
-    orb = opening_range_breakout.signal(
-        "AAPL", opening + [{"h": 99, "l": 93, "c": 94, "v": 200}], allow_short=True,
-    )
-
     assert trend is not None and trend.action == "short"
     assert momentum_signal is not None and momentum_signal.action == "short"
     assert mean_signal is not None and mean_signal.action == "short"
-    assert orb is not None and orb.action == "short"
 
 
 def test_algo_opening_rip_short_uses_mirrored_patient_filters():
@@ -383,37 +377,12 @@ def test_mean_reversion_requires_a_lower_band_reversal():
     assert "lower-band reversal" in signal.reason
 
 
-def test_opening_range_breakout_requires_a_close_and_volume_above_range():
-    opening = [{"h": 100, "l": 95, "c": 99, "v": 100} for _ in range(6)]
-    bars = opening + [{"h": 102, "l": 99, "c": 101, "v": 200}]
-
-    signal = opening_range_breakout.signal("AAPL", bars)
-
-    assert signal is not None
-    assert signal.action == "buy"
-    assert signal.strategy == "opening_range_breakout"
-
-
-def test_pairs_module_reports_spread_signal_without_submitting_orders():
-    left = [100 + index * 0.1 for index in range(60)]
-    right = [2 * value for value in left]
-    right[-1] *= 1.02
-
-    signal = pairs.candidate("AAA", _bars(left), "BBB", _bars(right), window=60)
-
-    assert signal is not None
-    assert signal.strategy == "pairs_stat_arb"
-    assert signal.long_ticker == "AAA"
-    assert signal.short_ticker == "BBB"
-
-
 def test_regime_filter_prefers_trend_strategies_in_a_rising_market():
     prices = [100 * (1.005**index) for index in range(60)]
     regime = rank_strategies(_bars(prices), mode="algo")
 
     assert regime["regime"] == "trending_up"
     assert regime["active"][0] == "trend_following"
-    assert "opening_range_breakout" in regime["active"]
 
 
 @pytest.mark.parametrize(

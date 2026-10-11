@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from dataclasses import replace
 from copy import deepcopy
 from datetime import date, datetime
 import math
@@ -17,10 +16,6 @@ except ImportError:
     from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin
 from .replay import ReplayLoopMixin
-from src.algo.strategies.catalog import (
-    RESEARCH_INTRADAY_STRATEGIES, RESEARCH_SWING_CORE_STRATEGIES,
-    RESEARCH_SWING_STRATEGIES,
-)
 from src.algo.strategies.event_driven import (
     EventCalendar, EventSignalGenerator, EventStrategyConfig,
 )
@@ -67,6 +62,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         force_close_at_end: bool = False,
         research_runtime_overrides: dict[str, bool] | None = None,
         preaggregated_daily_bars: dict[str, list[dict]] | None = None,
+        precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
         _signal_evaluator=None,
         _trade_validator=None,
         _regime_ranker=None,
@@ -90,6 +86,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self._regime_ranker = _regime_ranker or rank_strategies
         self.symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
         self.intraday_bars = intraday_bars
+        self.precomputed_timeline = precomputed_timeline
         self.spy_daily_bars = spy_daily_bars
         self.start = date.fromisoformat(start)
         self.end = date.fromisoformat(end)
@@ -107,9 +104,6 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.unknown_borrow_penalty_bps = float(unknown_borrow_penalty_bps)
         self.profile = validate_parameter_profile(profile or {})
         self.strategy_filter = validate_strategy_filter(strategies)
-        self.profile_bank_horizons = bool(self.strategy_filter) and {
-            "swing_momentum", "swing_trend_following",
-        }.issubset(self.strategy_filter)
         self.borrow_availability = {
             (str(ticker).upper(), str(day)): bool(available)
             for (ticker, day), available in (borrow_availability or {}).items()
@@ -118,52 +112,9 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.borrow_cost_total = 0.0
         self.commission_total = 0.0
         coordinator_config = coordinator_config or PortfolioCoordinatorConfig.from_dict()
-        if self.profile_bank_horizons:
-            coordinator_config = replace(
-                coordinator_config,
-                intraday_strategy_ids=tuple(RESEARCH_INTRADAY_STRATEGIES),
-                swing_strategy_ids=tuple(RESEARCH_SWING_STRATEGIES),
-                swing_core_strategy_ids=tuple(RESEARCH_SWING_CORE_STRATEGIES),
-                swing_trend_strategy_ids=("swing_trend_following",),
-            )
         self.coordinator = PortfolioCoordinator(coordinator_config)
         self.force_close_at_end = bool(force_close_at_end)
         self.risk = deepcopy(get_mode_config("algo")["risk"])
-        if self.profile_bank_horizons:
-            # The daily profile bank separates the unprefixed intraday rules
-            # from their explicitly named swing variants.
-            for risk_key in (
-                "stop_loss_pct_by_strategy", "trailing_stop_pct_by_strategy",
-                "trailing_activation_pct_by_strategy", "max_positions_per_strategy_by_strategy",
-                "minimum_hold_minutes_by_strategy", "cooldown_minutes_by_strategy",
-                "max_entries_per_strategy_per_day",
-            ):
-                values = self.risk.get(risk_key, {})
-                if "trend_following" in values:
-                    values["swing_trend_following"] = values["trend_following"]
-                if "momentum" in values:
-                    values["swing_momentum"] = values["momentum"]
-            for research_name, intraday_name in (
-                ("trend_following", "intraday_trend"),
-                ("momentum", "intraday_momentum"),
-            ):
-                for risk_key in (
-                    "stop_loss_pct_by_strategy", "trailing_stop_pct_by_strategy",
-                    "trailing_activation_pct_by_strategy",
-                ):
-                    values = self.risk.get(risk_key, {})
-                    if intraday_name in values:
-                        values[research_name] = values[intraday_name]
-            groups = self.risk.get("strategy_group_limits", {})
-            if "swing" in groups:
-                groups["swing"]["strategies"] = [
-                    "swing_trend_following", "swing_momentum", "swing_mean_reversion", "multi_factor",
-                ]
-            if "intraday_core" in groups:
-                groups["intraday_core"]["strategies"] = list(dict.fromkeys([
-                    *groups["intraday_core"].get("strategies", []),
-                    "trend_following", "momentum",
-                ]))
         self.research_runtime_overrides = dict(research_runtime_overrides or {})
         unknown_runtime_overrides = set(self.research_runtime_overrides) - {
             "intraday_trend", "intraday_momentum",
@@ -209,7 +160,12 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         # Swing trend, momentum, cyclical mean reversion, and Multi Factor all
         # consume the same point-in-time daily aggregates. Each caller filters
         # strictly through the last completed session.
-        self.daily_stock_bars = all_daily_bars
+        # Swing signals revisit these fixed histories each session, so cache
+        # their normalized rows once per symbol.
+        self.daily_stock_bars = {
+            symbol: CachedDailyBarHistory.from_bars(rows)
+            for symbol, rows in all_daily_bars.items()
+        }
         # Daily strategy history grows once per session, then is reused across
         # all 5-minute events that session. This avoids rebuilding a years-long
         # history for every symbol on every intraday bar.
@@ -248,7 +204,6 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.candidate_strategy_ticker_days: set[tuple[str, str, str]] = set()
         self.last_exit_at: dict[str, datetime] = {}
         self.last_exit_at_by_strategy: dict[tuple[str, str], datetime] = {}
-        self.orb_attempts: set[tuple[str, str]] = set()
         self.exposed_event_count = 0
         self.daily_curve: list[dict] = []
         self.daily_strategy_pnl: list[dict] = []

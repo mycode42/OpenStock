@@ -11,10 +11,7 @@ import math
 import statistics
 
 from .config import BAR_MINUTES, ET, MIN_REGIME_DAILY_BARS, STRATEGY_NAMES
-from src.algo.strategies.catalog import (
-    INTRADAY_STRATEGIES, RESEARCH_INTRADAY_STRATEGIES,
-    RESEARCH_SWING_CORE_STRATEGIES, RESEARCH_SWING_STRATEGIES,
-)
+from src.algo.strategies.catalog import INTRADAY_STRATEGIES
 from src.algo.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from src.algo.strategies.portfolio_coordinator import strategy_priority
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
@@ -57,7 +54,7 @@ class ReplayLoopMixin:
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
                 factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
-                momentum_strategy = "swing_momentum" if self.profile_bank_horizons else "momentum"
+                momentum_strategy = "momentum"
                 held_momentum = {
                     ticker: {
                         "qty": position.qty, "entry_at": position.entry_at,
@@ -142,14 +139,7 @@ class ReplayLoopMixin:
             # Resolve same-bar capacity consistently for baseline and research runs.
             candidates.sort(
                 key=lambda item: (
-                    strategy_priority(
-                        str(item[2].get("strategy", "")),
-                        **({
-                            "intraday_strategy_ids": RESEARCH_INTRADAY_STRATEGIES,
-                            "swing_core_strategy_ids": RESEARCH_SWING_CORE_STRATEGIES,
-                            "swing_strategy_ids": RESEARCH_SWING_STRATEGIES,
-                        } if self.profile_bank_horizons else {}),
-                    ),
+                    strategy_priority(str(item[2].get("strategy", ""))),
                     -float(item[2].get("rank_score", 0)),
                     -float(item[2].get("strength", 0)),
                     item[0],
@@ -167,10 +157,7 @@ class ReplayLoopMixin:
                 self._charge_daily_borrow()
                 if not self.coordinator.config.allow_intraday_overnight:
                     self._flatten_positions(
-                        bars, timestamp, strategies=set(
-                            RESEARCH_INTRADAY_STRATEGIES
-                            if self.profile_bank_horizons else INTRADAY_STRATEGIES
-                        ),
+                        bars, timestamp, strategies=set(INTRADAY_STRATEGIES),
                         reason="coordinator_intraday_eod_flatten",
                     )
                 if index + 1 == len(event_times) and self.force_close_at_end:
@@ -444,7 +431,7 @@ class ReplayLoopMixin:
                 "Rule-based exits observe the configured minimum holding time; hard stop and target brackets can exit sooner.",
                 "Historical borrow availability is optional; explicit non-easy-to-borrow shorts are skipped and unknown availability receives an adverse fill penalty.",
                 "Short borrow is charged at the configured annual rate on positions still open at each session close.",
-                "The walk-forward runner liquidates all remaining positions at each test-window boundary with modeled exit costs.",
+                "Each verification fold liquidates remaining positions at its test-window boundary with modeled exit costs.",
                 "Signal event counts are raw five-minute buy-signal observations and may include repeated observations of one setup.",
             ],
         }

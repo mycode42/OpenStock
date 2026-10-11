@@ -3,7 +3,6 @@ import math
 
 from src.algo.research import auto_research
 from src.algo.research.factor_research import _feature_panel, train_factor_model
-from src.algo.walk_forward import _read_profiles, build_parser as build_walk_forward_parser
 
 
 def _sessions(start: date, count: int) -> list[date]:
@@ -41,101 +40,6 @@ def _synthetic_daily_history(session_count: int = 2700) -> dict[str, list[dict]]
     return output
 
 
-def test_auto_research_profiles_are_bounded_and_have_strategy_cooldowns():
-    profiles = _read_profiles("autoresearch/algo-daily-profiles.json")
-    assert len(profiles) == 11
-    assert all(profile["controls"]["max_entries_per_day"] == 10 for profile in profiles)
-    assert all("cooldown_minutes_by_strategy" in profile["controls"] for profile in profiles)
-    expected = {
-        "mean_reversion", "momentum", "trend_following", "swing_mean_reversion",
-        "swing_momentum", "swing_trend_following", "multi_factor", "event_driven",
-    }
-    assert all(set(profile["strategies"]) == expected for profile in profiles)
-    by_name = {profile["name"]: profile for profile in profiles}
-    baseline_overlay = by_name["baseline"]["parameters"]["satellite_overlay"]
-    assert baseline_overlay["multi_factor_enabled"] is False
-    assert baseline_overlay["event_driven_enabled"] is False
-    assert by_name["multi_factor_satellite"]["parameters"]["satellite_overlay"]["multi_factor_enabled"]
-    assert by_name["event_driven_satellite"]["parameters"]["satellite_overlay"]["event_driven_enabled"]
-    assert by_name["combined_six_strategy_satellites"]["parameters"]["event_driven"]["enabled"]
-    assert by_name["combined_isolated_style_balanced_with_satellites"]["parameters"]["multi_factor"]["direction_mode"] == "regime_dependent"
-
-
-def test_isolated_optimizer_uses_one_direction_and_simple_candidate_sets():
-    assert auto_research.ISOLATED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION == 3
-    assert auto_research.COMBINED_MAX_CANDIDATE_TICKER_DAYS_PER_SESSION == 15
-    for strategy in auto_research.CORE_STRATEGIES:
-        for direction in ("long", "short"):
-            profiles = auto_research._isolated_direction_profiles(strategy, direction)
-            assert len(profiles) == 3
-            assert profiles[0]["name"] == "baseline"
-            assert all(profile["strategies"] == [strategy] for profile in profiles)
-            for profile in profiles:
-                settings = profile["parameters"][strategy]
-                if strategy in {"trend_following", "momentum", "swing_mean_reversion"}:
-                    assert settings["direction_mode"] == f"{direction}_only"
-                else:
-                    assert settings["allow_long"] is (direction == "long")
-                    assert settings["allow_short"] is (direction == "short")
-                assert profile["controls"]["max_entries_per_day"] == 10
-
-
-def test_combined_replay_compares_core_with_all_six_as_overlays(monkeypatch):
-    calls = []
-
-    class Store:
-        def bars(self, symbols, **kwargs):
-            if symbols == ["SPY"] and kwargs.get("timeframe") == "1Day":
-                sessions = _sessions(date(2023, 11, 1), 22)
-                return {
-                    "SPY": [
-                        {"t": f"{session.isoformat()}T16:00:00+00:00"}
-                        for session in sessions
-                    ]
-                }
-            return {symbol: [] for symbol in symbols}
-
-    class Replay:
-        def __init__(self, **kwargs):
-            calls.append(kwargs)
-
-        def run(self):
-            return {"net_return_pct": 0, "entry_count": 0}
-
-    monkeypatch.setattr(auto_research, "AlgoPortfolioBacktest", Replay)
-    report = auto_research._combined_portfolio_replay(
-        Store(), symbols=["AAPL"], start=date(2024, 1, 1), end=date(2024, 1, 2),
-        event_calendar=object(),
-    )
-
-    assert set(report["results"]) == {"four_core_rules", "six_strategy_satellite_portfolio"}
-    assert set(calls[0]["strategies"]) == {
-        "mean_reversion", "momentum", "opening_range_breakout", "trend_following",
-    }
-    assert set(calls[1]["strategies"]) == set(calls[0]["strategies"]) | {"multi_factor", "event_driven"}
-    assert calls[1]["profile"]["satellite_overlay"] == {
-        "multi_factor_enabled": True, "event_driven_enabled": True,
-    }
-
-
-def test_walk_forward_exposes_a_minimum_satellite_sample_gate():
-    args = build_walk_forward_parser().parse_args([
-        "--symbols", "AAPL", "--start", "2025-01-01", "--end", "2025-02-01",
-        "--profiles", "autoresearch/algo-daily-profiles.json",
-    ])
-
-    assert args.min_satellite_confirmed_entries == 3
-
-
-def test_walk_forward_summary_exposes_promotion_gate_and_costs(tmp_path):
-    gate = {"promotable": False, "checks": {"neighbor_parameter_stability": False}}
-    costs = {"spread_bps": 3, "commission_per_share_each_side": 0.005}
-    summary = auto_research._summarize_walk_forward(
-        {"folds": [], "promotion_gate": gate, "transaction_cost_model": costs},
-        artifact=tmp_path / "walk-forward.json",
-    )
-    assert summary["promotion_gate"] == gate
-    assert summary["transaction_cost_model"] == costs
 
 
 def test_auto_research_uses_the_configured_fixed_algo_universe():

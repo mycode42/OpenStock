@@ -69,7 +69,6 @@ def _state_for(states: dict, strategy: str, ticker: str) -> dict:
         "cooldown_until": None,
         "entry_day": None,
         "entries_today": 0,
-        "orb_attempt_day": None,
     }
     state = states.setdefault(strategy, {}).setdefault(ticker, {})
     for key, value in defaults.items():
@@ -102,7 +101,6 @@ class RuleStrategyStateMachine:
         max_entries_per_day: dict[str, int] | None = None,
         max_positions_per_strategy: int | None = None,
         max_positions_per_strategy_by_strategy: dict[str, int] | None = None,
-        one_orb_attempt_per_ticker_per_day: bool = False,
     ):
         from src.config import get_mode_config
 
@@ -120,9 +118,6 @@ class RuleStrategyStateMachine:
             max_positions_per_strategy_by_strategy
             if max_positions_per_strategy_by_strategy is not None
             else risk.get("max_positions_per_strategy_by_strategy", {})
-        )
-        self.one_orb_attempt_per_ticker_per_day = (
-            one_orb_attempt_per_ticker_per_day or risk.get("one_orb_attempt_per_ticker_per_day", False)
         )
         normalized = {}
         for ticker, owner in position_owners.items():
@@ -356,12 +351,6 @@ class RuleStrategyStateMachine:
                 )
                 if entries_today >= int(self.max_entries_per_day.get(strategy, 10**9)):
                     return False
-                if (
-                    strategy == "opening_range_breakout"
-                    and self.one_orb_attempt_per_ticker_per_day
-                    and state.get("orb_attempt_day") == session_day
-                ):
-                    return False
             position_cap = self.max_positions_per_strategy_by_strategy.get(
                 strategy, self.max_positions_per_strategy,
             )
@@ -507,8 +496,6 @@ class RuleStrategyStateMachine:
                 state["entry_day"] = session_day
                 state["entries_today"] = 0
             state["entries_today"] = int(state.get("entries_today", 0) or 0) + 1
-            if strategy == "opening_range_breakout":
-                state["orb_attempt_day"] = session_day
         _touch(state)
         if is_entry:
             self.position_owners[ticker] = strategy

@@ -119,8 +119,6 @@ STRATEGY_CONFIG = {
     "risk_per_trade_pct": 0.005,
     "max_strategy_position_pct": 0.05,
     "take_profit_r_multiple": 2.0,
-    "pairs_min_correlation": 0.80,
-    "pairs_entry_z": 2.0,
     **ALGO_RUNTIME_CONFIG,
 }
 

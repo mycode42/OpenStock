@@ -48,7 +48,7 @@ def test_catalog_groups_preserve_risk_and_coordinator_membership():
         "swing_trend_following", "swing_momentum", "multi_factor",
     ]
     assert groups["intraday_core"]["strategies"] == [
-        "mean_reversion", "opening_range_breakout",
+        "mean_reversion",
     ]
     assert groups["intraday_satellites"]["strategies"] == [
         "intraday_trend", "intraday_momentum",

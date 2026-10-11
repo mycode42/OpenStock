@@ -5,7 +5,6 @@ import pytest
 from risk_manager import validate_trade
 from src.algo.backtest import multi_factor_warmup_days
 from src.algo.state_store import validate_portfolio
-from src.algo.walk_forward import _read_profiles
 from src.algo.strategies.multi_factor.diagnostics import information_coefficient, turnover
 from src.config import STRATEGY_CONFIG, get_mode_config
 from src.algo.strategies.multi_factor import (
@@ -243,13 +242,6 @@ def test_multi_factor_position_can_be_persisted_as_a_strategy_owner():
     })
 
 
-def test_multi_factor_walk_forward_example_profiles_are_isolated_and_valid():
-    profiles = _read_profiles("autoresearch/multi-factor-profiles.example.json")
-
-    assert [profile["name"] for profile in profiles] == [
-        "baseline", "top_three", "daily_rebalance",
-    ]
-    assert all(profile["strategies"] == ["multi_factor"] for profile in profiles)
 
 
 def test_factor_diagnostics_calculate_spearman_ic_and_target_turnover():

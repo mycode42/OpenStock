@@ -7,7 +7,7 @@ from src.algo.backtest import AlgoPortfolioBacktest, _regular_session_bars
 import src.algo.backtest as backtest_module
 from src.algo.market_store import SQLiteBarStore
 from src.algo.slippage_sensitivity import parse_slippage_grid
-from src.algo.walk_forward import _trim_sessions_without_regime_warmup, walk_forward_windows
+from src.algo.research.adaptive import walk_forward_windows
 from src.algo.strategies.rule_pipeline import evaluate_rule_signal
 from src.algo.strategies.registry import validate_parameter_profile
 from src.algo.strategies.signals import Signal
@@ -49,27 +49,7 @@ def test_profile_can_change_rule_parameters_but_not_portfolio_risk():
         validate_parameter_profile({"mean_reversion": {"signal_model": "llm"}})
 
 
-def test_orb_research_buffer_filters_weak_breakouts():
-    bars = [
-        {"t": f"2026-10-05T13:{30 + index * 5:02d}:00Z", "o": 99, "h": 100, "l": 98, "c": 99, "v": 10}
-        for index in range(6)
-    ]
-    bars.append({"t": "2026-10-05T14:00:00Z", "o": 100, "h": 101, "l": 99, "c": 100.5, "v": 20})
-
-    assert evaluate_rule_signal(
-        "opening_range_breakout", "AAPL", bars,
-        {"opening_range_bars": 6, "minimum_volume_ratio": 1.25},
-    ) is not None
-    assert evaluate_rule_signal(
-        "opening_range_breakout", "AAPL", bars,
-        {
-            "opening_range_bars": 6, "minimum_volume_ratio": 1.25,
-            "breakout_buffer_pct": 0.01,
-        },
-    ) is None
-
-
-def test_walk_forward_windows_are_chronological_and_non_overlapping():
+def test_rolling_verification_windows_are_chronological_and_non_overlapping():
     sessions = [date(2026, 1, 5) + timedelta(days=index) for index in range(8)]
     windows = walk_forward_windows(sessions, train_days=3, test_days=2, step_days=2)
 
@@ -83,14 +63,6 @@ def test_walk_forward_windows_are_chronological_and_non_overlapping():
         walk_forward_windows(sessions, train_days=3, test_days=3, step_days=2)
 
 
-def test_walk_forward_skips_initial_sessions_until_regime_warmup_exists():
-    sessions = [date(2016, 1, 4) + timedelta(days=index) for index in range(30)]
-    spy_daily_dates = sessions[:24]
-
-    eligible, skipped = _trim_sessions_without_regime_warmup(sessions, spy_daily_dates)
-
-    assert skipped == 22
-    assert eligible == sessions[22:]
 
 
 def test_slippage_grid_is_sorted_and_rejects_invalid_values():
@@ -142,7 +114,7 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
     ]
 
     def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
-        if strategy == "opening_range_breakout" and len(history) == 1:
+        if strategy == "mean_reversion" and len(history) == 1:
             return Signal(ticker, "buy", strategy, "test trigger", 1.0)
         return None
 
@@ -190,7 +162,7 @@ def test_portfolio_replay_models_short_entry_cover_and_entry_relative_return(mon
     ]
 
     def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
-        if strategy != "opening_range_breakout":
+        if strategy != "mean_reversion":
             return None
         if position_qty == 0 and len(history) == 1:
             return Signal(ticker, "short", strategy, "test short trigger", 1.0)
@@ -284,7 +256,7 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
     ]
 
     def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
-        return Signal(ticker, "buy", strategy, "test trigger", 0.9) if strategy == "opening_range_breakout" else None
+        return Signal(ticker, "buy", strategy, "test trigger", 0.9) if strategy == "mean_reversion" else None
 
     monkeypatch.setattr(backtest_module, "evaluate_rule_signal", deterministic_signal)
     replay = AlgoPortfolioBacktest(
@@ -293,7 +265,7 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
         spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
         data_adjustment="raw", research_controls={"max_entries_per_day": 1},
-        strategies=["opening_range_breakout"],
+        strategies=["mean_reversion"],
     )
 
     report = replay.run()

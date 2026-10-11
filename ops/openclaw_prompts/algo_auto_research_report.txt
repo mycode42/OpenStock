@@ -1,11 +1,12 @@
-Use the exec tool to read `/opt/swarm-trader/data/research/algo-auto/latest.json` and send one concise Telegram report about Algo AutoResearch. This is a read-only research report; do not edit settings, restart services, place or modify orders, or present any proposal as live.
+Use the exec tool to read `/opt/swarm-trader/data/research/algo-auto/latest.json` and send one concise Telegram report about Algo AutoResearch. This is a read-only adaptive research report; do not edit settings, restart services, place or modify orders, or present any proposal as live.
 
-If the file is absent, invalid, or its `run_date_et` is not today in America/New_York, say that today's research report is missing or stale and include the available status. If `status` is `error`, report the error and stop.
+If the file is absent, invalid, or its `run_date_et` is not today in America/New_York, say today's research report is missing or stale and include the available status. If `status` is `error`, report the error and stop.
 
-For a completed run, include:
+For a completed or partial run, include:
 - Data tier/feed, range, selected and covered universe counts, exclusions, and whether SIP was refreshed through the latest session.
-- Rule walk-forward fold count, positive OOS fold count, average/median OOS return, latest training-selected profile and its test window/metrics. Briefly compare the per-strategy tuned profile with baseline in the latest training window; label these as training diagnostics. State that parameters are candidates only.
-- Multi-factor Ridge alpha and current proposed weights; frozen 2024+ holdout and adaptive prequential Spearman IC versus equal weights; include fixed portfolio replay metrics when present.
-- Any validation gates not met, stale/missing data, or methodological limitations.
+- Adaptive discovery status and selected candidate for active strategies.
+- Rolling verification fold count, positive OOS folds, aggregate OOS returns, locked-holdout status, and any failed checks. Read the referenced adaptive detail artifacts when needed.
+- Portfolio coordinator replay summary when present. If absent, state that incomplete adaptive verification skipped the replay; there is no fallback research path.
+- Multi Factor diagnostics and shadow candidate status, plus material data or methodology limitations.
 
-Keep it below 2,000 characters. Clearly finish with: live settings unchanged; takeover requires the owner's confirmation.
+Treat all parameters as research candidates only. Keep the report below 2,000 characters. Clearly finish with: live settings unchanged; takeover requires the owner's confirmation.

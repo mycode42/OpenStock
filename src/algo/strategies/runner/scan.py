@@ -21,7 +21,6 @@ class ScanDependencies(TypedDict):
     LOG: Any
     MAX_SPY_DAILY_AGE_DAYS: Any
     MultiFactorConfig: Any
-    PAIR_DATA_SYMBOLS: Any
     Path: Any
     PortfolioCoordinator: Any
     PortfolioCoordinatorConfig: Any
@@ -62,7 +61,6 @@ class ScanDependencies(TypedDict):
     load_algo_universe: Any
     load_event_context: Any
     os: Any
-    pairs: Any
     rank_strategies: Any
     regular_feed: Any
     throttle_signal: Any
@@ -106,7 +104,6 @@ def scan(
     LOG = _dependencies["LOG"]
     MAX_SPY_DAILY_AGE_DAYS = _dependencies["MAX_SPY_DAILY_AGE_DAYS"]
     MultiFactorConfig = _dependencies["MultiFactorConfig"]
-    PAIR_DATA_SYMBOLS = _dependencies["PAIR_DATA_SYMBOLS"]
     Path = _dependencies["Path"]
     PortfolioCoordinator = _dependencies["PortfolioCoordinator"]
     PortfolioCoordinatorConfig = _dependencies["PortfolioCoordinatorConfig"]
@@ -146,7 +143,6 @@ def scan(
     load_algo_universe = _dependencies["load_algo_universe"]
     load_event_context = _dependencies["load_event_context"]
     os = _dependencies["os"]
-    pairs = _dependencies["pairs"]
     rank_strategies = _dependencies["rank_strategies"]
     regular_feed = _dependencies["regular_feed"]
     throttle_signal = _dependencies["throttle_signal"]
@@ -223,7 +219,6 @@ def scan(
             max_entries_per_day=risk_config.get("max_entries_per_strategy_per_day"),
             max_positions_per_strategy=risk_config.get("max_positions_per_strategy"),
             max_positions_per_strategy_by_strategy=risk_config.get("max_positions_per_strategy_by_strategy"),
-            one_orb_attempt_per_ticker_per_day=risk_config.get("one_orb_attempt_per_ticker_per_day", False),
         )
         lifecycle.reconcile(positions, open_orders)
     unowned_positions = sorted(
@@ -247,7 +242,7 @@ def scan(
     # event signals; ordinary strategies still use their configured symbols.
     if mode == "algo" and event_satellite_enabled and "SPY" not in strategy_symbols:
         strategy_symbols.append("SPY")
-    symbols_for_bars = list(dict.fromkeys(strategy_symbols + PAIR_DATA_SYMBOLS + ["SPY"]))
+    symbols_for_bars = list(dict.fromkeys(strategy_symbols + ["SPY"]))
 
     now_utc = datetime.now(timezone.utc)
     factor_config_values = dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor") or {})
@@ -637,13 +632,6 @@ def scan(
         for strategy_name in candidates:
             if strategy_name == "event_driven" and (mode != "algo" or session_name not in {None, "regular"}):
                 continue
-            if (
-                strategy_name == "opening_range_breakout"
-                and session_name is not None
-                and session_name != "regular"
-                and owner != strategy_name
-            ):
-                continue
             signal_bar_time = symbol_bars[-1].get("t") if symbol_bars else None
             strategy_spec = STRATEGY_CATALOG.get(strategy_name)
             if strategy_spec is not None and strategy_spec.bar_interval == "1Day":
@@ -896,12 +884,6 @@ def scan(
     shadow_trades = []
     shadow_summary = None
     shadow_coordinator_book = None
-    orb_attempted_today = {
-        ticker
-        for by_symbol in (strategy_states or {}).values()
-        for ticker, state in by_symbol.items()
-        if state.get("strategy") == "opening_range_breakout" and state.get("orb_attempt_day") == today
-    }
     if mode == "algo":
         coordinator = PortfolioCoordinator(coordinator_config)
         entries_today = sum(
@@ -1010,13 +992,6 @@ def scan(
                     break
             if group_blocked:
                 continue
-            if (
-                strategy == "opening_range_breakout"
-                and risk_config.get("one_orb_attempt_per_ticker_per_day", False)
-                and item["ticker"] in orb_attempted_today
-            ):
-                item["suppressed_reason"] = "opening-range attempt already used for this ticker today"
-                continue
         quote = latest_quotes.get(item["ticker"])
         if quote is None:
             item["suppressed_reason"] = "latest Alpaca quote unavailable"
@@ -1115,8 +1090,6 @@ def scan(
                     if strategy in group.get("strategies", []):
                         group_entry_counts[group_name] = group_entry_counts.get(group_name, 0) + 1
                         group_open_counts[group_name] = group_open_counts.get(group_name, 0) + 1
-                if strategy == "opening_range_breakout":
-                    orb_attempted_today.add(item["ticker"])
             for satellite in item.get("satellite_confirmations", []):
                 if satellite in satellite_confirmation_counts:
                     satellite_confirmation_counts[satellite] += 1
@@ -1143,30 +1116,6 @@ def scan(
             session=session_name or "regular", regime=str(regime.get("regime", "unknown")),
             session_open=regular_open, session_close=regular_close,
         )
-
-    try:
-        pair_setups = pairs.candidates(
-            daily_bars,
-            minimum_correlation=float(STRATEGY_CONFIG["pairs_min_correlation"]),
-            entry_z=float(STRATEGY_CONFIG["pairs_entry_z"]),
-        )
-    except Exception as exc:
-        if mode != "algo":
-            raise
-        pair_setups = []
-        scan_errors.append(f"signal-only pair scan: {type(exc).__name__}: {exc}")
-    pair_output = []
-    try:
-        for pair_setup in pair_setups:
-            pair_setup_data = pair_setup.to_dict()
-            pair_setup_data["execution_enabled"] = False
-            pair_setup_data["execution_note"] = "signal only: paired orders are not atomic in the current executor"
-            pair_output.append(pair_setup_data)
-    except Exception as exc:
-        if mode != "algo":
-            raise
-        pair_output = []
-        scan_errors.append(f"signal-only pair report: {type(exc).__name__}: {exc}")
 
     return {
         "timestamp": now.isoformat(),
@@ -1212,9 +1161,7 @@ def scan(
                 ],
             }
         ),
-        "pairs": pair_output,
         "trades": trades,
-        "pair_execution_enabled": False,
         "portfolio_positions": sorted(positions),
         "position_details": positions,
         "pending_symbols": sorted(pending_by_symbol),

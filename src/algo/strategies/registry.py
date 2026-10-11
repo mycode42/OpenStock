@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from src.algo.strategies import mean_reversion, momentum, opening_range_breakout, trend_following
+from src.algo.strategies import mean_reversion, momentum, trend_following
 from src.algo.strategies.catalog import STRATEGY_CATALOG, STRATEGY_IDS
 from src.algo.strategies.mean_reversion import swing as swing_mean_reversion
 from src.algo.strategies.momentum import swing as swing_momentum
@@ -22,7 +22,6 @@ RULE_MODULES = {
     "mean_reversion": mean_reversion,
     "trend_following": trend_following,
     "momentum": momentum,
-    "opening_range_breakout": opening_range_breakout,
     "swing_mean_reversion": swing_mean_reversion,
 }
 ALGO_RULE_MODULES = {
@@ -60,7 +59,6 @@ ALGO_DEFAULT_PARAMETERS = {
         "allow_long": True,
         "allow_short": True,
     },
-    "opening_range_breakout": {"opening_range_bars": 6, "minimum_volume_ratio": 1.25, "allow_long": True, "allow_short": True},
     "multi_factor": MULTI_FACTOR_DEFAULT_CONFIG.to_dict(),
     "event_driven": EVENT_DEFAULT_CONFIG,
     "swing_mean_reversion": SWING_MEAN_REVERSION_DEFAULT_CONFIG,
@@ -86,10 +84,6 @@ PARAMETER_KEYS = {
         "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes",
         "minimum_bounce_pct", "higher_low_bars", "short_entry_rsi", "short_exit_rsi",
         "minimum_rip_pct", "minimum_fade_pct", "lower_high_bars", "allow_long", "allow_short",
-    },
-    "opening_range_breakout": {
-        "opening_range_bars", "minimum_volume_ratio", "post_range_delay_bars",
-        "breakout_buffer_pct", "allow_long", "allow_short",
     },
     "multi_factor": set(MULTI_FACTOR_DEFAULT_CONFIG.to_dict()),
     "event_driven": set(EVENT_DEFAULT_CONFIG),
@@ -193,13 +187,6 @@ def validate_parameter_profile(profile: dict) -> dict:
     for key in ("allow_long", "allow_short"):
         if key in normalized.get("mean_reversion", {}) and not isinstance(normalized["mean_reversion"][key], bool):
             raise ValueError(f"mean_reversion {key} must be a boolean")
-    number("opening_range_breakout", "opening_range_bars", 6, 1, 12, integer=True)
-    number("opening_range_breakout", "minimum_volume_ratio", 1.25, 0.1, 20)
-    number("opening_range_breakout", "post_range_delay_bars", 0, 0, 12, integer=True)
-    number("opening_range_breakout", "breakout_buffer_pct", 0, 0, 0.05)
-    for key in ("allow_long", "allow_short"):
-        if key in normalized.get("opening_range_breakout", {}) and not isinstance(normalized["opening_range_breakout"][key], bool):
-            raise ValueError(f"opening_range_breakout {key} must be a boolean")
     return normalized
 
 
@@ -235,13 +222,6 @@ def evaluate(
     if module is None:
         return None
     kwargs = {}
-    if name == "opening_range_breakout":
-        if mode not in {"day", "algo"}:
-            return None
-        if mode == "algo":
-            kwargs = dict(ALGO_DEFAULT_PARAMETERS[name])
-        kwargs.update(parameters or {})
-        return module.signal(ticker, bars, position_qty=position_qty, **kwargs)
     if mode == "day":
         if name == "trend_following":
             kwargs = dict(DAY_DEFAULT_PARAMETERS[name])

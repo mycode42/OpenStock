@@ -25,7 +25,6 @@ RESEARCH_CONTROL_KEYS = {
     "max_entries_per_day", "max_open_positions", "max_positions_per_strategy",
     "max_entries_per_strategy_per_day", "cooldown_minutes",
     "cooldown_minutes_by_strategy",
-    "one_orb_attempt_per_ticker_per_day",
 }
 
 def multi_factor_warmup_days(profile: dict | None = None) -> int:
@@ -84,8 +83,4 @@ def validate_research_controls(controls: dict | None) -> dict:
         if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:
             raise ValueError("strategy cooldowns must use known strategies and stay within the live Algo cap")
     normalized["cooldown_minutes_by_strategy"] = cooldowns
-    orb_once = normalized.get("one_orb_attempt_per_ticker_per_day", False)
-    if not isinstance(orb_once, bool):
-        raise ValueError("one_orb_attempt_per_ticker_per_day must be a boolean")
-    normalized["one_orb_attempt_per_ticker_per_day"] = orb_once
     return normalized

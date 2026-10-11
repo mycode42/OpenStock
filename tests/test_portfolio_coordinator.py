@@ -2,7 +2,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from src.algo.backtest import AlgoPortfolioBacktest
-from src.algo.walk_forward import evaluate_promotion_gate, parameter_neighbors
 from src.algo.strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig, choose_priority, strategy_priority,
     throttle_signal,
@@ -79,7 +78,7 @@ def test_multi_factor_and_trend_are_both_core_in_name_priority_resolution():
     assert rejected[0]["suppressed_reason"].startswith("portfolio coordinator:")
 
 
-def test_shared_intraday_budget_rejects_fourth_opening():
+def test_shared_intraday_budget_rejects_next_entry():
     config = PortfolioCoordinatorConfig(max_intraday_entries=1)
     coordinator = PortfolioCoordinator(config)
     book = coordinator.new_book(equity=100_000)
@@ -89,7 +88,7 @@ def test_shared_intraday_budget_rejects_fourth_opening():
         session="regular", timestamp=stamp,
     )
     rejected = book.review(
-        _proposal(strategy="opening_range_breakout", ticker="SPY", qty=10),
+        _proposal(strategy="intraday_trend", ticker="SPY", qty=10),
         session="regular", timestamp=stamp,
     )
     assert accepted.approved
@@ -165,38 +164,6 @@ def test_swing_opening_delay_and_regime_throttle():
     assert "halved" in note
 
 
-def test_neighbor_parameter_center_spike_fails_promotion_gate():
-    neighbors = parameter_neighbors({
-        "swing_mean_reversion": {"stretch_pct": 0.06},
-    })
-    assert {(row["parameter_key"], row["direction"]) for row in neighbors} == {
-        ("swing_mean_reversion.stretch_pct", "lower"),
-        ("swing_mean_reversion.stretch_pct", "upper"),
-    }
-    folds = []
-    for index in range(3):
-        folds.append({
-            "selected_profile": "fixed_candidate",
-            "out_of_sample": {
-                "net_return_pct": 1.0, "excess_return_vs_buy_hold_pct_points": 0.5,
-                "closed_trade_count": 4,
-            },
-            "neighbor_tests": [
-                {
-                    "parameter_key": "swing_mean_reversion.stretch_pct",
-                    "direction": side,
-                    "net_return_pct": -0.1,
-                    "excess_return_vs_buy_hold_pct_points": -0.2,
-                    "closed_trade_count": 4,
-                }
-                for side in ("lower", "upper")
-            ],
-        })
-    gate = evaluate_promotion_gate(folds, minimum_test_trades_per_fold=3)
-    assert not gate["promotable"]
-    assert gate["checks"]["positive_after_costs_in_majority_of_folds"]
-    assert not gate["checks"]["neighbor_parameter_stability"]
-    assert gate["unstable_parameters"] == ["swing_mean_reversion.stretch_pct"]
 
 
 def test_fill_costs_apply_spread_and_open_slippage_on_the_adverse_side():

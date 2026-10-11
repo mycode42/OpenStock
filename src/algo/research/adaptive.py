@@ -1,8 +1,8 @@
-"""Short-window parameter discovery and walk-forward verification.
+"""Short-window parameter discovery and rolling verification.
 
-The optimizer selects only signal parameters. Each fold fits on a recent
-training window, then evaluates its winner on the immediately following
-unseen window using the existing Algo portfolio replay engine.
+Discovery selects signal parameters. Each fold fits on a recent training
+window, then evaluates its selection on the next unseen window with the Algo
+portfolio replay engine.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from datetime import date, datetime, timedelta, timezone
 import itertools
 import json
 import math
-import os
 from pathlib import Path
 import random
 import statistics
@@ -21,10 +20,13 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
 
 from src.algo.backtest import (
-    DAILY_WARMUP_DAYS, multi_factor_warmup_days,
+    DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days,
     read_borrow_availability,
 )
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
+from src.algo.cpu import available_cpu_count
+from src.algo.backtest.execution import build_replay_timeline
+from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
 from src.algo.strategies.registry import (
     ALGO_DEFAULT_PARAMETERS, PARAMETER_KEYS, validate_parameter_profile,
 )
@@ -36,9 +38,6 @@ from .settings import (
     ADJUSTMENT, CORE_RESEARCH_CONTROLS, DEFAULT_OUTPUT_DIR, FEED,
     STRATEGY_FLAVORS,
 )
-from src.algo.walk_forward import walk_forward_windows
-
-
 ET = ZoneInfo("America/New_York")
 DEFAULT_FITNESS_WEIGHTS = {
     "sharpe": 0.25,
@@ -48,6 +47,31 @@ DEFAULT_FITNESS_WEIGHTS = {
     "profit_factor": 0.15,
     "drawdown": 0.10,
 }
+
+
+def walk_forward_windows(
+    trading_dates: list[date], *, train_days: int, test_days: int, step_days: int,
+) -> list[dict[str, str | int]]:
+    """Build non-overlapping chronological windows for rolling verification."""
+    if min(train_days, test_days, step_days) < 1:
+        raise ValueError("train_days, test_days, and step_days must be positive")
+    if step_days < test_days:
+        raise ValueError("step_days must be at least test_days so verification folds do not overlap")
+    dates = sorted(set(trading_dates))
+    windows = []
+    test_index = train_days
+    while test_index < len(dates):
+        train = dates[max(0, test_index - train_days):test_index]
+        test = dates[test_index:test_index + test_days]
+        if not train or not test:
+            break
+        windows.append({
+            "train_start": train[0].isoformat(), "train_end": train[-1].isoformat(),
+            "test_start": test[0].isoformat(), "test_end": test[-1].isoformat(),
+            "train_session_count": len(train), "test_session_count": len(test),
+        })
+        test_index += step_days
+    return windows
 
 # Discrete, bounded, signal-only domains. Execution and account risk remain
 # fixed during the search. Users can replace or extend these with a JSON file.
@@ -60,23 +84,6 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
         "entry_window_minutes": [30, 60, 90],
         "window": [15, 20, 30], "band_width": [1.8, 2.0, 2.4],
         "entry_rsi": [25, 30, 35], "exit_rsi": [55, 58, 62],
-    },
-    "opening_range_breakout": {
-        "opening_range_bars": [3, 6, 9, 12],
-        "post_range_delay_bars": [1, 2, 3],
-        "minimum_volume_ratio": [1.1, 1.4, 1.8, 2.2],
-        "breakout_buffer_pct": [0.0, 0.001, 0.0025],
-    },
-    "intraday_trend": {
-        "fast_period": [5, 6, 8, 10, 12], "slow_period": [15, 18, 20, 24, 30],
-        "confirmation_bars": [1, 2, 3], "minimum_slope_pct": [0.0, 0.0005, 0.001, 0.002],
-    },
-    "intraday_momentum": {
-        "lookback": [5, 8, 12, 16, 20],
-        "minimum_return": [0.008, 0.012, 0.02, 0.03, 0.04],
-        "minimum_short_return": [0.008, 0.012, 0.02, 0.03],
-        "minimum_volume_ratio": [1.0, 1.2, 1.5, 1.8],
-        "minimum_short_volume_ratio": [1.0, 1.2, 1.5, 1.8],
     },
     "trend_following": {
         "average_type": ["sma", "ema"], "fast_period": [10, 15, 20, 25, 30],
@@ -206,8 +213,6 @@ def _search_space(strategy: str, path: str | None) -> dict[str, list]:
 def _make_parameters(strategy: str, values: dict) -> dict:
     parameters = deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
     parameters.update(deepcopy(values))
-    if strategy in {"intraday_trend", "intraday_momentum"}:
-        parameters["enabled"] = True
     return validate_parameter_profile({strategy: parameters})[strategy]
 
 
@@ -410,24 +415,24 @@ def _run_replay(
     *, strategy: str, parameters: dict, symbols: list[str], bars: dict,
     spy_daily: list[dict], start: date, end: date, args,
     capital: float | None = None,
+    preaggregated_daily_bars: dict[str, list[dict]] | None = None,
+    precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
 ) -> dict:
-    from src.algo.walk_forward import _run_portfolio
-
     profile = _profile_for(strategy, parameters)
-    return _run_portfolio(
-        symbols=symbols, intraday=bars, spy_daily=spy_daily,
+    return AlgoPortfolioBacktest(
+        symbols=symbols, intraday_bars=bars, spy_daily_bars=spy_daily,
         start=start.isoformat(), end=end.isoformat(), feed=FEED,
-        adjustment=args.adjustment, capital=float(capital or args.capital),
+        data_adjustment=args.adjustment, initial_capital=float(capital or args.capital),
         slippage_bps=args.slippage_bps, spread_bps=args.spread_bps,
         commission_per_share=args.commission_per_share,
         short_borrow_annual_pct=args.short_borrow_annual_pct / 100,
         unknown_borrow_penalty_bps=args.unknown_borrow_penalty_bps,
         borrow_availability=args.borrow_availability_data,
         profile=profile["parameters"], strategies=profile["strategies"],
-        controls=profile["controls"], event_calendar=None,
-        research_runtime_overrides={strategy: True}
-        if strategy in {"intraday_trend", "intraday_momentum"} else None,
-    )
+        research_controls=profile["controls"], force_close_at_end=True,
+        preaggregated_daily_bars=preaggregated_daily_bars,
+        precomputed_timeline=precomputed_timeline,
+    ).run()
 
 
 def _run_search_with_bars(
@@ -436,7 +441,15 @@ def _run_search_with_bars(
     spy_daily: list[dict], start: date, end: date, args,
     weights: dict[str, float], min_trades: int,
     parent_parameters: dict | None = None,
+    preaggregated_daily_bars: dict[str, list[dict]] | None = None,
+    precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
 ) -> dict:
+    # Candidates in this search share the same input bars and replay window.
+    # Prepare their data-derived inputs once instead of rebuilding them per run.
+    if preaggregated_daily_bars is None:
+        preaggregated_daily_bars = aggregate_intraday_bars(bars)
+    if precomputed_timeline is None:
+        precomputed_timeline = build_replay_timeline(symbols, bars, start, end)
     candidates = _candidate_parameters(
         strategy, method, count, seed, space, parent_parameters=parent_parameters,
     )
@@ -469,6 +482,8 @@ def _run_search_with_bars(
         report = _run_replay(
             strategy=strategy, parameters=candidate["parameters"], symbols=symbols,
             bars=bars, spy_daily=spy_daily, start=start, end=end, args=args,
+            preaggregated_daily_bars=preaggregated_daily_bars,
+            precomputed_timeline=precomputed_timeline,
         )
         metrics = _metrics(report, capital=args.capital)
         fitness, components = _fitness(metrics, weights)
@@ -507,8 +522,11 @@ def _fit_window_ladder(
     *, strategy: str, method: str, count: int, seed: int, space: dict[str, list],
     symbols: list[str], bars: dict, spy_daily: list[dict], train_sessions: list[date],
     args, weights: dict[str, float], min_trades: int, window_options: list[int],
+    preaggregated_daily_bars: dict[str, list[dict]] | None = None,
 ) -> dict:
     """Search one or more trailing train windows, falling back until improvement."""
+    if preaggregated_daily_bars is None:
+        preaggregated_daily_bars = aggregate_intraday_bars(bars)
     ordered = _ordered_window_options(window_options)
     results = []
     attempts = []
@@ -523,6 +541,7 @@ def _fit_window_ladder(
             seed=seed + window_days * 73, space=space, symbols=symbols,
             bars=bars, spy_daily=spy_daily, start=fit_start, end=fit_end,
             args=args, weights=weights, min_trades=min_trades,
+            preaggregated_daily_bars=preaggregated_daily_bars,
         )
         comparison = _baseline_improvement(search)
         selected = search["selected_candidate"]
@@ -655,12 +674,14 @@ def run_discovery(args) -> dict:
         db=args.db, symbols=args.symbols_resolved, start=start, end=end,
         adjustment=args.adjustment, strategy=args.strategy,
     )
+    preaggregated_daily_bars = aggregate_intraday_bars(bars)
     report = _run_search_with_bars(
         strategy=args.strategy, method=args.search_method, count=args.candidates,
         seed=args.seed, space=args.search_space_data, symbols=args.symbols_resolved,
         bars=bars, spy_daily=spy, start=start, end=end, args=args,
         weights=args.fitness_weights_data, min_trades=args.min_trades,
         parent_parameters=parent_parameters,
+        preaggregated_daily_bars=preaggregated_daily_bars,
     )
     report.update({
         "schema": "swarm_algo_adaptive_discovery_v1", "stage": "short_window_discovery",
@@ -816,6 +837,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         db=args.db, symbols=args.symbols_resolved, start=train_start, end=test_end,
         adjustment=args.adjustment, strategy=args.strategy,
     )
+    preaggregated_daily_bars = aggregate_intraday_bars(bars)
     seed = args.seed + index * 1009
     train_sessions = _trading_sessions(args.db, train_end, train_start, args.adjustment)
     fitted = _fit_window_ladder(
@@ -824,6 +846,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         bars=bars, spy_daily=spy, train_sessions=train_sessions, args=args,
         weights=args.fitness_weights_data, min_trades=args.min_trades,
         window_options=args.train_window_options,
+        preaggregated_daily_bars=preaggregated_daily_bars,
     )
     discovery = fitted["search"]
     selected = fitted["selected_candidate"]
@@ -833,6 +856,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         strategy=args.strategy, parameters=selected_parameters,
         symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
         start=test_start, end=test_end, args=args, capital=capital_before,
+        preaggregated_daily_bars=preaggregated_daily_bars,
     )
     train_metrics = selected["metrics"]
     oos_metrics = _metrics(test_report, capital=capital_before)
@@ -981,7 +1005,7 @@ def run_adaptive_walk_forward(args) -> dict:
     if len(windows) < args.minimum_folds:
         raise ValueError(f"need at least {args.minimum_folds} walk-forward folds; found {len(windows)}")
     fold_jobs = [(index, window, args) for index, window in enumerate(windows)]
-    workers = min(args.workers, len(fold_jobs), os.cpu_count() or args.workers)
+    workers = min(args.workers, len(fold_jobs), available_cpu_count())
     results_by_index = {}
     if workers == 1:
         for job in fold_jobs:
@@ -1025,6 +1049,7 @@ def run_adaptive_walk_forward(args) -> dict:
             db=args.db, symbols=args.symbols_resolved, start=train_start, end=hold_end,
             adjustment=args.adjustment, strategy=args.strategy,
         )
+        preaggregated_daily_bars = aggregate_intraday_bars(bars)
         final_fit = _fit_window_ladder(
             strategy=args.strategy, method=args.search_method, count=args.candidates,
             seed=args.seed + 987_654, space=args.search_space_data,
@@ -1032,12 +1057,14 @@ def run_adaptive_walk_forward(args) -> dict:
             train_sessions=train_sessions, args=args,
             weights=args.fitness_weights_data, min_trades=args.min_trades,
             window_options=window_options,
+            preaggregated_daily_bars=preaggregated_daily_bars,
         )
         selected = final_fit["selected_candidate"]
         hold_report = _run_replay(
             strategy=args.strategy, parameters=selected["parameters"],
             symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
             start=hold_start, end=hold_end, args=args, capital=args.capital,
+            preaggregated_daily_bars=preaggregated_daily_bars,
         )
         hold_metrics = _metrics(hold_report, capital=args.capital)
         hold_fitness, _ = _fitness(hold_metrics, args.fitness_weights_data)
@@ -1190,7 +1217,7 @@ def add_cli_commands(commands) -> None:
                               help="advance between folds; must be at least test-days")
     verification.add_argument("--holdout-days", type=int, default=0,
                               help="reserve final sessions from all walk-forward fitting")
-    verification.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
+    verification.add_argument("--workers", type=int, default=min(8, available_cpu_count()))
     verification.add_argument("--minimum-folds", type=int, default=3)
     verification.add_argument("--minimum-oos-sharpe", type=float, default=0.0)
     verification.add_argument("--maximum-average-decay", type=float, default=0.35)
