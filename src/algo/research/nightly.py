@@ -31,15 +31,18 @@ from .files import _atomic_json, _research_lock
 from .live_manifest import live_configuration_manifest
 from .profiles import profile_search_manifest
 from .settings import (
+    ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_VERIFICATION_CANDIDATES,
+    ADAPTIVE_VERIFICATION_HOLDOUT_DAYS, ADAPTIVE_VERIFICATION_STEP_DAYS,
+    ADAPTIVE_VERIFICATION_TEST_DAYS, ADAPTIVE_WINDOW_DAYS,
     ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, LIVE_RESEARCH_STRATEGIES,
     MIN_COVERED_UNIVERSE, RESEARCHABLE_STRATEGIES, STRATEGY_ARTIFACT_MAX_AGE_DAYS,
-    STRATEGY_DISCOVERY_END, STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
+    STRATEGY_DISCOVERY_END, STRATEGY_FLAVORS, STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
     STRATEGY_MIN_TRAIN_TRADES, STRATEGY_OPTIMIZATION_START,
     STRATEGY_STEP_DAYS, STRATEGY_TEST_DAYS, STRATEGY_TRAIN_DAYS,
 )
 
 
-NIGHTLY_PIPELINE_VERSION = "algo-research-layers-v2"
+NIGHTLY_PIPELINE_VERSION = "algo-research-layers-v5-adaptive-all-strategies"
 MAX_WALK_FORWARD_WORKERS_PER_STRATEGY = 4
 _RESEARCH_COSTS = {
     "slippage_bps": 5.0,
@@ -142,6 +145,19 @@ def run_daily_research(args) -> dict:
             "max_train_drawdown_pct": STRATEGY_MAX_TRAIN_DRAWDOWN_PCT,
             "costs": _OPTIMIZATION_COSTS,
         },
+        "adaptive_pipeline": {
+            "window_days_by_flavor": {
+                flavor: list(values) for flavor, values in ADAPTIVE_WINDOW_DAYS.items()
+            },
+            "discovery_method": "bayes",
+            "discovery_candidates": ADAPTIVE_DISCOVERY_CANDIDATES,
+            "verification_start": history_start.isoformat(),
+            "verification_end": optimization_end.isoformat(),
+            "verification_candidates": ADAPTIVE_VERIFICATION_CANDIDATES,
+            "verification_test_days": ADAPTIVE_VERIFICATION_TEST_DAYS,
+            "verification_step_days": ADAPTIVE_VERIFICATION_STEP_DAYS,
+            "verification_holdout_days": ADAPTIVE_VERIFICATION_HOLDOUT_DAYS,
+        },
         "strategies": list(RESEARCHABLE_STRATEGIES),
         "profile_search_versions": search_versions,
         "live_configuration_sha256": live_snapshot["sha256"],
@@ -161,13 +177,86 @@ def run_daily_research(args) -> dict:
     root = Path(args.output_dir) / "layers"
     cohort_dir = root / "runs" / run_id
     report_path = cohort_dir / "report.json"
+    adaptive_root = Path(args.output_dir) / "adaptive"
+    adaptive_discovery_started = perf_counter()
+    adaptive_discovery = (
+        _run_nightly_adaptive_discoveries(
+            database=database, symbols=covered_symbols, latest_end=latest_end, data_version=data_version,
+            output_dir=adaptive_root, workers=args.workers, force=args.force,
+        )
+        if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
+    )
+    adaptive_discovery_seconds = round(perf_counter() - adaptive_discovery_started, 3)
+    adaptive_verification_started = perf_counter()
+    adaptive_verification = (
+        _run_nightly_adaptive_verifications(
+            database=database, symbols=covered_symbols,
+            start=history_start, end=optimization_end,
+            data_version=data_version,
+            output_dir=adaptive_root, workers=args.workers, force=args.force,
+        )
+        if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
+    )
+    adaptive_verification_seconds = round(perf_counter() - adaptive_verification_started, 3)
+    adaptive_shadow_discovery = (adaptive_discovery.get("strategies") or {}).get("multi_factor", {})
+    adaptive_coordinator_root = adaptive_root / "portfolio-optimization"
+    verification_statuses = adaptive_verification.get("strategies") or {}
+    adaptive_portfolio_ready = all(
+        (verification_statuses.get(strategy) or {}).get("coordinator_artifact")
+        and Path((verification_statuses.get(strategy) or {})["coordinator_artifact"]).is_file()
+        for strategy in LIVE_RESEARCH_STRATEGIES
+    )
+    portfolio_source = "adaptive_short_window" if adaptive_portfolio_ready else "fixed_profile_fallback"
     if not args.force and not args.factor_only:
         cached, _ = read_json(report_path)
-        if cached and cached.get("orchestration", {}).get("fingerprint") == fingerprint:
+        if (
+            cached
+            and cached.get("orchestration", {}).get("fingerprint") == fingerprint
+            and (cached.get("portfolio_coordinator_replay") or {}).get("profile_selection_source") == portfolio_source
+        ):
+            cached = {
+                **cached,
+                "stage_timings": {
+                    **(cached.get("stage_timings") or {}),
+                    "adaptive_discovery": {
+                        "seconds": adaptive_discovery_seconds,
+                        "status": adaptive_discovery.get("status"),
+                    },
+                    "adaptive_verification": {
+                        "seconds": adaptive_verification_seconds,
+                        "status": adaptive_verification.get("status"),
+                    },
+                    "total_seconds": round(perf_counter() - total_started, 3),
+                },
+                "adaptive_research": {
+                    "discovery": adaptive_discovery,
+                    "verification": adaptive_verification,
+                },
+                "adaptive_strategy_artifacts": {
+                    strategy: {
+                        "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
+                        "verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
+                        "coordinator_optimization": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
+                        "verification_summary": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("summary"),
+                    }
+                    for strategy in RESEARCHABLE_STRATEGIES
+                },
+                "adaptive_shadow_discovery": adaptive_shadow_discovery,
+            }
+            _atomic_json(report_path, cached)
+            _atomic_json(root / "latest.json", cached)
             return {**cached, "cache_hit": True}
 
     cohort_dir.mkdir(parents=True, exist_ok=True)
-    timings: dict[str, object] = {"data_refresh_seconds": refresh_seconds}
+    timings: dict[str, object] = {
+        "data_refresh_seconds": refresh_seconds,
+        "adaptive_discovery": {
+            "seconds": adaptive_discovery_seconds, "status": adaptive_discovery.get("status"),
+        },
+        "adaptive_verification": {
+            "seconds": adaptive_verification_seconds, "status": adaptive_verification.get("status"),
+        },
+    }
     strategy_reports = {}
     factor_started = perf_counter()
     factor_path = cohort_dir / "factor_model.json"
@@ -198,6 +287,11 @@ def run_daily_research(args) -> dict:
                 history_start, latest_end, optimization_end, latest_age_days,
                 covered_symbols, symbols, missing, universe_meta, refresh_report,
             ),
+            "adaptive_research": {
+                "discovery": adaptive_discovery,
+                "verification": adaptive_verification,
+            },
+            "adaptive_shadow_discovery": adaptive_shadow_discovery,
             "orchestration": {**context, "cache_hit": False},
             "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
             "limitations": [
@@ -226,16 +320,18 @@ def run_daily_research(args) -> dict:
     if (
         not args.force and cached_portfolio
         and cached_portfolio.get("orchestration", {}).get("fingerprint") == fingerprint
+        and cached_portfolio.get("profile_selection_source") == portfolio_source
     ):
         portfolio_report = cached_portfolio
         portfolio_reused = True
+        portfolio_source = cached_portfolio.get("profile_selection_source", portfolio_source)
     else:
         from .portfolio_simulation import run_coordinated_portfolio
 
         portfolio_args = SimpleNamespace(
             strategies=",".join(LIVE_RESEARCH_STRATEGIES),
             enable_disabled_intraday=False,
-            artifact_dir=str(cohort_dir / "optimization"),
+            artifact_dir=str(adaptive_coordinator_root if adaptive_portfolio_ready else cohort_dir / "optimization"),
             event_calendar=None,
             multi_factor_overlay=bool(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_enabled", True)),
             workers=max(1, args.workers), output_dir=str(portfolio_path),
@@ -244,6 +340,7 @@ def run_daily_research(args) -> dict:
         portfolio_report["orchestration"] = {
             "run_id": run_id, "fingerprint": fingerprint,
         }
+        portfolio_report["profile_selection_source"] = portfolio_source
         _atomic_json(portfolio_path / "latest.json", portfolio_report)
         _atomic_json(
             portfolio_path / f"{optimization_end.isoformat()}-portfolio.json",
@@ -268,6 +365,20 @@ def run_daily_research(args) -> dict:
         "research_window": context["research"],
         "optimization_window": context["optimization"],
         "factor_model": factor_report,
+        "adaptive_research": {
+            "discovery": adaptive_discovery,
+            "verification": adaptive_verification,
+        },
+        "adaptive_strategy_artifacts": {
+            strategy: {
+                "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
+                "verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
+                "coordinator_optimization": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
+                "verification_summary": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("summary"),
+            }
+            for strategy in RESEARCHABLE_STRATEGIES
+        },
+        "adaptive_shadow_discovery": adaptive_shadow_discovery,
         "strategy_jobs": strategy_reports,
         "portfolio_coordinator_replay": portfolio_report,
         "strategy_artifacts": {
@@ -283,11 +394,15 @@ def run_daily_research(args) -> dict:
         },
         "portfolio_summary": portfolio_report.get("fold_summary"),
         "recommendation": {
+            "adaptive_strategy_profiles": (
+                "The nightly adaptive stage searches all eight strategies on their short-window ranges and verifies them with rolling out-of-sample folds; "
+                "review per-strategy status, summaries, and locked holdouts before changing live parameters."
+            ),
             "strategy_profiles": "Training-window selections were evaluated on later out-of-sample folds; review artifacts before any promotion.",
             "multi_factor": (
-                "Factor model diagnostics are available for human review; weights remain research-only."
+                "The recent-regime Multi Factor candidate is routed to its shadow book only; broker execution remains disabled."
                 if factor_ic is not None and factor_ic > 0
-                else "Factor model did not show positive adaptive prequential IC; retain live weights."
+                else "Factor model did not show positive adaptive prequential IC; retain default parameters in the shadow book until positive discovery evidence is available."
             ),
             "takeover_requires_human_confirmation": True,
         },
@@ -304,6 +419,347 @@ def run_daily_research(args) -> dict:
     _atomic_json(report_path, report)
     _atomic_json(root / "latest.json", report)
     return report
+
+
+def _adaptive_window_options(strategy: str) -> list[int]:
+    return list(ADAPTIVE_WINDOW_DAYS[STRATEGY_FLAVORS[strategy]])
+
+
+def _run_nightly_adaptive_discoveries(
+    *, database: str, symbols: list[str], latest_end: date, data_version: str, output_dir: Path,
+    workers: int, force: bool,
+) -> dict:
+    """Run recent-window discovery for every strategy, reusing today's artifacts."""
+    statuses = {}
+    jobs = []
+    for strategy in RESEARCHABLE_STRATEGIES:
+        options = _adaptive_window_options(strategy)
+        latest_path = output_dir / strategy / "latest-discovery.json"
+        prior, _ = read_json(latest_path)
+        window_search = (prior or {}).get("adaptive_window_search") or {}
+        reusable = bool(
+            not force
+            and prior
+            and prior.get("schema") == "swarm_algo_adaptive_discovery_v1"
+            and prior.get("strategy") == strategy
+            and prior.get("window", {}).get("end") == latest_end.isoformat()
+            and window_search.get("pipeline_version") == NIGHTLY_PIPELINE_VERSION
+            and window_search.get("configured_window_days") == options
+            and window_search.get("candidate_count") == ADAPTIVE_DISCOVERY_CANDIDATES
+            and window_search.get("data_version") == data_version
+            and prior.get("data_tier") == "algo_trader_plus"
+            and prior.get("feed") == FEED
+            and prior.get("adjustment") == ADJUSTMENT
+            and set(prior.get("symbols") or []) == set(symbols)
+            and prior.get("database") == str(Path(database).resolve())
+        )
+        if reusable:
+            statuses[strategy] = _discovery_status(prior, latest_path, "reused")
+        else:
+            jobs.append((strategy, database, symbols, latest_end, data_version, output_dir, options))
+
+    if jobs:
+        worker_count = min(max(1, workers), len(jobs), os.cpu_count() or 1)
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(_run_nightly_adaptive_discovery_job, job): job[0]
+                for job in jobs
+            }
+            for future in as_completed(futures):
+                strategy = futures[future]
+                try:
+                    statuses[strategy] = future.result()
+                except Exception as exc:
+                    statuses[strategy] = {
+                        "status": "error", "strategy": strategy,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+    errors = [strategy for strategy, item in statuses.items() if item.get("status") == "error"]
+    return {
+        "status": "error" if len(errors) == len(RESEARCHABLE_STRATEGIES) else "completed" if not errors else "partial_error",
+        "window_days_by_strategy": {
+            strategy: _adaptive_window_options(strategy) for strategy in RESEARCHABLE_STRATEGIES
+        },
+        "strategies": {strategy: statuses[strategy] for strategy in RESEARCHABLE_STRATEGIES if strategy in statuses},
+        "error_strategies": errors,
+    }
+
+
+def _run_nightly_adaptive_discovery_job(payload: tuple) -> dict:
+    strategy, database, symbols, latest_end, data_version, output_dir, options = payload
+    from .adaptive import run_window_ladder_discovery
+
+    discovery_args = SimpleNamespace(
+        strategy=strategy, symbols=",".join(symbols), db=database,
+        adjustment=ADJUSTMENT, search_method="bayes",
+        candidates=ADAPTIVE_DISCOVERY_CANDIDATES,
+        seed=latest_end.toordinal() + sum(map(ord, strategy)),
+        search_space=None, fitness_weights=None, min_trades=3, capital=100_000.0,
+        slippage_bps=5.0, spread_bps=3.0, commission_per_share=0.005,
+        short_borrow_annual_pct=3.0, unknown_borrow_penalty_bps=25.0,
+        borrow_availability=None, start=None, end=latest_end.isoformat(),
+        window_days=options[len(options) // 2], output_dir=str(output_dir),
+    )
+    report = run_window_ladder_discovery(
+        discovery_args, options, pipeline_version=NIGHTLY_PIPELINE_VERSION,
+        data_version=data_version,
+    )
+    detail, _ = read_json(report["latest_detail_artifact"])
+    if not detail:
+        raise ValueError(f"adaptive discovery artifact was not readable for {strategy}")
+    latest = Path(report["latest_detail_artifact"])
+    return _discovery_status(detail, latest, "completed")
+
+
+def _discovery_status(detail: dict, path: Path, status: str) -> dict:
+    selected = detail.get("selected_candidate") or {}
+    return {
+        "status": status, "strategy": detail.get("strategy"),
+        "selection_status": detail.get("selection_status"),
+        "adaptive_improvement": bool(detail.get("adaptive_improvement")),
+        "window": detail.get("window"),
+        "window_search": detail.get("adaptive_window_search"),
+        "selected_candidate": {
+            "name": selected.get("name"), "parameters": selected.get("parameters"),
+            "metrics": selected.get("metrics"), "eligible": selected.get("eligible"),
+        },
+        "detail_artifact": str(path.resolve()),
+    }
+
+
+def _run_nightly_adaptive_verifications(
+    *, database: str, symbols: list[str], start: date, end: date,
+    data_version: str, output_dir: Path, workers: int, force: bool,
+) -> dict:
+    """Verify the short-window fitting policy on rolling historical holdouts."""
+    statuses = {}
+    jobs = []
+    for strategy in RESEARCHABLE_STRATEGIES:
+        options = _adaptive_window_options(strategy)
+        latest_path = output_dir / strategy / "latest-walk-forward.json"
+        prior, _ = read_json(latest_path)
+        cached_summary, _ = read_json(output_dir / strategy / "latest-walk-forward-summary.json")
+        if not force and _adaptive_verification_is_reusable(
+            prior, strategy=strategy, database=database, symbols=symbols,
+            start=start, end=end, options=options, data_version=data_version,
+        ) and cached_summary:
+            statuses[strategy] = {
+                "status": "reused", "strategy": strategy,
+                "summary": cached_summary, "detail_artifact": str(latest_path.resolve()),
+            }
+        else:
+            jobs.append((strategy, database, symbols, start, end, data_version, output_dir, options))
+
+    if jobs:
+        budget = min(max(1, workers), os.cpu_count() or 1)
+        fold_workers = min(MAX_WALK_FORWARD_WORKERS_PER_STRATEGY, budget)
+        concurrency = min(len(jobs), max(1, (budget + fold_workers - 1) // fold_workers))
+        for offset in range(0, len(jobs), concurrency):
+            batch = jobs[offset:offset + concurrency]
+            per_strategy_workers = min(fold_workers, max(1, budget // len(batch)))
+            with ProcessPoolExecutor(max_workers=len(batch)) as executor:
+                futures = {
+                    executor.submit(_run_nightly_adaptive_verification_job, (*job, per_strategy_workers)): job[0]
+                    for job in batch
+                }
+                for future in as_completed(futures):
+                    strategy = futures[future]
+                    try:
+                        statuses[strategy] = future.result()
+                    except Exception as exc:
+                        statuses[strategy] = {
+                            "status": "error", "strategy": strategy,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+    for strategy in RESEARCHABLE_STRATEGIES:
+        status = statuses.get(strategy) or {}
+        if status.get("status") == "error":
+            continue
+        detail, _ = read_json(output_dir / strategy / "latest-walk-forward.json")
+        summary = status.get("summary")
+        if not summary:
+            summary, _ = read_json(output_dir / strategy / "latest-walk-forward-summary.json")
+        try:
+            if not detail or not summary:
+                raise ValueError("adaptive verification detail or summary is missing")
+            artifact_path = _write_adaptive_optimization_artifact(
+                detail, summary, output_dir / "portfolio-optimization",
+            )
+            status["coordinator_artifact"] = str(artifact_path.resolve())
+            statuses[strategy] = status
+        except Exception as exc:
+            statuses[strategy] = {
+                **status, "status": "error", "strategy": strategy,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    errors = [strategy for strategy, item in statuses.items() if item.get("status") == "error"]
+    return {
+        "status": "error" if len(errors) == len(RESEARCHABLE_STRATEGIES) else "completed" if not errors else "partial_error",
+        "window_days_by_strategy": {
+            strategy: _adaptive_window_options(strategy) for strategy in RESEARCHABLE_STRATEGIES
+        },
+        "verification_range": {"start": start.isoformat(), "end": end.isoformat()},
+        "strategies": {strategy: statuses[strategy] for strategy in RESEARCHABLE_STRATEGIES if strategy in statuses},
+        "error_strategies": errors,
+    }
+
+
+def _write_adaptive_optimization_artifact(detail: dict, summary: dict, output_dir: Path) -> Path:
+    """Adapt verified short-window fold choices to the shared coordinator input schema."""
+    strategy = detail["strategy"]
+    data = detail["data"]
+    folds = []
+    for item in detail.get("folds") or []:
+        controls = item.get("train_controls") or {}
+        folds.append({
+            **{key: item[key] for key in ("train_start", "train_end", "test_start", "test_end")},
+            "selected_profile": item["selected_candidate"],
+            "selected_parameters": {strategy: item["train_parameters"]},
+            "selected_strategies": [strategy],
+            "selected_controls": controls,
+            "selected_reason": (
+                f"Adaptive {item['fit_window_days']}-session fit beat baseline on training data"
+                if item.get("adaptive_improvement")
+                else "Baseline retained after no qualifying short-window improvement"
+            ),
+            "adaptive_improvement": bool(item.get("adaptive_improvement")),
+            "fit_window_days": item.get("fit_window_days"),
+            "out_of_sample": item.get("oos_metrics"),
+        })
+    if len(folds) < 3:
+        raise ValueError(f"adaptive verification needs at least three folds for {strategy}")
+    output_dir = output_dir / strategy
+    output_dir.mkdir(parents=True, exist_ok=True)
+    detail_path = Path(detail.get("detail_artifact") or output_dir / "latest-walk-forward.json")
+    try:
+        detail_bytes = detail_path.read_bytes()
+    except OSError:
+        detail_bytes = json.dumps(detail, sort_keys=True).encode()
+    run_date = datetime.now(ET).date().isoformat()
+    promotion = {
+        "promotable": bool((summary.get("checks") or {}).get("overall_pass")),
+        "source": "short_window_adaptive_walk_forward",
+        "checks": summary.get("checks"),
+    }
+    artifact = {
+        "schema": "swarm_algo_strategy_optimization_v1",
+        "stage": "strategy_optimization",
+        "research_only": True,
+        "live_configuration_changed": False,
+        "trade_or_order_actions": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "strategy": strategy,
+        "strategy_flavor": STRATEGY_FLAVORS[strategy],
+        "research_runtime_overrides": (
+            {strategy: True} if strategy in {"intraday_trend", "intraday_momentum"} else {}
+        ),
+        "direction_scope": "both",
+        "profile_search": profile_search_manifest(strategy),
+        "live_configuration": live_configuration_manifest([strategy]),
+        "source": {
+            "database": data["database"], "symbols": data["symbols"],
+            "borrow_availability": None,
+            "candidate_profiles": [],
+            "candidate_profiles_artifact": {
+                "path": str(detail_path.resolve()),
+                "sha256": hashlib.sha256(detail_bytes).hexdigest(),
+            },
+        },
+        "optimization": {
+            "start": data["start"], "end": data["end"], "feed": data["feed"],
+            "data_adjustment": data["adjustment"], "symbols": data["symbols"],
+            "data_tier_at_run": data.get("data_tier"),
+            "transaction_cost_model": {
+                "slippage_bps_each_side": _OPTIMIZATION_COSTS["slippage_bps"],
+                "spread_bps": _OPTIMIZATION_COSTS["spread_bps"],
+                "commission_per_share_each_side": _OPTIMIZATION_COSTS["commission_per_share"],
+                "short_borrow_annual_pct": _OPTIMIZATION_COSTS["short_borrow_annual_pct"],
+                "unknown_borrow_adverse_fill_penalty_bps": _OPTIMIZATION_COSTS["unknown_borrow_penalty_bps"],
+            },
+            "folds": folds, "promotion_gate": promotion,
+            "adaptive_verification_summary": summary,
+        },
+        "latest_training_selection": {
+            "train_start": folds[-1]["train_start"],
+            "train_end": folds[-1]["train_end"],
+            "test_start": folds[-1]["test_start"],
+            "test_end": folds[-1]["test_end"],
+            "profile": folds[-1]["selected_profile"],
+            "parameters": folds[-1]["selected_parameters"],
+            "strategies": folds[-1]["selected_strategies"],
+            "controls": folds[-1]["selected_controls"],
+            "reason": folds[-1]["selected_reason"],
+        },
+        "promotion_gate": promotion,
+    }
+    latest = output_dir / "latest.json"
+    dated = output_dir / f"{run_date}-optimization.json"
+    _atomic_json(latest, artifact)
+    _atomic_json(dated, artifact)
+    return latest
+
+
+def _adaptive_verification_is_reusable(
+    detail: dict | None, *, strategy: str, database: str, symbols: list[str],
+    start: date, end: date, options: list[int], data_version: str,
+) -> bool:
+    if not detail:
+        return False
+    config = detail.get("window_config") or {}
+    search = detail.get("search") or {}
+    data = detail.get("data") or {}
+    return bool(
+        detail.get("strategy") == strategy
+        and detail.get("adaptive_policy_version") == NIGHTLY_PIPELINE_VERSION
+        and data.get("start") == start.isoformat()
+        and data.get("end") == end.isoformat()
+        and data.get("symbols") == symbols
+        and data.get("database") == str(Path(database).resolve())
+        and data.get("data_version") == data_version
+        and data.get("feed") == FEED
+        and data.get("adjustment") == ADJUSTMENT
+        and config.get("train_days") == max(max(values) for values in ADAPTIVE_WINDOW_DAYS.values())
+        and config.get("train_window_options") == options
+        and config.get("test_days") == ADAPTIVE_VERIFICATION_TEST_DAYS
+        and config.get("step_days") == ADAPTIVE_VERIFICATION_STEP_DAYS
+        and config.get("locked_holdout_days") == ADAPTIVE_VERIFICATION_HOLDOUT_DAYS
+        and search.get("method") == "bayes"
+        and search.get("candidates_per_fold") == ADAPTIVE_VERIFICATION_CANDIDATES
+    )
+
+
+def _run_nightly_adaptive_verification_job(payload: tuple) -> dict:
+    strategy, database, symbols, start, end, data_version, output_dir, options, fold_workers = payload
+    from .adaptive import run_adaptive_walk_forward
+
+    walk_args = SimpleNamespace(
+        strategy=strategy, symbols=",".join(symbols), db=database,
+        adjustment=ADJUSTMENT, search_method="bayes",
+        candidates=ADAPTIVE_VERIFICATION_CANDIDATES,
+        seed=end.toordinal() + sum(map(ord, strategy)),
+        search_space=None, fitness_weights=None, min_trades=3, capital=100_000.0,
+        slippage_bps=5.0, spread_bps=3.0, commission_per_share=0.005,
+        short_borrow_annual_pct=3.0, unknown_borrow_penalty_bps=25.0,
+        borrow_availability=None, start=start.isoformat(), end=end.isoformat(),
+        train_days=max(max(values) for values in ADAPTIVE_WINDOW_DAYS.values()),
+        train_window_options=options,
+        test_days=ADAPTIVE_VERIFICATION_TEST_DAYS,
+        step_days=ADAPTIVE_VERIFICATION_STEP_DAYS,
+        holdout_days=ADAPTIVE_VERIFICATION_HOLDOUT_DAYS,
+        workers=fold_workers, minimum_folds=3, minimum_oos_sharpe=0.0,
+        maximum_average_decay=0.35, output_dir=str(output_dir),
+        adaptive_policy_version=NIGHTLY_PIPELINE_VERSION,
+        data_version=data_version,
+    )
+    report = run_adaptive_walk_forward(walk_args)
+    detail, _ = read_json(report["latest_detail_artifact"])
+    return {
+        "status": "completed", "strategy": strategy,
+        "summary": report.get("summary"),
+        "detail_artifact": report.get("latest_detail_artifact"),
+        "summary_artifact": report.get("summary_artifact"),
+        "worker_count": (detail or {}).get("worker_count"),
+    }
 
 
 def _run_strategy_stages(

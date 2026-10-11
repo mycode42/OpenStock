@@ -85,10 +85,9 @@ def rank_strategies(
             available.add("event_driven")
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
     allowed = [name for name, score in ranked if score >= 0.55 and name in available]
-    # Keep satellite eligibility separate from the core set the regime
-    # advisor prioritizes. Multi Factor may also use its own bounded entry path.
-    satellites = [name for name in allowed if name in {"multi_factor", "event_driven"}]
-    active = [name for name in allowed if name not in {"multi_factor", "event_driven"}]
+    # Multi Factor is a core swing strategy. Event Driven remains evidence-only.
+    satellites = [name for name in allowed if name == "event_driven"]
+    active = [name for name in allowed if name != "event_driven"]
     return {
         "regime": regime,
         "reason": reason,

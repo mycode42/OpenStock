@@ -136,7 +136,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             groups = self.risk.get("strategy_group_limits", {})
             if "swing" in groups:
                 groups["swing"]["strategies"] = [
-                    "swing_trend_following", "swing_momentum", "swing_mean_reversion",
+                    "swing_trend_following", "swing_momentum", "swing_mean_reversion", "multi_factor",
                 ]
             if "intraday_core" in groups:
                 groups["intraday_core"]["strategies"] = list(dict.fromkeys([

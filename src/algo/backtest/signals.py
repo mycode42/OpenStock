@@ -181,6 +181,10 @@ class ReplaySignalsMixin:
                 continue
             if strategy not in CORE_STRATEGIES:
                 continue
+            # Multi Factor has a dedicated rebalance generator below; it is a
+            # core strategy, but it has no rule-pipeline evaluator.
+            if strategy == "multi_factor":
+                continue
             if strategy == "intraday_trend" and not self.research_runtime_overrides.get(
                 strategy, STRATEGY_CONFIG.get("enable_intraday_trend", False),
             ):
@@ -258,7 +262,7 @@ class ReplaySignalsMixin:
         if (
             not position_qty and factor_signal is not None
             and factor_signal.get("action") in {"buy", "short"}
-            and "multi_factor" in allowed_satellites
+            and "multi_factor" in self._current_regime.get("active", [])
             and self.multi_factor_enabled
             and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
         ):
@@ -268,12 +272,11 @@ class ReplaySignalsMixin:
             options.append(item)
         if (
             factor_signal is not None
-            and "multi_factor" in allowed_satellites
             and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
             and position_qty and held is not None and held.strategy == "multi_factor"
             and factor_signal.get("action") in {"sell", "cover"}
         ):
-            # Preserve exit management for any legacy satellite-owned holding.
+            # Multi Factor is a core swing strategy and owns its exits.
             options.append({**factor_signal, "rank_score": -1.0, "timeframe": "1Day"})
 
         event_evidence = None
@@ -450,7 +453,7 @@ class ReplaySignalsMixin:
             count for (day, name), count in self.entry_counts_by_strategy.items()
             if day == self.day_key and name in (
                 RESEARCH_SWING_CORE_STRATEGIES if self.profile_bank_horizons
-                else {"trend_following", "momentum", "swing_mean_reversion"}
+                else {"trend_following", "momentum", "swing_mean_reversion", "multi_factor"}
             )
         )
         coordinator_book = self.coordinator.new_book(

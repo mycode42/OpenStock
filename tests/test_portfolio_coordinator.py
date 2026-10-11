@@ -4,7 +4,8 @@ from zoneinfo import ZoneInfo
 from src.algo.backtest import AlgoPortfolioBacktest
 from src.algo.walk_forward import evaluate_promotion_gate, parameter_neighbors
 from src.algo.strategies.portfolio_coordinator import (
-    PortfolioCoordinator, PortfolioCoordinatorConfig, choose_priority, throttle_signal,
+    PortfolioCoordinator, PortfolioCoordinatorConfig, choose_priority, strategy_priority,
+    throttle_signal,
 )
 
 
@@ -67,11 +68,12 @@ def test_same_strategy_add_is_shrunk_to_the_eight_percent_name_cap():
     assert result.reduced_from_qty == 100
 
 
-def test_competing_name_proposals_keep_the_higher_priority_strategy():
+def test_multi_factor_and_trend_are_both_core_in_name_priority_resolution():
     winner, rejected = choose_priority([
-        _proposal(strategy="multi_factor", ticker="NVDA", action="buy"),
-        _proposal(strategy="trend_following", ticker="NVDA", action="short"),
+        {**_proposal(strategy="multi_factor", ticker="NVDA", action="buy"), "rank_score": 0.5},
+        {**_proposal(strategy="trend_following", ticker="NVDA", action="short"), "rank_score": 1.0},
     ])
+    assert strategy_priority("multi_factor") == strategy_priority("trend_following")
     assert winner["strategy"] == "trend_following"
     assert winner["action"] == "short"
     assert rejected[0]["suppressed_reason"].startswith("portfolio coordinator:")
@@ -130,11 +132,11 @@ def test_shared_swing_slice_allows_only_three_entries_per_day():
     assert rejected.reason == "shared swing entry slice is exhausted"
 
 
-def test_satellite_cannot_own_an_entry_and_boats_entries_are_disabled():
+def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_disabled():
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
-    satellite = book.review(
+    factor_core = book.review(
         _proposal(strategy="multi_factor"), session="regular", timestamp=stamp,
     )
     overnight = book.review(
@@ -142,8 +144,7 @@ def test_satellite_cannot_own_an_entry_and_boats_entries_are_disabled():
         timestamp=datetime(2026, 10, 9, 21, 0, tzinfo=ET), regime="trending_up",
     )
 
-    assert not satellite.approved
-    assert "confirmation-only" in satellite.reason
+    assert factor_core.approved
     assert not overnight.approved
     assert overnight.reason == "overnight entries are disabled by configuration"
 

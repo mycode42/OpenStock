@@ -14,6 +14,7 @@ from src.algo.market_store import DEFAULT_DB
 from src.algo.config import ALGO_RUNTIME_CONFIG
 
 from .files import _atomic_json
+from .adaptive import add_cli_commands as _add_adaptive_commands
 from .portfolio_simulation import run_coordinated_portfolio
 from .settings import (
     DEFAULT_OUTPUT_DIR, LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES,
@@ -87,13 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
     portfolio.add_argument(
         "--multi-factor-overlay", action=argparse.BooleanOptionalAction,
         default=bool(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_enabled", True)),
-        help="enable the Multi Factor confirmation overlay (enabled by default to match Algo runtime config)",
+        help="include the Multi Factor core strategy in this replay (enabled by default to match Algo runtime config)",
     )
     portfolio.add_argument("--workers", type=int, default=8)
     portfolio.add_argument(
         "--output-dir", default=str(DEFAULT_OUTPUT_DIR / "layers" / "portfolio"),
     )
     portfolio.set_defaults(handler=_portfolio_command)
+    _add_adaptive_commands(commands)
     return parser
 
 

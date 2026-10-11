@@ -63,9 +63,9 @@ required history first with `python -m src.algo.backtest fetch`, using the same
 symbol list and date range. Include `multi_factor` in `--strategies` when fetching
 so the fetch command includes its historical warmup. The portfolio stage
 requires matching symbols, dates, costs, and walk-forward folds across its input
-artifacts. Multi Factor and Event Driven are confirmation overlays: they can
-confirm core entries but cannot open standalone positions. Multi Factor follows
-the live runtime setting. Event Driven also follows live config and builds a
+artifacts. Multi Factor is a core strategy in the portfolio replay. Event Driven
+remains a confirmation overlay and cannot open standalone positions. Multi
+Factor follows the live runtime enable setting. Event Driven also follows live config and builds a
 point-in-time historical calendar for the artifact interval when no CSV is
 supplied. If that calendar can't be built or safely reused, the result records
 that Event Driven was omitted.
@@ -77,9 +77,12 @@ stops, or portfolio constraints. This is the live-rule replay twin with bounded
 profile selection, not a promise that the selected profile will work in future
 markets.
 
-All three layers are research-only. They do not change live configuration or
-place orders. Fixed-window `research` comparisons are descriptive; use the
-walk-forward optimization and coordinator holdouts to evaluate candidates.
+The research and optimization layers do not change live configuration or place
+orders. The scheduled pipeline also writes a recent Multi Factor candidate for
+the shadow book; the scanner consumes only fresh, positive, sample-qualified
+profiles while broker execution remains disabled. Fixed-window `research`
+comparisons are descriptive; use walk-forward optimization and coordinator
+holdouts to evaluate candidates.
 
 ## Scheduled pipeline
 
@@ -91,11 +94,25 @@ point. It now delegates to the layered nightly orchestrator:
    and walk-forward optimization jobs concurrently.
 3. Store each run in a fingerprinted cohort directory, so the exact research
    and optimization inputs are versioned together.
-4. Load the fixed optimization artifacts into the portfolio stage, check that
-   their folds and cost assumptions align, and replay them through
-   `PortfolioCoordinator` without retraining during replay.
+4. Load the verified adaptive short-window fold selections into the portfolio
+   stage when every live-enabled strategy has a compatible artifact, check
+   that their folds and cost assumptions align, and replay them through
+   `PortfolioCoordinator` without retraining during replay. If adaptive
+   verification is incomplete, the report identifies the fixed-profile
+   fallback used for that cohort.
 5. Write one nightly report with artifact paths, reuse status, stage timings,
    selected profiles, promotion gates, and portfolio results.
+6. Run recent-window adaptive discovery for all eight strategies once per new
+   trading session. Intraday profiles try 10/20/30 sessions and swing profiles
+   try 30/60/90; when a window does not beat its baseline with a positive,
+   sample-qualified result, the next window is tried.
+7. Run rolling short-window walk-forward verification for all eight strategies
+   for each new weekly cohort, reserving the final 252 sessions as a locked
+   holdout. The fold search repeats the same window fallback using training
+   data only and tests each selected candidate on the following unseen window.
+   The per-strategy artifacts include discovery, verification, and coordinator
+   paths. Multi Factor discovery may feed its separate shadow book; the other
+   discovery results remain research evidence until reviewed.
 
 The scheduler still owns the schedule and remains the invocation point.
 `pipeline.py` is a small import facade; `nightly.py` owns orchestration,
@@ -107,14 +124,16 @@ and event preparation; `factor_research.py` fits Multi Factor diagnostics;
 `event_calendar_refresh.py` refreshes the live event calendar. `settings.py`
 holds paths and fixed policy, while `files.py` handles locks and atomic writes.
 
-The current orchestrator runs discovery on the frozen interval ending
-2020-12-31 and optimization from 2021-01-01 through the latest completed
-Friday. A completed cohort is reused only when the data fingerprint, strategy
-search versions, live configuration, windows, and costs match. Standalone
-artifacts are also checked for matching strategy, data window, configuration,
-costs, source research artifact, and recency before reuse. Worker processes
-parallelize strategy stages, with one walk-forward worker per strategy to
-avoid nested oversubscription.
+The orchestrator retains the frozen-profile cohort discovery ending
+2020-12-31 as a comparison stream. Adaptive verification starts at the earliest
+overlapping stored SIP session and ends at the latest completed Friday. Its
+aligned coordinator artifacts use 90-session outer windows so the portfolio
+folds line up across both intraday and swing strategies; each strategy still
+fits only within its configured 10/20/30 or 30/60/90-session window. A final
+252-session holdout stays outside all rolling folds. Adaptive verification
+artifacts are reused only when the strategy, data range, universe, window
+policy, candidate count, and nightly policy version match. Worker processes
+share the configured CPU budget across strategies and walk-forward folds.
 
 The first uncached run still reads the same SQLite store separately in each
 strategy worker. Cohort reuse avoids repeating that work when inputs have not

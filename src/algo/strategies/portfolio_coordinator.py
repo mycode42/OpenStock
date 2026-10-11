@@ -22,17 +22,17 @@ INTRADAY_STRATEGIES = frozenset({
 SWING_STRATEGIES = frozenset({
     "trend_following", "momentum", "swing_mean_reversion", "multi_factor", "event_driven",
 })
-SWING_CORE_STRATEGIES = frozenset({"trend_following", "momentum", "swing_mean_reversion"})
+SWING_CORE_STRATEGIES = frozenset({"trend_following", "momentum", "swing_mean_reversion", "multi_factor"})
 RESEARCH_INTRADAY_STRATEGIES = frozenset({
     *INTRADAY_STRATEGIES, "trend_following", "momentum",
 })
 RESEARCH_SWING_CORE_STRATEGIES = frozenset({
-    "swing_trend_following", "swing_momentum", "swing_mean_reversion",
+    "swing_trend_following", "swing_momentum", "swing_mean_reversion", "multi_factor",
 })
 RESEARCH_SWING_STRATEGIES = frozenset({
-    *RESEARCH_SWING_CORE_STRATEGIES, "multi_factor", "event_driven",
+    *RESEARCH_SWING_CORE_STRATEGIES, "event_driven",
 })
-SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})
+SATELLITE_STRATEGIES = frozenset({"event_driven"})
 
 
 @dataclass(frozen=True)

@@ -23,7 +23,7 @@ load_dotenv()
 
 from src.config import STRATEGY_CONFIG, get_mode_config
 from src.algo.strategies import pairs
-from src.algo.config import ALGO_SIGNAL_DATA_CONFIG
+from src.algo.config import ALGO_RUNTIME_CONFIG, ALGO_SIGNAL_DATA_CONFIG
 from . import data as _runner_data
 from . import factors as _runner_factors
 from . import sizing as _runner_sizing
@@ -46,6 +46,7 @@ from src.algo.strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES, PortfolioCoordinator, PortfolioCoordinatorConfig,
     choose_priority, strategy_priority, throttle_signal,
 )
+from .multi_factor_shadow import process_shadow_orders as process_multi_factor_shadow_orders
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -66,7 +67,8 @@ _ticker_max_position_pct = _runner_sizing._ticker_max_position_pct
 _make_trade = _runner_sizing._make_trade
 _update_trailing_stop = _runner_sizing._update_trailing_stop
 _multi_factor_rebalance_signals = _runner_factors._multi_factor_rebalance_signals
-_multi_factor_satellite_signals = _runner_factors._multi_factor_satellite_signals
+_multi_factor_current_targets = _runner_factors._multi_factor_current_targets
+_multi_factor_parameters_for_session = _runner_factors.multi_factor_parameters_for_session
 
 
 def _current_portfolio(mode: str) -> tuple[dict, dict[str, dict], list[dict]]:
@@ -120,6 +122,7 @@ def scan(
     data_feed: str | None = None,
     quote_feed: str | None = None,
     overnight_tradable_tickers: set[str] | None = None,
+    multi_factor_shadow: dict | None = None,
 ) -> dict:
     """Compatibility facade; dependencies remain patchable at this module."""
     return _runner_scan.scan(
@@ -136,6 +139,7 @@ def scan(
         data_feed=data_feed,
         quote_feed=quote_feed,
         overnight_tradable_tickers=overnight_tradable_tickers,
+        multi_factor_shadow=multi_factor_shadow,
         _dependencies=globals(),
     )
 

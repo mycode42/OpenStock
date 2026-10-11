@@ -18,7 +18,7 @@ from src.algo.strategies.multi_factor.features import FactorCalculator
 from src.algo.strategies.registry import validate_parameter_profile
 from src.algo.strategies.regime import rank_strategies
 from src.algo.strategies.runner import (
-    _make_trade, _multi_factor_rebalance_signals, _multi_factor_satellite_signals,
+    _make_trade, _multi_factor_current_targets, _multi_factor_rebalance_signals,
 )
 
 
@@ -125,7 +125,7 @@ def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
     assert by_symbol["CCC"].direction == "short"
 
 
-def test_multi_factor_stays_available_as_a_bearish_satellite():
+def test_multi_factor_is_active_as_a_core_strategy_in_a_bearish_regime():
     spy = [
         {"t": f"2026-09-{index + 1:02d}T20:00:00Z", "c": 200 - index}
         for index in range(25)
@@ -133,8 +133,8 @@ def test_multi_factor_stays_available_as_a_bearish_satellite():
     regime = rank_strategies(spy, mode="algo")
 
     assert regime["regime"] == "trending_down"
-    assert "multi_factor" not in regime["active"]
-    assert "multi_factor" in regime["satellites"]
+    assert "multi_factor" in regime["active"]
+    assert "multi_factor" not in regime["satellites"]
 
 
 def test_factor_satellite_direction_modes_are_explicit():
@@ -286,7 +286,7 @@ def test_live_rebalance_ranks_cross_sectional_input_and_persists_weekly_key():
     assert repeated_diagnostics is None
 
 
-def test_bearish_factor_short_recommendation_persists_for_live_overlay():
+def test_bearish_factor_short_recommendation_persists_for_core_targets():
     symbols = [f"S{index:02d}" for index in range(20)]
     daily_bars = {
         symbol: _daily_closes(symbol, growth=(index - 10) * 0.0003)
@@ -300,9 +300,9 @@ def test_bearish_factor_short_recommendation_persists_for_live_overlay():
 
     assert diagnostics["selected_short_count"] > 0
     assert all(signal.action == "short" for signal in signals.values())
-    confirmations = _multi_factor_satellite_signals(states, symbols, session)
-    assert confirmations
-    assert all(signal["action"] == "short" and signal["direction"] == "short" for signal in confirmations.values())
+    targets = _multi_factor_current_targets(states, symbols, session)
+    assert targets
+    assert all(signal["action"] == "short" and signal["direction"] == "short" for signal in targets.values())
 
 
 @pytest.mark.parametrize("values", [

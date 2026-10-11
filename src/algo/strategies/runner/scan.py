@@ -17,11 +17,13 @@ def scan(
     data_feed: str | None = None,
     quote_feed: str | None = None,
     overnight_tradable_tickers: set[str] | None = None,
+    multi_factor_shadow: dict | None = None,
     _dependencies: dict,
 ) -> dict:
     """Run one complete scan using the compatibility facade dependencies."""
     # Binding the facade namespace here keeps legacy monkeypatches and adapters effective.
     ALGO_DEFAULT_PARAMETERS = _dependencies["ALGO_DEFAULT_PARAMETERS"]
+    ALGO_RUNTIME_CONFIG = _dependencies["ALGO_RUNTIME_CONFIG"]
     ALGO_RULE_MODULES = _dependencies["ALGO_RULE_MODULES"]
     ALGO_SIGNAL_DATA_CONFIG = _dependencies["ALGO_SIGNAL_DATA_CONFIG"]
     CORE_STRATEGIES = _dependencies["CORE_STRATEGIES"]
@@ -51,7 +53,9 @@ def scan(
     _latest_bar_age_seconds = _dependencies["_latest_bar_age_seconds"]
     _make_trade = _dependencies["_make_trade"]
     _multi_factor_rebalance_signals = _dependencies["_multi_factor_rebalance_signals"]
-    _multi_factor_satellite_signals = _dependencies["_multi_factor_satellite_signals"]
+    _multi_factor_current_targets = _dependencies["_multi_factor_current_targets"]
+    _multi_factor_parameters_for_session = _dependencies["_multi_factor_parameters_for_session"]
+    process_multi_factor_shadow_orders = _dependencies["process_multi_factor_shadow_orders"]
     _positive_price_level = _dependencies["_positive_price_level"]
     _update_trailing_stop = _dependencies["_update_trailing_stop"]
     apply_regime_advisory = _dependencies["apply_regime_advisory"]
@@ -91,8 +95,16 @@ def scan(
         data_feed = data_feed or regular_feed()
         quote_feed = quote_feed or data_feed
     mode_config = get_mode_config(mode)
+    multi_factor_execution_mode = str(
+        ALGO_RUNTIME_CONFIG.get("algo_multi_factor_execution_mode", "live")
+    ).strip().lower() if mode == "algo" else "live"
+    if multi_factor_execution_mode not in {"live", "shadow"}:
+        multi_factor_execution_mode = "shadow"
     now = datetime.now(ET)
     today = trading_date or now.date().isoformat()
+    multi_factor_parameters, multi_factor_parameter_source = _multi_factor_parameters_for_session(
+        date.fromisoformat(today), execution_mode=multi_factor_execution_mode,
+    )
     if universe_result is not None:
         universe = universe_result
     elif mode == "algo":
@@ -165,7 +177,9 @@ def scan(
     symbols_for_bars = list(dict.fromkeys(strategy_symbols + PAIR_DATA_SYMBOLS + ["SPY"]))
 
     now_utc = datetime.now(timezone.utc)
-    factor_config = MultiFactorConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor"))
+    factor_config_values = dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor") or {})
+    factor_config_values.update(multi_factor_parameters)
+    factor_config = MultiFactorConfig.from_dict(factor_config_values)
     daily_history_days = factor_config.warmup_calendar_days() if mode == "algo" else 220
     daily_start = (now_utc - timedelta(days=daily_history_days)).date().isoformat()
     daily_feed = regular_feed() if mode == "algo" else data_feed
@@ -389,6 +403,9 @@ def scan(
                 regime=str(regime.get("regime", "unknown")),
                 intraday_bars=bars_by_symbol,
                 positions=positions,
+                shadow_positions=(multi_factor_shadow or {}).get("positions", {})
+                if multi_factor_execution_mode == "shadow" else None,
+                parameters=multi_factor_parameters,
             )
         except Exception as exc:
             scan_errors.append(f"multi-factor rebalance: {type(exc).__name__}: {exc}")
@@ -425,13 +442,16 @@ def scan(
             scan_errors.append(f"daily momentum ranking: {type(exc).__name__}: {exc}")
             entry_pause_reasons.append("daily momentum ranking failed")
     factor_confirmation_signals = (
-        _multi_factor_satellite_signals(
+        _multi_factor_current_targets(
             strategy_states, selected_symbols, date.fromisoformat(today),
+            parameters=multi_factor_parameters,
         )
         if mode == "algo" and satellite_config.multi_factor_enabled
         else {}
     )
     generated = []
+    shadow_generated = []
+    shadow_candidate_keys = set()
     satellite_confirmation_counts = {"multi_factor": 0, "event_driven": 0}
 
     for ticker in strategy_symbols:
@@ -617,8 +637,9 @@ def scan(
                     scan_errors.append(f"{strategy_name} signal {ticker}: {type(exc).__name__}: {exc}")
                     entry_pause_reasons.append("one or more Algo signal rules failed")
                     continue
+            signal_action = signal.get("action") if isinstance(signal, dict) else getattr(signal, "action", None)
             expected_exit = "cover" if position_qty < 0 else "sell"
-            if signal is None or (owner and signal.action != expected_exit):
+            if signal is None or (owner and signal_action != expected_exit):
                 continue
             item = dict(signal) if isinstance(signal, dict) else signal.to_dict()
             item["rank_score"] = (
@@ -635,8 +656,29 @@ def scan(
                 else "5Min"
             )
             if lifecycle and not lifecycle.allows(
-                strategy_name, ticker, signal.action, item["signal_bar_time"],
+                strategy_name, ticker, signal_action, item["signal_bar_time"],
             ):
+                continue
+            if (
+                mode == "algo" and multi_factor_execution_mode == "shadow"
+                and strategy_name == "multi_factor" and owner is None
+            ):
+                item["execution_mode"] = "shadow"
+                item["shadow_only"] = True
+                ticker_orders = pending_by_symbol.get(ticker, [])
+                if item["action"] in {"buy", "short"} and ticker not in fresh_signal_bar_symbols:
+                    item["suppressed_reason"] = "latest completed signal bar is stale or unavailable"
+                elif item["action"] in {"buy", "short"} and ticker_orders:
+                    item["suppressed_reason"] = "a conflicting Alpaca order is already open for this symbol"
+                elif item["action"] == "buy" and regime.get("regime") == "trending_down":
+                    item["suppressed_reason"] = "long entries are disabled in the downtrend regime"
+                elif item["action"] == "short" and str(regime.get("regime")) not in {"range_bound", "trending_down"}:
+                    item["suppressed_reason"] = "short entries require a neutral or bearish deterministic regime"
+                elif item["action"] == "short" and ticker not in set(universe.get("easy_to_borrow_tickers") or []):
+                    item["suppressed_reason"] = "Alpaca has not confirmed this ticker as easy to borrow"
+                shadow_generated.append(item)
+                shadow_candidate_keys.add((ticker, str(item.get("action"))))
+                generated.append(item)
                 continue
             options.append(item)
 
@@ -732,6 +774,24 @@ def scan(
             continue
         generated.append(chosen)
 
+    if mode == "algo" and multi_factor_execution_mode == "shadow":
+        virtual_positions = (multi_factor_shadow or {}).get("positions", {})
+        for ticker, signal in multi_factor_signals.items():
+            signal_action = signal.get("action") if isinstance(signal, dict) else getattr(signal, "action", None)
+            key = (str(ticker).upper(), str(signal_action))
+            if ticker not in virtual_positions or signal_action not in {"sell", "cover"} or key in shadow_candidate_keys:
+                continue
+            item = dict(signal) if isinstance(signal, dict) else signal.to_dict()
+            item.update({
+                "ticker": str(ticker).upper(), "strategy": "multi_factor",
+                "rank_score": -float(item.get("rank") or 1),
+                "signal_bar_time": (daily_bars.get(ticker) or [{}])[-1].get("t"),
+                "timeframe": "1Day", "execution_mode": "shadow", "shadow_only": True,
+            })
+            shadow_generated.append(item)
+            shadow_candidate_keys.add(key)
+            generated.append(item)
+
     entries_paused = bool(entry_pause_reasons)
     if entries_paused:
         reason = "; ".join(dict.fromkeys(entry_pause_reasons))
@@ -773,6 +833,9 @@ def scan(
     strategy_caps = risk_config.get("max_positions_per_strategy_by_strategy", {})
     batch_entry_counts: dict[str, int] = {}
     batch_open_counts: dict[str, int] = {}
+    shadow_trades = []
+    shadow_summary = None
+    shadow_coordinator_book = None
     orb_attempted_today = {
         ticker
         for by_symbol in (strategy_states or {}).values()
@@ -825,12 +888,33 @@ def scan(
             intraday_entries_today=intraday_entries_today,
             swing_entries_today=group_entry_counts.get("swing", 0),
         )
+        if multi_factor_execution_mode == "shadow":
+            shadow_positions_for_risk = dict(positions)
+            shadow_owners_for_risk = dict(owner_map)
+            for ticker, shadow_position in (multi_factor_shadow or {}).get("positions", {}).items():
+                symbol = str(ticker).upper()
+                if symbol not in shadow_owners_for_risk and not float((shadow_positions_for_risk.get(symbol) or {}).get("qty", 0) or 0):
+                    shadow_positions_for_risk[symbol] = {
+                        "qty": shadow_position.get("qty", 0),
+                        "avg_entry_price": shadow_position.get("entry_price"),
+                    }
+                    shadow_owners_for_risk[symbol] = "multi_factor"
+            shadow_coordinator_book = coordinator.new_book(
+                equity=equity,
+                positions=shadow_positions_for_risk,
+                position_owners=shadow_owners_for_risk,
+                pending_buy_values=pending_buys,
+                pending_short_values=pending_shorts,
+                entries_today=0,
+                intraday_entries_today=0,
+                swing_entries_today=0,
+            )
 
     # Resolve shared limits in strategy-priority order so lower-priority
     # candidates cannot consume the daily budget before the core swing book.
-    ordered_generated = generated
+    ordered_generated = [item for item in generated if not item.get("shadow_only")]
     if mode == "algo":
-        ordered_generated = sorted(generated, key=lambda item: (
+        ordered_generated = sorted(ordered_generated, key=lambda item: (
             0 if item.get("software_protection") else
             1 if item.get("action") in {"sell", "cover"} else
             2 + strategy_priority(str(item.get("strategy", ""))),
@@ -981,6 +1065,25 @@ def scan(
         else:
             item["suppressed_reason"] = "position or strategy sizing produced zero shares"
 
+    if mode == "algo" and multi_factor_execution_mode == "shadow" and shadow_coordinator_book is not None:
+        initial_capital = float(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_shadow_capital", 100_000))
+        shadow_trades = []
+        multi_factor_shadow, shadow_trades, shadow_summary = process_multi_factor_shadow_orders(
+            multi_factor_shadow, shadow_generated,
+            quotes=latest_quotes, real_positions=positions,
+            today=today, timestamp=now, initial_capital=initial_capital,
+            max_entries_per_day=int(risk_config.get("max_entries_per_strategy_per_day", {}).get("multi_factor", 2)),
+            max_positions=int(risk_config.get("max_positions_per_strategy_by_strategy", {}).get("multi_factor", 4)),
+            slippage_bps=float(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_shadow_slippage_bps", 5.0)),
+            commission_per_share=float(ALGO_RUNTIME_CONFIG.get("algo_multi_factor_shadow_commission_per_share", 0.005)),
+            quote_stale_seconds=freshness_limit,
+            cooldown_minutes=int(risk_config.get("cooldown_minutes_by_strategy", {}).get("multi_factor", 0)),
+            make_trade=_make_trade, risk=risk_config, universe=mode_config.get("universe", {}),
+            coordinator_book=shadow_coordinator_book,
+            session=session_name or "regular", regime=str(regime.get("regime", "unknown")),
+            session_open=regular_open, session_close=regular_close,
+        )
+
     try:
         pair_setups = pairs.candidates(
             daily_bars,
@@ -1011,6 +1114,10 @@ def scan(
         "universe": universe,
         "market_regime": regime,
         "multi_factor_diagnostics": multi_factor_diagnostics,
+        "multi_factor_parameter_profile": multi_factor_parameter_source,
+        "multi_factor_execution_mode": multi_factor_execution_mode,
+        "multi_factor_shadow_summary": shadow_summary,
+        "multi_factor_shadow_trades": shadow_trades,
         "satellite_confirmation_counts": satellite_confirmation_counts,
         "event_strategy_diagnostics": (
             {

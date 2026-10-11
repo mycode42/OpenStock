@@ -10,9 +10,9 @@ CORE_STRATEGIES = frozenset({
     "mean_reversion", "swing_mean_reversion", "momentum",
     "opening_range_breakout", "trend_following",
     "swing_momentum", "swing_trend_following",
-    "intraday_trend", "intraday_momentum",
+    "intraday_trend", "intraday_momentum", "multi_factor",
 })
-SATELLITE_STRATEGIES = frozenset({"multi_factor", "event_driven"})
+SATELLITE_STRATEGIES = frozenset({"event_driven"})
 
 
 @dataclass(frozen=True)
@@ -75,7 +75,7 @@ def apply_satellite_confirmations(
     result = dict(signal)
     action = result.get("action")
     direction = "long" if action == "buy" else "short" if action == "short" else None
-    if direction is None or result.get("strategy") not in CORE_STRATEGIES:
+    if direction is None or result.get("strategy") not in CORE_STRATEGIES or result.get("strategy") == "multi_factor":
         return result
 
     confirmations: list[str] = []

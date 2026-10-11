@@ -75,7 +75,8 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 3
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_open_positions"] == 6
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 3
-    assert "multi_factor" not in ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["multi_factor"] == 4
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["multi_factor"] == 2
     assert "event_driven" not in ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]
     assert STRATEGY_CONFIG["overnight_entries_enabled"] is False
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["trend_following"] > 0.05
@@ -262,14 +263,21 @@ def test_algo_risk_manager_blocks_the_tenth_shared_daily_entry():
 
 
 @pytest.mark.parametrize("action", ["buy", "short"])
-@pytest.mark.parametrize("strategy", ["multi_factor", "event_driven"])
-def test_risk_manager_rejects_satellite_position_ownership(action, strategy):
+def test_risk_manager_rejects_event_driven_satellite_position_ownership(action):
     result = risk_manager.validate_trade(
-        "AAPL", action, 1, 100, _portfolio_state(), mode="algo", strategy=strategy,
+        "AAPL", action, 1, 100, _portfolio_state(), mode="algo", strategy="event_driven",
     )
 
     assert not result.approved
     assert result.rule == "satellite_confirmation_only"
+
+
+def test_risk_manager_allows_multi_factor_to_own_a_core_entry():
+    result = risk_manager.validate_trade(
+        "AAPL", "buy", 1, 100, _portfolio_state(), mode="algo", strategy="multi_factor",
+    )
+
+    assert result.approved
 
 
 def test_algo_entry_quota_does_not_block_scale_ins_at_limit_or_missing_history():

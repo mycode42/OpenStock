@@ -14,7 +14,7 @@ from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_param
 from .settings import CORE_RESEARCH_CONTROLS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS
 
 
-SEARCH_SPACE_VERSION = "2026-10-09.1"
+SEARCH_SPACE_VERSION = "2026-10-11.1"
 
 # Each row is a coherent strategy profile, rather than a Cartesian product of
 # every parameter value. That keeps the search reviewable and compute bounded
@@ -68,6 +68,13 @@ STRATEGY_SEARCH_SPEC = {
             "mean_target_fraction", "use_rsi_confirmation", "long_rsi_max", "short_rsi_min",
         ],
         "search_design": "multi-session stretch and reversal confirmation on completed daily bars",
+    },
+    "multi_factor": {
+        "flavor": "swing",
+        "signal_parameters": [
+            "rebalance_frequency", "top_n", "minimum_score", "direction_mode", "factor_weights",
+        ],
+        "search_design": "daily and weekly factor rebalance variants with bounded factor-weight alternatives",
     },
 }
 
@@ -261,6 +268,31 @@ _VARIANTS: dict[str, tuple[tuple[str, dict], ...]] = {
         ("rsi_free_stretch_8pct", {
             "lookback_days": 20, "stretch_pct": 0.08,
             "minimum_stretch_days": 2, "use_rsi_confirmation": False,
+        }),
+    ),
+    "multi_factor": (
+        ("daily_equal_weight", {
+            "rebalance_frequency": "daily", "factor_weights": {
+                "momentum_1m": 0.25, "momentum_3m": 0.25,
+                "momentum_6m": 0.25, "low_volatility": 0.25,
+            },
+        }),
+        ("daily_long_only_momentum_blend", {
+            "rebalance_frequency": "daily", "direction_mode": "long_only",
+            "factor_weights": {"momentum_1m": 0.2, "momentum_3m": 0.3, "momentum_6m": 0.3, "low_volatility": 0.2},
+        }),
+        ("weekly_6m_momentum", {
+            "rebalance_frequency": "weekly", "direction_mode": "regime_dependent",
+            "factor_weights": {"momentum_6m": 1.0},
+        }),
+        ("daily_top_two", {"rebalance_frequency": "daily", "top_n": 2}),
+        ("daily_top_four", {"rebalance_frequency": "daily", "top_n": 4}),
+        ("daily_selective_score", {"rebalance_frequency": "daily", "minimum_score": 0.1}),
+        ("weekly_equal_weight", {
+            "rebalance_frequency": "weekly", "factor_weights": {
+                "momentum_1m": 0.25, "momentum_3m": 0.25,
+                "momentum_6m": 0.25, "low_volatility": 0.25,
+            },
         }),
     ),
 }

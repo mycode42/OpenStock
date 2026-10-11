@@ -36,9 +36,9 @@ CORE_STRATEGIES = (
 # research catalog separate from CORE_STRATEGIES, which preserves the nightly
 # pipeline's established set and behavior.
 INTRADAY_STRATEGIES = ("mean_reversion", "opening_range_breakout", "intraday_trend", "intraday_momentum")
-SWING_STRATEGIES = ("trend_following", "momentum", "swing_mean_reversion")
+SWING_STRATEGIES = ("trend_following", "momentum", "swing_mean_reversion", "multi_factor")
 RESEARCHABLE_STRATEGIES = (*SWING_STRATEGIES, *INTRADAY_STRATEGIES)
-OVERLAY_STRATEGIES = ("multi_factor", "event_driven")
+OVERLAY_STRATEGIES = ("event_driven",)
 LIVE_RESEARCH_STRATEGIES = tuple(
     strategy for strategy in RESEARCHABLE_STRATEGIES
     if strategy not in {"intraday_trend", "intraday_momentum"}
@@ -53,7 +53,7 @@ STRATEGY_FLAVORS = {
     "trend_following": "swing",
     "momentum": "swing",
     "swing_mean_reversion": "swing",
-    "multi_factor": "confirmation_overlay",
+    "multi_factor": "swing",
     "event_driven": "confirmation_overlay",
 }
 
@@ -74,4 +74,16 @@ STRATEGY_TEST_DAYS = 63
 STRATEGY_STEP_DAYS = 63
 STRATEGY_MIN_TRAIN_TRADES = 10
 STRATEGY_MAX_TRAIN_DRAWDOWN_PCT = 12
+
+# Nightly adaptive research tries the middle length first, then neighboring
+# windows if no sample-qualified, positive-after-costs improvement is found.
+ADAPTIVE_WINDOW_DAYS = {
+    "intraday": (10, 20, 30),
+    "swing": (30, 60, 90),
+}
+ADAPTIVE_DISCOVERY_CANDIDATES = 16
+ADAPTIVE_VERIFICATION_CANDIDATES = 8
+ADAPTIVE_VERIFICATION_TEST_DAYS = 63
+ADAPTIVE_VERIFICATION_STEP_DAYS = 63
+ADAPTIVE_VERIFICATION_HOLDOUT_DAYS = 252
 

@@ -23,7 +23,7 @@ def _combined_portfolio_replay(
     event_calendar: EventCalendar | None,
     backtest_class=None,
 ) -> dict:
-    """Compare the rule portfolio with its bounded Multi Factor/Event satellites."""
+    """Compare the rule portfolio with its bounded Multi Factor/Event strategies."""
     if end < start:
         raise ValueError("combined replay end must not be before start")
     start = _replay_start_after_spy_warmup(store, start, end)
@@ -53,7 +53,7 @@ def _combined_portfolio_replay(
         "event_calendar_available": event_calendar is not None,
         "results": results,
         "comparison_note": (
-            "The six-strategy variant keeps the four core rules as entry owners; Multi Factor and Event Driven only confirm and amplify aligned core entries."
+            "The six-strategy variant keeps the four rule strategies and Multi Factor as entry owners; Event Driven only confirms and amplifies aligned core entries."
         ),
     }
 

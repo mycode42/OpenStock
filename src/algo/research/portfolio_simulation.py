@@ -28,6 +28,13 @@ OPTIMIZATION_SCHEMA = "swarm_algo_strategy_optimization_v1"
 def run_coordinated_portfolio(args) -> dict:
     """Combine each strategy's training-selected profile, then replay its shared OOS folds."""
     strategies = _parse_strategies(args.strategies)
+    if args.multi_factor_overlay:
+        if "multi_factor" not in strategies:
+            strategies.append("multi_factor")
+    else:
+        strategies = [strategy for strategy in strategies if strategy != "multi_factor"]
+    if not strategies:
+        raise ValueError("At least one strategy must remain enabled for the portfolio replay")
     disabled_intraday = [
         strategy for strategy in strategies
         if strategy in {"intraday_trend", "intraday_momentum"}
@@ -81,10 +88,7 @@ def run_coordinated_portfolio(args) -> dict:
         if event_calendar is not None:
             event_path = event_report.get("calendar_path")
     event_enabled = event_requested and bool(event_path)
-    if args.multi_factor_overlay:
-        enabled_strategies = [*strategies, "multi_factor"]
-    else:
-        enabled_strategies = list(strategies)
+    enabled_strategies = list(strategies)
     if event_enabled:
         enabled_strategies.append("event_driven")
 
@@ -199,8 +203,9 @@ def run_coordinated_portfolio(args) -> dict:
             "event_driven_enabled": event_enabled,
             "event_calendar": event_path,
             "event_calendar_report": event_report,
-            "note": "Satellite strategies are confirmation overlays and cannot open standalone positions.",
+            "note": "Multi Factor is a core strategy in this replay; Event Driven remains a confirmation overlay.",
         },
+        "core_strategies": {"multi_factor_enabled": bool(args.multi_factor_overlay)},
         "live_configuration": live_configuration_manifest(enabled_strategies),
         "research_runtime_overrides": runtime_overrides,
         "worker_count": worker_count,

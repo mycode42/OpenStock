@@ -80,7 +80,7 @@ Swing, Day, and Algo operate on their configured Alpaca accounts. Algo has one c
 |---|---|---|
 | `swing` | Primary account | Multi-day holds, conservative risk |
 | `day` | Day trading account | Intraday only, flattens EOD |
-| `algo` | Dedicated Algo account | Continuous portfolio: five core rules with Multi Factor and Event Driven as confirmation satellites; pairs remain analysis-only |
+| `algo` | Dedicated Algo account | Continuous portfolio: six core strategies; Multi Factor is shadow-only for now, Event Driven remains confirmation-only; pairs remain analysis-only |
 
 Credentials are configured in `.env`:
 
@@ -112,9 +112,9 @@ acct.headers  # ready-to-use API headers
 
 ### Autonomous Algo Portfolio
 
-Open-dip mean reversion, opening-range breakout, swing/cyclical mean reversion, swing trend, and swing momentum are the five core entry rules. The deterministic SPY regime filter chooses the allowed core set first. The optional OpenAI advisor can only rank that set. Multi Factor and Event Driven are confirmation-only satellites: an aligned signal may confirm a core proposal, raise its priority, and modestly increase its risk budget. They cannot create an order, consume an entry slot, or own a position. Every core proposal passes through the portfolio coordinator and regular Algo risk validation. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
+Open-dip mean reversion, opening-range breakout, swing/cyclical mean reversion, swing trend, swing momentum, and Multi Factor are the six core strategies. The deterministic SPY regime filter chooses the allowed core set first. The optional OpenAI advisor can only rank that set. Multi Factor is currently routed to a separate shadow book, with two entries per day and four open positions; its orders are sized and coordinator-checked but never submitted to Alpaca. Event Driven remains confirmation-only: aligned evidence may confirm another core proposal, raise its priority, and modestly increase its risk budget. Every live core proposal passes through the portfolio coordinator and Algo risk validation. Pairs remain analysis-only because the shared executor does not submit atomic two-leg orders. `data/algo_state.sqlite3` is the authoritative store for the coordinator, per-strategy ticker states, ownership, entry provenance, and its execution lease. `data/algo_state.json` is an atomic, derived compatibility snapshot for existing status consumers; do not edit it to change ownership.
 
-All three modes use the Algo Trader Plus market-data plan through the shared `ALPACA_DATA_TIER=algo_trader_plus` setting. Regular and extended-session data use SIP. Algo may read overnight bars and quotes from `feed=boats`, but `overnight_entries_enabled` is false: BOATS data is for observation and position management until that config is explicitly enabled. Swing positions may remain open overnight; intraday positions are flattened before the regular close, and `allow_intraday_overnight` remains false. The service follows Alpaca's 24/5 sessions using New York time and the broker calendar. The shared Algo cap is 10 new entries per 20:00–20:00 ET trade date, with no more than 3 intraday entries and 3 swing-group entries per day. The owner book is capped at 16 positions: 10 swing and 6 intraday-core; satellites have no owner slots. Execution remains paper-only. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for session and feed details.
+All three modes use the Algo Trader Plus market-data plan through the shared `ALPACA_DATA_TIER=algo_trader_plus` setting. Regular and extended-session data use SIP. Algo may read overnight bars and quotes from `feed=boats`, but `overnight_entries_enabled` is false: BOATS data is for observation and position management until that config is explicitly enabled. Swing positions may remain open overnight; intraday positions are flattened before the regular close, and `allow_intraday_overnight` remains false. The service follows Alpaca's 24/5 sessions using New York time and the broker calendar. The shared Algo cap is 10 new entries per 20:00–20:00 ET trade date, with no more than 3 intraday entries and 3 swing-group entries per day. The owner book is capped at 16 positions: 10 swing and 6 intraday-core; Event Driven has no owner slot. Execution remains paper-only. See [Alpaca's 24/5 data-feed guide](https://docs.alpaca.markets/us/docs/245-trading-for-trading-api) for session and feed details.
 
 Extended-hours entries have software-managed stops and targets. The coordinator attaches a broker-verified full-size OCO during the next regular session once no symbol order remains open. Ordinary strategy exit signals wait while a broker bracket or OCO is active. A quote-triggered software hard/trailing stop can request a protective-order cancellation and market exit during regular hours; execution verifies cancellation and reconciles the remaining position first, and a `pending_cancel` leaves the stop in place and the exit deferred. A stale or failed historical bar request pauses new entries but does not disable quote-driven protective checks on owned positions.
 
@@ -122,17 +122,17 @@ Extended-hours entries have software-managed stops and targets. The coordinator 
 
 `src.algo.backtest` replays the deterministic Algo regime selector, strategy rules, shared sizing, and hard risk validator over stored regular-session 5-minute bars. It fills signals no earlier than the next bar open, models adverse slippage, and reports its assumptions with every run. It is research-only and cannot submit orders.
 
-`src.algo.research.auto_research` is the scheduled weekday Algo research entry point. It refreshes Plus SIP split-adjusted bars, fingerprints the data and configuration, then discovers and walk-forward optimizes each of the seven strategy/flavor profiles independently. Compatible versioned artifacts are reused; missing or stale strategy jobs run in parallel. The resulting fixed strategy artifacts are replayed together through the live `PortfolioCoordinator` and risk limits without retraining inside the replay. One report records the per-stage timings, artifact reuse, training selections, promotion gates, and portfolio results. The workflow is research-only: it does not edit live settings, reload the service, or submit orders. The scheduler remains the entry point at `python -m src.algo.research.auto_research`.
+`src.algo.research.auto_research` is the scheduled weekday Algo research entry point. It refreshes Plus SIP split-adjusted bars, fingerprints the data and configuration, and runs recent-window adaptive discovery for all eight strategy/flavor profiles. Intraday searches try 10, 20, then 30 sessions; swing searches try 30, 60, then 90, starting with the prior successful length when available. If a window does not yield a sample-qualified positive-after-costs candidate that beats its baseline, the search tries a neighboring length. Every strategy also receives rolling short-window walk-forward verification from the earliest shared history through the latest completed Friday, with a locked final-year holdout. Compatible artifacts are reused and work is scheduled within the configured worker budget. Verified adaptive fold selections feed the shared `PortfolioCoordinator` replay whenever artifacts are available for every strategy active in live config; if verification fails, the report marks and uses the fixed-profile fallback. Multi Factor candidates can update its shadow book. The workflow does not edit live settings or submit broker orders. The scheduler remains `python -m src.algo.research.auto_research`.
 
-The independent three-stage strategy workflow supports all seven core rule
+The independent three-stage strategy workflow supports all eight research
 strategies, with separate swing and intraday implementations where applicable:
 `python -m src.algo.research research`, `optimize`, and `portfolio`. It compares
 bounded signal profiles, selects them on walk-forward training windows, then
 replays the combined out-of-sample portfolio through the same Algo coordinator
 and risk settings. The standalone `intraday_trend` and `intraday_momentum`
 strategies remain disabled in live config and are enabled only inside research
-when explicitly requested. Multi Factor and Event Driven remain confirmation
-overlays. See [the research workflow guide](src/algo/research/README.md) for
+when explicitly requested. Multi Factor is a core strategy; Event Driven
+remains a confirmation overlay. See [the research workflow guide](src/algo/research/README.md) for
 commands, candidate coverage, and validation limits.
 
 Historical scheduled-event inputs are rebuilt into `data/research/algo-auto/event-calendar-historical.csv`: issuer earnings dates use SEC EDGAR 8-K Item 2.02 filing acceptance times (ETFs are excluded), while CPI/NFP and FOMC dates use official BLS and Federal Reserve archives. Macro reactions become visible no earlier than their scheduled release, and all reaction windows align to stored regular-session bars. This is a conservative historical reaction ledger, not an intraday news feed; event profiles are skipped and reported if a valid full-range calendar cannot be built or reused. Historical fixed-universe membership remains a survivorship limitation.
@@ -160,11 +160,26 @@ poetry run python -m src.algo.walk_forward --symbols AAPL,MSFT,NVDA --start 2026
 
 Replay currently covers regular hours only. It uses a fixed supplied symbol list, does not reconstruct historical universe membership, omits LLM advice, assumes the stop executes first when both bracket legs are touched within one bar, and does not model commissions or regulatory fees. Historical bars do not contain the live quote stream, so slippage is configurable rather than inferred from quotes. These reports evaluate the model and its stability; they are not performance forecasts.
 
-#### Multi Factor confirmation satellite
+#### Multi Factor core strategy and shadow route
 
-The Algo-only `src.algo.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section. Its default weekly score equally weights 1-, 3-, and 6-month price momentum with low volatility; it winsorizes each factor and converts it to a cross-sectional z-score before combining. It computes long and short ranks for research diagnostics. In the live portfolio, only same-ticker, same-direction evidence confirms a core-rule proposal; it cannot open or own a position. Factor-only backtest runs report ranking and IC diagnostics without creating standalone positions.
+The Algo-only `src.algo.strategies.multi_factor` package ranks the fixed Algo universe as a cross-section and is configured as a core swing strategy. It uses completed daily bars through the prior session. Nightly adaptive research searches 30-, 60-, or 90-session windows, carries forward an eligible prior positive candidate, and tries one-parameter derivatives alongside new candidates. A candidate is treated as an improvement only when it meets the trade sample, is positive after costs, and scores better than baseline. The scanner can apply a fresh selected profile to its shadow book; the default execution mode is `shadow`, so these proposals never reach Alpaca. Shadow entries are capped at two per day and four open positions. Switching the route to broker execution remains a separate configuration change.
 
-Features use completed daily bars through the prior session. Live settings are centralized in `ALGO_DEFAULT_PARAMETERS["multi_factor"]`; research profiles can override the validated fields without changing live settings. The simulator aggregates stored regular-session 5-minute bars and fetches 260 calendar days of warmup by default, extending it for longer configured horizons. The fixed universe supplied to a backtest must contain enough names with the required history to meet `min_universe` (20 by default). Value is disabled by default; if enabled, it requires earnings-yield observations with an `available_at` timestamp, and observations published after the rebalance cutoff are ignored. No price-only value proxy is substituted.
+Live defaults are centralized in `ALGO_DEFAULT_PARAMETERS["multi_factor"]`; research profiles are validated before use and never mutate those defaults. The simulator aggregates stored regular-session 5-minute bars and fetches warmup for the selected factor horizons. The fixed universe supplied to a backtest must contain enough names with the required history to meet `min_universe` (20 by default). Value is disabled by default; if enabled, it requires earnings-yield observations with an `available_at` timestamp, and observations published after the rebalance cutoff are ignored. No price-only value proxy is substituted.
+
+The two-stage adaptive pipeline supports recent-window discovery and rolling out-of-sample verification for all eight research strategies. Search can use a bounded grid, random sampling, or a simple kernel-surrogate Bayesian-style sampler; fitness weights, windows, step, and holdout are configurable. Each verification fold fits on its own trailing window and tests the chosen profile on the following unseen segment; it does not read the current nightly discovery artifact.
+
+```bash
+# Recent-regime discovery (writes detailed, latest, and compact summary JSON)
+poetry run python -m src.algo.research adaptive-search --strategy multi_factor --window-days 60 --search-method bayes --candidates 16
+
+# Verify an intraday fitting process on rolling unseen windows
+poetry run python -m src.algo.research adaptive-walk-forward --strategy mean_reversion --start 2016-01-01 --end 2026-10-09 --train-window-options 10 20 30 --test-days 63 --step-days 63 --holdout-days 252 --workers 8
+
+# Verify a swing fitting process with the same locked final-year holdout
+poetry run python -m src.algo.research adaptive-walk-forward --strategy multi_factor --start 2016-01-01 --end 2026-10-09 --train-window-options 30 60 90 --test-days 63 --step-days 63 --holdout-days 252 --workers 8
+```
+
+The nightly adaptive artifacts are written under `data/research/algo-auto/adaptive/<strategy>/`. Discovery tries a neighboring window when its preferred length finds no improvement. Rolling verification runs once for each new weekly cohort and records per-fold fit window, parameters, decay, and OOS metrics, plus a locked final-year holdout. Discovery winners are research evidence. The scanner consumes only a recent, positive, sample-qualified Multi Factor winner while its execution mode is `shadow`; other strategy profiles remain research-only pending separate review.
 
 For example, fetch data with warmup and inspect factor ranking/IC diagnostics:
 
@@ -198,7 +213,7 @@ if proposal is not None:
 
 `_make_trade` applies the existing Algo risk sizing and the signal's target weight as an additional cap; the executor calls `risk_manager.validate_trade()` again before submission. The backtester applies the same validator to buys and sells; the deterministic SPY regime permits only core strategies, while satellites only confirm aligned core proposals. Backtest diagnostics include target turnover and weekly 21-session Spearman IC; those labels overlap and are descriptive. AutoResearch separately uses monthly-spaced 21-session labels with a purge for its Ridge fit and expanding prequential IC. The fixed 22-symbol universe is replayed across all historical years because point-in-time membership is not available; this creates survivorship and listing-availability bias, which limits historical conclusions.
 
-The portfolio coordinator shares a 10-entry daily budget, a 3-entry intraday slice, and a 3-entry swing slice. It caps owner positions at 10 swing and 6 intraday-core; satellites have no independent position or entry allowance. It also applies an 8% per-name cap, 100% gross cap, +60%/-40% net caps, and universe-group caps of 30% for core technology, 25% for diversifiers/hedges, and 15% for tactical names. It rejects duplicate or opposing exposure by default, blocks swing entries during the first 15 minutes, rejects overnight entries while disabled, and flattens intraday holdings before the regular close. Coordinator budget rejections are logged. `risk_manager.validate_trade()` remains the final approval layer.
+The portfolio coordinator shares a 10-entry daily budget, a 3-entry intraday slice, and a 3-entry swing slice. It caps owner positions at 10 swing and 6 intraday-core; Multi Factor additionally has its own 2-entry and 4-position caps. Event driven remains a confirmation-only satellite. It also applies an 8% per-name cap, 100% gross cap, +60%/-40% net caps, and universe-group caps of 30% for core technology, 25% for diversifiers/hedges, and 15% for tactical names. It rejects duplicate or opposing exposure by default, blocks swing entries during the first 15 minutes, rejects overnight entries while disabled, and flattens intraday holdings before the regular close. Coordinator budget rejections are logged. `risk_manager.validate_trade()` remains the final approval layer.
 
 Walk-forward reports require at least three chronological, non-overlapping test folds. Each fold selects parameters using only its preceding training window, then evaluates the selected profile and predeclared one-at-a-time threshold neighbors on the frozen test fold. A fixed profile is promotable only when that same profile is selected in every fold, it has positive after-cost and buy-and-hold excess returns in a majority of folds, meets the minimum trade sample in every fold, and at least one neighboring value is profitable for every tuned threshold. Every replay includes spread, adverse open slippage, per-share commission, modeled short borrow, and a penalty for unknown historical borrow availability; explicit hard-to-borrow shorts are skipped. Reports compare the combined book and each strategy with an equal-weight buy-and-hold benchmark for the same symbols, and include pairwise daily strategy-P&L correlation and same-ticker/direction holding overlap. Test-window positions are liquidated with modeled costs. These are research gates only; they do not change live settings. The fixed universe still creates survivorship and listing-availability bias because historical point-in-time membership is unavailable.
 
@@ -373,7 +388,8 @@ Algo has its own limits; Swing and Day retain the values above and below. The sh
 |---|---|
 | Max open positions | 16 total: up to 10 swing and 6 intraday-core |
 | New entries/trade date | 10 shared; up to 3 intraday and 3 swing-group entries |
-| Satellite-owned positions/entries | 0; Multi Factor and Event Driven only confirm aligned core proposals |
+| Multi Factor | Core swing; shadow-only, maximum 2 entries/day and 4 positions |
+| Satellite-owned positions/entries | 0; Event Driven only confirms aligned core proposals |
 | Max position | 5% of equity |
 | Sector/theme allocation | Effective: 30% tech, 25% diversifiers, 20% hedge ETFs, 4% tactical; the coordinator's 25% hedge / 15% tactical ceilings do not loosen the tighter risk-manager catalog |
 | Daily circuit breaker | -2% |
@@ -423,7 +439,7 @@ The risk manager (`risk_manager.py`) enforces **12 hard rules** that no agent ca
 | 9 | Max position size | 8% | 15% | 5% |
 | 10 | Max sector allocation | 30% | 50% | Coordinator: 30% tech, 25% diversifiers/hedges, 15% tactical |
 | 11 | Tactical/high-risk cap | 3% total | No cap | 4% total; coordinator ceiling is 15% |
-| 12 | Satellite ownership | n/a | n/a | Multi Factor/Event Driven cannot own entries |
+| 12 | Satellite ownership | n/a | n/a | Event Driven cannot own entries; Multi Factor uses a separate shadow book |
 
 ### Stop Losses
 

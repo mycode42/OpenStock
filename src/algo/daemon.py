@@ -102,10 +102,15 @@ def _scan_strategy_portfolio(
         overnight_tradable_tickers=set(
             (portfolio.get("universe") or {}).get("overnight_tradable_tickers", [])
         ),
+        multi_factor_shadow=portfolio.setdefault("multi_factor_shadow", {}),
     )
     portfolio["market_regime"] = result.get("market_regime", {"regime": "unknown"})
     portfolio["active_strategies"] = list(portfolio["market_regime"].get("active", []))
     portfolio["last_signals"] = result.get("signals", [])
+    portfolio["multi_factor_execution_mode"] = result.get("multi_factor_execution_mode", "live")
+    portfolio["multi_factor_parameter_profile"] = result.get("multi_factor_parameter_profile")
+    portfolio["multi_factor_shadow_summary"] = result.get("multi_factor_shadow_summary")
+    portfolio["multi_factor_shadow_last_events"] = result.get("multi_factor_shadow_trades", [])
     portfolio["last_scan_at"] = datetime.now(ET).isoformat()
     portfolio["last_execution"] = None
     portfolio["scan_errors"] = list(result.get("scan_errors") or [])

@@ -105,15 +105,12 @@ class ReplayLoopMixin:
                     continue
                 factor_signal = factor_signals_for_day.get(ticker) if factor_signals_date == trading_day else None
                 if factor_signal and factor_signal.get("action") in {"sell", "cover"}:
-                    # Satellite exits share the same simulator risk manager
-                    # and next-bar fill model as core strategy exits.
+                    # Multi Factor core exits use the same simulator risk
+                    # manager and next-bar fill model as other core exits.
                     self._queue_exit_signal(ticker, factor_signal, bar, timestamp)
                     factor_signals_for_day.pop(ticker, None)
                 history = self.histories[(ticker, trading_day)]
-                factor_support = (
-                    self.latest_multi_factor_signals.get(ticker)
-                    if "multi_factor" in regime.get("satellites", []) else None
-                )
+                factor_support = self.latest_multi_factor_signals.get(ticker)
                 position = self.positions.get(ticker)
                 signal = self._signal_for(
                     ticker, history, regime.get("active", []), ranked, timestamp,

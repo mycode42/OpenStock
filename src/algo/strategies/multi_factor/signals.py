@@ -32,7 +32,7 @@ class MultiFactorSignal:
     reason: str
     stop_pct: float = 0.06
     risk_multiplier: float = 0.5
-    strategy_group: str = "swing_satellite"
+    strategy_group: str = "swing"
 
     @property
     def strength(self) -> float:

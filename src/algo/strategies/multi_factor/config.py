@@ -18,9 +18,9 @@ SUPPORTED_FACTORS = {
 
 @dataclass(frozen=True)
 class MultiFactorConfig:
-    """Small cross-sectional ranking configuration for the Algo satellite."""
+    """Small cross-sectional ranking configuration for the Algo core strategy."""
 
-    rebalance_frequency: str = "weekly"
+    rebalance_frequency: str = "daily"
     top_n: int = 3
     min_universe: int = 20
     minimum_score: float = 0.0
