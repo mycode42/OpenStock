@@ -35,6 +35,7 @@ from src.algo.strategies.universe import configured_universe
 from src.market_data import data_tier, regular_feed
 
 from .files import _atomic_json
+from .replay_logging import quiet_coordinator_rejections
 from .settings import (
     ADJUSTMENT, CORE_RESEARCH_CONTROLS, DEFAULT_OUTPUT_DIR, FEED,
     RESEARCH_START, RESEARCH_WARMUP_DAYS, STRATEGY_FLAVORS,
@@ -422,7 +423,7 @@ def _run_replay(
     precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
 ) -> dict:
     profile = _profile_for(strategy, parameters)
-    return AlgoPortfolioBacktest(
+    replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=bars, spy_daily_bars=spy_daily,
         start=start.isoformat(), end=end.isoformat(), feed=FEED,
         data_adjustment=args.adjustment, initial_capital=float(capital or args.capital),
@@ -435,7 +436,9 @@ def _run_replay(
         research_controls=profile["controls"], force_close_at_end=True,
         preaggregated_daily_bars=preaggregated_daily_bars,
         precomputed_timeline=precomputed_timeline,
-    ).run()
+    )
+    with quiet_coordinator_rejections():
+        return replay.run()
 
 
 def _candidate_replay_worker_init(context: dict) -> None:

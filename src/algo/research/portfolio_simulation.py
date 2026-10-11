@@ -20,6 +20,7 @@ from src.algo.strategies.event_driven import EventCalendar
 from src.config import get_algo_runtime_settings
 
 from .live_manifest import live_configuration_manifest
+from .replay_logging import quiet_coordinator_rejections
 from .settings import LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT
 
 
@@ -265,7 +266,7 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         end=end.isoformat(), adjustment=ADJUSTMENT,
     ).get("SPY", [])
     calendar = EventCalendar.from_csv(event_path) if event_path else None
-    report = AlgoPortfolioBacktest(
+    replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
         start=start.isoformat(), end=end.isoformat(), feed=FEED,
         data_adjustment=ADJUSTMENT,
@@ -278,7 +279,9 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         profile=item["profile"], strategies=strategies,
         research_controls=item["controls"], event_calendar=calendar,
         research_runtime_overrides=runtime_overrides,
-    ).run()
+    )
+    with quiet_coordinator_rejections():
+        report = replay.run()
     selected_gates = report.get("portfolio_coordinator", {})
     keys = (
         "start", "end", "net_return_pct", "max_drawdown_pct", "closed_trade_count",
