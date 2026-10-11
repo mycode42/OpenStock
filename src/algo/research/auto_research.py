@@ -33,14 +33,15 @@ from .files import _atomic_json, _research_lock
 from .fitness_timeline import _attach_fitness_timeline
 from .live_manifest import live_configuration_manifest
 from .settings import (
-    ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_VERIFICATION_CANDIDATES,
+    ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
+    ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, RESEARCH_START, RESEARCH_WARMUP_DAYS,
     ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, LIVE_RESEARCH_STRATEGIES,
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v9-rolling-2024"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v10-iterative-discovery-2024"
 logger = logging.getLogger(__name__)
 
 
@@ -124,6 +125,7 @@ def run_daily_research(args) -> dict:
             },
             "discovery_method": "bayes",
             "discovery_candidates": ADAPTIVE_DISCOVERY_CANDIDATES,
+            "discovery_iterations": ADAPTIVE_DISCOVERY_ITERATIONS,
             "verification_training_start": RESEARCH_START.isoformat(),
             "verification_end": cohort_end.isoformat(),
             "verification_initial_training_sessions": max(

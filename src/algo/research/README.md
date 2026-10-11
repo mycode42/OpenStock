@@ -9,7 +9,10 @@ The pipeline uses dynamic parameter search over bounded signal-parameter
 spaces. Discovery tries recent windows (10/20/30 sessions for intraday and
 30/60/90 for swing strategies), starting with the middle window and falling
 back when a candidate does not beat baseline with enough trades and positive
-net results. Rolling verification and the fold-aligned portfolio replay cover
+net results. Each window gets five 16-candidate, training-only refinement
+rounds in the scheduled pipeline; an eligible training winner seeds the next
+round. Rolling verification runs after discovery and does not steer those
+rounds. Rolling verification and the fold-aligned portfolio replay cover
 2024 onward. The first 90 sessions establish the initial fit; each fold then
 tests its selection on the following 63 sessions. Profiles are re-fit for each
 fold, so the first scored fold begins around May 2024. The stitched OOS results
@@ -29,6 +32,8 @@ verification, and coordinator replay:
 
 ```bash
 python -m src.algo.research adaptive-search --strategy momentum --end 2026-10-09
+python -m src.algo.research adaptive-search --strategy momentum \
+  --end 2026-10-09 --search-iterations 5
 python -m src.algo.research adaptive-walk-forward --strategy momentum \
   --start 2024-01-01 --end 2026-10-09 \
   --train-window-options 10 20 30 --test-days 63 --step-days 63
@@ -43,7 +48,7 @@ evaluation.
 
 Adaptive discovery and verification artifacts are reused only when their
 strategy, data range, universe, window policy, candidate count, and policy
-version match. Discovery evaluates candidate replays in process batches up to
+version and iteration count match. Discovery evaluates candidate replays in process batches up to
 the configured CPU budget; Bayesian proposals for each batch use the results
 from completed batches. Strategy searches run one at a time so their candidate
 workers do not oversubscribe the machine. Verification shares its CPU budget
@@ -70,11 +75,15 @@ When `--output-dir` is set, the log is written under that directory instead.
 `auto_research.py` owns the scheduled entry point and top-level orchestration.
 `adaptive_pipeline.py` runs discovery, rolling verification, and coordinator
 artifact generation; `fitness_timeline.py` records scorecards and run comparisons.
-`adaptive.py` owns parameter discovery and rolling verification logic,
-`portfolio_simulation.py` replays the verified selections, `data.py` handles
-SIP data and event preparation, and `factor_research.py` fits Multi Factor
-diagnostics. Event history and live
-calendar refresh remain available through their package commands:
+`adaptive.py` keeps the CLI and compatibility entry points. Its implementation
+lives in `adaptive_search.py` (scoring, replay, candidate search, and fit-window
+selection), `adaptive_discovery.py` (recent-window search and incumbent reuse),
+`adaptive_verification.py` (rolling out-of-sample folds and stitched scoring),
+and `adaptive_common.py` (argument validation and artifact writing).
+`portfolio_simulation.py` replays verified selections, `data.py` handles SIP
+data and event preparation, and `factor_research.py` fits Multi Factor
+diagnostics. Event history and live calendar refresh remain available through
+their package commands:
 
 ```bash
 python -m src.algo.research.historical_events --start 2024-01-01

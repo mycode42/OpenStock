@@ -16,14 +16,15 @@ from .artifact_cache import read_json
 from .files import _atomic_json
 from .live_manifest import live_configuration_manifest
 from .settings import (
-    ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_VERIFICATION_CANDIDATES,
+    ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
+    ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, ADJUSTMENT, ET, FEED,
     MAX_ADAPTIVE_FOLD_WORKERS_PER_STRATEGY, RESEARCHABLE_STRATEGIES,
     STRATEGY_FLAVORS,
 )
 
-ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v7-batched-candidate-search-2024"
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v8-iterative-candidate-search-2024"
 ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v7-rolling-2024"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
@@ -75,6 +76,7 @@ def run_adaptive_discoveries(
             and window_search.get("pipeline_version") == ADAPTIVE_PIPELINE_VERSION
             and window_search.get("configured_window_days") == options
             and window_search.get("candidate_count") == ADAPTIVE_DISCOVERY_CANDIDATES
+            and window_search.get("search_iterations") == ADAPTIVE_DISCOVERY_ITERATIONS
             and window_search.get("data_version") == data_version
             and prior.get("data_tier") == "algo_trader_plus"
             and prior.get("feed") == FEED
@@ -130,6 +132,7 @@ def _run_adaptive_discovery_job(payload: tuple) -> dict:
         strategy=strategy, symbols=",".join(symbols), db=database,
         adjustment=ADJUSTMENT, search_method="bayes",
         candidates=ADAPTIVE_DISCOVERY_CANDIDATES,
+        search_iterations=ADAPTIVE_DISCOVERY_ITERATIONS,
         seed=latest_end.toordinal() + sum(map(ord, strategy)),
         search_space=None, fitness_weights=None, min_trades=3, capital=100_000.0,
         slippage_bps=5.0, spread_bps=3.0, commission_per_share=0.005,
@@ -156,6 +159,8 @@ def _discovery_status(detail: dict, path: Path, status: str) -> dict:
         "status": status, "strategy": detail.get("strategy"),
         "selection_status": detail.get("selection_status"),
         "adaptive_improvement": bool(detail.get("adaptive_improvement")),
+        "search_iterations": detail.get("search_iterations", 1),
+        "search_iteration_summaries": detail.get("search_iteration_summaries", []),
         "window": detail.get("window"),
         "window_search": detail.get("adaptive_window_search"),
         "parent_candidate": {

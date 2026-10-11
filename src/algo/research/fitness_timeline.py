@@ -71,6 +71,8 @@ def _fitness_scorecard(report: dict) -> dict:
                 "status": discovery.get("status", "missing"),
                 "selection_status": discovery.get("selection_status"),
                 "improvement_found": bool(window_search.get("improvement_found")),
+                "search_iterations": discovery.get("search_iterations", 1),
+                "search_iteration_summaries": discovery.get("search_iteration_summaries", []),
                 "selected_candidate": selected.get("name"),
                 "selected_window_days": selected_window,
                 "attempts": [
