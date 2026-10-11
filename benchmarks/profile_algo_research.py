@@ -172,7 +172,7 @@ def _adaptive_args(
         start=start.isoformat(), end=end.isoformat(), output_dir=str(output_dir),
         window_days=policy_windows[len(policy_windows) // 2],
         train_days=max(training_windows), train_window_options=training_windows,
-        test_days=args.test_sessions, step_days=args.test_sessions, holdout_days=0,
+        test_days=args.test_sessions, step_days=args.test_sessions,
         workers=args.workers, minimum_folds=args.folds,
         minimum_oos_sharpe=0.0, maximum_average_decay=0.35,
         adaptive_policy_version="profile-benchmark-v1", data_version=None,
@@ -195,7 +195,7 @@ def _fold_profile_totals(directory: Path) -> dict:
 
 def _run(args) -> dict:
     global _ADAPTIVE_FOLD_ORIGINAL, _COORDINATOR_FOLD_ORIGINAL
-    from src.algo.research import adaptive, nightly, portfolio_simulation
+    from src.algo.research import adaptive, adaptive_pipeline, portfolio_simulation
 
     if args.days < 1 or args.candidates < 1 or args.folds < 3 or args.test_sessions < 1:
         raise ValueError("days/candidates/test sessions must be positive and folds must be at least three")
@@ -247,7 +247,7 @@ def _run(args) -> dict:
         _ADAPTIVE_FOLD_ORIGINAL = None
 
     detail = json.loads(Path(verification["latest_detail_artifact"]).read_text())
-    coordinator_artifact = nightly._write_adaptive_coordinator_artifact(
+    coordinator_artifact = adaptive_pipeline._write_adaptive_coordinator_artifact(
         detail, verification["summary"], adaptive_output / "verification-coordinator",
     )
     portfolio_args = argparse.Namespace(

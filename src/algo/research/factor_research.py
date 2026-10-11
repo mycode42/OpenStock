@@ -20,11 +20,9 @@ from src.algo.strategies.multi_factor.ranking import FactorRanker
 
 FACTORS = ("momentum_1m", "momentum_3m", "momentum_6m", "low_volatility")
 FORWARD_SESSIONS = 21
-RIDGE_ALPHAS = (0.01, 0.1, 1.0, 10.0)
-TRAIN_CUTOFF = date(2019, 12, 31)
-DEVELOPMENT_START = date(2020, 1, 1)
-DEVELOPMENT_CUTOFF = date(2023, 12, 31)
-HOLDOUT_START = date(2024, 1, 1)
+FACTOR_RESEARCH_START = date(2024, 1, 1)
+FACTOR_TRAINING_SAMPLES = 12
+RIDGE_ALPHA = 1.0
 
 
 def _as_date(value: object) -> date | None:
@@ -166,11 +164,11 @@ def _ic_summary(observations: list[dict], weights: dict[str, float]) -> dict:
 
 
 def train_factor_model(daily_by_symbol: dict[str, list[dict]], *, min_universe: int = 20) -> dict:
-    """Train, select ridge strength, and evaluate via strictly chronological folds.
+    """Evaluate recent factor weights with a trailing, purged walk-forward fit.
 
-    The baseline holdout fit uses labels ending by 2023-12-31 and tests from
-    2024 onward. Adaptive results use expanding fits; each training label must
-    end strictly before its prediction date (a 21-session purge/embargo).
+    Factor observations are limited to 2024 onward. Each prediction uses only
+    the previous 12 observations whose 21-session labels ended before the
+    prediction date. Earlier prices are indicator warm-up only.
     """
     if "SPY" not in {symbol.upper() for symbol in daily_by_symbol}:
         raise ValueError("SPY daily bars are required to define the market-session calendar")
@@ -179,70 +177,39 @@ def train_factor_model(daily_by_symbol: dict[str, list[dict]], *, min_universe: 
         session for row in spy_rows
         if (session := _as_date(row.get("date", row.get("t")))) is not None
     })
-    observations = _feature_panel(
-        daily_by_symbol, session_dates=session_dates, min_universe=min_universe,
-    )
-    if not observations:
-        raise ValueError("Insufficient daily history to create factor training observations")
-
-    train = [row for row in observations if row["label_end"] <= TRAIN_CUTOFF]
-    development = [
-        row for row in observations
-        if DEVELOPMENT_START <= row["date"] and row["label_end"] <= DEVELOPMENT_CUTOFF
+    observations = [
+        row for row in _feature_panel(
+            daily_by_symbol, session_dates=session_dates, min_universe=min_universe,
+        )
+        if row["date"] >= FACTOR_RESEARCH_START
     ]
-    holdout = [row for row in observations if row["date"] >= HOLDOUT_START]
-    if len(train) < 24 or len(development) < 12 or len(holdout) < 8:
+    if len(observations) <= FACTOR_TRAINING_SAMPLES:
         raise ValueError(
-            "Need at least 24 training, 12 development, and 8 holdout monthly samples "
-            f"(found {len(train)}, {len(development)}, {len(holdout)})"
+            "Need more than 12 monthly factor observations from 2024 onward; "
+            f"found {len(observations)}"
         )
 
-    alpha_results = []
-    for alpha in RIDGE_ALPHAS:
-        weights, fallback = _fit_weights(train, alpha)
-        alpha_results.append({
-            "alpha": alpha,
-            "weights": weights,
-            "fallback_to_equal_weights": fallback,
-            "development": _ic_summary(development, weights),
-        })
-    selected = max(
-        alpha_results,
-        key=lambda item: (
-            item["development"]["mean_spearman_ic"]
-            if item["development"]["mean_spearman_ic"] is not None else -math.inf,
-            item["alpha"],
-        ),
-    )
-    alpha = float(selected["alpha"])
     equal_weights = {name: 1 / len(FACTORS) for name in FACTORS}
-
-    frozen_train = [row for row in observations if row["label_end"] <= DEVELOPMENT_CUTOFF]
-    frozen_weights, frozen_fallback = _fit_weights(frozen_train, alpha)
-    frozen_holdout = _ic_summary(holdout, frozen_weights)
-    equal_holdout = _ic_summary(holdout, equal_weights)
-
-    through_2025 = [row for row in observations if row["label_end"] <= date(2025, 12, 31)]
-    weights_through_2025 = None
-    fallback_through_2025 = None
-    if len(through_2025) >= 24:
-        weights_through_2025, fallback_through_2025 = _fit_weights(through_2025, alpha)
-
     adaptive_observations = []
-    for observation in observations:
-        if observation["date"] < HOLDOUT_START:
+    for index, observation in enumerate(observations):
+        # Labels must finish before the prediction date; retain only the
+        # latest year of eligible observations to follow recent regimes.
+        prior = [
+            row for row in observations[:index]
+            if row["label_end"] < observation["date"]
+        ][-FACTOR_TRAINING_SAMPLES:]
+        if len(prior) < FACTOR_TRAINING_SAMPLES:
             continue
-        # Purge any target that includes the current feature date, even if its
-        # label period otherwise meets the training cutoff.
-        prior = [row for row in observations if row["label_end"] < observation["date"]]
-        if len(prior) < 24:
-            continue
-        weights, _ = _fit_weights(prior, alpha)
+        weights, _ = _fit_weights(prior, RIDGE_ALPHA)
         adaptive_observations.append({
             **observation,
             "_scores": _scores(observation, weights),
             "_weights": weights,
         })
+    if len(adaptive_observations) < 3:
+        raise ValueError(
+            "Need at least three rolling factor evaluations after the 12-observation warm-up"
+        )
 
     adaptive_values = [
         value for row in adaptive_observations
@@ -258,8 +225,12 @@ def train_factor_model(daily_by_symbol: dict[str, list[dict]], *, min_universe: 
     adaptive_equal = _ic_summary(adaptive_observations, equal_weights)
 
     latest_date = session_dates[-1]
-    current_train = [row for row in observations if row["label_end"] < latest_date]
-    current_weights, current_fallback = _fit_weights(current_train, alpha)
+    current_train = [
+        row for row in observations if row["label_end"] < latest_date
+    ][-FACTOR_TRAINING_SAMPLES:]
+    if len(current_train) < FACTOR_TRAINING_SAMPLES:
+        raise ValueError("Not enough recent factor observations to fit current weights")
+    current_weights, current_fallback = _fit_weights(current_train, RIDGE_ALPHA)
     by_year = {}
     for year in sorted({row["date"].year for row in adaptive_observations}):
         year_rows = [row for row in adaptive_observations if row["date"].year == year]
@@ -274,37 +245,29 @@ def train_factor_model(daily_by_symbol: dict[str, list[dict]], *, min_universe: 
         }
 
     return {
-        "method": "expanding_ridge_cross_sectional_21_session_purged",
+        "method": "rolling_recent_ridge_cross_sectional_21_session_purged",
         "factor_names": list(FACTORS),
         "forward_horizon_sessions": FORWARD_SESSIONS,
         "sampling_step_sessions": FORWARD_SESSIONS,
+        "research_start": FACTOR_RESEARCH_START.isoformat(),
+        "indicator_warmup_start": session_dates[0].isoformat(),
+        "training_lookback_observations": FACTOR_TRAINING_SAMPLES,
+        "ridge_alpha": RIDGE_ALPHA,
         "min_universe": min_universe,
-        "session_start": session_dates[0].isoformat(),
+        "session_start": FACTOR_RESEARCH_START.isoformat(),
         "session_end": latest_date.isoformat(),
         "observation_count": len(observations),
-        "training_sample_count_through_2019": len(train),
-        "development_sample_count_2020_2023": len(development),
-        "holdout_sample_count_2024_onward": len(holdout),
-        "selected_ridge_alpha": alpha,
-        "alpha_selection_by_development_ic": [
-            {"alpha": row["alpha"], "development": row["development"]}
-            for row in alpha_results
-        ],
-        "frozen_2016_2023_weights": frozen_weights,
-        "frozen_fit_equal_weight_fallback": frozen_fallback,
-        "weights_fit_through_2025": weights_through_2025,
-        "fit_through_2025_equal_weight_fallback": fallback_through_2025,
-        "frozen_holdout_ic": frozen_holdout,
-        "equal_weight_holdout_ic": equal_holdout,
+        "rolling_evaluation_count": len(adaptive_observations),
+        "current_training_sample_count": len(current_train),
         "adaptive_prequential_ic": adaptive_summary,
         "adaptive_equal_weight_ic": adaptive_equal,
         "adaptive_prequential_ic_by_year": by_year,
         "current_candidate_weights": current_weights,
         "current_fit_equal_weight_fallback": current_fallback,
         "current_training_label_cutoff": max(row["label_end"] for row in current_train).isoformat(),
-        "purge_rule": "Every 21-session forward label must end strictly before the feature date used for a prediction.",
+        "purge_rule": "Every 21-session forward label must end strictly before the feature date used for prediction.",
         "universe_limitation": (
-            "The current fixed Algo universe is replayed across the full history; "
+            "The current fixed Algo universe is replayed across the 2024-onward evaluation period; "
             "historical membership and listing eligibility are not point-in-time, "
             "so results have survivorship and availability bias."
         ),

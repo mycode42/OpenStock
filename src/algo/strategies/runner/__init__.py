@@ -48,7 +48,6 @@ from src.algo.strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES, PortfolioCoordinator, PortfolioCoordinatorConfig,
     choose_priority, strategy_priority, throttle_signal,
 )
-from .multi_factor_shadow import process_shadow_orders as process_multi_factor_shadow_orders
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -123,7 +122,6 @@ def scan(
     data_feed: str | None = None,
     quote_feed: str | None = None,
     overnight_tradable_tickers: set[str] | None = None,
-    multi_factor_shadow: dict | None = None,
 ) -> dict:
     """Compatibility facade; dependencies remain patchable at this module."""
     return _runner_scan.scan(
@@ -140,7 +138,6 @@ def scan(
         data_feed=data_feed,
         quote_feed=quote_feed,
         overnight_tradable_tickers=overnight_tradable_tickers,
-        multi_factor_shadow=multi_factor_shadow,
         _dependencies=cast(_runner_scan.ScanDependencies, globals()),
     )
 

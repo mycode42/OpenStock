@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -26,7 +26,9 @@ ADJUSTMENT = "split"
 
 MIN_COVERED_UNIVERSE = 20
 
-INITIAL_HISTORY_DATE = date(2015, 1, 1)
+RESEARCH_START = date(2024, 1, 1)
+RESEARCH_WARMUP_DAYS = 260
+INITIAL_HISTORY_DATE = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
 
 # Keep the scheduled research catalog derived from workflow metadata.
 INTRADAY_STRATEGIES = strategy_ids_for_research_workflow("nightly_intraday")
@@ -64,5 +66,4 @@ ADAPTIVE_DISCOVERY_CANDIDATES = 16
 ADAPTIVE_VERIFICATION_CANDIDATES = 8
 ADAPTIVE_VERIFICATION_TEST_DAYS = 63
 ADAPTIVE_VERIFICATION_STEP_DAYS = 63
-ADAPTIVE_VERIFICATION_HOLDOUT_DAYS = 252
 

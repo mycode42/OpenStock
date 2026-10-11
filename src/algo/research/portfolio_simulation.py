@@ -184,7 +184,10 @@ def run_coordinated_portfolio(args) -> dict:
             "database": str(Path(db).resolve()),
             "tier": artifacts[strategies[0]]["verification"].get("data_tier_at_run"),
             "feed": common["feed"], "adjustment": common["adjustment"],
-            "start": common["start"], "end": common["end"], "symbols": symbols,
+            "start": common["start"], "end": common["end"],
+            "training_history_start": common.get("training_history_start", common["start"]),
+            "out_of_sample_range": common.get("out_of_sample_range"),
+            "symbols": symbols,
         },
         "strategies": strategies,
         "strategy_artifacts": {
@@ -335,6 +338,8 @@ def _validate_artifacts(artifacts: dict[str, dict]) -> dict:
     first = artifacts[first_strategy]["verification"]
     common = {
         "start": first.get("start"), "end": first.get("end"),
+        "training_history_start": first.get("training_history_start", first.get("start")),
+        "out_of_sample_range": first.get("out_of_sample_range"),
         "feed": first.get("feed"), "adjustment": first.get("data_adjustment"),
         "symbols": first.get("symbols"), "folds": first.get("folds"),
     }
@@ -354,6 +359,10 @@ def _validate_artifacts(artifacts: dict[str, dict]) -> dict:
                 raise ValueError(f"{strategy} adaptive verification artifact has a different {key}")
         if report.get("symbols") != common["symbols"]:
             raise ValueError(f"{strategy} adaptive verification artifact has a different symbol universe")
+        if report.get("training_history_start", report.get("start")) != common["training_history_start"]:
+            raise ValueError(f"{strategy} adaptive verification artifact has a different training history start")
+        if report.get("out_of_sample_range") != common["out_of_sample_range"]:
+            raise ValueError(f"{strategy} adaptive verification artifact has a different OOS range")
         windows = [
             tuple(fold.get(key) for key in ("train_start", "train_end", "test_start", "test_end"))
             for fold in report.get("folds", [])

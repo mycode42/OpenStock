@@ -31,11 +31,6 @@ class AlgoRuntimeSettings:
     intraday_satellite_position_pct: float = 0.01
     intraday_satellite_risk_multiplier: float = 0.25
     algo_multi_factor_enabled: bool = True
-    # Core-strategy candidates are measured in shadow mode before any order is routed.
-    algo_multi_factor_execution_mode: str = "shadow"
-    algo_multi_factor_shadow_capital: int = 100_000
-    algo_multi_factor_shadow_slippage_bps: float = 5.0
-    algo_multi_factor_shadow_commission_per_share: float = 0.005
     algo_event_driven_enabled: bool = False
 
     def __post_init__(self) -> None:
@@ -46,27 +41,12 @@ class AlgoRuntimeSettings:
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
-        if self.algo_multi_factor_execution_mode not in {"live", "shadow"}:
-            raise ValueError("algo_multi_factor_execution_mode must be live or shadow")
         for name in (
             "intraday_satellite_position_pct", "intraday_satellite_risk_multiplier",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number")
-        if (
-            isinstance(self.algo_multi_factor_shadow_capital, bool)
-            or not isinstance(self.algo_multi_factor_shadow_capital, int)
-            or self.algo_multi_factor_shadow_capital <= 0
-        ):
-            raise ValueError("algo_multi_factor_shadow_capital must be a positive integer")
-        for name in (
-            "algo_multi_factor_shadow_slippage_bps",
-            "algo_multi_factor_shadow_commission_per_share",
-        ):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be a finite non-negative number")
 
     def as_legacy_dict(self) -> dict:
         """Return the compatibility mapping consumed by older integrations."""

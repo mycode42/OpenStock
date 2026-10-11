@@ -7,7 +7,10 @@ from datetime import date, timedelta
 import json
 from pathlib import Path
 
-from .settings import ADJUSTMENT, FEED, INITIAL_HISTORY_DATE, MIN_COVERED_UNIVERSE
+from .settings import (
+    ADJUSTMENT, FEED, INITIAL_HISTORY_DATE, MIN_COVERED_UNIVERSE,
+    RESEARCH_START, RESEARCH_WARMUP_DAYS,
+)
 from .files import _atomic_json
 from src.algo.backtest import _regular_session_bars
 from src.algo.market_store import SQLiteBarStore, fetch_alpaca_bars
@@ -90,7 +93,7 @@ def _refresh_incremental(
     )), None)
     daily_rows_written = 0
     if spy_daily is None:
-        daily_start = "2015-01-01"
+        daily_start = (RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)).isoformat()
     else:
         last_daily = _parse_date(spy_daily["last"])
         daily_start = (last_daily + timedelta(days=1)).isoformat()

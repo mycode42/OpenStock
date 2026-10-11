@@ -8,7 +8,7 @@ from src.algo.research.adaptive import (
     _search_space,
 )
 from src.algo.research.cli import build_parser
-from src.algo.research.nightly import _write_adaptive_coordinator_artifact
+from src.algo.research.adaptive_pipeline import _write_adaptive_coordinator_artifact
 from src.algo.research.portfolio_simulation import _read_artifact, _validate_artifacts
 from src.algo.research.settings import (
     ADAPTIVE_WINDOW_DAYS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS,
@@ -39,7 +39,7 @@ def test_adaptive_cli_stages_cover_all_research_strategies():
         assert set(strategy_argument.choices) == set(RESEARCHABLE_STRATEGIES)
 
 
-def test_nightly_window_ranges_match_intraday_and_swing_horizons():
+def test_auto_research_window_ranges_match_intraday_and_swing_horizons():
     assert ADAPTIVE_WINDOW_DAYS["intraday"] == (10, 20, 30)
     assert ADAPTIVE_WINDOW_DAYS["swing"] == (30, 60, 90)
     assert set(STRATEGY_FLAVORS) >= set(RESEARCHABLE_STRATEGIES)

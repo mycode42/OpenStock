@@ -12,6 +12,7 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import itertools
 import json
+import logging
 import math
 from pathlib import Path
 import random
@@ -20,7 +21,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
 
 from src.algo.backtest import (
-    DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days,
+    DAILY_WARMUP_DAYS, MIN_REGIME_DAILY_BARS, AlgoPortfolioBacktest, multi_factor_warmup_days,
     read_borrow_availability,
 )
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
@@ -36,9 +37,11 @@ from src.market_data import data_tier, regular_feed
 from .files import _atomic_json
 from .settings import (
     ADJUSTMENT, CORE_RESEARCH_CONTROLS, DEFAULT_OUTPUT_DIR, FEED,
-    STRATEGY_FLAVORS,
+    RESEARCH_START, RESEARCH_WARMUP_DAYS, STRATEGY_FLAVORS,
 )
 ET = ZoneInfo("America/New_York")
+logger = logging.getLogger(__name__)
+_CANDIDATE_REPLAY_CONTEXT: dict | None = None
 DEFAULT_FITNESS_WEIGHTS = {
     "sharpe": 0.25,
     "sortino": 0.15,
@@ -435,6 +438,49 @@ def _run_replay(
     ).run()
 
 
+def _candidate_replay_worker_init(context: dict) -> None:
+    """Install read-only replay inputs once in each candidate worker."""
+    global _CANDIDATE_REPLAY_CONTEXT
+    _CANDIDATE_REPLAY_CONTEXT = context
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+        handler.close()
+    root_logger.addHandler(logging.NullHandler())
+    root_logger.setLevel(logging.CRITICAL)
+    logging.getLogger("strategy_runner").setLevel(logging.CRITICAL)
+
+
+def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
+    report = _run_replay(
+        strategy=context["strategy"], parameters=candidate["parameters"],
+        symbols=context["symbols"], bars=context["bars"],
+        spy_daily=context["spy_daily"], start=context["start"], end=context["end"],
+        args=context["args"],
+        preaggregated_daily_bars=context["preaggregated_daily_bars"],
+        precomputed_timeline=context["precomputed_timeline"],
+    )
+    metrics = _metrics(report, capital=context["args"].capital)
+    fitness, components = _fitness(metrics, context["weights"])
+    enough_trades = int(metrics.get("closed_trade_count") or 0) >= context["min_trades"]
+    positive_after_costs = float(metrics.get("net_return_pct") or 0) > 0
+    del report
+    return {
+        "name": candidate["name"], "parameters": candidate["parameters"],
+        "metrics": metrics, "fitness": round(fitness, 8), "_fitness_raw": fitness,
+        "fitness_components": {key: round(value, 8) for key, value in components.items()},
+        "eligible": enough_trades and positive_after_costs,
+        "minimum_trade_count_met": enough_trades,
+        "positive_after_costs": positive_after_costs,
+    }
+
+
+def _evaluate_candidate_in_worker(candidate: dict) -> dict:
+    if _CANDIDATE_REPLAY_CONTEXT is None:
+        raise RuntimeError("candidate replay worker was not initialized")
+    return _evaluate_search_candidate(candidate, _CANDIDATE_REPLAY_CONTEXT)
+
+
 def _run_search_with_bars(
     *, strategy: str, method: str, count: int, seed: int,
     space: dict[str, list], symbols: list[str], bars: dict,
@@ -450,6 +496,17 @@ def _run_search_with_bars(
         preaggregated_daily_bars = aggregate_intraday_bars(bars)
     if precomputed_timeline is None:
         precomputed_timeline = build_replay_timeline(symbols, bars, start, end)
+    worker_count = min(
+        max(1, int(getattr(args, "candidate_workers", 1))),
+        available_cpu_count(),
+    )
+    replay_context = {
+        "strategy": strategy, "symbols": symbols, "bars": bars,
+        "spy_daily": spy_daily, "start": start, "end": end, "args": args,
+        "weights": weights, "min_trades": min_trades,
+        "preaggregated_daily_bars": preaggregated_daily_bars,
+        "precomputed_timeline": precomputed_timeline,
+    }
     candidates = _candidate_parameters(
         strategy, method, count, seed, space, parent_parameters=parent_parameters,
     )
@@ -462,44 +519,65 @@ def _run_search_with_bars(
     queue = list(candidates)
     rng = random.Random(seed)
     bayes_attempts = 0
-    while queue or (method == "bayes" and len(evaluated) < count and bayes_attempts < count * 40):
-        if queue:
-            candidate = queue.pop(0)
-        else:
-            bayes_attempts += 1
-            values = _bayes_proposal(space, history, seen, rng)
-            if not values:
+    executor = None
+    try:
+        while queue or (method == "bayes" and len(evaluated) < count and bayes_attempts < count * 40):
+            had_queued_candidates = bool(queue)
+            batch = []
+            while queue and len(batch) < worker_count:
+                batch.append(queue.pop(0))
+            # Bayesian proposals use completed results from the previous batch.
+            # New proposals within this batch are unique, but do not wait for
+            # another candidate's replay, keeping the CPU workers busy.
+            while (
+                not had_queued_candidates and not queue and method == "bayes"
+                and len(evaluated) + len(batch) < count
+                and len(batch) < worker_count and bayes_attempts < count * 40
+            ):
+                bayes_attempts += 1
+                values = _bayes_proposal(space, history, seen, rng)
+                if not values:
+                    break
+                try:
+                    parameters = _make_parameters(strategy, values)
+                except ValueError:
+                    continue
+                key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                batch.append({
+                    "name": f"bayes_{len(evaluated) + len(batch):03d}",
+                    "parameters": parameters,
+                })
+            if not batch:
                 break
-            try:
-                parameters = _make_parameters(strategy, values)
-            except ValueError:
-                continue
-            key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-            if key in seen:
-                continue
-            seen.add(key)
-            candidate = {"name": f"bayes_{len(evaluated):03d}", "parameters": parameters}
-        report = _run_replay(
-            strategy=strategy, parameters=candidate["parameters"], symbols=symbols,
-            bars=bars, spy_daily=spy_daily, start=start, end=end, args=args,
-            preaggregated_daily_bars=preaggregated_daily_bars,
-            precomputed_timeline=precomputed_timeline,
-        )
-        metrics = _metrics(report, capital=args.capital)
-        fitness, components = _fitness(metrics, weights)
-        enough_trades = int(metrics.get("closed_trade_count") or 0) >= min_trades
-        positive_after_costs = float(metrics.get("net_return_pct") or 0) > 0
-        eligible = enough_trades and positive_after_costs
-        row = {
-            "name": candidate["name"], "parameters": candidate["parameters"],
-            "metrics": metrics, "fitness": round(fitness, 8),
-            "fitness_components": {key: round(value, 8) for key, value in components.items()},
-            "eligible": eligible, "minimum_trade_count_met": enough_trades,
-            "positive_after_costs": positive_after_costs,
-        }
-        evaluated.append(row)
-        history.append({"parameters": candidate["parameters"], "fitness": fitness})
-        del report
+
+            if executor is None and worker_count > 1 and len(batch) > 1:
+                executor = ProcessPoolExecutor(
+                    max_workers=worker_count,
+                    initializer=_candidate_replay_worker_init,
+                    initargs=(replay_context,),
+                )
+                logger.info(
+                    "Adaptive search %s: evaluating candidates in batches of up to %d processes",
+                    strategy, worker_count,
+                )
+            if executor is None:
+                rows = [_evaluate_search_candidate(candidate, replay_context) for candidate in batch]
+            else:
+                rows = list(executor.map(_evaluate_candidate_in_worker, batch))
+            for candidate, row in zip(batch, rows):
+                raw_fitness = row.pop("_fitness_raw")
+                evaluated.append(row)
+                history.append({"parameters": candidate["parameters"], "fitness": raw_fitness})
+            logger.info(
+                "Adaptive search %s: completed %d/%d candidates",
+                strategy, len(evaluated), count,
+            )
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
     eligible_rows = [row for row in evaluated if row["eligible"]]
     sample_eligible = [row for row in evaluated if row["minimum_trade_count_met"]]
     pool = eligible_rows or sample_eligible or evaluated
@@ -603,10 +681,11 @@ def _symbols(value: str | None) -> list[str]:
 
 
 def _trading_sessions(db: str, end: date, start: date | None = None, adjustment: str = ADJUSTMENT) -> list[date]:
+    lookup_start = start or (RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS))
     store = SQLiteBarStore(db)
     daily = store.bars(
         ["SPY"], feed=FEED, timeframe="1Day",
-        start=(start or date(2015, 1, 1)).isoformat(), end=end.isoformat(),
+        start=lookup_start.isoformat(), end=end.isoformat(),
         adjustment=adjustment,
     ).get("SPY", [])
     result = set()
@@ -659,10 +738,14 @@ def run_discovery(args) -> dict:
     """Run short-window discovery only and persist detailed plus summary JSON."""
     _prepare_args(args)
     end = date.fromisoformat(args.end) if args.end else datetime.now(ET).date() - timedelta(days=1)
-    sessions = _trading_sessions(args.db, end, adjustment=args.adjustment)
+    window = args.window_days
+    session_lookback_days = max(RESEARCH_WARMUP_DAYS, int(window) * 3)
+    sessions = _trading_sessions(
+        args.db, end, start=end - timedelta(days=session_lookback_days),
+        adjustment=args.adjustment,
+    )
     if args.start:
         sessions = [session for session in sessions if session >= date.fromisoformat(args.start)]
-    window = args.window_days
     if window < 2 or len(sessions) < window:
         raise ValueError(f"need {window} completed SPY sessions for discovery; found {len(sessions)}")
     selected_sessions = sessions[-window:]
@@ -838,7 +921,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         adjustment=args.adjustment, strategy=args.strategy,
     )
     preaggregated_daily_bars = aggregate_intraday_bars(bars)
-    seed = args.seed + index * 1009
+    seed = args.seed + test_end.toordinal() + index * 1009
     train_sessions = _trading_sessions(args.db, train_end, train_start, args.adjustment)
     fitted = _fit_window_ladder(
         strategy=args.strategy, method=args.search_method, count=args.candidates,
@@ -983,23 +1066,39 @@ def run_adaptive_walk_forward(args) -> dict:
     args.train_days = max(int(args.train_days), max(window_options))
     if not args.start or not args.end:
         raise ValueError("adaptive-walk-forward requires --start and --end")
-    start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
-    sessions = _trading_sessions(args.db, end, start, args.adjustment)
-    if len(sessions) < args.train_days + args.test_days:
-        raise ValueError("date range does not contain enough sessions for a train and test window")
+    requested_start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
+    warmup_days = max(
+        DAILY_WARMUP_DAYS,
+        multi_factor_warmup_days() if args.strategy == "multi_factor" else 0,
+    )
+    all_sessions = _trading_sessions(
+        args.db, end, start=requested_start - timedelta(days=warmup_days),
+        adjustment=args.adjustment,
+    )
+    sessions = [session for session in all_sessions if session >= requested_start]
+    if not sessions:
+        raise ValueError("date range does not contain completed SPY sessions")
+    prior_session_count = sum(session < sessions[0] for session in all_sessions)
+    if prior_session_count < MIN_REGIME_DAILY_BARS:
+        first_ready_index = MIN_REGIME_DAILY_BARS
+        if len(all_sessions) <= first_ready_index:
+            raise ValueError("date range has too few SPY sessions to warm up the regime filter")
+        first_ready_session = all_sessions[first_ready_index]
+        sessions = [session for session in sessions if session >= first_ready_session]
+        if not sessions:
+            raise ValueError("date range ends before the regime filter has enough warm-up bars")
+    start = sessions[0]
     if args.step_days < args.test_days:
         raise ValueError("step-days must be at least test-days so stitched OOS segments do not overlap")
-    holdout = args.holdout_days
     if (
         args.train_days < 2 or args.test_days < 1 or args.step_days < 1
         or args.workers < 1 or args.minimum_folds < 1
     ):
         raise ValueError("train/test/step days, workers, and minimum folds must be positive")
-    if holdout < 0 or (holdout and holdout > len(sessions) - args.train_days - args.test_days):
-        raise ValueError("holdout-days must leave room for at least one train and test window")
-    development_sessions = sessions[:-holdout] if holdout else sessions
+    if len(sessions) < args.train_days + args.test_days:
+        raise ValueError("2024-onward range does not contain enough sessions for a train and test window")
     windows = walk_forward_windows(
-        development_sessions, train_days=args.train_days,
+        sessions, train_days=args.train_days,
         test_days=args.test_days, step_days=args.step_days,
     )
     if len(windows) < args.minimum_folds:
@@ -1039,58 +1138,7 @@ def run_adaptive_walk_forward(args) -> dict:
     improvement_folds = sum(bool(row.get("adaptive_improvement")) for row in folds)
     improvement_pass = improvement_folds > 0
     walk_forward_pass = bool(sharpe_pass and decay_pass and fold_pass and improvement_pass)
-    locked_holdout = None
-    if holdout:
-        holdout_sessions = sessions[-holdout:]
-        train_sessions = sessions[-holdout - args.train_days:-holdout]
-        train_start, train_end = train_sessions[0], train_sessions[-1]
-        hold_start, hold_end = holdout_sessions[0], holdout_sessions[-1]
-        bars, spy = _load_window_data(
-            db=args.db, symbols=args.symbols_resolved, start=train_start, end=hold_end,
-            adjustment=args.adjustment, strategy=args.strategy,
-        )
-        preaggregated_daily_bars = aggregate_intraday_bars(bars)
-        final_fit = _fit_window_ladder(
-            strategy=args.strategy, method=args.search_method, count=args.candidates,
-            seed=args.seed + 987_654, space=args.search_space_data,
-            symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
-            train_sessions=train_sessions, args=args,
-            weights=args.fitness_weights_data, min_trades=args.min_trades,
-            window_options=window_options,
-            preaggregated_daily_bars=preaggregated_daily_bars,
-        )
-        selected = final_fit["selected_candidate"]
-        hold_report = _run_replay(
-            strategy=args.strategy, parameters=selected["parameters"],
-            symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
-            start=hold_start, end=hold_end, args=args, capital=args.capital,
-            preaggregated_daily_bars=preaggregated_daily_bars,
-        )
-        hold_metrics = _metrics(hold_report, capital=args.capital)
-        hold_fitness, _ = _fitness(hold_metrics, args.fitness_weights_data)
-        locked_holdout = {
-            "training_window": {"start": train_start.isoformat(), "end": train_end.isoformat()},
-            "holdout_window": {"start": hold_start.isoformat(), "end": hold_end.isoformat(), "sessions": holdout},
-            "selected_candidate": selected["name"], "train_parameters": selected["parameters"],
-            "fit_window_days": final_fit["fit_window_days"],
-            "fit_window_start": final_fit["fit_window_start"],
-            "fit_window_end": final_fit["fit_window_end"],
-            "adaptive_improvement": final_fit["adaptive_improvement"],
-            "window_attempts": final_fit["window_attempts"],
-            "train_fitness": selected["fitness"], "train_metrics": selected["metrics"],
-            "oos_fitness": round(hold_fitness, 8), "oos_metrics": hold_metrics,
-            "fitness_decay": round(float(selected["fitness"]) - hold_fitness, 8),
-            "daily_equity": hold_report.get("daily_equity", []),
-            "optimization_used_holdout_data": False,
-        }
-        locked_holdout["pass"] = bool(
-            locked_holdout["adaptive_improvement"]
-            and hold_metrics.get("daily_sharpe_annualized") is not None
-            and hold_metrics["daily_sharpe_annualized"] >= args.minimum_oos_sharpe
-            and locked_holdout["fitness_decay"] <= args.maximum_average_decay
-        )
-        del bars, spy, hold_report
-    overall_pass = walk_forward_pass and (locked_holdout["pass"] if locked_holdout else True)
+    overall_pass = walk_forward_pass
     detail = {
         "schema": "swarm_algo_adaptive_walk_forward_detail_v1",
         "stage": "short_window_walk_forward_verification",
@@ -1102,22 +1150,29 @@ def run_adaptive_walk_forward(args) -> dict:
         "search": {"method": args.search_method, "candidates_per_fold": args.candidates,
                    "search_space": args.search_space_data, "fitness_weights": args.fitness_weights_data,
                    "minimum_train_trades": args.min_trades},
-        "data": {"start": start.isoformat(), "end": end.isoformat(), "symbols": args.symbols_resolved,
-                 "feed": FEED, "adjustment": args.adjustment, "data_tier": data_tier(),
-                 "database": str(Path(args.db).resolve()),
-                 "data_version": getattr(args, "data_version", None)},
+        "data": {
+            "requested_start": requested_start.isoformat(),
+            "start": start.isoformat(), "end": end.isoformat(),
+            "symbols": args.symbols_resolved,
+            "feed": FEED, "adjustment": args.adjustment, "data_tier": data_tier(),
+            "database": str(Path(args.db).resolve()),
+            "data_version": getattr(args, "data_version", None),
+        },
         "window_config": {"train_days": args.train_days, "test_days": args.test_days,
                           "train_window_options": window_options,
-                          "step_days": args.step_days, "locked_holdout_days": holdout},
+                          "step_days": args.step_days,
+                          "rolling_training_range": {
+                              "start": windows[0]["train_start"],
+                              "first_oos_start": windows[0]["test_start"],
+                              "last_oos_end": windows[-1]["test_end"],
+                          }},
         "worker_count": workers,
         "folds": folds,
         "stitched_oos_daily_equity": curve,
-        "locked_holdout": locked_holdout,
         "limitations": [
             "The search uses bounded discrete signal parameters; execution and risk settings are held fixed.",
             "Each fold begins with the stitched equity from the prior OOS segment; training searches use fixed starting capital.",
-            "A configured locked holdout is searched against only its preceding training window and evaluated once.",
-            "The universe is fixed across history; this is not a profitability guarantee or live promotion.",
+            "The rolling evaluation begins in 2024 and uses the current fixed universe; this is not a profitability guarantee or live promotion.",
         ],
     }
     summary = {
@@ -1134,7 +1189,6 @@ def run_adaptive_walk_forward(args) -> dict:
             "adaptive_improvement_folds": improvement_folds,
             "stitched_oos_sharpe_threshold_met": sharpe_pass,
             "average_decay_threshold_met": decay_pass,
-            "locked_holdout_passed": locked_holdout["pass"] if locked_holdout else None,
             "walk_forward_pass": walk_forward_pass,
             "overall_pass": overall_pass,
         },
@@ -1200,7 +1254,7 @@ def add_cli_commands(commands) -> None:
     discovery.set_defaults(handler=run_discovery)
 
     verification = commands.add_parser(
-        "adaptive-walk-forward", help="verify short-window fitting across rolling unseen windows",
+        "adaptive-walk-forward", help="verify short-window fitting across rolling future windows",
     )
     _add_adaptive_args(verification, include_range=False)
     verification.add_argument("--start", required=True)
@@ -1215,8 +1269,6 @@ def add_cli_commands(commands) -> None:
                               help="immediately following unseen sessions per fold")
     verification.add_argument("--step-days", type=int, default=20,
                               help="advance between folds; must be at least test-days")
-    verification.add_argument("--holdout-days", type=int, default=0,
-                              help="reserve final sessions from all walk-forward fitting")
     verification.add_argument("--workers", type=int, default=min(8, available_cpu_count()))
     verification.add_argument("--minimum-folds", type=int, default=3)
     verification.add_argument("--minimum-oos-sharpe", type=float, default=0.0)

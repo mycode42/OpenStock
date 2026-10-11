@@ -650,7 +650,7 @@ def build_historical_event_calendar(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build SEC/BLS/Fed historical events for Algo backtests")
-    parser.add_argument("--start", default="2016-01-01")
+    parser.add_argument("--start", default="2024-01-01")
     parser.add_argument("--end", default=None, help="defaults to the last stored SPY SIP session")
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))

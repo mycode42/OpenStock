@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -18,12 +18,13 @@ def research_data_version(
     database: str | Path, *, start: date, end: date,
     symbols: list[str], feed: str, adjustment: str,
 ) -> str:
-    """Fingerprint ingestions that overlap the exact range used by the run.
+    """Fingerprint ingestions wholly contained in the range used by the run.
 
-    New bars after ``end`` do not invalidate a weekly cohort. Updates to an
-    overlapping request do. Older stores without ingestion metadata fall back
-    to their coverage manifest, which is conservative and may invalidate more
-    often.
+    New bars after ``end`` do not invalidate a session cohort. Updates to an
+    in-range request do. Broad legacy requests that include dates before the
+    research warm-up range are ignored, so full-history ingestion metadata
+    cannot influence current-run cache keys. Older stores without relevant
+    ingestion metadata fall back to coverage bounded to the requested dates.
     """
     requested = {symbol.upper() for symbol in symbols} | {"SPY"}
     lower, upper = start.isoformat(), end.isoformat()
@@ -40,7 +41,7 @@ def research_data_version(
         except sqlite3.OperationalError:
             rows = []
         relevant = []
-        for row_id, timeframe, symbol_csv, requested_start, requested_end, rows_written, fetched_at in rows:
+        for _, timeframe, symbol_csv, requested_start, requested_end, rows_written, fetched_at in rows:
             ingest_symbols = {part.strip().upper() for part in str(symbol_csv).split(",") if part.strip()}
             if timeframe == "1Day":
                 if "SPY" not in requested:
@@ -49,26 +50,27 @@ def research_data_version(
                 continue
             start_day = str(requested_start or "")[:10]
             end_day = str(requested_end or "")[:10]
-            if start_day and end_day and (end_day < lower or start_day > upper):
+            if not start_day or not end_day or start_day < lower or end_day > upper:
                 continue
             relevant.append((
-                row_id, timeframe, sorted(ingest_symbols), requested_start,
+                timeframe, sorted(ingest_symbols), requested_start,
                 requested_end, rows_written, fetched_at,
             ))
     if relevant:
         return stable_hash(relevant)
 
-    # Pre-ingestion legacy stores still get a useful, conservative fingerprint.
+    # Pre-ingestion stores fingerprint only bars that can affect this research
+    # window, including its explicit warm-up range.
     with sqlite3.connect(database) as connection:
         try:
             coverage = connection.execute(
                 """SELECT feed, adjustment, timeframe, symbol, COUNT(*),
                           MIN(timestamp), MAX(timestamp)
                    FROM market_bar
-                   WHERE feed=? AND adjustment=?
+                   WHERE feed=? AND adjustment=? AND timestamp>=? AND timestamp<?
                    GROUP BY feed, adjustment, timeframe, symbol
                    ORDER BY timeframe, symbol""",
-                (feed, adjustment),
+                (feed, adjustment, lower, (end + timedelta(days=1)).isoformat()),
             ).fetchall()
         except sqlite3.OperationalError:
             coverage = []

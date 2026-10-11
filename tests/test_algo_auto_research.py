@@ -15,8 +15,8 @@ def _sessions(start: date, count: int) -> list[date]:
     return result
 
 
-def _synthetic_daily_history(session_count: int = 2700) -> dict[str, list[dict]]:
-    sessions = _sessions(date(2016, 1, 4), session_count)
+def _synthetic_daily_history(session_count: int = 850) -> dict[str, list[dict]]:
+    sessions = _sessions(date(2023, 4, 17), session_count)
     output = {}
     for symbol_index in range(26):
         name = f"T{symbol_index:02d}"
@@ -58,13 +58,13 @@ def test_auto_research_backfills_symbols_missing_from_the_market_store(monkeypat
     coverage = [
         {
             "symbol": symbol, "feed": "sip", "adjustment": "split", "timeframe": "5Min",
-            "first": "2016-01-04", "last": end_date.isoformat(),
+            "first": "2023-04-16", "last": end_date.isoformat(),
         }
         for symbol in symbols[:-1]
     ]
     coverage.append({
         "symbol": "SPY", "feed": "sip", "adjustment": "split", "timeframe": "1Day",
-        "first": "2016-01-04", "last": end_date.isoformat(),
+        "first": "2023-04-16", "last": end_date.isoformat(),
     })
 
     class Store:
@@ -88,7 +88,7 @@ def test_auto_research_backfills_symbols_missing_from_the_market_store(monkeypat
 
     assert report["missing_selected_history"] == [missing_symbol]
     assert calls[0][0] == [missing_symbol]
-    assert calls[0][1]["start"] == "2015-01-01T00:00:00Z"
+    assert calls[0][1]["start"] == "2023-04-16T00:00:00Z"
 
 
 def test_factor_features_are_as_of_and_forward_labels_are_purged():
@@ -110,14 +110,15 @@ def test_factor_features_are_as_of_and_forward_labels_are_purged():
     assert revised["returns"][ticker] != first["returns"][ticker]
 
 
-def test_ridge_factor_candidate_reports_chronological_holdouts():
+def test_ridge_factor_candidate_reports_recent_rolling_evaluation():
     report = train_factor_model(_synthetic_daily_history(), min_universe=20)
     weights = report["current_candidate_weights"]
     assert set(weights) == {"momentum_1m", "momentum_3m", "momentum_6m", "low_volatility"}
     assert all(value >= 0 for value in weights.values())
     assert abs(sum(weights.values()) - 1.0) < 1e-6
-    assert report["selected_ridge_alpha"] in {0.01, 0.1, 1.0, 10.0}
-    assert report["frozen_holdout_ic"]["sample_count"] >= 8
+    assert report["ridge_alpha"] == 1.0
+    assert report["research_start"] == "2024-01-01"
+    assert report["training_lookback_observations"] == 12
     assert report["adaptive_prequential_ic"]["sample_count"] >= 8
     assert "strictly before" in report["purge_rule"]
     assert report["current_training_label_cutoff"] < report["session_end"]

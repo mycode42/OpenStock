@@ -1,12 +1,15 @@
-Use the exec tool to read `/opt/swarm-trader/data/research/algo-auto/latest.json` and send one concise Telegram report about Algo AutoResearch. This is a read-only adaptive research report; do not edit settings, restart services, place or modify orders, or present any proposal as live.
+First inspect the runner with `openclaw automations get a66b8ffd-8154-482b-82a8-2480661c0fac`, then read `/opt/swarm-trader/data/research/algo-auto/latest.json`. This is a read-only report. Do not edit settings, restart services, place or modify orders, or present a research candidate as live.
 
-If the file is absent, invalid, or its `run_date_et` is not today in America/New_York, say today's research report is missing or stale and include the available status. If `status` is `error`, report the error and stop.
+If the runner is still running, do not summarize an older report. If the latest report is missing, invalid, stale for today's America/New_York date, or has status `error`, say so clearly.
 
-For a completed or partial run, include:
-- Data tier/feed, range, selected and covered universe counts, exclusions, and whether SIP was refreshed through the latest session.
-- Adaptive discovery status and selected candidate for active strategies.
-- Rolling verification fold count, positive OOS folds, aggregate OOS returns, locked-holdout status, and any failed checks. Read the referenced adaptive detail artifacts when needed.
-- Portfolio coordinator replay summary when present. If absent, state that incomplete adaptive verification skipped the replay; there is no fallback research path.
-- Multi Factor diagnostics and shadow candidate status, plus material data or methodology limitations.
+Keep the Telegram report under 2,000 characters. Use the report's `fitness_timeline` first; read referenced verification artifacts only when needed to explain dates or diagnostics. Never scan the artifact directory or report strategies absent from this run's `orchestration.strategies`.
 
-Treat all parameters as research candidates only. Keep the report below 2,000 characters. Clearly finish with: live settings unchanged; takeover requires the owner's confirmation.
+Include:
+- Run id/date/status, cache reuse, Plus SIP/feed, stored coverage, latest session age, refresh result, and the 2024-onward scored range. Distinguish indicator warm-up from scored OOS dates.
+- For current strategies, summarize discovery window/attempts and candidate fitness delta versus its training baseline, then verification folds/date range, stitched OOS fitness, return, Sharpe, decay, stability, gate, and errors. Training improvement is not an OOS pass.
+- Compare with `fitness_timeline.comparison_to_previous`. If not comparable or no prior score exists, explain why. Call score changes across the expanding OOS range trend changes, not a controlled A/B result. Use `recent_runs` for the timeline.
+- Explain what improved or failed using these metrics. Describe the next search from `fitness_timeline.next_run_plan`; note whether an eligible recent candidate can seed research and that it must pass rolling OOS verification. Keep the baseline when no candidate beats it after costs.
+- Say portfolio replay combines the same verified OOS folds using each fold's selected profile. Include its compounded fold return and fold counts only when present; otherwise state that incomplete verification skipped replay.
+- Multi Factor is active through the shared Algo coordinator on the Alpaca paper route using configured defaults, with a two-entry daily cap. Discovery parameters do not auto-change live settings. State that the fixed current-symbol universe is an accepted assumption and that positions/risk state reset between folds.
+
+Explain that portfolio equity compounds across OOS folds within each run. Separate nightly runs are scored and compared; their returns are not added together. Close by saying AutoResearch made no live-setting or order changes and no orders were placed.
