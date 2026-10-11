@@ -43,6 +43,8 @@ FED_YEAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomchistorical{yea
 FED_CALENDARS_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 SEC_MIN_INTERVAL_SECONDS = 0.12
 REACTION_WINDOW = timedelta(days=2)
+_RETROSPECTIVE_CUTOFF_DAYS = 45
+_SOURCE_PRIORITY = {"8-K": 0, "10-Q": 1, "10-K": 2}
 DEFAULT_OUTPUT = ROOT / "data" / "research" / "event_calendar_historical.csv"
 SOURCE_CACHE = ROOT / "data" / "research" / "event_sources"
 
@@ -273,63 +275,150 @@ def _load_company_submissions(cik: str) -> list[dict]:
 
 def _earnings_events(
     tickers: set[str], *, bar_times: list[datetime], start_date: date, end_date: date,
+    announcement_only: bool = True,
 ) -> tuple[list[ScheduledEvent], dict]:
     # ETFs file reports but do not publish portfolio-company earnings.
     earnings_tickers = tickers - {"SPY", "QQQ", "GLD", "TLT"}
     cik_by_ticker, coverage = _ticker_ciks(earnings_tickers)
     events = []
-    counts = {"companies_queried": 0, "item_2_02_filings": 0, "events_written": 0, "missing_acceptance_time": 0}
+    counts = {
+        "companies_queried": 0, "item_2_02_filings": 0,
+        "qualifying_filings": 0, "events_written": 0,
+        "missing_acceptance_time": 0,
+    }
     for ticker, cik in sorted(cik_by_ticker.items()):
         counts["companies_queried"] += 1
         filings = _load_company_submissions(cik)
-        accessions = set()
-        for filing_rows in filings:
-            if not isinstance(filing_rows, dict):
+        for filing in _qualifying_earnings_filings(filings, announcement_only=announcement_only):
+            filed = date.fromisoformat(filing["filing_date"])
+            if not start_date <= filed <= end_date:
                 continue
-            accessions_col = filing_rows.get("accessionNumber", [])
-            forms = filing_rows.get("form", [])
-            items = filing_rows.get("items", [])
-            filed_dates = filing_rows.get("filingDate", [])
-            accepted = filing_rows.get("acceptanceDateTime", [])
-            length = min(map(len, (accessions_col, forms, items, filed_dates, accepted)), default=0)
-            for index in range(length):
-                item_codes = {part.strip() for part in str(items[index] or "").split(",")}
-                if forms[index] != "8-K" or "2.02" not in item_codes:
-                    continue
-                filed = date.fromisoformat(str(filed_dates[index]))
-                if not start_date <= filed <= end_date:
-                    continue
-                accession = str(accessions_col[index])
-                if accession in accessions:
-                    continue
-                accessions.add(accession)
+            counts["qualifying_filings"] += 1
+            form = filing["source_type"]
+            if form == "8-K":
                 counts["item_2_02_filings"] += 1
-                if not accepted[index]:
-                    counts["missing_acceptance_time"] += 1
-                    continue
-                try:
-                    known_at = _parse_et_timestamp(str(accepted[index]))
-                except ValueError:
-                    counts["missing_acceptance_time"] += 1
-                    continue
-                accession_path = accession.replace("-", "")
-                source = (
-                    f"SEC EDGAR 8-K Item 2.02; CIK {cik}; accession {accession}; "
-                    f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{accession_path}-index.htm"
-                )
-                event = _event(
-                    event_id=f"sec-8k-2.02-{ticker}-{accession}", event_type="earnings",
-                    ticker=ticker, scheduled_at=known_at, known_at=known_at,
-                    source=source, bar_times=bar_times, end_date=end_date,
-                )
-                if event is not None:
-                    events.append(event)
-                    counts["events_written"] += 1
+            try:
+                known_at = _parse_et_timestamp(filing["acceptance_date_time"])
+            except ValueError:
+                counts["missing_acceptance_time"] += 1
+                continue
+            accession = filing["accession"]
+            accession_path = accession.replace("-", "")
+            source_label = "8-K Item 2.02" if form == "8-K" else form
+            event_id = (
+                f"sec-8k-2.02-{ticker}-{accession}"
+                if form == "8-K" else f"sec-{form.lower()}-{ticker}-{accession}"
+            )
+            source = (
+                f"SEC EDGAR {source_label}; CIK {cik}; accession {accession}; "
+                f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession_path}/{accession_path}-index.htm"
+            )
+            event = _event(
+                event_id=event_id, event_type="earnings",
+                ticker=ticker, scheduled_at=known_at, known_at=known_at,
+                source=source, bar_times=bar_times, end_date=end_date,
+            )
+            if event is not None:
+                events.append(event)
+                counts["events_written"] += 1
     return events, {
         **coverage, **counts,
+        "announcement_only": announcement_only,
         "configured_universe_ticker_count": len(tickers),
         "etfs_excluded_from_earnings": sorted(tickers - earnings_tickers),
     }
+
+
+def _qualifying_earnings_filings(
+    filings: list[dict], *, announcement_only: bool = True,
+) -> list[dict[str, str]]:
+    """Select one timely earnings filing per report period.
+
+    By default, only 8-K Item 2.02 announcements qualify. Setting
+    ``announcement_only=False`` admits 10-Q/K as fallback events. Duplicate
+    announcements for a period keep the earliest filing date, and the
+    45-day cutoff removes filings too far after their reported period.
+    """
+    best: dict[str, tuple[int, str, dict[str, str]]] = {}
+    seen_accessions: set[str] = set()
+    candidates: list[dict[str, str]] = []
+    statutory_periods: set[str] = set()
+    for filing_rows in filings:
+        if not isinstance(filing_rows, dict):
+            continue
+        values = {
+            name: filing_rows.get(name, [])
+            for name in ("accessionNumber", "form", "items", "filingDate", "reportDate", "acceptanceDateTime")
+        }
+        required = (
+            values["accessionNumber"], values["form"], values["filingDate"],
+            values["reportDate"], values["acceptanceDateTime"],
+        )
+        if not all(isinstance(value, list) for value in required):
+            continue
+        length = min(map(len, required), default=0)
+        for index in range(length):
+            accession = str(values["accessionNumber"][index] or "")
+            form = str(values["form"][index] or "")
+            if not accession or accession in seen_accessions:
+                continue
+            if form not in _SOURCE_PRIORITY:
+                continue
+            filing_date = str(values["filingDate"][index] or "")
+            report_period = str(values["reportDate"][index] or "")
+            acceptance_date_time = str(values["acceptanceDateTime"][index] or "")
+            try:
+                date.fromisoformat(filing_date)
+                date.fromisoformat(report_period)
+                _parse_et_timestamp(acceptance_date_time)
+            except ValueError:
+                continue
+            if form in {"10-Q", "10-K"}:
+                statutory_periods.add(report_period)
+            if announcement_only and form != "8-K":
+                continue
+            items_col = values["items"]
+            items = {
+                part.strip() for part in str(
+                    items_col[index] if isinstance(items_col, list) and index < len(items_col) else "",
+                ).split(",")
+            }
+            if form == "8-K" and "2.02" not in items:
+                continue
+            seen_accessions.add(accession)
+            candidates.append({
+                "accession": accession,
+                "source_type": form,
+                "filing_date": filing_date,
+                "report_period": report_period,
+                "acceptance_date_time": acceptance_date_time,
+            })
+
+    # On an 8-K, SEC reportDate is the date of the reported event. Use the
+    # nearest preceding 10-Q/K period end as the earnings report period where
+    # available, so an announcement and its later statutory filing dedupe.
+    sorted_statutory_periods = sorted(statutory_periods)
+    for candidate in candidates:
+        if candidate["source_type"] == "8-K":
+            filed = date.fromisoformat(candidate["filing_date"])
+            prior_periods = [
+                period for period in sorted_statutory_periods
+                if date.fromisoformat(period) <= filed
+            ]
+            if prior_periods:
+                candidate["report_period"] = prior_periods[-1]
+        lag = (
+            date.fromisoformat(candidate["filing_date"])
+            - date.fromisoformat(candidate["report_period"])
+        ).days
+        if lag >= _RETROSPECTIVE_CUTOFF_DAYS:
+            continue
+        form = candidate["source_type"]
+        key = (_SOURCE_PRIORITY[form], candidate["filing_date"])
+        report_period = candidate["report_period"]
+        if report_period not in best or key < best[report_period][:2]:
+            best[report_period] = (key[0], key[1], candidate)
+    return [filing for _, _, filing in best.values()]
 
 
 def _parse_bls_date(value: str) -> date | None:
@@ -498,9 +587,13 @@ def _write_calendar(path: Path, events: list[ScheduledEvent]) -> None:
 
 def build_historical_event_calendar(
     *, start: date, end: date, db: str | Path = DEFAULT_DB,
-    output: str | Path = DEFAULT_OUTPUT,
+    output: str | Path = DEFAULT_OUTPUT, announcement_only: bool = True,
 ) -> dict:
-    """Fetch public event histories and publish a backtest-ready calendar."""
+    """Fetch public event histories and publish a backtest-ready calendar.
+
+    Earnings are limited to SEC 8-K Item 2.02 announcements by default;
+    ``announcement_only=False`` restores 10-Q/K fallback events.
+    """
     if end < start:
         raise ValueError("event calendar end date must not be before start date")
     store = SQLiteBarStore(db)
@@ -518,6 +611,7 @@ def build_historical_event_calendar(
     tickers = set(configured_universe("algo")["tickers"])
     earnings, earnings_report = _earnings_events(
         tickers, bar_times=bar_times, start_date=start, end_date=end,
+        announcement_only=announcement_only,
     )
     years = range(start.year, end.year + 1)
     macro_bls, bls_report = _bls_events(years=years, bar_times=bar_times, end_date=end)
@@ -541,7 +635,11 @@ def build_historical_event_calendar(
         "bls_source": bls_report,
         "fed_source": fed_report,
         "point_in_time_policy": {
-            "earnings_known_at": "SEC acceptanceDateTime; filed Item 2.02 8-K",
+            "earnings_known_at": (
+                "SEC acceptanceDateTime; filed Item 2.02 8-K"
+                if announcement_only else
+                "SEC acceptanceDateTime; 8-K Item 2.02 preferred, with 10-Q/K fallback"
+            ),
             "macro_known_at": "scheduled release timestamp; post-release-only and conservative",
             "reaction_start": "first stored regular-session SPY 5-minute bar at or after event time",
             "earnings_caveat": "EDGAR acceptance may lag the issuer's initial press release; reactions start no earlier than filing availability",
@@ -556,6 +654,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end", default=None, help="defaults to the last stored SPY SIP session")
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument(
+        "--allow-statutory-filings", dest="announcement_only", action="store_false",
+        help="allow 10-Q/K earnings filings when no 8-K announcement exists for the period",
+    )
+    parser.set_defaults(announcement_only=True)
     return parser
 
 
@@ -571,6 +674,7 @@ def main(argv: list[str] | None = None) -> int:
     end = date.fromisoformat(args.end) if args.end else date.fromisoformat(coverage["last"][:10])
     report = build_historical_event_calendar(
         start=date.fromisoformat(args.start), end=end, db=args.db, output=args.output,
+        announcement_only=args.announcement_only,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
