@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, PARAMETER_KEYS, validate_parameter_profile
 
 from .settings import CORE_RESEARCH_CONTROLS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS
 
 
-SEARCH_SPACE_VERSION = "2026-10-11.1"
+SEARCH_SPACE_VERSION = "2026-10-11.2"
 
 # Each row is a coherent strategy profile, rather than a Cartesian product of
 # every parameter value. That keeps the search reviewable and compute bounded
@@ -306,7 +306,7 @@ def candidate_profiles(strategy: str) -> list[dict]:
     baseline = deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
     if strategy in {"trend_following", "momentum", "swing_mean_reversion"}:
         baseline["direction_mode"] = "both"
-    else:
+    elif {"allow_long", "allow_short"}.issubset(PARAMETER_KEYS[strategy]):
         baseline["allow_long"] = True
         baseline["allow_short"] = True
     candidates = [("baseline", {})]
