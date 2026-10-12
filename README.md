@@ -714,7 +714,7 @@ Deterministic Gateway command jobs provide the operational guards:
 - `day-open-recovery` repeats the verified Day account cleanup from 9:30 through 9:34 AM ET. The first Day agent report starts at 9:35 AM, and new Day buys require that day's successful recovery receipt.
 - `day-flatten-guard` checks the broker-calendar deadline every five minutes from noon through 4 PM ET on weekdays. The existing 3:45 PM Day report also checks the flatten result. Early closes move the deadline earlier.
 - Swing, Day, and Algo close-snapshot jobs record account-specific `snapshot_kind=close` baselines after the actual exchange close. Holidays are successful skips.
-- `algo-health` runs every ten minutes, including Sunday overnight, and exits nonzero on stale scans, state problems, broker protection gaps, or an inactive service.
+- `algo-health` runs once an hour, including Sunday overnight, and exits nonzero on stale scans, state problems, broker protection gaps, or an inactive service.
 
 The four Algo report jobs cover premarket, morning, midday, and close. Report jobs announce their summaries; command jobs alert on failures without delivering normal stdout. Existing trader and AutoResearch jobs also have explicit failure alerts and bounded timeouts. See [the maintained OpenClaw schedule and alert reference](ops/openclaw-crons.md) for the current job names, cron expressions, and operating details. Inspect the live declarations with:
 
