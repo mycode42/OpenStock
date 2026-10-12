@@ -1,6 +1,6 @@
-# EXPERIMENT: slower_macd_fast_14
-# HYPOTHESIS: A slightly slower MACD fast EMA may filter noisy intraday momentum confirmations and improve entry quality.
-# CHANGE: Increased MACD_FAST from 12 to 14
+# EXPERIMENT: earlier_entry_cutoff_1525
+# HYPOTHESIS: Avoiding late entries leaves more time for intraday setups to develop before positions are flattened, which may reduce low-quality trades.
+# CHANGE: Moved MARKET_CLOSE_CUTOFF from 15:35 to 15:25
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,12 +14,12 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "slower_macd_fast_14"
+EXPERIMENT_NAME = "earlier_entry_cutoff_1525"
 EXPERIMENT_HYPOTHESIS = (
-    "A slightly slower MACD fast EMA may filter noisy intraday momentum "
-    "confirmations and improve entry quality."
+    "Avoiding late entries leaves more time for intraday setups to develop "
+    "before positions are flattened, which may reduce low-quality trades."
 )
-EXPERIMENT_CHANGE = "Increased MACD_FAST from 12 to 14"
+EXPERIMENT_CHANGE = "Moved MARKET_CLOSE_CUTOFF from 15:35 to 15:25"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -58,7 +58,7 @@ REGIME_MULTIPLIER: dict[str, float] = {
 }
 
 NO_TRADE_OPEN_MINUTES = 5
-MARKET_CLOSE_CUTOFF = time(15, 35)
+MARKET_CLOSE_CUTOFF = time(15, 25)
 MARKET_TZ = ZoneInfo("America/New_York")
 MODE = "day"
 
