@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_confidence_cutoff
-# HYPOTHESIS: Lowering the confidence cutoff should admit additional qualified signals and reduce the severe fitness penalty from fewer than 10 trades.
-# CHANGE: Reduced MIN_CONFIDENCE from 58.0 to 54.0
+# EXPERIMENT: slower_macd_fast_14
+# HYPOTHESIS: A slightly slower MACD fast EMA may filter noisy intraday momentum confirmations and improve entry quality.
+# CHANGE: Increased MACD_FAST from 12 to 14
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,12 +14,12 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "lower_confidence_cutoff"
+EXPERIMENT_NAME = "slower_macd_fast_14"
 EXPERIMENT_HYPOTHESIS = (
-    "Lowering the confidence cutoff should admit additional qualified signals "
-    "and reduce the severe fitness penalty from fewer than 10 trades."
+    "A slightly slower MACD fast EMA may filter noisy intraday momentum "
+    "confirmations and improve entry quality."
 )
-EXPERIMENT_CHANGE = "Reduced MIN_CONFIDENCE from 58.0 to 54.0"
+EXPERIMENT_CHANGE = "Increased MACD_FAST from 12 to 14"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -45,7 +45,7 @@ CONF_WEIGHT_VWAP = 0.40
 CONF_WEIGHT_VOLUME = 0.20
 CONF_WEIGHT_MACD = 0.15
 
-MACD_FAST = 12
+MACD_FAST = 14
 MACD_SLOW = 26
 MACD_SIGNAL_PERIOD = 9
 
