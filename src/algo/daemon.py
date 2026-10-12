@@ -19,6 +19,7 @@ from pathlib import Path
 from src.algo.alpaca import AlgoAccountMismatchError, AlgoAlpaca
 from src.algo.incidents import open_incident_symbols, record_incident
 from src.algo.protection_recovery import recover_broker_protection
+from src.algo.protection_sync import sync_broker_stops
 from src.algo.reconciliation import reconcile_startup
 from src.algo.sessions import ET, get_trading_window, next_session_start
 from src.algo.state_store import AlgoStateStore, StateStoreError
@@ -194,6 +195,7 @@ def _scan_strategy_portfolio(
     portfolio: dict,
     *,
     window,
+    broker=None,
     persist_before_execution=None,
     dry_run: bool = False,
 ) -> dict:
@@ -257,6 +259,38 @@ def _scan_strategy_portfolio(
         portfolio["last_scan_status"] = "degraded"
         portfolio["entry_pause_reasons"].append(
             "Algo execution incident needs broker resolution: " + ", ".join(incident_symbols)
+        )
+
+    if broker is not None and not dry_run:
+        extra_pause_reasons = [
+            reason for reason in portfolio.get("entry_pause_reasons") or []
+            if reason not in startup_reasons
+            and reason not in scan_reasons
+            and not reason.startswith("Algo broker stop synchronization needs attention:")
+        ]
+        sync_report = sync_broker_stops(
+            portfolio,
+            window=window,
+            broker=broker,
+            save=persist_before_execution or (lambda: None),
+            now=datetime.now(ET),
+        )
+        portfolio["protection_sync_status"] = sync_report
+        sync_issues = (sync_report.get("errors") or []) + (sync_report.get("waiting") or [])
+        if sync_issues:
+            sync_reason = "Algo broker stop synchronization needs attention: " + "; ".join(sync_issues)[:220]
+            extra_pause_reasons.append(sync_reason)
+        startup = portfolio.get("startup_reconciliation") or {}
+        portfolio["entry_pause_reasons"] = list(dict.fromkeys([
+            *(startup.get("entry_pause_reasons") or []),
+            *scan_reasons,
+            *extra_pause_reasons,
+        ]))
+        portfolio["entries_paused"] = bool(
+            startup.get("entries_paused")
+            or scan_result.get("entries_paused")
+            or extra_pause_reasons
+            or sync_issues
         )
 
     trades = [
@@ -474,6 +508,7 @@ def run_loop(
                         result = _scan_strategy_portfolio(
                             portfolio,
                             window=window,
+                            broker=broker,
                             persist_before_execution=save_before_execution,
                             dry_run=dry_run,
                         )

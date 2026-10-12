@@ -42,6 +42,11 @@ class AlgoAlpaca:
         response.raise_for_status()
         return response.json()
 
+    def _patch(self, url: str, payload: dict):
+        response = self.session.patch(url, headers=self.headers, json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
     def account(self) -> dict:
         account = self._get(f"{PAPER_BASE}/account")
         configured_id = self.account_id.strip()
@@ -175,6 +180,20 @@ class AlgoAlpaca:
     def order(self, order_id: str, *, nested: bool = False) -> dict:
         url = f"{PAPER_BASE}/orders/{order_id}"
         return self._get(url, params={"nested": "true"}) if nested else self._get(url)
+
+    def replace_stop_order(self, order_id: str, stop_price: object) -> dict:
+        """Replace a stop leg on a bracket/OCO order in the Algo Paper account."""
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            price = Decimal(str(stop_price))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("Invalid Algo replacement stop price") from exc
+        if not order_id or not price.is_finite() or price <= 0:
+            raise ValueError("Invalid Algo replacement stop order")
+        if price != price.quantize(Decimal("0.01")):
+            raise ValueError("Algo replacement stop price must be rounded to cents")
+        return self._patch(f"{PAPER_BASE}/orders/{order_id}", {"stop_price": str(price)})
 
     @staticmethod
     def current_utc() -> datetime:

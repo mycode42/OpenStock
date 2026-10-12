@@ -242,11 +242,21 @@ def _bracket_stop_gaps(
             qty = _quantity(leg.get("qty"))
             filled = _quantity(leg.get("filled_qty") or 0)
             if qty is not None and filled is not None and qty >= filled:
-                active_stops.append(qty - filled)
+                active_stops.append((qty - filled, _quantity(leg.get("stop_price"))))
+        state = (states.get(owner) or {}).get(symbol, {})
+        expected_stop = _quantity(state.get("stop_price"))
+        actual_stop = active_stops[0][1] if len(active_stops) == 1 else None
+        # Existing state files predate broker_stop_price metadata. Once a stop
+        # has been synchronized, require the broker leg to match the live trail.
+        stop_level_matches = (
+            state.get("broker_stop_price") is None
+            or (expected_stop is not None and actual_stop == expected_stop)
+        )
         bracket_stop_covers_position = (
             position_size is not None
             and len(active_stops) == 1
-            and active_stops[0] == position_size
+            and active_stops[0][0] == position_size
+            and stop_level_matches
         )
         replacement_oco_covers_position = (
             not bracket_stop_covers_position
@@ -301,6 +311,15 @@ def build_report(
         else:
             detail = str(recovery_errors)
         problems.append(_problem("protection_recovery_degraded", f"Algo broker protection repair is {recovery_status}: {detail}"))
+    stop_sync = portfolio.get("protection_sync_status") or {}
+    stop_sync_status = stop_sync.get("status") if isinstance(stop_sync, dict) else None
+    if state_available and stop_sync_status in {"degraded", "waiting"}:
+        sync_details = (stop_sync.get("errors") or []) + (stop_sync.get("waiting") or [])
+        if sync_details:
+            problems.append(_problem(
+                "broker_stop_sync_pending",
+                "Algo broker stop synchronization needs attention: " + "; ".join(str(item) for item in sync_details[:2]),
+            ))
 
     account_available = False
     window: TradingWindow | None = None
@@ -491,6 +510,7 @@ def build_report(
         "entry_pause_reasons": pause_reasons,
         "execution_incident_status": incident_status,
         "protection_recovery_status": recovery_status,
+        "broker_stop_sync_status": stop_sync_status,
         "broker_position_count": len(positions) if positions is not None else None,
         "unsupported_positions": unsupported_positions,
         "unowned_positions": unowned,
