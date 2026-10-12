@@ -629,8 +629,9 @@ poetry run python rebalance.py --mode swing
 ### Run (Day Trading Mode)
 
 ```bash
-# Gather intraday data for holdings and the fixed Day universe
-poetry run python gather_data.py --mode day --include-universe --output /tmp/data.json
+# Discover liquid Day candidates, then gather intraday data for those tickers
+TICKERS=$(poetry run python scan_market.py --max 25)
+poetry run python gather_data.py --mode day --tickers "$TICKERS" --output /tmp/data.json
 
 # Verify and clear residual Day exposure before new Day buys
 poetry run python execute_trades.py --mode day --flatten
@@ -645,6 +646,8 @@ poetry run python execute_trades.py --mode day --flatten-if-due
 # Market pulse check
 poetry run python check_moves.py --mode day
 ```
+
+The scanner and gatherer use the Day account and the shared SIP market-data feed selected by `src/market_data.py`.
 
 ---
 
@@ -735,6 +738,7 @@ Account-aware scripts should be run with an explicit `--mode`; each supported mo
 | Script | Purpose | Key Flags |
 |---|---|---|
 | `run_hedge_fund.py` | Multi-agent analysis + execution | `--execute`, `--tickers`, `--mode`, `--show-reasoning` |
+| `scan_market.py` | Discover liquid Day candidates from Alpaca movers and most-active lists | `--max`, `--min-price`, `--min-trades`, `--json`, `--no-core` |
 | `gather_data.py` | Market data gathering | `--mode`, `--tickers`, `--top N`, `--output` |
 | `execute_trades.py` | Trade execution with risk validation | `--mode`, `--file`, `--flatten`, `--flatten-if-due` (Day), `--dry-run` |
 | `risk_manager.py` | Risk status check | `--status`, `--mode` |
@@ -760,6 +764,7 @@ swarm-trader/
 ├── portfolio_monitor.py       # Stop loss monitor + auto-sell + SPY comparison
 ├── performance_tracker_v2.py  # Daily snapshots, Sharpe ratio, benchmarking
 ├── execute_trades.py          # Trade executor with risk validation
+├── scan_market.py             # Dynamic Day ticker discovery
 ├── gather_data.py             # Market data gatherer (swing + day modes)
 ├── check_portfolio.py         # Quick Alpaca portfolio check
 ├── check_moves.py             # Universe pulse check

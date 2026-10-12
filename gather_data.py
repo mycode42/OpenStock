@@ -34,6 +34,7 @@ import requests
 
 from src.config import get_mode_config, resolve_mode
 from src.accounts import get_account_for_mode
+from src.market_data import regular_feed
 
 # Alpaca trading API
 API_BASE = "https://paper-api.alpaca.markets/v2"
@@ -228,7 +229,7 @@ def get_intraday_bars(ticker: str, today: str, limit: int = 100) -> list[dict]:
                     hour=9, minute=30, second=0, microsecond=0, tzinfo=MARKET_TZ
                 ).isoformat(),
                 "limit": limit,
-                "feed": "iex",
+                "feed": regular_feed(),
             },
             timeout=15,
         )
@@ -278,6 +279,18 @@ def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
         intraday["low"] = min(float(b["l"]) for b in bars)
         intraday["close"] = float(bars[-1]["c"])  # latest price
         intraday["volume"] = sum(volumes)
+        last_bar_timestamp = bars[-1].get("t")
+        intraday["last_bar_timestamp"] = last_bar_timestamp
+        try:
+            last_bar_dt = datetime.fromisoformat(str(last_bar_timestamp).replace("Z", "+00:00"))
+            if last_bar_dt.tzinfo is None:
+                last_bar_dt = last_bar_dt.replace(tzinfo=timezone.utc)
+            intraday["last_bar_age_minutes"] = round(
+                (datetime.now(timezone.utc) - last_bar_dt.astimezone(timezone.utc)).total_seconds() / 60,
+                2,
+            )
+        except (TypeError, ValueError):
+            intraday["last_bar_age_minutes"] = None
         intraday["vwap"] = _calc_vwap(bars)
         intraday["rsi_14"] = _calc_rsi(closes)
         if intraday["vwap"] and intraday["close"]:
@@ -303,7 +316,7 @@ def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
                 "start": (datetime.strptime(prev_date, "%Y-%m-%d") - timedelta(days=30)).strftime("%Y-%m-%d"),
                 "end": prev_date,
                 "limit": 22,
-                "feed": "iex",
+                "feed": regular_feed(),
             },
             timeout=15,
         )
@@ -340,7 +353,7 @@ def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
                     hour=9, minute=30, second=0, microsecond=0, tzinfo=MARKET_TZ
                 ).isoformat(),
                 "limit": 30,
-                "feed": "iex",
+                "feed": regular_feed(),
             },
             timeout=15,
         )
