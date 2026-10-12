@@ -592,10 +592,14 @@ ANTHROPIC_API_KEY=
 GOOGLE_API_KEY=
 GROQ_API_KEY=
 DEEPSEEK_API_KEY=
+LLM_PROVIDER=OpenAI
+LLM_MODEL=gpt-6-luna
 
 # Optional Swing/Day fallback if trading_mode.json is absent
 TRADING_MODE=swing
 ```
+
+`run_analysis.py` uses `LLM_PROVIDER` and `LLM_MODEL` by default. Pass `--provider` or `--model` to override them for a run.
 
 ### Verify
 

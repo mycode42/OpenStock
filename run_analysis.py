@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -113,17 +114,18 @@ Examples:
     )
     
     # Model configuration
+    configured_provider = os.getenv("LLM_PROVIDER", "OpenAI").strip() or "OpenAI"
     parser.add_argument(
         "--model", 
         type=str, 
-        default="claude-opus-4-20250514",
-        help="Model to use (default: claude-opus-4-20250514)"
+        default=None,
+        help="Model to use (default: LLM_MODEL for the configured provider)"
     )
     parser.add_argument(
         "--provider",
         type=str,
-        default="Anthropic",
-        help="Model provider (default: Anthropic)"
+        default=configured_provider,
+        help=f"Model provider (default: LLM_PROVIDER or {configured_provider})"
     )
     parser.add_argument(
         "--analysts", 
@@ -144,6 +146,18 @@ Examples:
     )
     
     args = parser.parse_args()
+    model_provider = args.provider
+    if args.model:
+        model_name = args.model
+    elif model_provider.casefold() == configured_provider.casefold() and os.getenv("LLM_MODEL", "").strip():
+        model_name = os.getenv("LLM_MODEL", "").strip()
+    else:
+        provider_defaults = {
+            "openai": "gpt-4.1",
+            "anthropic": "claude-opus-4-20250514",
+        }
+        model_name = provider_defaults.get(model_provider.casefold()) or os.getenv("LLM_MODEL", "gpt-4.1").strip()
+
     mode = resolve_mode(cli_mode=args.mode)
     if mode == "auto":
         mode = "swing"
@@ -183,7 +197,7 @@ Examples:
             
         print(f"🔍 Analyzing {len(tickers_to_analyze)} ticker(s): {', '.join(tickers_to_analyze)}")
         print(f"🤖 Using analysts: {', '.join(selected_analysts)}")
-        print(f"🧠 Model: {args.model} ({args.provider})")
+        print(f"🧠 Model: {model_name} ({model_provider})")
         print(f"💼 Mode: {'LIVE TRADING' if args.execute else 'DRY RUN'}")
         print()
         
@@ -195,8 +209,8 @@ Examples:
             portfolio=portfolio,
             show_reasoning=args.show_reasoning,
             selected_analysts=selected_analysts,
-            model_name=args.model,
-            model_provider=args.provider,
+            model_name=model_name,
+            model_provider=model_provider,
         )
         
         decisions = result.get("decisions", {})
