@@ -87,6 +87,8 @@ def _multi_factor_current_targets(
         direction = state.get("desired_direction")
         if state.get("last_rebalance_period") != period or direction not in {"long", "short"}:
             continue
+        score = float(state.get("factor_score") or 0.0)
+        directional_score = abs(score) if direction == "short" else score
         output[ticker] = {
             "ticker": ticker,
             "strategy": "multi_factor",
@@ -94,6 +96,7 @@ def _multi_factor_current_targets(
             "direction": direction,
             "rank": state.get("factor_rank"),
             "score": state.get("factor_score"),
+            "strength": max(0.0, min(1.0, 0.5 + directional_score / 6)),
             "target_weight": config.max_position_pct,
             "stop_pct": config.hard_stop_pct,
             "risk_multiplier": config.risk_multiplier,

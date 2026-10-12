@@ -720,7 +720,11 @@ def scan(
         else:
             chosen = max(
                 options,
-                key=lambda item: (bool(item.get("software_protection")), item["rank_score"], item["strength"]),
+                key=lambda item: (
+                    bool(item.get("software_protection")),
+                    item["rank_score"],
+                    float(item.get("strength", 0.0) or 0.0),
+                ),
             )
         ticker_orders = pending_by_symbol.get(ticker, [])
         pending_entry = position_qty == 0 and any(

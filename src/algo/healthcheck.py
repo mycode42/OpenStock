@@ -38,6 +38,7 @@ WARMUP_PAUSE_REASONS = frozenset({
 EMPTY_EXTENDED_DATA_REASONS = WARMUP_PAUSE_REASONS | {
     "the Algo universe has no fresh quotes",
 }
+EXPECTED_OVERNIGHT_PAUSE = "overnight entries are disabled by configuration"
 
 
 def _problem(code: str, detail: str) -> dict[str, str]:
@@ -408,11 +409,22 @@ def build_report(
             scanned_this_window
             and _expected_empty_extended_data(window, portfolio, positions, open_orders, pause_reasons)
         )
+        expected_policy_pause = bool(
+            scanned_this_window
+            and scan_status == "ok"
+            and window.name == "overnight"
+            and pause_reasons
+            and all(reason == EXPECTED_OVERNIGHT_PAUSE for reason in pause_reasons)
+        )
         if (scan_age is None or scan_age > scan_limit) and startup_grace_passed:
             problems.append(_problem("scan_stale", f"Algo scan age exceeds {scan_limit}s in the {window.name} session"))
         if (startup_grace_passed or scanned_this_window) and scan_status in {"degraded", "error"} and not (expected_warmup or expected_idle_data):
             problems.append(_problem("scan_degraded", f"Last Algo scan status is {scan_status}"))
-        if (startup_grace_passed or scanned_this_window) and portfolio.get("entries_paused") and not (expected_warmup or expected_idle_data):
+        if (
+            (startup_grace_passed or scanned_this_window)
+            and portfolio.get("entries_paused")
+            and not (expected_warmup or expected_idle_data or expected_policy_pause)
+        ):
             detail = "; ".join(pause_reasons) or "entry pause has no recorded reason"
             problems.append(_problem("entries_paused", f"Algo entries are paused: {detail}"))
 
