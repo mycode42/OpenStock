@@ -75,12 +75,14 @@ def get_positions() -> list[dict]:
     return _get("positions")
 
 
-def place_market_sell(symbol: str, qty: float, reason: str, dry_run: bool) -> dict:
-    """Submit one verified position-reducing sell, or preview it."""
+def place_market_close(symbol: str, qty: float, reason: str, dry_run: bool) -> dict:
+    """Submit one verified sell/cover that reduces the held position."""
+    action = "sell" if qty > 0 else "cover"
+    verb = "sell" if action == "sell" else "cover"
     if dry_run:
-        msg = f"DRY-RUN: Would sell {qty} {symbol} — {reason}"
+        msg = f"DRY-RUN: Would {verb} {abs(qty)} {symbol} — {reason}"
         log.info(msg)
-        return {"status": "dry_run", "symbol": symbol, "qty": qty, "reason": reason}
+        return {"status": "dry_run", "symbol": symbol, "qty": abs(qty), "action": action, "reason": reason}
 
     from execute_trades import (
         _submit_broker_order, account_execution_lock, cancel_open_orders_for_symbol,
@@ -98,40 +100,41 @@ def place_market_sell(symbol: str, qty: float, reason: str, dry_run: bool) -> di
                 )
                 now = datetime.now(MARKET_TZ)
                 if schedule is None or not schedule.market_open(now) or schedule.flatten_due(now):
-                    return {"status": "failed", "symbol": symbol, "qty": qty,
-                            "reason": reason, "error": "Day stop sell requires an open session before the flatten deadline"}
+                    return {"status": "failed", "symbol": symbol, "qty": abs(qty), "action": action,
+                            "reason": reason, "error": "Day stop close requires an open session before the flatten deadline"}
             cancelled = cancel_open_orders_for_symbol(symbol, mode=_active_mode)
             if not cancelled.get("success"):
-                return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason,
-                        "error": cancelled.get("error")}
-            fresh = next((p for p in get_positions() if p.get("symbol") == symbol), None)
+                return {"status": "failed", "symbol": symbol, "qty": abs(qty), "action": action,
+                        "reason": reason, "error": cancelled.get("error")}
+            fresh = next((p for p in get_positions() if str(p.get("symbol", "")).upper() == symbol.upper()), None)
             held_qty = Decimal(str((fresh or {}).get("qty", 0)))
-            if held_qty <= 0:
-                return {"status": "already_flat", "symbol": symbol, "qty": 0, "reason": reason}
-            sell_qty = held_qty
-            if sell_qty <= 0:
-                return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason,
-                        "error": "No sellable position quantity remained"}
+            if held_qty == 0:
+                return {"status": "already_flat", "symbol": symbol, "qty": 0, "action": action, "reason": reason}
+            if (action == "sell" and held_qty < 0) or (action == "cover" and held_qty > 0):
+                return {"status": "failed", "symbol": symbol, "qty": abs(qty), "action": action,
+                        "reason": reason, "error": "Position direction changed before stop close; refusing the order"}
+            close_qty = abs(held_qty)
             event = reason.split(":", 1)[0].strip().lower()
-            identity = f"{_active_mode}:{datetime.now(MARKET_TZ).date()}:{symbol}:{sell_qty}:{event}"
+            identity = f"{_active_mode}:{datetime.now(MARKET_TZ).date()}:{symbol}:{action}:{close_qty}:{event}"
             client_order_id = f"stop-{hashlib.sha256(identity.encode()).hexdigest()[:20]}"
             order = {
                 "symbol": symbol,
-                "qty": format(sell_qty, "f"),
-                "side": "sell",
+                "qty": format(close_qty, "f"),
+                "side": "sell" if action == "sell" else "buy",
+                "position_intent": "sell_to_close" if action == "sell" else "buy_to_close",
                 "type": "market",
                 "time_in_force": "day",
                 "client_order_id": client_order_id,
             }
             result = _submit_broker_order(order, "market", mode=_active_mode)
             if not result.get("success"):
-                return {"status": "failed", "symbol": symbol, "qty": str(sell_qty),
-                        "reason": reason, "client_order_id": order["client_order_id"], **result}
-            log.info("Submitted %s %s sell for %s, order %s", sell_qty, symbol, reason, result["order_id"])
-            return {"status": "submitted", "symbol": symbol, "qty": str(sell_qty),
-                    "reason": reason, "client_order_id": order["client_order_id"], **result}
+                return {"status": "failed", "symbol": symbol, "qty": str(close_qty), "action": action,
+                        "reason": reason, "client_order_id": client_order_id, **result}
+            log.info("Submitted %s %s %s for %s, order %s", close_qty, symbol, verb, reason, result["order_id"])
+            return {"status": "submitted", "symbol": symbol, "qty": str(close_qty), "action": action,
+                    "reason": reason, "client_order_id": client_order_id, **result}
     except (requests.RequestException, ValueError, TimeoutError) as exc:
-        return {"status": "failed", "symbol": symbol, "qty": qty, "reason": reason, "error": str(exc)}
+        return {"status": "failed", "symbol": symbol, "qty": abs(qty), "action": action, "reason": reason, "error": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +159,27 @@ def get_intraday_high(symbol: str) -> float | None:
         return high if math.isfinite(high) and high > 0 else None
     except Exception as e:
         log.warning(f"Could not get intraday high for {symbol}: {e}")
+        return None
+
+
+def get_intraday_low(symbol: str) -> float | None:
+    """Fetch only today's New York session low for short trailing-stop checks."""
+    try:
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1d", interval="1m")
+        if hist.empty:
+            log.warning("Yahoo Finance returned no intraday bars for %s", symbol)
+            return None
+        index = hist.index.tz_convert(MARKET_TZ)
+        today = datetime.now(MARKET_TZ).date()
+        current = hist.loc[index.date == today]
+        if current.empty:
+            log.warning("Yahoo Finance returned no bars from today's session for %s", symbol)
+            return None
+        low = float(current["Low"].min())
+        return low if math.isfinite(low) and low > 0 else None
+    except Exception as e:
+        log.warning("Could not get intraday low for %s: %s", symbol, e)
         return None
 
 
@@ -191,34 +215,41 @@ def check_hard_stop(position: dict, stop_loss_pct: float) -> tuple[bool, str]:
         return False, ""
 
     pct_change = (current_price - avg_entry) / avg_entry
-    if pct_change <= -stop_loss_pct:
+    adverse_move = pct_change if float(position.get("qty", 0) or 0) < 0 else -pct_change
+    if adverse_move >= stop_loss_pct:
         return True, (
-            f"Hard stop triggered: {pct_change*100:.1f}% from entry "
+            f"Hard stop triggered: {adverse_move*100:.1f}% adverse move from entry "
             f"(entry ${avg_entry:.2f}, current ${current_price:.2f}, "
-            f"threshold -{stop_loss_pct*100:.1f}%)"
+            f"threshold {stop_loss_pct*100:.1f}%)"
         )
     return False, ""
 
 
-def check_trailing_stop(position: dict, intraday_high: float | None, trailing_stop_pct: float) -> tuple[bool, str]:
+def check_trailing_stop(position: dict, intraday_extreme: float | None, trailing_stop_pct: float) -> tuple[bool, str]:
     """
-    Check if position has breached the trailing stop from today's intraday high.
+    Check a long against today's high or a short against today's low.
 
     Returns (triggered, reason_string).
     """
-    if intraday_high is None:
+    if intraday_extreme is None:
         return False, ""
 
     current_price = float(position.get("current_price", 0))
-    if intraday_high <= 0 or current_price <= 0:
+    if intraday_extreme <= 0 or current_price <= 0:
         return False, ""
 
-    drop_from_high = (current_price - intraday_high) / intraday_high
-    if drop_from_high <= -trailing_stop_pct:
+    is_short = float(position.get("qty", 0) or 0) < 0
+    adverse_move = (
+        (current_price - intraday_extreme) / intraday_extreme
+        if is_short else
+        (intraday_extreme - current_price) / intraday_extreme
+    )
+    if adverse_move >= trailing_stop_pct:
+        extreme_label = "low" if is_short else "high"
         return True, (
-            f"Trailing stop triggered: {drop_from_high*100:.1f}% from today's high "
-            f"(high ${intraday_high:.2f}, current ${current_price:.2f}, "
-            f"threshold -{trailing_stop_pct*100:.1f}%)"
+            f"Trailing stop triggered: {adverse_move*100:.1f}% adverse move from today's {extreme_label} "
+            f"(${intraday_extreme:.2f}, current ${current_price:.2f}, "
+            f"threshold {trailing_stop_pct*100:.1f}%)"
         )
     return False, ""
 
@@ -311,28 +342,29 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
 
     actions = []
     warnings = []
-    long_positions = [p for p in positions if float(p.get("qty", 0)) > 0]
+    open_positions = [p for p in positions if float(p.get("qty", 0)) != 0]
 
     # ── Per-position stop checks ─────────────────────────────────────────────
     if calendar_error:
         warnings.append(calendar_error)
-    for pos in long_positions:
+    for pos in open_positions:
         symbol = pos["symbol"]
         qty = float(pos["qty"])
+        is_short = qty < 0
 
-        intraday_high = get_intraday_high(symbol)
-        if intraday_high is None:
+        intraday_extreme = get_intraday_low(symbol) if is_short else get_intraday_high(symbol)
+        if intraday_extreme is None:
             warnings.append(f"{symbol}: trailing stop check unavailable (intraday price data missing)")
 
         hard_triggered, hard_reason = check_hard_stop(pos, stop_loss_pct)
         if hard_triggered:
-            result = place_market_sell(symbol, qty, hard_reason, dry_run)
+            result = place_market_close(symbol, qty, hard_reason, dry_run)
             actions.append({**result, "stop_type": "hard_stop"})
             continue
 
-        trail_triggered, trail_reason = check_trailing_stop(pos, intraday_high, trailing_stop_pct)
+        trail_triggered, trail_reason = check_trailing_stop(pos, intraday_extreme, trailing_stop_pct)
         if trail_triggered:
-            result = place_market_sell(symbol, qty, trail_reason, dry_run)
+            result = place_market_close(symbol, qty, trail_reason, dry_run)
             actions.append({**result, "stop_type": "trailing_stop"})
             continue
 
@@ -343,25 +375,32 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
 
         if avg_entry > 0 and current_price > 0:
             pct_from_entry = (current_price - avg_entry) / avg_entry
-            if pct_from_entry <= -(stop_loss_pct - warn_buffer):
+            adverse_move = pct_from_entry if is_short else -pct_from_entry
+            if adverse_move >= stop_loss_pct - warn_buffer:
                 warnings.append(
                     f"⚠️  {symbol}: approaching hard stop at "
-                    f"{pct_from_entry*100:.1f}% from entry (stop at -{stop_loss_pct*100:.1f}%)"
+                    f"{adverse_move*100:.1f}% adverse from entry (stop at {stop_loss_pct*100:.1f}%)"
                 )
 
-        if intraday_high and intraday_high > 0 and current_price > 0:
+        if intraday_extreme and intraday_extreme > 0 and current_price > 0:
             trail_warn = trailing_stop_pct * 0.2
-            pct_from_high = (current_price - intraday_high) / intraday_high
-            if pct_from_high <= -(trailing_stop_pct - trail_warn):
+            trail_adverse_move = (
+                (current_price - intraday_extreme) / intraday_extreme
+                if is_short else
+                (intraday_extreme - current_price) / intraday_extreme
+            )
+            if trail_adverse_move >= trailing_stop_pct - trail_warn:
+                extreme_name = "low" if is_short else "high"
                 warnings.append(
                     f"⚠️  {symbol}: approaching trailing stop at "
-                    f"{pct_from_high*100:.1f}% from today's high (stop at -{trailing_stop_pct*100:.1f}%)"
+                    f"{trail_adverse_move*100:.1f}% adverse from today's {extreme_name} "
+                    f"(stop at {trailing_stop_pct*100:.1f}%)"
                 )
 
     spy_return = get_spy_daily_return()
     _print_summary(
         equity=equity, cash=cash, daily_pnl=daily_pnl, daily_pnl_pct=daily_pnl_pct,
-        spy_return=spy_return, positions=long_positions, actions=actions, warnings=warnings,
+        spy_return=spy_return, positions=open_positions, actions=actions, warnings=warnings,
         dry_run=dry_run, mode=mode, stop_loss_pct=stop_loss_pct, trailing_stop_pct=trailing_stop_pct,
     )
 
@@ -372,7 +411,7 @@ def run_monitor(dry_run: bool = False, mode: str = None) -> dict:
         "equity": equity,
         "daily_pnl_pct": round(daily_pnl_pct * 100, 2),
         "spy_return_pct": round(spy_return * 100, 2) if spy_return is not None else None,
-        "positions_checked": len(long_positions),
+        "positions_checked": len(open_positions),
         "stops_triggered": len(actions),
         "status": "failed" if calendar_error or any(a.get("status") == "failed" for a in actions) else "ok",
         "success": not calendar_error and all(a.get("status") != "failed" for a in actions),
@@ -424,7 +463,7 @@ def _print_summary(
     print()
 
     if positions:
-        print(f"  {'Symbol':<8} {'Qty':>5} {'Price':>9} {'Entry':>9} {'From Entry':>11} {'Value':>12} {'Intraday Hi':>13}")
+        print(f"  {'Symbol':<8} {'Qty':>5} {'Price':>9} {'Entry':>9} {'From Entry':>11} {'Value':>12} {'Intraday Ext.':>13}")
         print(f"  {'-'*71}")
         warn_pct = stop_loss_pct * 0.8  # flag approaching threshold
         for pos in sorted(positions, key=lambda x: float(x.get("market_value", 0)), reverse=True):
@@ -434,10 +473,10 @@ def _print_summary(
             entry = float(pos.get("avg_entry_price", 0))
             value = float(pos.get("market_value", 0))
             plpc = float(pos.get("unrealized_plpc", 0)) * 100
-            intra_high = get_intraday_high(sym)
-            high_str = f"${intra_high:>9.2f}" if intra_high else "     N/A"
+            intraday_extreme = get_intraday_low(sym) if qty < 0 else get_intraday_high(sym)
+            extreme_str = f"${intraday_extreme:>9.2f}" if intraday_extreme else "     N/A"
             flag = " 🔴" if plpc / 100 <= -stop_loss_pct else (" ⚠️" if plpc / 100 <= -warn_pct else "")
-            print(f"  {sym:<8} {qty:>5} ${price:>8.2f} ${entry:>8.2f} {plpc:>+10.1f}% ${value:>10,.0f} {high_str}{flag}")
+            print(f"  {sym:<8} {qty:>5} ${price:>8.2f} ${entry:>8.2f} {plpc:>+10.1f}% ${value:>10,.0f} {extreme_str}{flag}")
     print()
 
     if actions:

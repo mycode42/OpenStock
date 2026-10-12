@@ -408,12 +408,14 @@ def get_portfolio_state(mode: str = None) -> dict:
       daily_pnl_pct, weekly_pnl_pct,
       positions (symbol → position dict),
       sector_alloc (sector → $ value),
-      trade_count_today (all nonterminal buy orders),
-      entry_count_today (new-position buys for Algo; legacy buy count otherwise),
+      trade_count_today (all nonterminal long and short entry orders),
+      entry_count_today (new-position entries for Algo; long/short entries otherwise),
       open_position_count.
     """
     if mode is None:
         mode = os.environ.get("TRADING_MODE", "swing")
+    risk = get_mode_config(mode)["risk"]
+    allow_short_positions = bool(risk.get("allow_short_positions", False))
     ticker_sector, _, _, _ = _get_universe_maps(mode)
 
     # A risk snapshot must belong to the configured, active paper account.
@@ -472,9 +474,9 @@ def get_portfolio_state(mode: str = None) -> dict:
         # The same paginated New York session query is required for all
         # accounts. A 100-order first page can omit earlier Day entries.
         orders = _get_algo_orders_since(session_start, mode=mode)
-        buy_orders_today = [
+        entry_orders_today = [
             o for o in orders
-            if str(o.get("side", "")).lower() == "buy"
+            if str(o.get("side", "")).lower() in {"buy", "sell"}
             and (
                 _is_in_algo_session(o.get("submitted_at", ""), session_date)
                 if is_algo else _is_market_session_date(o.get("submitted_at", ""), session_date)
@@ -483,8 +485,16 @@ def get_portfolio_state(mode: str = None) -> dict:
                 o.get("status") not in ("canceled", "expired", "rejected")
                 or float(o.get("filled_qty") or 0) > 0
             )
+            and (
+                str(o.get("side", "")).lower() == "buy"
+                or str(o.get("position_intent", "")).lower() == "sell_to_open"
+                or (
+                    str(o.get("position_intent", "")).lower() not in {"sell_to_close", "buy_to_close"}
+                    and float((positions.get(str(o.get("symbol") or "").upper()) or {}).get("qty", 0) or 0) <= 0
+                )
+            )
         ]
-        trade_count_today = len(buy_orders_today)
+        trade_count_today = len(entry_orders_today)
         if is_algo:
             fills = _get_algo_fill_activities(session_start, mode=mode)
             entry_count_today = _count_algo_new_entries_today(
@@ -511,7 +521,7 @@ def get_portfolio_state(mode: str = None) -> dict:
         pending_buy_value_by_ticker = _pending_buy_exposure(
             open_orders, positions,
         )
-        if mode == "algo":
+        if allow_short_positions:
             pending_short_value_by_ticker = _pending_short_exposure(open_orders, positions)
         for symbol, value in pending_buy_value_by_ticker.items():
             sector = ticker_sector.get(symbol, "other")
@@ -520,11 +530,11 @@ def get_portfolio_state(mode: str = None) -> dict:
             sector = ticker_sector.get(symbol, "other")
             sector_alloc[sector] = sector_alloc.get(sector, 0.0) + value
     except Exception as exc:
-        log.warning("Could not value %s pending buy orders: %s", mode, exc)
+        log.warning("Could not value %s pending entry orders: %s", mode, exc)
         pending_exposure_available = False
-        pending_exposure_error = f"Could not value {mode} open buy orders"
+        pending_exposure_error = f"Could not value {mode} open buy/short orders"
 
-    if mode == "algo":
+    if allow_short_positions:
         try:
             easy_to_borrow_symbols = _easy_to_borrow_symbols(mode)
             shortability_available = True
@@ -557,6 +567,7 @@ def get_portfolio_state(mode: str = None) -> dict:
 
     return {
         "account_id": broker_account_id,
+        "account_shorting_enabled": bool(account.get("shorting_enabled", False)),
         "equity": equity,
         "daily_baseline_equity": daily_baseline_equity,
         "daily_pnl_dollars": daily_pnl_dollars,
@@ -888,13 +899,15 @@ def validate_trade(
         return ValidationResult(approved=False, reason=f"Unknown action '{action}'", rule="unknown_action")
 
     if action == "short":
-        if mode != "algo" or not risk.get("allow_short_positions", False):
+        if not risk.get("allow_short_positions", False):
             return ValidationResult(False, "New short entries are disabled for this mode.", "short_disabled")
         if portfolio_state is None:
             try:
                 portfolio_state = get_portfolio_state(mode=mode)
             except Exception as exc:
                 return ValidationResult(False, f"Could not verify shortability and portfolio state: {exc}", "portfolio_fetch_failed")
+        if portfolio_state.get("account_shorting_enabled") is False:
+            return ValidationResult(False, "Alpaca account is not enabled for short selling.", "account_shorting_disabled")
         if not portfolio_state.get("shortability_available", False):
             return ValidationResult(False, "Alpaca shortability data is unavailable; refusing the short.", "shortability_unavailable")
         if ticker.upper() not in set(portfolio_state.get("easy_to_borrow_symbols") or []):
@@ -956,7 +969,7 @@ def validate_trade(
 
     if not portfolio_state.get("pending_exposure_available", True):
         return ValidationResult(
-            False, "Open buy exposure is unavailable; new entries are blocked.",
+            False, "Open buy/short exposure is unavailable; new entries are blocked.",
             "pending_exposure_unavailable",
         )
 
@@ -1110,7 +1123,7 @@ def validate_trade(
             if symbol not in portfolio_state["positions"]
         )
         if is_new_position and ticker.upper() not in short_positions and len(short_positions) >= int(risk.get("max_short_positions", 0)):
-            return ValidationResult(False, "Algo maximum short position count reached.", "max_short_positions")
+            return ValidationResult(False, "Maximum short position count reached.", "max_short_positions")
         short_exposure = sum(
             abs(float((position or {}).get("market_value", 0) or 0))
             for position in portfolio_state["positions"].values()

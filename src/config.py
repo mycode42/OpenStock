@@ -63,6 +63,9 @@ MODES = {
             "max_tactical_pct": 0.03,       # 3% cap on high-risk / tactical bucket
             "flatten_eod": False,           # hold overnight
             "allow_leveraged_etfs": False,
+            "allow_short_positions": True,
+            "max_short_positions": 5,
+            "max_short_exposure_pct": 0.20,
         },
     },
     "day": {
@@ -104,6 +107,9 @@ MODES = {
             "flatten_lead_minutes": 15,    # move earlier on early-close sessions
             "entry_cutoff_minutes": 15,    # leave time to cancel and verify exits
             "allow_leveraged_etfs": True,   # OK intraday only
+            "allow_short_positions": True,
+            "max_short_positions": 5,
+            "max_short_exposure_pct": 0.20,
         },
     },
 }

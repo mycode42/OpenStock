@@ -278,6 +278,7 @@ def _submit_flatten_order(headers: dict, position: dict) -> dict:
         "symbol": symbol,
         "qty": str(abs(quantity)),
         "side": "sell" if quantity > 0 else "buy",
+        "position_intent": "sell_to_close" if quantity > 0 else "buy_to_close",
         "type": "market",
         "time_in_force": "day",
         "client_order_id": client_order_id,
@@ -693,12 +694,12 @@ def place_order(
         return {"success": False, "error": f"Unsupported trade action: {action}"}
     if order_type not in {"market", "limit", "bracket", "stop", "oco", "trailing_stop"}:
         return {"success": False, "error": f"Unsupported order type: {order_type}"}
-    if action == "short" and (_active_mode != "algo" or not get_mode_config("algo")["risk"].get("allow_short_positions")):
+    if action == "short" and not get_mode_config(_active_mode)["risk"].get("allow_short_positions", False):
         return {"success": False, "error": "New short entries are disabled for this mode"}
     if action == "short" and (stop_price is None or take_profit is None):
-        return {"success": False, "error": "Algo short entries require attached stop-loss and take-profit prices"}
+        return {"success": False, "error": "Short entries require attached stop-loss and take-profit prices"}
     if action == "short" and order_type not in {"market", "limit", "bracket"}:
-        return {"success": False, "error": "Algo short entries require a bracket-capable entry order"}
+        return {"success": False, "error": "Short entries require a bracket-capable entry order"}
     if action == "cover" and order_type not in {"market", "limit", "oco", "stop"}:
         return {"success": False, "error": "Cover exits support market, limit, stop, or OCO orders"}
     if order_type == "oco" and action not in {"sell", "cover"}:
@@ -718,7 +719,7 @@ def place_order(
         return {"success": False, "error": "Stop and trailing-stop orders cannot include bracket or limit fields"}
     if order_type == "oco" and (limit_price is not None or trail_percent is not None):
         return {"success": False, "error": "OCO take-profit and stop prices must use their dedicated fields"}
-    if _active_mode == "day" and action == "buy":
+    if _active_mode == "day" and action in {"buy", "short"}:
         try:
             risk = get_mode_config("day")["risk"]
             schedule = get_day_schedule(
@@ -1268,6 +1269,22 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                         ref_price = 0.0
                         log.warning("No reference price for %s: %s", ticker, exc)
             if action == "short":
+                # Require broker-side protection for every short. For market
+                # entries, derive missing levels from the mode's configured
+                # hard stop and the shared target multiple. Limit entries need
+                # explicit levels because the fill may differ from the mark.
+                auto_bracket = mode in {"swing", "day"} and (
+                    order_type == "market"
+                    or (order_type == "bracket" and limit_price is None)
+                )
+                if auto_bracket and ref_price > 0:
+                    if stop_price is None:
+                        stop_price = round(ref_price * (1 + stop_loss_pct), 2)
+                    if take_profit is None:
+                        stop_dist = abs(ref_price - float(stop_price))
+                        take_profit = round(
+                            ref_price - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2,
+                        )
                 try:
                     stop_value = float(stop_price)
                     target_value = float(take_profit)
@@ -1333,26 +1350,18 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             })
             continue
 
-        # ── Auto-calculate bracket for swing mode (mandatory stops) ──────────
-        # In day mode: brackets are not required — stops managed intraday / via EOD flatten.
-        # If the trade JSON explicitly includes stop_price, it will still be used.
-        if mode == "swing" and action in ("buy", "short") and order_type not in ("limit", "stop", "trailing_stop", "oco"):
+        # ── Auto-calculate swing long brackets (mandatory stops) ──────────────
+        if mode == "swing" and action == "buy" and order_type not in ("limit", "stop", "trailing_stop", "oco"):
             pos = positions.get(ticker, {})
             ref = entry_price or limit_price or float(pos.get("current_price", 0))
             if ref > 0:
                 if stop_price is None:
-                    if action == "buy":
-                        stop_price = round(ref * (1 - stop_loss_pct), 2)
-                    else:  # short
-                        stop_price = round(ref * (1 + stop_loss_pct), 2)
+                    stop_price = round(ref * (1 - stop_loss_pct), 2)
                 if take_profit is None and stop_price is not None:
                     stop_dist = abs(ref - float(stop_price))
-                    if action == "buy":
-                        take_profit = round(ref + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
-                    else:
-                        take_profit = round(ref - stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
+                    take_profit = round(ref + stop_dist * DEFAULT_TARGET_MULTIPLIER, 2)
 
-            if action in {"buy", "short"} and stop_price is not None:
+            if stop_price is not None:
                 log.info(
                     f"{action.upper()} {ticker}: bracket order with stop=${stop_price:.2f} "
                     f"target=${take_profit:.2f}"
@@ -1440,14 +1449,15 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                         "strategy": strategy, "client_order_id": client_order_id,
                     })
                     continue
-            # Pass stop_pct only in swing mode so place_order() can auto-calc if needed
+            # Short brackets are populated from the fresh quote above. Swing
+            # longs may use place_order()'s stop_pct fallback.
             result = place_order(
                 ticker, action, qty,
                 order_type=order_type,
                 stop_price=stop_price, take_profit=take_profit,
                 limit_price=limit_price, trail_percent=trail_percent,
                 entry_price=entry_price,
-                stop_pct=stop_loss_pct if mode == "swing" else None,
+                stop_pct=stop_loss_pct if mode == "swing" and action == "buy" else None,
                 client_order_id=client_order_id,
                 extended_hours=extended_hours,
             )
