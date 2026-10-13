@@ -495,23 +495,21 @@ def test_monitor_reports_incomplete_flatten_before_optional_analytics(monkeypatc
     assert not result["eod_flatten"]
 
 def test_monitor_ignores_yesterday_intraday_high(monkeypatch):
-    import pandas as pd
-
-    now = datetime.now(ET)
-    yesterday = now - timedelta(days=1)
-    history = pd.DataFrame(
-        {"High": [200.0, 105.0]},
-        index=pd.DatetimeIndex([
-            yesterday.replace(hour=15, minute=0),
-            now.replace(hour=9, minute=31),
-        ]),
-    )
-    monkeypatch.setattr(portfolio_monitor.yf, "Ticker", lambda symbol: SimpleNamespace(
-        history=lambda **kwargs: history,
-    ))
+    now = datetime(2026, 10, 13, 9, 31, 5, tzinfo=ET)
+    opened = now.replace(minute=30, second=0)
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+    monkeypatch.setattr(portfolio_monitor, "datetime", Clock)
+    monkeypatch.setattr(portfolio_monitor, "get_day_schedule", lambda **kwargs: SimpleNamespace(
+        trading_date=now.date(), opens_at=opened, closes_at=now.replace(hour=16,minute=0)))
+    bar = {"t": opened.isoformat(), "o": 104, "h": 105, "l": 103, "c": 104,
+           "v": 100, "n": 10, "vw": 104}
+    body = {"symbol": "AAPL", "bars": [bar], "next_page_token": None}
+    monkeypatch.setattr(portfolio_monitor, "_stop_data_get", lambda *args: body)
     assert portfolio_monitor.get_intraday_high("AAPL") == 105.0
-
-    history = history.iloc[:1]
+    body["bars"] = [{**bar, "t": (opened-timedelta(days=1)).isoformat()}]
     assert portfolio_monitor.get_intraday_high("AAPL") is None
 
 def test_stop_monitor_uses_idempotent_executor_submission(monkeypatch):
@@ -531,8 +529,8 @@ def test_stop_monitor_uses_idempotent_executor_submission(monkeypatch):
 
     monkeypatch.setattr(execute_trades, "_submit_broker_order", submit)
 
-    result = portfolio_monitor.place_market_sell("AAPL", 2, "hard stop", dry_run=False)
-    replay = portfolio_monitor.place_market_sell("AAPL", 2, "hard stop", dry_run=False)
+    result = portfolio_monitor.place_market_close("AAPL", 2, "hard stop", dry_run=False)
+    replay = portfolio_monitor.place_market_close("AAPL", 2, "hard stop", dry_run=False)
 
     assert result["status"] == "submitted"
     assert replay["status"] == "submitted"
@@ -552,7 +550,7 @@ def test_day_stop_monitor_does_not_cancel_after_close(monkeypatch):
         execute_trades, "cancel_open_orders_for_symbol",
         lambda *args, **kwargs: pytest.fail("Day stop canceled after close"),
     )
-    result = portfolio_monitor.place_market_sell("AAPL", 2, "hard stop", dry_run=False)
+    result = portfolio_monitor.place_market_close("AAPL", 2, "hard stop", dry_run=False)
     assert result["status"] == "failed"
 
 def test_executor_keeps_submission_separate_from_broker_fill(tmp_path, monkeypatch, capsys):

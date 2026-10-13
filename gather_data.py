@@ -427,7 +427,7 @@ def main():
     prev_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     payload = {
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": args.mode,
         "targets": {
             "phase_1": {"amount": 155000, "deadline": "2026-03-22", "description": "Liquidate legacy, deploy into universe"},
@@ -481,6 +481,10 @@ def main():
             if anchor not in tickers:
                 tickers.append(anchor)
 
+    # Keep the scanner/selection universe explicit in the artifact. SPY and QQQ
+    # are context anchors, not Day setup candidates.
+    payload["tickers"] = [ticker for ticker in tickers if ticker not in ("SPY", "QQQ")]
+
     # Gather data
     print(f"🔍 Gathering {args.mode} data for {len(tickers)} tickers...", file=sys.stderr)
     payload["ticker_data"] = {}
@@ -495,6 +499,28 @@ def main():
     if args.mode == "swing":
         print("📊 Fetching SPY benchmark...", file=sys.stderr)
         payload["spy_benchmark"] = get_spy_benchmark()
+
+    # Timestamp the completed snapshot and measure every latest bar at the same
+    # capture point so the consumer can enforce one consistent freshness gate.
+    captured_at = datetime.now(timezone.utc)
+    payload["generated_at"] = captured_at.isoformat()
+    if args.mode == "day":
+        for record in payload["ticker_data"].values():
+            intraday = record.get("intraday") if isinstance(record, dict) else None
+            if not isinstance(intraday, dict):
+                continue
+            last_bar_timestamp = intraday.get("last_bar_timestamp")
+            if not last_bar_timestamp:
+                intraday["last_bar_age_minutes"] = None
+                continue
+            try:
+                bar_at = datetime.fromisoformat(str(last_bar_timestamp).replace("Z", "+00:00"))
+                if bar_at.tzinfo is None or bar_at.utcoffset() is None:
+                    bar_at = bar_at.replace(tzinfo=timezone.utc)
+                age_minutes = (captured_at - bar_at.astimezone(timezone.utc)).total_seconds() / 60
+                intraday["last_bar_age_minutes"] = round(age_minutes, 2) if age_minutes >= 0 else None
+            except (TypeError, ValueError):
+                intraday["last_bar_age_minutes"] = None
 
     # Output
     output = json.dumps(payload, indent=2, default=str)
