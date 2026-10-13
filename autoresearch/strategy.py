@@ -1,6 +1,6 @@
-# EXPERIMENT: earlier_entry_cutoff_1525
-# HYPOTHESIS: Avoiding late entries leaves more time for intraday setups to develop before positions are flattened, which may reduce low-quality trades.
-# CHANGE: Moved MARKET_CLOSE_CUTOFF from 15:35 to 15:25
+# EXPERIMENT: lower_volume_confirm_threshold
+# HYPOTHESIS: Giving moderately elevated volume a stronger confirmation score may help otherwise-qualified signals clear the confidence cutoff and capture more intraday opportunities.
+# CHANGE: Lowered VOLUME_CONFIRM_RATIO from 1.30 to 1.15
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,12 +14,13 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "earlier_entry_cutoff_1525"
+EXPERIMENT_NAME = "lower_volume_confirm_threshold"
 EXPERIMENT_HYPOTHESIS = (
-    "Avoiding late entries leaves more time for intraday setups to develop "
-    "before positions are flattened, which may reduce low-quality trades."
+    "Giving moderately elevated volume a stronger confirmation score may help "
+    "otherwise-qualified signals clear the confidence cutoff and capture more "
+    "intraday opportunities."
 )
-EXPERIMENT_CHANGE = "Moved MARKET_CLOSE_CUTOFF from 15:35 to 15:25"
+EXPERIMENT_CHANGE = "Lowered VOLUME_CONFIRM_RATIO from 1.30 to 1.15"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -32,7 +33,7 @@ RSI_NEUTRAL_HIGH = 53
 
 VWAP_NEAR_BAND_PCT = 0.90
 VWAP_EXTENDED_PCT = 1.50
-VOLUME_CONFIRM_RATIO = 1.30
+VOLUME_CONFIRM_RATIO = 1.15
 VOLUME_STRONG_RATIO = 2.50
 
 STOP_PCT = 0.0105
