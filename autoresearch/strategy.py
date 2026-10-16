@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_volume_confirm_threshold
-# HYPOTHESIS: Giving moderately elevated volume a stronger confirmation score may help otherwise-qualified signals clear the confidence cutoff and capture more intraday opportunities.
-# CHANGE: Lowered VOLUME_CONFIRM_RATIO from 1.30 to 1.15
+# EXPERIMENT: lower_day_target
+# HYPOTHESIS: A moderately closer profit target may let more winning intraday trades realize gains before the day-end flatten, improving win rate and risk-adjusted returns while retaining a favorable reward-to-risk ratio.
+# CHANGE: Lowered TARGET_MULTIPLIER from 3.8 to 3.2
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,13 +14,13 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "lower_volume_confirm_threshold"
+EXPERIMENT_NAME = "lower_day_target"
 EXPERIMENT_HYPOTHESIS = (
-    "Giving moderately elevated volume a stronger confirmation score may help "
-    "otherwise-qualified signals clear the confidence cutoff and capture more "
-    "intraday opportunities."
+    "A moderately closer profit target may let more winning intraday trades "
+    "realize gains before the day-end flatten, improving win rate and "
+    "risk-adjusted returns while retaining a favorable reward-to-risk ratio."
 )
-EXPERIMENT_CHANGE = "Lowered VOLUME_CONFIRM_RATIO from 1.30 to 1.15"
+EXPERIMENT_CHANGE = "Lowered TARGET_MULTIPLIER from 3.8 to 3.2"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -37,7 +37,7 @@ VOLUME_CONFIRM_RATIO = 1.15
 VOLUME_STRONG_RATIO = 2.50
 
 STOP_PCT = 0.0105
-TARGET_MULTIPLIER = 3.8
+TARGET_MULTIPLIER = 3.2
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 54.0
 
