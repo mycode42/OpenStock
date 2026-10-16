@@ -1,6 +1,6 @@
-# EXPERIMENT: lower_day_target
-# HYPOTHESIS: A moderately closer profit target may let more winning intraday trades realize gains before the day-end flatten, improving win rate and risk-adjusted returns while retaining a favorable reward-to-risk ratio.
-# CHANGE: Lowered TARGET_MULTIPLIER from 3.8 to 3.2
+# EXPERIMENT: moderate_day_target
+# HYPOTHESIS: The best result at a 3.2 target, and weaker results from both wider and closer targets, suggest a moderate target may balance realized wins with reward per trade.
+# CHANGE: Raised TARGET_MULTIPLIER from 3.2 to 3.4
 
 """
 Pure-Python deterministic trading strategy.
@@ -14,13 +14,13 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 
-EXPERIMENT_NAME = "lower_day_target"
+EXPERIMENT_NAME = "moderate_day_target"
 EXPERIMENT_HYPOTHESIS = (
-    "A moderately closer profit target may let more winning intraday trades "
-    "realize gains before the day-end flatten, improving win rate and "
-    "risk-adjusted returns while retaining a favorable reward-to-risk ratio."
+    "The best result at a 3.2 target, and weaker results from both wider and "
+    "closer targets, suggest a moderate target may balance realized wins with "
+    "reward per trade."
 )
-EXPERIMENT_CHANGE = "Lowered TARGET_MULTIPLIER from 3.8 to 3.2"
+EXPERIMENT_CHANGE = "Raised TARGET_MULTIPLIER from 3.2 to 3.4"
 
 RSI_PERIOD = 16
 RSI_OVERSOLD = 25
@@ -37,7 +37,7 @@ VOLUME_CONFIRM_RATIO = 1.15
 VOLUME_STRONG_RATIO = 2.50
 
 STOP_PCT = 0.0105
-TARGET_MULTIPLIER = 3.2
+TARGET_MULTIPLIER = 3.4
 MAX_POSITION_SIZE_PCT = 0.15
 MIN_CONFIDENCE = 54.0
 
