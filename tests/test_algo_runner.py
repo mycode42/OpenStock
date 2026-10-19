@@ -9,6 +9,7 @@ import requests
 from src.config import ALGO_MODE_CONFIG, get_mode_config
 from src.algo.strategies import runner, universe as strategy_universe
 from src.algo.strategies.signals import Signal
+from src.algo.strategies.runner.data import fetch_latest_quotes
 
 
 ET = ZoneInfo("America/New_York")
@@ -36,6 +37,46 @@ def _mock_common(monkeypatch, *, positions=None, orders=None):
         runner, "_current_portfolio",
         lambda mode: ({"equity": "100000"}, positions or {}, orders or []),
     )
+
+
+def test_latest_quote_fetch_diagnostics_distinguish_missing_and_invalid():
+    diagnostics = {}
+    payload = {"quotes": {
+        "AAPL": {"bp": 99.9, "ap": 100.1, "t": "2026-10-08T01:00:00Z"},
+        "MSFT": {"bp": 0, "ap": 0, "t": "2026-10-08T01:00:00Z"},
+        "TSLA": {"bp": 100, "ap": 101},
+        "NVDA": None,
+        "AMD": ["malformed"],
+    }}
+
+    quotes = fetch_latest_quotes(
+        ["AAPL", "MSFT", "TSLA", "NVDA", "AMD"],
+        mode="algo", feed="boats", diagnostics=diagnostics,
+        request_fn=lambda endpoint, *, mode, params: payload,
+    )
+
+    assert set(quotes) == {"AAPL"}
+    assert diagnostics["AAPL"]["status"] == "usable"
+    assert diagnostics["MSFT"]["status"] == "invalid_bid_ask"
+    assert diagnostics["TSLA"]["status"] == "invalid_timestamp"
+    assert diagnostics["NVDA"]["status"] == "missing"
+    assert diagnostics["AMD"]["status"] == "invalid_quote"
+    assert diagnostics["AAPL"]["quote_timestamp"] == "2026-10-08T01:00:00+00:00"
+    assert not ({"price", "bid", "ask"} & diagnostics["AAPL"].keys())
+
+    failed_diagnostics = {}
+    errors = []
+    quotes = fetch_latest_quotes(
+        ["AAPL", "MSFT"], mode="algo", feed="boats",
+        errors=errors, diagnostics=failed_diagnostics,
+        request_fn=lambda *args, **kwargs: (_ for _ in ()).throw(requests.Timeout()),
+    )
+    assert quotes == {}
+    assert failed_diagnostics == {
+        "AAPL": {"status": "request_error"},
+        "MSFT": {"status": "request_error"},
+    }
+    assert errors == ["latest quotes boats: Timeout: "]
 
 
 def test_swing_and_day_use_their_fixed_configured_universes():
@@ -135,7 +176,7 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
             return {"AAPL": [{"t": "2026-10-08T00:55:00Z", "c": 100, "h": 101, "l": 99, "v": 1000}]}
         return {"SPY": [{"t": "2026-10-07T20:00:00Z", "c": 100}]}
 
-    def fetch_quotes(symbols, *, mode, feed, errors=None):
+    def fetch_quotes(symbols, *, mode, feed, errors=None, diagnostics=None):
         quote_feeds.append(feed)
         return {"AAPL": _quote(100)}
 
@@ -192,7 +233,7 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
     )
     monkeypatch.setattr(
         runner, "_fetch_latest_quotes",
-        lambda symbols, *, mode, feed, errors=None: {"AAPL": _quote(98)},
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(98)},
     )
     states = {"trend_following": {"AAPL": {
         "phase": "open", "stop_price": 97.95, "take_profit": 105.0,
@@ -218,7 +259,7 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
     assert result["signals"][0]["software_protection"] is True
 
 
-def test_extended_hours_exit_keeps_broker_stop_in_place(monkeypatch):
+def test_extended_hours_software_exit_uses_limit_with_active_broker_bracket(monkeypatch):
     position = {"AAPL": {"symbol": "AAPL", "qty": "2"}}
     bracket_stop = [{
         "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
@@ -231,7 +272,7 @@ def test_extended_hours_exit_keeps_broker_stop_in_place(monkeypatch):
     )
     monkeypatch.setattr(
         runner, "_fetch_latest_quotes",
-        lambda symbols, *, mode, feed, errors=None: {"AAPL": _quote(98)},
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(98)},
     )
     states = {"trend_following": {"AAPL": {
         "phase": "open", "stop_price": 97.95, "take_profit": 105.0,
@@ -243,8 +284,100 @@ def test_extended_hours_exit_keeps_broker_stop_in_place(monkeypatch):
         extended_hours=True, data_feed="boats", quote_feed="overnight",
         overnight_tradable_tickers={"AAPL"},
     )
-    assert result["trades"] == []
-    assert "broker protective order remains active" in result["signals"][0]["suppressed_reason"]
+    assert len(result["trades"]) == 1
+    trade = result["trades"][0]
+    assert trade["action"] == "sell"
+    assert trade["cancel_open_orders"] is True
+    assert trade["order_type"] == "limit"
+    assert trade["extended_hours"] is True
+    assert trade["limit_price"] == pytest.approx(97.9)
+    assert result["signals"][0]["software_protection"] is True
+    assert not result["signals"][0].get("suppressed_reason")
+
+
+@pytest.mark.parametrize("order_class", ["bracket", "oco"])
+@pytest.mark.parametrize(
+    ("session_name", "extended_hours", "frozen_now"),
+    [
+        ("regular", False, datetime(2026, 10, 8, 10, 0, tzinfo=ET)),
+        ("overnight", True, datetime(2026, 10, 8, 3, 55, tzinfo=ET)),
+        ("overnight", True, datetime(2026, 10, 8, 4, 0, tzinfo=ET)),
+        ("premarket", True, datetime(2026, 10, 8, 4, 5, tzinfo=ET)),
+    ],
+)
+def test_strategy_rule_sell_proceeds_with_active_broker_protection(
+    monkeypatch, order_class, session_name, extended_hours, frozen_now,
+):
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_now if tz is None else frozen_now.astimezone(tz)
+
+    position = {"AAPL": {"symbol": "AAPL", "qty": "2", "avg_entry_price": "100"}}
+    bracket_stop = [{
+        "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
+        "order_class": order_class, "status": "held",
+    }]
+    _mock_common(monkeypatch, positions=position, orders=bracket_stop)
+    monkeypatch.setattr(runner, "datetime", FrozenClock)
+    signal_bar_time = (frozen_now.astimezone(timezone.utc) - timedelta(minutes=5)).isoformat()
+    previous_signal_bar_time = (frozen_now.astimezone(timezone.utc) - timedelta(minutes=10)).isoformat()
+    monkeypatch.setattr(
+        runner, "_fetch_bars",
+        lambda symbols, *, timeframe, **kwargs: (
+            {"AAPL": [{"t": signal_bar_time, "c": 100}]}
+            if timeframe == "5Min" else
+            {"SPY": [{"t": "2026-10-07T20:00:00Z", "c": 100}]}
+        ),
+    )
+    quote = _quote(100)
+    quote["timestamp"] = frozen_now.astimezone(timezone.utc)
+    monkeypatch.setattr(
+        runner, "_fetch_latest_quotes",
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": quote},
+    )
+    monkeypatch.setattr(
+        runner, "rank_strategies",
+        lambda bars, mode, **kwargs: {
+            "regime": "trending_up", "reason": "test",
+            "ranked": [{"strategy": "trend_following", "score": 0.8}],
+            "active": ["trend_following"], "satellites": [],
+        },
+    )
+    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
+    monkeypatch.setattr(
+        runner, "evaluate_rule_signal",
+        lambda *args, **kwargs: Signal("AAPL", "sell", "trend_following", "rule exit", strength=1.0),
+    )
+    states = {"trend_following": {"AAPL": {
+        "phase": "open", "last_signal_bar": previous_signal_bar_time,
+        "opened_at": "2026-10-07T14:00:00Z", "stop_price": 90, "take_profit": 120,
+    }}}
+
+    result = runner.scan(
+        mode="algo", universe_result={"tickers": ["AAPL"]},
+        position_owners={"AAPL": "trend_following"}, strategy_states=states,
+        session_name=session_name, trading_date="2026-10-08",
+        extended_hours=extended_hours,
+        data_feed="boats" if extended_hours else "sip",
+        quote_feed="boats" if extended_hours else "sip",
+        overnight_tradable_tickers={"AAPL"} if extended_hours else None,
+    )
+
+    assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
+    assert result["trades"][0]["action"] == "sell"
+    assert result["trades"][0]["qty"] == 2
+    assert result["trades"][0]["cancel_open_orders"] is True
+    assert not result["trades"][0].get("software_protection")
+    assert not result["signals"][0].get("suppressed_reason")
+    if extended_hours:
+        assert result["trades"][0]["order_type"] == "limit"
+        assert result["trades"][0]["extended_hours"] is True
+        assert result["trades"][0]["limit_price"] == pytest.approx(99.9)
+    if session_name == "overnight" and frozen_now.hour == 4:
+        assert (frozen_now.hour, frozen_now.minute) == (4, 0)
+    if session_name == "premarket":
+        assert (frozen_now.hour, frozen_now.minute) == (4, 5)
 
 
 def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):
@@ -260,7 +393,7 @@ def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):
     )
     monkeypatch.setattr(
         runner, "_fetch_latest_quotes",
-        lambda symbols, *, mode, feed, errors=None: {"AAPL": _quote(98)},
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(98)},
     )
     states = {"trend_following": {"AAPL": {
         "phase": "open", "stop_price": 99.0, "take_profit": 105.0,
@@ -279,6 +412,53 @@ def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):
     assert result["trades"][0]["software_protection"] is True
 
 
+def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
+    position = {"AAPL": {"symbol": "AAPL", "qty": "2"}}
+    _mock_common(monkeypatch, positions=position, orders=[])
+
+    def fetch_bars(symbols, *, timeframe, **kwargs):
+        if timeframe == "5Min":
+            return {"AAPL": [{"t": "2026-10-08T00:50:00Z", "c": 100}]}
+        return {"SPY": [{"t": "2026-10-07T00:00:00Z", "c": 100}]}
+
+    stale_quote = _quote(100)
+    stale_quote["timestamp"] = FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=91)
+    monkeypatch.setattr(runner, "_fetch_bars", fetch_bars)
+    monkeypatch.setattr(
+        runner, "_fetch_latest_quotes",
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": stale_quote},
+    )
+    monkeypatch.setattr(
+        runner, "rank_strategies",
+        lambda bars, mode, **kwargs: {
+            "regime": "trending_up", "reason": "test",
+            "ranked": [], "active": [], "satellites": [],
+        },
+    )
+    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
+
+    result = runner.scan(
+        mode="algo", universe_result={"tickers": []},
+        position_owners={"AAPL": "trend_following"},
+        strategy_states={"trend_following": {"AAPL": {"phase": "open", "stop_price": 95}}},
+        session_name="overnight", trading_date="2026-10-08",
+        extended_hours=True, data_feed="boats", quote_feed="boats",
+        overnight_tradable_tickers=set(),
+    )
+
+    diagnostic, = result["data_status"]["owned_position_quote_diagnostics"]
+    assert diagnostic == {
+        "symbol": "AAPL", "feed": "boats", "status": "stale",
+        "quote_availability": "session_limited", "overnight_tradable": False,
+        "quote_timestamp": (FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=91)).isoformat(),
+        "age_seconds": 91.0, "freshness_limit_seconds": 90,
+    }
+    assert result["data_status"]["quotes"] == "session_limited"
+    assert result["data_status"]["quote_request_status"] == "succeeded"
+    assert result["data_status"]["session_limited_quotes"] is True
+    assert result["data_status"]["owned_positions_without_fresh_quotes"] == ["AAPL"]
+
+
 def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
     _mock_common(monkeypatch)
     monkeypatch.setattr(
@@ -291,7 +471,7 @@ def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
     )
     monkeypatch.setattr(
         runner, "_fetch_latest_quotes",
-        lambda symbols, *, mode, feed, errors=None: {"AAPL": _quote(100)},
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(100)},
     )
     monkeypatch.setattr(
         runner, "rank_strategies",

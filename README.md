@@ -373,7 +373,6 @@ Intraday trading with tighter stops, larger positions, and mandatory daily flatt
 - **Volume ratio** — today's volume vs 20-day average
 - **Fixed per-mode universes** — live Swing, Day, and Algo scans use their separate configured lists.
 - **Market regime detection** — trending, range-bound, or volatile
-- **Verified opening cleanup** — repeated `execute_trades.py --mode day --flatten` runs before the first Day agent report. A successful check verifies zero broker positions and open orders and writes an account-bound `data/day_recovery.json` receipt for that New York date. New Day buys require today's receipt.
 - **Calendar-aware flatten** — `execute_trades.py --mode day --flatten-if-due` uses Alpaca's exchange calendar. The deadline is the earlier of 3:45 PM ET or 15 minutes before an early close; new entries stop 15 minutes before that deadline. The command cancels orders, closes residual positions, and succeeds only after verifying zero positions and open orders.
 - **Close snapshot** — after the broker's actual close, `performance_tracker_v2.py --mode day --snapshot --force --snapshot-kind close` records a marked baseline for later drawdown checks.
 
@@ -446,7 +445,7 @@ The configured defaults are:
 - **Day:** -1.2% hard stop + 3% trailing stop from intraday high.
 - **Algo:** horizon-specific stops from `ALGO_MODE_CONFIG`: intraday 1.1% hard / 0.8% trailing; swing 6–7% hard / 4.5–5% trailing.
 
-Regular-session entries with stop and target levels use broker brackets. Extended-hours Algo orders cannot use those brackets, so the coordinator monitors persisted software levels using fresh quotes. `portfolio_monitor.py` checks Swing and Day positions when invoked by their jobs; do not assume it runs continuously.
+Regular-session entries with stop and target levels use broker brackets. Extended-hours Algo orders cannot use those brackets, so the coordinator monitors persisted software levels using fresh quotes. `portfolio_monitor.py` checks Swing and Day positions against configured hard stops when invoked by their jobs; Day mode can also flatten at its configured time. Do not assume it runs continuously.
 
 ### Status Check
 
@@ -714,12 +713,11 @@ Create your own — see `src/agents/mordecai.py` as a template. Register in `src
 
 Swing and Day use dedicated OpenClaw agents for scheduled analysis and reports. The Algo daemon trades independently; its OpenClaw agent reports service health, persisted strategy ownership, scan freshness, regime, account risk, and broker-confirmed order events. The report agent does not place trades. All trader jobs use `America/New_York` so market-time schedules follow daylight saving changes.
 
-The six Swing/Day decision prompts use the original [Swarm Trader OpenClaw instructions](https://github.com/zhound420/swarm-trader#automation-with-openclaw). Their existing New York schedules are preserved. Mode-specific commands pass `--mode swing` or `--mode day` so one agent cannot route an account-wide action through the other mode. The extra `day-brunch` and `day-afternoon` trade-analysis jobs are disabled; account recovery, flatten guards, and close snapshots remain active.
+The six Swing/Day decision prompts use the original [Swarm Trader OpenClaw instructions](https://github.com/zhound420/swarm-trader#automation-with-openclaw). Their existing New York schedules are preserved. Mode-specific commands pass `--mode swing` or `--mode day` so one agent cannot route an account-wide action through the other mode. The extra `day-brunch` and `day-afternoon` trade-analysis jobs are disabled; the canonical Day flatten and close-snapshot jobs remain scheduled.
 
 Deterministic Gateway command jobs provide the operational guards:
 
-- `day-open-recovery` repeats the verified Day account cleanup from 9:30 through 9:34 AM ET. The first Day agent report starts at 9:35 AM, and new Day buys require that day's successful recovery receipt.
-- `day-flatten-guard` checks the broker-calendar deadline every five minutes from noon through 4 PM ET on weekdays. The existing 3:45 PM Day report also checks the flatten result. Early closes move the deadline earlier.
+- The live Gateway inventory has no separate Day opening-recovery or five-minute flatten-guard job. The scheduled `day-flatten` checkpoint remains responsible for end-of-day liquidation; its broker-calendar-aware flatten command verifies the account state.
 - Swing, Day, and Algo close-snapshot jobs record account-specific `snapshot_kind=close` baselines after the actual exchange close. Holidays are successful skips.
 - `algo-health` runs once an hour, including Sunday overnight, and exits nonzero on stale scans, state problems, broker protection gaps, or an inactive service.
 
@@ -746,7 +744,7 @@ Account-aware scripts should be run with an explicit `--mode`; each supported mo
 | `gather_data.py` | Market data gathering | `--mode`, `--tickers`, `--top N`, `--output` |
 | `execute_trades.py` | Trade execution with risk validation | `--mode`, `--file`, `--flatten`, `--flatten-if-due` (Day), `--dry-run` |
 | `risk_manager.py` | Risk status check | `--status`, `--mode` |
-| `portfolio_monitor.py` | Stop loss monitoring + auto-sell | `--mode`, `--dry-run` / `--no-sell` |
+| `portfolio_monitor.py` | Hard-stop monitoring + auto-sell | `--mode`, `--dry-run` / `--no-sell` |
 | `performance_tracker_v2.py` | Account-specific snapshots, benchmarking, optional broker fill P&L | `--mode`, `--snapshot`, `--snapshot-kind close`, `--report`, `--json`, `--fill-report`, `--days N` |
 | `python -m src.account_baseline` | One-time weekly loss baseline for a verified unused paper account | `--mode` |
 | `check_portfolio.py` | Quick portfolio overview | `--mode`, `--telegram`, `--json` |
@@ -765,7 +763,7 @@ swarm-trader/
 ├── run_hedge_fund.py          # Main runner — analysis + execution
 ├── run_analysis.py            # Wrapper for run_hedge_fund.py
 ├── risk_manager.py            # V2 risk manager (12 hard rules, code-enforced)
-├── portfolio_monitor.py       # Stop loss monitor + auto-sell + SPY comparison
+├── portfolio_monitor.py       # Hard-stop monitor + auto-sell + SPY comparison
 ├── performance_tracker_v2.py  # Daily snapshots, Sharpe ratio, benchmarking
 ├── execute_trades.py          # Trade executor with risk validation
 ├── scan_market.py             # Dynamic Day ticker discovery
@@ -783,7 +781,6 @@ swarm-trader/
 ├── src/
 │   ├── config.py              # MODES dict — single source of truth per mode
 │   ├── accounts.py            # Three paper account routes + broker verification
-│   ├── day_recovery.py        # Daily, account-bound verified opening receipt
 │   ├── market_calendar.py     # Broker-calendar Day deadlines and early closes
 │   ├── fill_analytics.py      # Read-only broker FILL FIFO realized P&L
 │   ├── algo/                   # Algo-only runtime, strategy, replay, and research code

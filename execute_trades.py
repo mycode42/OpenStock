@@ -56,7 +56,6 @@ logging.basicConfig(
 log = logging.getLogger("execute_trades")
 
 from src.accounts import get_account_for_mode, verify_account_for_mode
-from src.day_recovery import day_recovery_confirmed, record_day_recovery
 from src.market_calendar import get_day_schedule
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
@@ -544,21 +543,13 @@ def _flatten_all_unlocked(
                 remaining.append({"ticker": str(position.get("symbol") or ""), "qty": str(quantity)})
         open_ids = [str(order.get("id") or "unknown") for order in open_orders]
         verified_flat = not remaining and not open_ids and status in ("flattened", "already_flat")
-        recovery_recorded = False
-        if verified_flat and mode == "day" and not dry_run:
-            try:
-                record_day_recovery(get_account_for_mode("day").account_id)
-                recovery_recorded = True
-            except Exception as exc:
-                errors.append(f"Could not persist Day recovery receipt: {exc}")
         return {
             "timestamp": datetime.now(MARKET_TZ).isoformat(),
             "trading_mode": mode,
             "mode": "dry_run" if dry_run else "live",
             "status": status,
-            "success": verified_flat and (mode != "day" or recovery_recorded),
+            "success": verified_flat,
             "verified_flat": verified_flat,
-            "day_recovery_recorded": recovery_recorded,
             "positions_closed": max(0, initial_count - len(remaining)),
             "positions_remaining": remaining,
             "open_orders_remaining": open_ids,
@@ -731,12 +722,6 @@ def place_order(
             return {"success": False, "error": f"Day calendar unavailable: {exc}"}
         if schedule is None or not schedule.entries_allowed(datetime.now(MARKET_TZ)):
             return {"success": False, "error": "Day entry cutoff has passed or market is closed"}
-        if not day_recovery_confirmed(
-            get_account_for_mode("day").account_id,
-            session_open_at=schedule.opens_at,
-        ):
-            return {"success": False, "error": "Today's Day opening cleanup has not verified a flat account"}
-
     side = "buy" if action in ("buy", "cover") else "sell"
 
     # Alpaca extended sessions accept simple limit DAY orders only. Keep this
@@ -1414,7 +1399,9 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                 cancel_result = cancel_open_orders_for_symbol(
                     ticker, mode=mode,
                     allow_protective=bool(
-                        trade.get("coordinator_force_flatten") or trade.get("software_protection")
+                        trade.get("coordinator_force_flatten")
+                        or trade.get("software_protection")
+                        or trade.get("cancel_open_orders")
                     ),
                 )
                 if not cancel_result.get("success"):

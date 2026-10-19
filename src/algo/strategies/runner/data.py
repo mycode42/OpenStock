@@ -71,7 +71,8 @@ def fetch_bars(
 
 
 def fetch_latest_quotes(
-    symbols: list[str], *, mode: str, feed: str | None = None, errors: list[str] | None = None, request_fn=None,
+    symbols: list[str], *, mode: str, feed: str | None = None, errors: list[str] | None = None,
+    diagnostics: dict[str, dict] | None = None, request_fn=None,
 ) -> dict[str, dict]:
     if not symbols:
         return {}
@@ -94,20 +95,50 @@ def fetch_latest_quotes(
         except (requests.RequestException, ValueError) as exc:
             if errors is not None:
                 errors.append(f"latest quotes {feed}: {type(exc).__name__}: {exc}")
+            if diagnostics is not None:
+                for ticker in chunk:
+                    diagnostics[ticker] = {"status": "request_error"}
             continue
-        for ticker, quote in quotes.items():
+        for ticker in chunk:
+            quote = quotes.get(ticker)
+            if quote is None:
+                if diagnostics is not None:
+                    diagnostics[ticker] = {"status": "missing"}
+                continue
             if not isinstance(quote, dict):
+                if diagnostics is not None:
+                    diagnostics[ticker] = {"status": "invalid_quote"}
                 continue
             try:
-                bid = float(quote.get("bp", 0) or 0)
-                ask = float(quote.get("ap", 0) or 0)
                 timestamp = datetime.fromisoformat(str(quote["t"]).replace("Z", "+00:00"))
             except (KeyError, TypeError, ValueError):
+                if diagnostics is not None:
+                    diagnostics[ticker] = {"status": "invalid_timestamp"}
                 continue
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
-            if not all(math.isfinite(value) for value in (bid, ask)) or bid <= 0 or ask < bid:
+            try:
+                bid = float(quote.get("bp", 0) or 0)
+                ask = float(quote.get("ap", 0) or 0)
+            except (TypeError, ValueError):
+                if diagnostics is not None:
+                    diagnostics[ticker] = {
+                        "status": "invalid_bid_ask",
+                        "quote_timestamp": timestamp.isoformat(),
+                    }
                 continue
+            if not all(math.isfinite(value) for value in (bid, ask)) or bid <= 0 or ask < bid:
+                if diagnostics is not None:
+                    diagnostics[ticker] = {
+                        "status": "invalid_bid_ask",
+                        "quote_timestamp": timestamp.isoformat(),
+                    }
+                continue
+            if diagnostics is not None:
+                diagnostics[ticker] = {
+                    "status": "usable",
+                    "quote_timestamp": timestamp.isoformat(),
+                }
             previous = output.get(ticker)
             if previous is None or timestamp > previous["timestamp"]:
                 output[ticker] = {

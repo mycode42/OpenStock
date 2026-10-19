@@ -36,7 +36,6 @@ load_dotenv(override=True)
 import requests
 
 from src.config import get_mode_config
-from src.day_recovery import day_recovery_confirmed
 from src.market_calendar import get_day_schedule
 
 logging.basicConfig(
@@ -900,18 +899,18 @@ def validate_trade(
 
     if action == "short":
         if not risk.get("allow_short_positions", False):
-            return ValidationResult(False, "New short entries are disabled for this mode.", "short_disabled")
+            return ValidationResult(False, "Short selling is disabled for this mode.", "short_disabled")
         if portfolio_state is None:
             try:
                 portfolio_state = get_portfolio_state(mode=mode)
             except Exception as exc:
                 return ValidationResult(False, f"Could not verify shortability and portfolio state: {exc}", "portfolio_fetch_failed")
         if portfolio_state.get("account_shorting_enabled") is False:
-            return ValidationResult(False, "Alpaca account is not enabled for short selling.", "account_shorting_disabled")
+            return ValidationResult(False, "Short selling is disabled on this Alpaca account.", "account_shorting_disabled")
         if not portfolio_state.get("shortability_available", False):
-            return ValidationResult(False, "Alpaca shortability data is unavailable; refusing the short.", "shortability_unavailable")
+            return ValidationResult(False, "Alpaca has not confirmed borrow availability; short entry blocked.", "shortability_unavailable")
         if ticker.upper() not in set(portfolio_state.get("easy_to_borrow_symbols") or []):
-            return ValidationResult(False, f"{ticker.upper()} is not confirmed easy to borrow by Alpaca.", "not_easy_to_borrow")
+            return ValidationResult(False, f"Alpaca has not marked {ticker.upper()} as easy to borrow; short entry blocked.", "not_easy_to_borrow")
 
     try:
         entry_price = float(entry_price)
@@ -941,19 +940,6 @@ def validate_trade(
             return ValidationResult(False, f"Day market calendar unavailable: {exc}", "day_calendar_unavailable")
         if schedule is None or not schedule.entries_allowed(datetime.now(MARKET_TZ)):
             return ValidationResult(False, "Day entry window has closed or the market is shut.", "day_entry_cutoff")
-        try:
-            recovery_ok = day_recovery_confirmed(
-                get_account_for_mode("day").account_id,
-                session_open_at=schedule.opens_at,
-            )
-        except Exception:
-            recovery_ok = False
-        if not recovery_ok:
-            return ValidationResult(
-                False, "Today's Day opening cleanup has not verified a flat account.",
-                "day_recovery_unconfirmed",
-            )
-
     if portfolio_state is None:
         try:
             portfolio_state = get_portfolio_state(mode=mode)

@@ -7,7 +7,7 @@ news, and insider activity for all tickers. Cassius (Opus 4.6) does the thinking
 
 Modes:
   --mode swing (default) — fundamentals + news + insider trades (existing behavior)
-  --mode day             — intraday technicals: VWAP, RSI, 5-min bars, volume ratio
+  --mode day             — intraday technicals: VWAP, RSI, 1-min bars, volume ratio
 
 Usage:
   poetry run python gather_data.py                        # All holdings, swing mode
@@ -168,8 +168,10 @@ def get_ticker_data_swing(ticker):
         insiders = get_insider_trades(ticker, end_date, limit=5)
         if insiders:
             data["insider_trades"] = [{
-                "name": t.owner_name,
-                "type": t.transaction_type,
+                "name": t.name,
+                # The current InsiderTrade model has no transaction-type field.
+                # Preserve it only when an upstream model provides one.
+                "type": getattr(t, "transaction_type", None),
                 "shares": t.transaction_shares,
                 "price": t.transaction_price_per_share,
                 "date": t.transaction_date,
@@ -204,7 +206,7 @@ def _calc_rsi(closes: list[float], period: int = 14) -> float | None:
 
 
 def _calc_vwap(bars: list[dict]) -> float | None:
-    """Calculate VWAP from 5-min bars (each bar: {o, h, l, c, v, t})."""
+    """Calculate VWAP from intraday bars (each bar: {o, h, l, c, v, t})."""
     total_pv = 0.0
     total_v = 0.0
     for bar in bars:
@@ -217,14 +219,16 @@ def _calc_vwap(bars: list[dict]) -> float | None:
     return round(total_pv / total_v, 4)
 
 
-def get_intraday_bars(ticker: str, today: str, limit: int = 100) -> list[dict]:
-    """Fetch 5-min intraday bars from Alpaca data API."""
+def get_intraday_bars(
+    ticker: str, today: str, limit: int = 500, timeframe: str = "1Min"
+) -> list[dict]:
+    """Fetch intraday bars from Alpaca data API (1-minute by default)."""
     try:
         resp = requests.get(
             f"{DATA_BASE}/stocks/{ticker}/bars",
             headers=_alpaca_headers(),
             params={
-                "timeframe": "5Min",
+                "timeframe": timeframe,
                 "start": datetime.fromisoformat(today).replace(
                     hour=9, minute=30, second=0, microsecond=0, tzinfo=MARKET_TZ
                 ).isoformat(),
@@ -266,14 +270,18 @@ def get_ticker_data_day(ticker: str, today: str, prev_date: str) -> dict:
     """Get intraday technical data for day trading analysis."""
     data: dict = {"ticker": ticker}
 
-    # 5-min intraday bars for today
-    bars = get_intraday_bars(ticker, today)
+    # Use 1-minute bars for current day-mode indicators. Keep a separate 5-minute
+    # series for existing strategy consumers calibrated to that interval.
+    bars_1min = get_intraday_bars(ticker, today, timeframe="1Min")
+    bars_5min = get_intraday_bars(ticker, today, timeframe="5Min")
+    bars = bars_1min or bars_5min
     closes = [float(b["c"]) for b in bars]
     volumes = [float(b.get("v", 0)) for b in bars]
 
     if bars:
         intraday: dict = {}
-        intraday["bars_5min"] = bars
+        intraday["bars_1min"] = bars_1min
+        intraday["bars_5min"] = bars_5min
         intraday["open"] = float(bars[0]["o"])
         intraday["high"] = max(float(b["h"]) for b in bars)
         intraday["low"] = min(float(b["l"]) for b in bars)

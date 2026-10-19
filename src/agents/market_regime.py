@@ -55,6 +55,12 @@ def market_regime_agent(state: AgentState, agent_id: str = "market_regime_agent"
     # Extract SPY intraday context — this is the primary regime signal
     spy_data = ticker_data_map.get("SPY", {})
     qqq_data = ticker_data_map.get("QQQ", {})
+    spy_intraday = spy_data.get("intraday") or {}
+    spy_bars_1min = spy_intraday.get("bars_1min") or []
+    spy_recent_bars = (
+        spy_bars_1min[-30:] if spy_bars_1min
+        else (spy_intraday.get("bars_5min") or [])[-6:]
+    )
 
     spy_context = {
         "spy_current_price": (spy_data.get("prices") or {}).get("current"),
@@ -67,7 +73,7 @@ def market_regime_agent(state: AgentState, agent_id: str = "market_regime_agent"
         "spy_todays_low": (spy_data.get("intraday") or {}).get("low"),
         "spy_volume_ratio": (spy_data.get("intraday") or {}).get("volume_ratio"),
         "spy_macd_signal": (spy_data.get("intraday") or {}).get("macd_signal"),
-        "spy_bars_5min_last_30m": (spy_data.get("intraday") or {}).get("bars_5min", [])[-6:],
+        "spy_recent_bars_last_30m": spy_recent_bars,
         "qqq_change_1d_pct": (qqq_data.get("prices") or {}).get("change_1d"),
         "qqq_price_vs_vwap_pct": (qqq_data.get("intraday") or {}).get("price_vs_vwap_pct"),
         "qqq_rsi_14": (qqq_data.get("intraday") or {}).get("rsi_14"),
@@ -157,7 +163,7 @@ Max reasoning: 150 chars. Max strategy_bias: 100 chars."""
 
 Work through this quickly:
 1. Is SPY above or below VWAP? (Key intraday bias indicator)
-2. What is the trend direction based on 5-min bars and daily % change?
+2. What is the trend direction based on recent intraday bars and daily % change?
 3. What does volume ratio tell you? >1.2 = unusual activity (vol or trending), <0.8 = dead tape
 4. What is RSI signaling? >55 = momentum up, <45 = momentum down, 45-55 = chopping
 5. Are SPY and QQQ confirming each other? Divergence = caution.

@@ -53,6 +53,11 @@ def _extract_intraday_context(ticker_data: dict, ticker: str) -> dict:
     """Pull intraday technical data from the pre-gathered data payload."""
     intraday = ticker_data.get("intraday", {})
     prices = ticker_data.get("prices", {})
+    bars_1min = intraday.get("bars_1min") or []
+    recent_bars = (
+        bars_1min[-30:] if bars_1min
+        else (intraday.get("bars_5min") or [])[-6:]
+    )
     return {
         "ticker": ticker,
         "current_price": prices.get("current") if prices else None,
@@ -70,7 +75,7 @@ def _extract_intraday_context(ticker_data: dict, ticker: str) -> dict:
         "avg_volume_20d": intraday.get("avg_volume_20d"),
         "volume_ratio": intraday.get("volume_ratio"),  # today / 20d avg
         "macd_signal": intraday.get("macd_signal"),
-        "bars_5min_last_30m": intraday.get("bars_5min", [])[-6:],  # last 30 min
+        "recent_bars_last_30m": recent_bars,
     }
 
 

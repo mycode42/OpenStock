@@ -82,7 +82,14 @@ def _codes(report):
     return {item["code"] for item in report["problems"]}
 
 def test_healthy_active_session_verifies_sqlite_broker_owner_and_bracket_stop():
-    store = FakeStore(portfolio())
+    diagnostic = {
+        "symbol": "AAPL", "feed": "boats", "status": "fresh",
+        "quote_timestamp": "2026-10-08T13:59:00+00:00",
+        "age_seconds": 60.0, "freshness_limit_seconds": 90,
+    }
+    state = portfolio()
+    state["data_status"] = {"owned_position_quote_diagnostics": [diagnostic]}
+    store = FakeStore(state)
     broker = FakeBroker(
         positions=[{"symbol": "AAPL", "qty": "10"}],
         orders=[{
@@ -99,8 +106,57 @@ def test_healthy_active_session_verifies_sqlite_broker_owner_and_bracket_stop():
     assert report["market_session"] == "regular"
     assert report["bracket_entries_checked"] == 1
     assert report["broker_position_count"] == 1
+    assert report["owned_position_quote_diagnostics"] == [diagnostic]
     assert broker.calls == ["account", "calendar", "positions", ("orders", "all", True), ("order", "entry-1", True)]
     assert store.reads == 1
+
+@pytest.mark.parametrize("quote_status", ["session_limited", "degraded"])
+def test_quiet_extended_session_quote_is_warning_not_service_failure(quote_status):
+    now = datetime(2026, 10, 9, 0, 10, tzinfo=timezone.utc)  # 20:10 ET
+    state = portfolio(now)
+    state["entries_paused"] = True
+    state["entry_pause_reasons"] = ["owned positions lack fresh protective quotes"]
+    state["data_status"] = {
+        "quotes": quote_status,
+        "quote_request_status": "succeeded",
+        "owned_position_quote_diagnostics": [{"symbol": "AAPL", "status": "stale"}],
+    }
+    broker = FakeBroker(
+        calendar=[{"date": "2026-10-09", "open": "09:30", "close": "16:00"}],
+        positions=[{"symbol": "AAPL", "qty": "10"}],
+        orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "simple", "side": "buy", "status": "filled", "qty": "10"}],
+    )
+
+    report = build_report(now=now, store=FakeStore(state), broker=broker, service_active=True)
+
+    assert report["market_session"] == "overnight"
+    assert report["ok"] is True
+    assert report["entries_paused"] is True
+    assert report["session_limited_quotes"] is True
+    assert {item["code"] for item in report["warnings"]} == {"session_limited_quotes"}
+    assert "entries_paused" not in _codes(report)
+
+
+def test_extended_session_quote_request_failure_remains_a_problem():
+    now = datetime(2026, 10, 9, 0, 10, tzinfo=timezone.utc)
+    state = portfolio(now)
+    state["last_scan_status"] = "degraded"
+    state["entries_paused"] = True
+    state["entry_pause_reasons"] = ["owned positions lack fresh protective quotes"]
+    state["scan_errors"] = ["latest quotes boats: Timeout"]
+    state["data_status"] = {"quotes": "session_limited", "quote_request_status": "failed"}
+    broker = FakeBroker(
+        calendar=[{"date": "2026-10-09", "open": "09:30", "close": "16:00"}],
+        positions=[{"symbol": "AAPL", "qty": "10"}],
+        orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "simple", "side": "buy", "status": "filled", "qty": "10"}],
+    )
+
+    report = build_report(now=now, store=FakeStore(state), broker=broker, service_active=True)
+
+    assert report["ok"] is False
+    assert {"scan_degraded", "entries_paused"} <= _codes(report)
+    assert not report["warnings"]
+
 
 def test_capped_history_page_uses_exact_nested_entry_lookup():
     entry = {

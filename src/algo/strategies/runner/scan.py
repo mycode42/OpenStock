@@ -401,9 +401,11 @@ def scan(
     allowed_satellites = set(regime.get("satellites", []))
     equity = float(account.get("equity", 0) or 0)
     quote_errors: list[str] = []
+    quote_fetch_diagnostics: dict[str, dict] = {}
     latest_quotes = _fetch_latest_quotes(
         strategy_symbols, mode=mode, feed=quote_feed,
         errors=quote_errors if mode == "algo" else None,
+        diagnostics=quote_fetch_diagnostics,
     )
     freshness_limit = int(STRATEGY_CONFIG["quote_stale_seconds"])
     quote_checked_at = datetime.now(timezone.utc)
@@ -416,6 +418,52 @@ def scan(
         if ticker in owner_map and float(position.get("qty", 0) or 0) != 0
         and ticker not in fresh_quote_symbols
     ) if track_owners else []
+    owned_position_quote_diagnostics = []
+    invalid_quote_symbols = sorted(
+        ticker for ticker, diagnostic in quote_fetch_diagnostics.items()
+        if str(diagnostic.get("status", "")).startswith("invalid_")
+    )
+    if mode == "algo":
+        for ticker, position in sorted(positions.items()):
+            if ticker not in owner_map or float(position.get("qty", 0) or 0) == 0:
+                continue
+            quote = latest_quotes.get(ticker)
+            fetch_diagnostic = quote_fetch_diagnostics.get(ticker) or {"status": "missing"}
+            timestamp = quote.get("timestamp") if quote else None
+            if timestamp is None and fetch_diagnostic.get("quote_timestamp"):
+                try:
+                    timestamp = datetime.fromisoformat(fetch_diagnostic["quote_timestamp"].replace("Z", "+00:00"))
+                except (TypeError, ValueError):
+                    timestamp = None
+            age_seconds = (quote_checked_at - timestamp).total_seconds() if timestamp is not None else None
+            if quote is not None:
+                if age_seconds is not None and age_seconds < 0:
+                    status = "future_timestamp"
+                elif age_seconds is not None and age_seconds <= freshness_limit:
+                    status = "fresh"
+                else:
+                    status = "stale"
+            else:
+                status = fetch_diagnostic.get("status", "missing")
+            owned_position_quote_diagnostics.append({
+                "symbol": ticker,
+                "feed": quote_feed,
+                "status": status,
+                "quote_availability": (
+                    "session_limited"
+                    if session_name in {"premarket", "after_hours", "overnight"}
+                    and not quote_errors and status in {"missing", "stale"}
+                    else status
+                ),
+                "overnight_tradable": (
+                    ticker in overnight_tradable_tickers
+                    if session_name == "overnight" and overnight_tradable_tickers is not None
+                    else None
+                ),
+                "quote_timestamp": timestamp.isoformat() if timestamp is not None else None,
+                "age_seconds": round(age_seconds, 1) if age_seconds is not None else None,
+                "freshness_limit_seconds": freshness_limit,
+            })
     owned_positions_without_software_stops = sorted(
         ticker for ticker, position in positions.items()
         if ticker in owner_map and float(position.get("qty", 0) or 0) != 0
@@ -431,9 +479,23 @@ def scan(
             entry_pause_reasons.append("owned positions lack valid software stop levels")
         if selected_symbols and not fresh_quote_symbols.intersection(selected_symbols):
             entry_pause_reasons.append("the Algo universe has no fresh quotes")
+    selected_symbols_with_fresh_quotes = fresh_quote_symbols.intersection(selected_symbols)
+    session_limited_quotes = bool(
+        mode == "algo"
+        and session_name in {"premarket", "after_hours", "overnight"}
+        and not quote_errors
+        and not invalid_quote_symbols
+        and (
+            owned_positions_without_fresh_quotes
+            or (selected_symbols and not selected_symbols_with_fresh_quotes)
+        )
+    )
     quote_status = (
         "idle" if not strategy_symbols else
-        "degraded" if quote_errors or owned_positions_without_fresh_quotes else
+        "degraded" if quote_errors or invalid_quote_symbols or (
+            session_name == "regular" and owned_positions_without_fresh_quotes
+        ) else
+        "session_limited" if session_limited_quotes else
         "unavailable" if not fresh_quote_symbols else "ok"
     )
     multi_factor_signals: dict[str, MultiFactorSignal] = {}
@@ -739,20 +801,6 @@ def scan(
             and not _is_protective_sell_order(order, position_qty)
             for order in ticker_orders
         )
-        if (
-            mode == "algo" and chosen["action"] in {"sell", "cover"}
-            and protective_exit_order and not chosen.get("coordinator_force_flatten")
-            and not (chosen.get("software_protection") and session_name == "regular")
-        ):
-            # A broker bracket/OCO already owns the exit quantity. Alpaca may
-            # cancel its stop and profit legs at different times; replacing a
-            # rule exit by cancelling both can leave the holding without a
-            # stop even during regular hours. Let the broker exit stand.
-            chosen["suppressed_reason"] = (
-                "broker protective order remains active; wait for its stop or target"
-            )
-            generated.append(chosen)
-            continue
         if (
             (chosen["action"] in {"buy", "short"} and ticker_orders)
             or pending_entry
@@ -1084,9 +1132,13 @@ def scan(
             "bar_end": historical_bar_end,
             "quote_feed": quote_feed,
             "quotes": quote_status,
+            "quote_request_status": "failed" if quote_errors else "succeeded",
+            "session_limited_quotes": session_limited_quotes,
+            "invalid_quote_symbols": invalid_quote_symbols,
             "fresh_quote_count": len(fresh_quote_symbols),
             "requested_quote_count": len(strategy_symbols),
             "owned_positions_without_fresh_quotes": owned_positions_without_fresh_quotes,
+            "owned_position_quote_diagnostics": owned_position_quote_diagnostics,
             "owned_positions_without_software_stops": owned_positions_without_software_stops,
             "historical_delay_seconds": delay_seconds,
             "fresh_signal_bar_count": len(fresh_signal_bar_symbols),

@@ -38,6 +38,11 @@ WARMUP_PAUSE_REASONS = frozenset({
 EMPTY_EXTENDED_DATA_REASONS = WARMUP_PAUSE_REASONS | {
     "the Algo universe has no fresh quotes",
 }
+SESSION_QUOTE_PAUSE_REASONS = frozenset({
+    "owned positions lack fresh protective quotes",
+    "the Algo universe has no fresh quotes",
+})
+EXTENDED_SESSIONS = frozenset({"premarket", "after_hours", "overnight"})
 EXPECTED_OVERNIGHT_PAUSE = "overnight entries are disabled by configuration"
 
 
@@ -146,6 +151,9 @@ def _expected_data_warmup(
     """Suppress only the normal first incomplete 5-minute bar interval."""
     grace = WARMUP_GRACE_SECONDS.get(window.name)
     data_status = portfolio.get("data_status") or {}
+    allowed_pause_reasons = WARMUP_PAUSE_REASONS
+    if isinstance(data_status, dict) and data_status.get("quotes") == "session_limited":
+        allowed_pause_reasons = allowed_pause_reasons | SESSION_QUOTE_PAUSE_REASONS
     return bool(
         grace is not None
         and session_age is not None
@@ -154,7 +162,30 @@ def _expected_data_warmup(
         and data_status.get("historical_bars") == "warming_up"
         and not portfolio.get("scan_errors")
         and pause_reasons
-        and all(reason in WARMUP_PAUSE_REASONS for reason in pause_reasons)
+        and all(reason in allowed_pause_reasons for reason in pause_reasons)
+    )
+
+
+def _expected_session_quote_pause(
+    window: TradingWindow, portfolio: dict, pause_reasons: list[str],
+) -> bool:
+    """Treat quiet extended-session quotes as a data limitation, not a service fault."""
+    data_status = portfolio.get("data_status") or {}
+    diagnostics = data_status.get("owned_position_quote_diagnostics") or [] if isinstance(data_status, dict) else []
+    legacy_session_limited = bool(
+        isinstance(data_status, dict)
+        and data_status.get("quotes") == "degraded"
+        and diagnostics
+        and all(isinstance(item, dict) and item.get("status") in {"missing", "stale"} for item in diagnostics)
+    )
+    return bool(
+        window.name in EXTENDED_SESSIONS
+        and isinstance(data_status, dict)
+        and (data_status.get("quotes") == "session_limited" or legacy_session_limited)
+        and data_status.get("quote_request_status", "succeeded") == "succeeded"
+        and not portfolio.get("scan_errors")
+        and pause_reasons
+        and all(reason in SESSION_QUOTE_PAUSE_REASONS for reason in pause_reasons)
     )
 
 
@@ -281,6 +312,7 @@ def build_report(
         raise ValueError("Health check requires a timezone-aware clock")
     now_et = now.astimezone(ET)
     problems: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
     service_active = _systemd_active() if service_active is None else service_active
     if service_active is None:
         problems.append(_problem("service_status_unavailable", "Cannot determine Algo systemd service status"))
@@ -435,6 +467,22 @@ def build_report(
             and pause_reasons
             and all(reason == EXPECTED_OVERNIGHT_PAUSE for reason in pause_reasons)
         )
+        expected_session_quote_pause = bool(
+            scanned_this_window
+            and scan_status == "ok"
+            and _expected_session_quote_pause(window, portfolio, pause_reasons)
+        )
+        if expected_session_quote_pause:
+            diagnostics = (portfolio.get("data_status") or {}).get("owned_position_quote_diagnostics") or []
+            affected = sorted(
+                str(item.get("symbol")) for item in diagnostics
+                if isinstance(item, dict) and item.get("status") != "fresh" and item.get("symbol")
+            )
+            symbols = (" for " + ", ".join(affected)) if affected else ""
+            warnings.append(_problem(
+                "session_limited_quotes",
+                f"No quote update within the freshness window{symbols}; entries remain paused until a fresh quote arrives",
+            ))
         if (scan_age is None or scan_age > scan_limit) and startup_grace_passed:
             problems.append(_problem("scan_stale", f"Algo scan age exceeds {scan_limit}s in the {window.name} session"))
         if (startup_grace_passed or scanned_this_window) and scan_status in {"degraded", "error"} and not (expected_warmup or expected_idle_data):
@@ -442,7 +490,7 @@ def build_report(
         if (
             (startup_grace_passed or scanned_this_window)
             and portfolio.get("entries_paused")
-            and not (expected_warmup or expected_idle_data or expected_policy_pause)
+            and not (expected_warmup or expected_idle_data or expected_policy_pause or expected_session_quote_pause)
         ):
             detail = "; ".join(pause_reasons) or "entry pause has no recorded reason"
             problems.append(_problem("entries_paused", f"Algo entries are paused: {detail}"))
@@ -494,6 +542,13 @@ def build_report(
         if positions and startup.get("status") in {"degraded", "error"}:
             problems.append(_problem("startup_reconciliation_degraded", "Broker attribution or protection did not verify at coordinator startup"))
 
+    data_status = portfolio.get("data_status") if state_available else {}
+    if not isinstance(data_status, dict):
+        data_status = {}
+    quote_diagnostics = data_status.get("owned_position_quote_diagnostics") or []
+    if not isinstance(quote_diagnostics, list):
+        quote_diagnostics = []
+
     return {
         "checked_at": now.isoformat(),
         "ok": not problems,
@@ -506,6 +561,7 @@ def build_report(
         "scan_freshness_limit_seconds": scan_limit,
         "last_scan_status": scan_status,
         "market_data_idle": expected_idle_data,
+        "session_limited_quotes": any(item.get("code") == "session_limited_quotes" for item in warnings),
         "entries_paused": portfolio.get("entries_paused") if state_available else None,
         "entry_pause_reasons": pause_reasons,
         "execution_incident_status": incident_status,
@@ -516,10 +572,12 @@ def build_report(
         "unowned_positions": unowned,
         "entry_provenance_missing": unproven_positions,
         "software_stops_missing": software_stop_gaps,
+        "owned_position_quote_diagnostics": quote_diagnostics,
         "bracket_entries_checked": brackets_checked,
         "broker_bracket_stops_missing": broker_stop_gaps,
         "broker_pending_cancel_exits": pending_cancel_exits,
         "broker_stop_coverage_unknown": broker_stop_unknown,
+        "warnings": warnings,
         "problems": problems,
     }
 
