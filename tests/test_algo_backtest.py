@@ -226,13 +226,13 @@ def test_research_controls_cannot_exceed_live_algo_ceilings():
             start="2026-10-05", end="2026-10-05", feed="sip",
             data_adjustment="raw", research_controls={"max_entries_per_day": 41},
         )
-    with pytest.raises(ValueError, match="between 1 and 5"):
+    with pytest.raises(ValueError, match="between 1 and 7"):
         AlgoPortfolioBacktest(
             symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
             start="2026-10-05", end="2026-10-05", feed="sip",
-            data_adjustment="raw", research_controls={"max_positions_per_strategy": 6},
+            data_adjustment="raw", research_controls={"max_positions_per_strategy": 8},
         )
-    with pytest.raises(ValueError, match="live Algo cap of 1"):
+    with pytest.raises(ValueError, match="live Algo cap of 2"):
         AlgoPortfolioBacktest(
             symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
             start="2026-10-05", end="2026-10-05", feed="sip",
