@@ -12,9 +12,9 @@ class AlgoEntryLimits:
     """Shared entry budgets consumed by live coordination and research replay."""
 
     max_daily_entries: int = 10
-    max_intraday_entries: int = 3
-    max_swing_entries: int = 3
-    max_intraday_core_entries: int = 3
+    max_intraday_entries: int = 4
+    max_swing_entries: int = 6
+    max_intraday_core_entries: int = 4
     max_intraday_satellite_entries: int = 2
 
 
@@ -25,7 +25,7 @@ ALGO_ENTRY_LIMITS = AlgoEntryLimits()
 class AlgoRuntimeSettings:
     """Typed source of truth for settings specific to the Algo service."""
 
-    overnight_entries_enabled: bool = False
+    overnight_entries_enabled: bool = True
     enable_intraday_trend: bool = False
     enable_intraday_momentum: bool = False
     intraday_satellite_position_pct: float = 0.01
@@ -173,7 +173,7 @@ ALGO_MODE_CONFIG = {
             "event_driven": 5 * 24 * 60,
         },
         "max_entries_per_strategy_per_day": {
-            "mean_reversion": 3,
+            "mean_reversion": 4,
             "trend_following": 1,
             "momentum": 1,
             "swing_trend_following": 1,

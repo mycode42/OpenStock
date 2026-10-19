@@ -110,7 +110,7 @@ def test_shared_daily_budget_is_ten_and_logs_rejection(caplog):
     assert "shared daily entry budget is exhausted" in caplog.text
 
 
-def test_shared_swing_slice_allows_only_three_entries_per_day():
+def test_shared_swing_slice_allows_only_six_entries_per_day():
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
@@ -119,7 +119,7 @@ def test_shared_swing_slice_allows_only_three_entries_per_day():
             _proposal(strategy="trend_following", ticker=ticker, qty=1),
             session="regular", timestamp=stamp, regime="trending_up",
         )
-        for ticker in ("NVDA", "AAPL", "JPM")
+        for ticker in ("NVDA", "AAPL", "JPM", "SPY", "QQQ", "GLD")
     ]
     rejected = book.review(
         _proposal(strategy="momentum", ticker="SPY", qty=1),
@@ -131,7 +131,7 @@ def test_shared_swing_slice_allows_only_three_entries_per_day():
     assert rejected.reason == "shared swing entry slice is exhausted"
 
 
-def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_disabled():
+def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_enabled():
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
@@ -144,8 +144,7 @@ def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_disabled():
     )
 
     assert factor_core.approved
-    assert not overnight.approved
-    assert overnight.reason == "overnight entries are disabled by configuration"
+    assert overnight.approved
 
 
 def test_swing_opening_delay_and_regime_throttle():

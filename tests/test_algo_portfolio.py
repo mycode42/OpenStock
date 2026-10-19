@@ -72,13 +72,14 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
     assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.15
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_open_positions"] == 10
-    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 3
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 6
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_open_positions"] == 6
-    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 3
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 4
     assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["multi_factor"] == 4
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["multi_factor"] == 2
     assert "event_driven" not in ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]
-    assert STRATEGY_CONFIG["overnight_entries_enabled"] is False
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["mean_reversion"] == 4
+    assert STRATEGY_CONFIG["overnight_entries_enabled"] is True
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["trend_following"] > 0.05
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["mean_reversion"] <= 0.012
     assert STRATEGY_CONFIG["enable_intraday_trend"] is False
