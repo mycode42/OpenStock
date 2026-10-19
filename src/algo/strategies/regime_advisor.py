@@ -1,7 +1,8 @@
 """Optional OpenAI tie-breaker for deterministic regime rankings.
 
-The deterministic regime filter is authoritative. The advisor can only reorder
-strategies already marked active; it cannot activate rules or submit orders.
+Deterministic regime eligibility and scores remain authoritative. The advisor
+can only reorder strategies already marked active; it cannot enable disabled
+strategies or submit orders.
 """
 
 from __future__ import annotations

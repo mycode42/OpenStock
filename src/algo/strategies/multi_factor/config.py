@@ -38,7 +38,7 @@ class MultiFactorConfig:
         "momentum_6m": 0.20,
         "low_volatility": 0.2,
     })
-    direction_mode: str = "regime_dependent"
+    direction_mode: str = "long_short"
     disable_in_volatile: bool = True
     max_position_pct: float = 0.02
     hard_stop_pct: float = 0.06

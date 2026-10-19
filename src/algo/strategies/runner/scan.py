@@ -809,10 +809,6 @@ def scan(
             chosen["suppressed_reason"] = "a conflicting Alpaca order is already open for this symbol"
             generated.append(chosen)
             continue
-        if regime.get("regime") == "trending_down" and chosen["action"] == "buy":
-            chosen["suppressed_reason"] = "long entries are disabled in the downtrend regime"
-            generated.append(chosen)
-            continue
         if chosen["action"] == "short":
             regime_name = str(regime.get("regime", "unknown"))
             if session_name not in {None, "regular"}:

@@ -135,10 +135,6 @@ def generate_signals(
     spread_ok = len(ranked) >= minimum_universe and spread >= config.minimum_score_spread
     allow_long = config.direction_mode in {"both", "long_only"}
     allow_short = config.direction_mode in {"both", "short_only"}
-    if regime == "trending_up":
-        allow_short = False
-    elif regime == "trending_down":
-        allow_long = False
     selected_longs = {ticker for ticker, _ in ranked[-config.top_n:]} if spread_ok and allow_long else set()
     selected_shorts = {ticker for ticker, _ in ranked[:config.top_n]} if spread_ok and allow_short else set()
 

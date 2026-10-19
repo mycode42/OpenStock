@@ -1,4 +1,4 @@
-"""Deterministic SPY regime filter and strategy ranking."""
+"""Deterministic SPY context and soft strategy ranking."""
 
 from __future__ import annotations
 
@@ -35,9 +35,8 @@ def rank_strategies(
         reason = f"SPY above 20-day average with {return_20d:.1%} 20-day return"
     elif sma20 and values[-1] < sma20 and return_20d <= -0.01:
         regime = "trending_down"
-        # Mean reversion is active in downtrends so its upper-band short
-        # rejection can participate; deterministic entry gates still block
-        # its long signals in this regime.
+        # Keep every enabled core strategy eligible; ticker-level rules decide
+        # whether its long or short setup is present.
         weights = {"trend_following": 0.72, "momentum": 0.65, "multi_factor": 0.62, "event_driven": 0.56, "mean_reversion": 0.58, "swing_mean_reversion": 0.15}
         reason = f"SPY below 20-day average with {return_20d:.1%} 20-day return"
     else:
@@ -58,10 +57,18 @@ def rank_strategies(
             weights["intraday_momentum"] = 0.3 if regime == "range_bound" else 0.56
             available.add("intraday_momentum")
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    allowed = [name for name, score in ranked if score >= 0.55 and name in available]
-    # Multi Factor is a core swing strategy. Event Driven remains evidence-only.
-    satellites = [name for name in allowed if name == "event_driven"]
-    active = [name for name in allowed if name != "event_driven"]
+    ranked_available = [(name, score) for name, score in ranked if name in available]
+    # Directional regimes rank core strategies without making the rank a gate.
+    # Volatile remains a hard brake for core entries; optional event entries
+    # retain their explicit regime threshold and configuration.
+    active = [
+        name for name, _score in ranked_available
+        if name != "event_driven" and regime != "volatile"
+    ]
+    satellites = [
+        name for name, score in ranked_available
+        if name == "event_driven" and score >= 0.55
+    ]
     return {
         "regime": regime,
         "reason": reason,

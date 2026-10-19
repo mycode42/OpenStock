@@ -383,9 +383,6 @@ class ReplaySignalsMixin:
                 self.rejections["research_strategy_group_daily_cap"] += 1
                 return
         regime = self._current_regime
-        if action == "buy" and regime.get("regime") == "trending_down":
-            self.rejections["downtrend_entry_block"] += 1
-            return
         if action == "short":
             regime_name = str(regime.get("regime", "unknown"))
             if ticker not in self.symbols:
