@@ -66,7 +66,7 @@ def test_daily_earnings_continuation_emits_risk_sized_long():
     assert signal.strategy_group == "swing_satellite"
     assert signal.exit_mode == "follow_through"
     assert signal.maximum_holding_sessions == 2
-    assert signal.target_weight == pytest.approx(0.0125)
+    assert signal.target_weight == pytest.approx(0.04)
     assert signal.event_id == event.event_id
 
 

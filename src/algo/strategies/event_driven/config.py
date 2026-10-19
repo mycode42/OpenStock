@@ -20,14 +20,14 @@ class EventStrategyConfig:
     minimum_macro_move_pct: float = 0.004
     reaction_stop_pct: float = 0.025
     stop_pct: float = 0.04
-    max_position_pct: float = 0.02
-    max_event_risk_pct: float = 0.0005
+    max_position_pct: float = 0.04
+    max_event_risk_pct: float = 0.0016
     risk_multiplier: float = 0.5
     follow_through_sessions: int = 2
     cooldown_days_per_ticker: int = 5
     cooldown_hours_portfolio: int = 24
     max_entries_per_week: int = 3
-    max_positions: int = 2
+    max_positions: int = 5
 
     @classmethod
     def from_dict(cls, values: dict | None = None) -> "EventStrategyConfig":
@@ -43,7 +43,7 @@ class EventStrategyConfig:
         integer_bounds = {
             "reaction_window_days": (1, 5), "follow_through_sessions": (1, 3),
             "cooldown_days_per_ticker": (1, 30), "cooldown_hours_portfolio": (0, 168),
-            "max_entries_per_week": (1, 5), "max_positions": (1, 3),
+            "max_entries_per_week": (1, 5), "max_positions": (1, 5),
             "minimum_confidence": (0, 100),
         }
         for key, (low, high) in integer_bounds.items():

@@ -16,10 +16,14 @@ it cannot take over or close a position owned by another strategy. Watch and
 low-confidence recommendations produce no trade signal. Short selling is
 disabled. New entries are also blocked by the default volatile-regime brake.
 
-Each snapshot expires after 90 minutes (four hours maximum). The configured
-position target is capped at 1.25% of equity by the strategy's stop-risk
-budget; the live runner then applies the usual quote, sizing, portfolio
-coordinator, lifecycle, and `risk_manager.validate_trade()` checks.
+The strategy can hold up to five positions and open up to five new positions
+per day, subject to shared portfolio limits. Each snapshot expires after 90
+minutes (four hours maximum). Each position targets at most 4% of equity, for
+a maximum 20% across five positions. The 4% target is consistent with the 4%
+stop and 0.16% maximum event risk per position. Ticker and portfolio limits
+can reduce a position further. The live runner then applies the usual quote,
+sizing, portfolio coordinator, lifecycle, and `risk_manager.validate_trade()`
+checks.
 Deterministic stop, trailing-stop, and time-based owner exits remain available
 when an AI snapshot is missing or expired.
 
