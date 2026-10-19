@@ -1169,17 +1169,6 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             results.append({"ticker": ticker, "action": action, "status": "skipped", "reason": "Hold or zero qty"})
             continue
 
-        if action == "short" and mode == "algo":
-            regime = str(trade.get("market_regime", "unknown"))
-            allowed_regimes = {"range_bound", "trending_down"}
-            if regime not in allowed_regimes:
-                results.append({
-                    "ticker": ticker, "action": action, "qty": qty,
-                    "status": "blocked", "reason": "Algo short entries require a neutral or bearish regime",
-                    "rule": "short_regime_block", "strategy": strategy,
-                })
-                continue
-
         if not RISK_MANAGER_AVAILABLE:
             reason = "V2 risk manager unavailable; order blocked"
             log.error(reason)

@@ -815,14 +815,6 @@ def scan(
             continue
         if chosen["action"] == "short":
             regime_name = str(regime.get("regime", "unknown"))
-            if risk_config.get("short_disabled_in_bull_regime", True) and regime_name == "trending_up":
-                chosen["suppressed_reason"] = "short entries are disabled in the strong bull regime"
-                generated.append(chosen)
-                continue
-            if regime_name not in {"range_bound", "trending_down"}:
-                chosen["suppressed_reason"] = "short entries require a neutral or bearish deterministic regime"
-                generated.append(chosen)
-                continue
             if session_name not in {None, "regular"}:
                 chosen["suppressed_reason"] = "short entries are restricted to regular market hours"
                 generated.append(chosen)

@@ -388,9 +388,6 @@ class ReplaySignalsMixin:
             return
         if action == "short":
             regime_name = str(regime.get("regime", "unknown"))
-            if regime_name not in {"range_bound", "trending_down"}:
-                self.rejections["short_regime_block"] += 1
-                return
             if ticker not in self.symbols:
                 self.rejections["short_universe_block"] += 1
                 return

@@ -148,7 +148,6 @@ ALGO_MODE_CONFIG = {
         "max_short_positions": 5,
         "max_short_exposure_pct": 0.20,
         "allow_short_positions": True,
-        "short_disabled_in_bull_regime": True,
         "range_regime_short_risk_multiplier": 0.75,
         "minimum_hold_minutes_by_strategy": {
             "mean_reversion": 20,
