@@ -218,7 +218,7 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
     assert result["signals"][0]["software_protection"] is True
 
 
-def test_extended_hours_exit_keeps_broker_stop_in_place(monkeypatch):
+def test_extended_hours_software_exit_uses_limit_with_active_broker_bracket(monkeypatch):
     position = {"AAPL": {"symbol": "AAPL", "qty": "2"}}
     bracket_stop = [{
         "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
@@ -243,8 +243,100 @@ def test_extended_hours_exit_keeps_broker_stop_in_place(monkeypatch):
         extended_hours=True, data_feed="boats", quote_feed="overnight",
         overnight_tradable_tickers={"AAPL"},
     )
-    assert result["trades"] == []
-    assert "broker protective order remains active" in result["signals"][0]["suppressed_reason"]
+    assert len(result["trades"]) == 1
+    trade = result["trades"][0]
+    assert trade["action"] == "sell"
+    assert trade["cancel_open_orders"] is True
+    assert trade["order_type"] == "limit"
+    assert trade["extended_hours"] is True
+    assert trade["limit_price"] == pytest.approx(97.9)
+    assert result["signals"][0]["software_protection"] is True
+    assert not result["signals"][0].get("suppressed_reason")
+
+
+@pytest.mark.parametrize("order_class", ["bracket", "oco"])
+@pytest.mark.parametrize(
+    ("session_name", "extended_hours", "frozen_now"),
+    [
+        ("regular", False, datetime(2026, 10, 8, 10, 0, tzinfo=ET)),
+        ("overnight", True, datetime(2026, 10, 8, 3, 55, tzinfo=ET)),
+        ("overnight", True, datetime(2026, 10, 8, 4, 0, tzinfo=ET)),
+        ("premarket", True, datetime(2026, 10, 8, 4, 5, tzinfo=ET)),
+    ],
+)
+def test_strategy_rule_sell_proceeds_with_active_broker_protection(
+    monkeypatch, order_class, session_name, extended_hours, frozen_now,
+):
+    class FrozenClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen_now if tz is None else frozen_now.astimezone(tz)
+
+    position = {"AAPL": {"symbol": "AAPL", "qty": "2", "avg_entry_price": "100"}}
+    bracket_stop = [{
+        "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
+        "order_class": order_class, "status": "held",
+    }]
+    _mock_common(monkeypatch, positions=position, orders=bracket_stop)
+    monkeypatch.setattr(runner, "datetime", FrozenClock)
+    signal_bar_time = (frozen_now.astimezone(timezone.utc) - timedelta(minutes=5)).isoformat()
+    previous_signal_bar_time = (frozen_now.astimezone(timezone.utc) - timedelta(minutes=10)).isoformat()
+    monkeypatch.setattr(
+        runner, "_fetch_bars",
+        lambda symbols, *, timeframe, **kwargs: (
+            {"AAPL": [{"t": signal_bar_time, "c": 100}]}
+            if timeframe == "5Min" else
+            {"SPY": [{"t": "2026-10-07T20:00:00Z", "c": 100}]}
+        ),
+    )
+    quote = _quote(100)
+    quote["timestamp"] = frozen_now.astimezone(timezone.utc)
+    monkeypatch.setattr(
+        runner, "_fetch_latest_quotes",
+        lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": quote},
+    )
+    monkeypatch.setattr(
+        runner, "rank_strategies",
+        lambda bars, mode, **kwargs: {
+            "regime": "trending_up", "reason": "test",
+            "ranked": [{"strategy": "trend_following", "score": 0.8}],
+            "active": ["trend_following"], "satellites": [],
+        },
+    )
+    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
+    monkeypatch.setattr(
+        runner, "evaluate_rule_signal",
+        lambda *args, **kwargs: Signal("AAPL", "sell", "trend_following", "rule exit", strength=1.0),
+    )
+    states = {"trend_following": {"AAPL": {
+        "phase": "open", "last_signal_bar": previous_signal_bar_time,
+        "opened_at": "2026-10-07T14:00:00Z", "stop_price": 90, "take_profit": 120,
+    }}}
+
+    result = runner.scan(
+        mode="algo", universe_result={"tickers": ["AAPL"]},
+        position_owners={"AAPL": "trend_following"}, strategy_states=states,
+        session_name=session_name, trading_date="2026-10-08",
+        extended_hours=extended_hours,
+        data_feed="boats" if extended_hours else "sip",
+        quote_feed="boats" if extended_hours else "sip",
+        overnight_tradable_tickers={"AAPL"} if extended_hours else None,
+    )
+
+    assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
+    assert result["trades"][0]["action"] == "sell"
+    assert result["trades"][0]["qty"] == 2
+    assert result["trades"][0]["cancel_open_orders"] is True
+    assert not result["trades"][0].get("software_protection")
+    assert not result["signals"][0].get("suppressed_reason")
+    if extended_hours:
+        assert result["trades"][0]["order_type"] == "limit"
+        assert result["trades"][0]["extended_hours"] is True
+        assert result["trades"][0]["limit_price"] == pytest.approx(99.9)
+    if session_name == "overnight" and frozen_now.hour == 4:
+        assert (frozen_now.hour, frozen_now.minute) == (4, 0)
+    if session_name == "premarket":
+        assert (frozen_now.hour, frozen_now.minute) == (4, 5)
 
 
 def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):

@@ -740,20 +740,6 @@ def scan(
             for order in ticker_orders
         )
         if (
-            mode == "algo" and chosen["action"] in {"sell", "cover"}
-            and protective_exit_order and not chosen.get("coordinator_force_flatten")
-            and not (chosen.get("software_protection") and session_name == "regular")
-        ):
-            # A broker bracket/OCO already owns the exit quantity. Alpaca may
-            # cancel its stop and profit legs at different times; replacing a
-            # rule exit by cancelling both can leave the holding without a
-            # stop even during regular hours. Let the broker exit stand.
-            chosen["suppressed_reason"] = (
-                "broker protective order remains active; wait for its stop or target"
-            )
-            generated.append(chosen)
-            continue
-        if (
             (chosen["action"] in {"buy", "short"} and ticker_orders)
             or pending_entry
             or (pending_exit and not chosen.get("coordinator_force_flatten"))

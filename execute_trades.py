@@ -1414,7 +1414,9 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
                 cancel_result = cancel_open_orders_for_symbol(
                     ticker, mode=mode,
                     allow_protective=bool(
-                        trade.get("coordinator_force_flatten") or trade.get("software_protection")
+                        trade.get("coordinator_force_flatten")
+                        or trade.get("software_protection")
+                        or trade.get("cancel_open_orders")
                     ),
                 )
                 if not cancel_result.get("success"):

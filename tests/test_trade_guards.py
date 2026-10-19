@@ -377,6 +377,21 @@ def test_unknown_order_type_never_becomes_market_order(monkeypatch):
         mixed = execute_trades.place_order("AAPL", "buy", 1, order_type=order_type, **fields)
         assert not mixed["success"]
 
+
+def test_extended_hours_exit_rejects_market_order_without_broker_submission(monkeypatch):
+    monkeypatch.setattr(execute_trades, "_active_mode", "algo")
+    monkeypatch.setattr(
+        execute_trades, "_submit_broker_order",
+        lambda *args: pytest.fail("unsupported extended-hours market order reached broker"),
+    )
+
+    result = execute_trades.place_order(
+        "AAPL", "sell", 2, order_type="market", extended_hours=True,
+    )
+
+    assert not result["success"]
+    assert "Extended-hours orders require a buy/sell/cover limit order" in result["error"]
+
 def test_algo_bracket_exit_never_cancels_broker_protection(monkeypatch):
     bracket_leg = {
         "id": "stop-1", "symbol": "CRM", "side": "sell", "type": "stop",
@@ -405,6 +420,143 @@ def test_pending_cancel_leg_is_polled_without_repeated_delete(monkeypatch):
 
     assert not result["success"]
     assert "pending_cancel" in result["error"]
+
+
+def test_strategy_exit_does_not_submit_while_bracket_cancellation_is_ambiguous(
+    tmp_path, monkeypatch, capsys,
+):
+    import trade_journal
+
+    bracket_leg = {
+        "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
+        "order_class": "bracket", "status": "pending_cancel",
+    }
+    decision_file = tmp_path / "sell.json"
+    decision_file.write_text(json.dumps({"trades": [{
+        "ticker": "AAPL", "action": "sell", "qty": 2,
+        "entry_price": 100, "strategy": "trend_following",
+        "client_order_id": "stable-rule-sell", "cancel_open_orders": True,
+    }]}))
+    account = {"id": "paper-account", "equity": "100000", "cash": "90000", "last_equity": "100000"}
+    monkeypatch.setattr(execute_trades, "get_account_for_mode", lambda mode: SimpleNamespace(name="Algo"))
+    monkeypatch.setattr(execute_trades, "_verify_algo_execution_lease", lambda: None)
+    monkeypatch.setattr(execute_trades, "verify_account_for_mode", lambda mode: (None, account))
+    monkeypatch.setattr(execute_trades, "get_positions", lambda: {"AAPL": {"qty": "2", "current_price": 100}})
+    monkeypatch.setattr(execute_trades, "get_daily_pnl", lambda account: 0.0)
+    monkeypatch.setattr(execute_trades, "RISK_MANAGER_AVAILABLE", True)
+    monkeypatch.setattr(execute_trades, "rm_get_portfolio_state", lambda mode: _state(positions={"AAPL": {"qty": 2}}))
+    monkeypatch.setattr(execute_trades, "rm_validate_trade", lambda **kwargs: SimpleNamespace(
+        approved=True, reason="", rule="",
+    ))
+    monkeypatch.setattr(execute_trades, "validate_trade_legacy", lambda *args, **kwargs: (True, ""))
+    monkeypatch.setattr(execute_trades, "_headers", lambda mode: {})
+    monkeypatch.setattr(execute_trades, "_list_open_orders", lambda headers: [bracket_leg])
+    monkeypatch.setattr(execute_trades.time, "sleep", lambda delay: None)
+    monkeypatch.setattr(
+        execute_trades, "place_order",
+        lambda *args, **kwargs: pytest.fail("sell submitted before bracket cancellation was verified"),
+    )
+    monkeypatch.setattr(trade_journal, "append_trades", lambda output: 0)
+
+    args = argparse.Namespace(
+        file=str(decision_file), dry_run=False, flatten=False, flatten_if_due=False,
+    )
+    exit_code = execute_trades._run_main(args, "algo")
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert output["results"][0]["status"] == "failed"
+    assert "pending_cancel" in output["results"][0]["reason"]
+
+
+@pytest.mark.parametrize(("refreshed_qty", "should_submit"), [(2, True), (1, False)])
+def test_strategy_exit_submits_only_after_bracket_cancel_and_position_refresh(
+    tmp_path, monkeypatch, capsys, refreshed_qty, should_submit,
+):
+    import trade_journal
+
+    bracket_leg = {
+        "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
+        "order_class": "bracket", "status": "new",
+    }
+    decision_file = tmp_path / "sell.json"
+    decision_file.write_text(json.dumps({"trades": [{
+        "ticker": "AAPL", "action": "sell", "qty": 2,
+        "entry_price": 100, "strategy": "trend_following",
+        "client_order_id": "stable-rule-sell", "cancel_open_orders": True,
+    }]}))
+    account = {"id": "paper-account", "equity": "100000", "cash": "90000", "last_equity": "100000"}
+    events = []
+    order_snapshots = iter([[bracket_leg], []])
+    positions = iter([
+        {"AAPL": {"qty": "2", "current_price": 100}},
+        {"AAPL": {"qty": str(refreshed_qty), "current_price": 100}},
+    ])
+    monkeypatch.setattr(execute_trades, "get_account_for_mode", lambda mode: SimpleNamespace(name="Algo"))
+    monkeypatch.setattr(execute_trades, "_verify_algo_execution_lease", lambda: None)
+    monkeypatch.setattr(execute_trades, "verify_account_for_mode", lambda mode: (None, account))
+    monkeypatch.setattr(
+        execute_trades, "get_positions",
+        lambda: (events.append("positions") or next(positions)),
+    )
+    monkeypatch.setattr(execute_trades, "get_daily_pnl", lambda account: 0.0)
+    monkeypatch.setattr(execute_trades, "RISK_MANAGER_AVAILABLE", True)
+    monkeypatch.setattr(execute_trades, "rm_get_portfolio_state", lambda mode: _state(positions={"AAPL": {"qty": 2}}))
+    monkeypatch.setattr(execute_trades, "rm_validate_trade", lambda **kwargs: SimpleNamespace(
+        approved=True, reason="", rule="",
+    ))
+    monkeypatch.setattr(execute_trades, "_headers", lambda mode: {})
+    monkeypatch.setattr(
+        execute_trades, "_list_open_orders",
+        lambda headers: (events.append("orders") or next(order_snapshots)),
+    )
+    monkeypatch.setattr(
+        execute_trades, "_cancel_orders",
+        lambda headers, orders: (events.append("cancel") or (["stop-1"], [])),
+    )
+    monkeypatch.setattr(execute_trades.time, "sleep", lambda delay: None)
+
+    def submit(ticker, action, qty, **kwargs):
+        events.append("submit")
+        return {"success": True, "order_id": "broker-sell", "broker_status": "new"}
+
+    monkeypatch.setattr(execute_trades, "place_order", submit)
+    monkeypatch.setattr(trade_journal, "append_trades", lambda output: 0)
+
+    args = argparse.Namespace(
+        file=str(decision_file), dry_run=False, flatten=False, flatten_if_due=False,
+    )
+    exit_code = execute_trades._run_main(args, "algo")
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert events == [
+        "positions", "orders", "cancel", "orders", "positions",
+        *( ["submit"] if should_submit else [] ),
+    ]
+    assert output["results"][0]["status"] == ("submitted" if should_submit else "blocked")
+    if should_submit:
+        assert output["results"][0]["client_order_id"] == "stable-rule-sell"
+    else:
+        assert "exceeds the 1 shares currently held" in output["results"][0]["reason"]
+
+
+def test_protective_cancel_must_be_verified_even_when_explicitly_allowed(monkeypatch):
+    bracket_leg = {
+        "id": "stop-1", "symbol": "CRM", "side": "sell", "type": "stop",
+        "order_class": "bracket", "status": "new",
+    }
+    monkeypatch.setattr(execute_trades, "_headers", lambda mode: {})
+    monkeypatch.setattr(execute_trades, "_list_open_orders", lambda headers: [bracket_leg])
+    monkeypatch.setattr(execute_trades, "_cancel_orders", lambda headers, orders: (["stop-1"], []))
+    monkeypatch.setattr(execute_trades.time, "sleep", lambda delay: None)
+
+    result = execute_trades.cancel_open_orders_for_symbol(
+        "CRM", mode="algo", allow_protective=True,
+    )
+
+    assert not result["success"]
+    assert "Open CRM orders remained after cancellation" in result["error"]
 
 def test_flatten_cancels_pending_orders_then_confirms_zero_exposure(monkeypatch):
     events = []
