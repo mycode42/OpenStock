@@ -73,8 +73,9 @@ def test_daily_earnings_continuation_emits_risk_sized_long():
 def test_event_outcome_can_emit_shorts_and_reaction_fades_in_any_regime():
     day = date(2025, 9, 4)
     event = _event(day)
+    config = EventStrategyConfig(enabled=True, allow_short=True)
     generator = EventSignalGenerator(
-        EventCalendar([event]), EventStrategyConfig(enabled=True),
+        EventCalendar([event]), config,
     )
     short = generator.generate(
         "AAPL", _daily_bars(day, gap=0.03, move=-0.025), as_of=_as_of(day),
@@ -82,7 +83,7 @@ def test_event_outcome_can_emit_shorts_and_reaction_fades_in_any_regime():
     )
     long = daily_event_reaction(
         event, "AAPL", _daily_bars(day, gap=-0.03, move=0.025),
-        as_of=_as_of(day), config=EventStrategyConfig(enabled=True),
+        as_of=_as_of(day), config=config,
     )
 
     assert short is not None and short.action == "short"
@@ -130,7 +131,7 @@ def test_event_calendar_records_cooldown_after_a_proposal():
 def test_event_config_and_profile_keep_frequency_and_holding_bounded():
     settings = validate_parameter_profile({"event_driven": {"enabled": True}})["event_driven"]
     assert settings["follow_through_sessions"] == 2
-    assert settings["max_positions"] == 2
+    assert settings["max_positions"] == 5
     with pytest.raises(ValueError, match="max_entries_per_week"):
         EventStrategyConfig.from_dict({"max_entries_per_week": 8})
 

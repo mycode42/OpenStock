@@ -122,7 +122,7 @@ def test_shared_swing_slice_allows_only_six_entries_per_day():
         for ticker in ("NVDA", "AAPL", "JPM", "SPY", "QQQ", "GLD")
     ]
     rejected = book.review(
-        _proposal(strategy="momentum", ticker="SPY", qty=1),
+        _proposal(strategy="momentum", ticker="TLT", qty=1),
         session="regular", timestamp=stamp, regime="trending_up",
     )
 

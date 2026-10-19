@@ -214,14 +214,12 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     assert quote_feeds == ["boats"]
     assert result["data_status"]["historical_delay_seconds"] == 0
     assert result["data_status"]["historical_bars"] == "ok"
-    assert result["entries_paused"] is True
-    assert "overnight entries are disabled by configuration" in result["entry_pause_reasons"]
-    assert result["trades"] == []
-    assert any(
-        item["action"] == "buy"
-        and "overnight entries are disabled by configuration" in item["suppressed_reason"]
-        for item in result["signals"]
-    )
+    assert result["entries_paused"] is False
+    assert result["entry_pause_reasons"] == []
+    assert len(result["trades"]) == 1
+    assert result["trades"][0]["ticker"] == "AAPL"
+    assert result["trades"][0]["order_type"] == "limit"
+    assert result["trades"][0]["extended_hours"] is True
 
 
 def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):

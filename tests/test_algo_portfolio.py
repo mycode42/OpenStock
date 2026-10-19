@@ -77,7 +77,8 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 4
     assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["multi_factor"] == 4
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["multi_factor"] == 2
-    assert "event_driven" not in ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["event_driven"] == 5
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["event_driven"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["mean_reversion"] == 4
     assert STRATEGY_CONFIG["overnight_entries_enabled"] is True
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["trend_following"] > 0.05
