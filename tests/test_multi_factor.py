@@ -95,7 +95,8 @@ def test_signal_generator_emits_targets_and_sells_held_names_outside_ranked_univ
     assert by_symbol["AAA"].action == "buy"
     assert by_symbol["AAA"].target_weight == pytest.approx(0.02)
     assert by_symbol["OLD"].action == "sell"
-    assert all(signal.direction != "short" for signal in signals)
+    assert by_symbol["CCC"].action == "short"
+    assert by_symbol["CCC"].direction == "short"
 
 
 def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
@@ -105,6 +106,7 @@ def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
         momentum_lookbacks={"momentum_1m": 5},
         volatility_lookback=10,
         factor_weights={"momentum_1m": 1},
+        direction_mode="regime_dependent",
     )
     bars = {
         "AAA": _daily_closes("AAA", growth=0.01),
@@ -291,10 +293,17 @@ def test_bearish_factor_short_recommendation_persists_for_core_targets():
     )
 
     assert diagnostics["selected_short_count"] > 0
-    assert all(signal.action == "short" for signal in signals.values())
+    short_signals = {
+        ticker: signal for ticker, signal in signals.items()
+        if signal.action == "short"
+    }
+    assert short_signals
+    assert diagnostics["selected_long_count"] > 0
     targets = _multi_factor_current_targets(states, symbols, session)
     assert targets
-    assert all(signal["action"] == "short" and signal["direction"] == "short" for signal in targets.values())
+    for ticker, signal in short_signals.items():
+        assert targets[ticker]["action"] == signal.action == "short"
+        assert targets[ticker]["direction"] == signal.direction == "short"
 
 
 @pytest.mark.parametrize("values", [
