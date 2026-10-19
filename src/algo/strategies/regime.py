@@ -58,17 +58,14 @@ def rank_strategies(
             available.add("intraday_momentum")
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
     ranked_available = [(name, score) for name, score in ranked if name in available]
-    # Directional regimes rank core strategies without making the rank a gate.
-    # Volatile remains a hard brake for core entries; optional event entries
-    # retain their explicit regime threshold and configuration.
+    # Event-driven is now an entry-producing strategy. It retains its confidence
+    # rank threshold and configured volatile-regime brake.
     active = [
         name for name, _score in ranked_available
-        if name != "event_driven" and regime != "volatile"
+        if (regime != "volatile" or name == "event_driven")
+        and (name != "event_driven" or _score >= 0.55)
     ]
-    satellites = [
-        name for name, score in ranked_available
-        if name == "event_driven" and score >= 0.55
-    ]
+    satellites: list[str] = []
     return {
         "regime": regime,
         "reason": reason,

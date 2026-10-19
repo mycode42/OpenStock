@@ -60,7 +60,7 @@ _STRATEGIES = {
         research_workflows=("nightly_swing",),
     ),
     "event_driven": StrategySpec(
-        "event_driven", "1Day", "swing", "satellite", None, "satellite", "event",
+        "event_driven", "1Day", "swing", "core", "swing", "swing_core", "event",
         research_workflows=("overlay",),
     ),
 }

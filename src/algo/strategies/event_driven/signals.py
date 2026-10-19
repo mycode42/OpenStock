@@ -1,4 +1,4 @@
-"""Calendar-driven event entries and daily exit management."""
+"""Scheduled AI recommendations and deterministic daily exit management."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from src.algo.strategies.event_driven.config import EventStrategyConfig
 from src.algo.strategies.event_driven.filters import EventFilter
 from src.algo.strategies.event_driven.models import ScheduledEvent
 from src.algo.strategies.event_driven.reactions import EventSignal, daily_event_reaction
+from src.algo.strategies.event_driven.ai import AIEventSignalBook, DEFAULT_AI_SIGNAL_FILE
 from src.algo.strategies.swing_common import clean_daily_bars, held_sessions, position_entry_price
 from src.algo.strategies.signals import Signal
 
@@ -18,14 +19,25 @@ ET = ZoneInfo("America/New_York")
 
 
 class EventSignalGenerator:
-    def __init__(self, calendar: EventCalendar, config: EventStrategyConfig) -> None:
+    def __init__(
+        self,
+        calendar: EventCalendar,
+        config: EventStrategyConfig,
+        *,
+        ai_signal_file: str | None = None,
+    ) -> None:
         self.calendar = calendar
         self.config = config
         self.event_filter = EventFilter(config)
+        self.ai_signal_book = (
+            AIEventSignalBook(ai_signal_file or DEFAULT_AI_SIGNAL_FILE)
+            if ai_signal_file is not None else None
+        )
         self.counts = {
             "active_event_windows": 0, "signals": 0,
             "signals_by_direction": {"long": 0, "short": 0},
             "signals_by_exit_mode": {"reaction": 0, "follow_through": 0},
+            "ai_signals": 0,
         }
 
     def generate(
@@ -43,6 +55,12 @@ class EventSignalGenerator:
         entry_price: float | None = None,
     ) -> Signal | None:
         """Bars are completed daily aggregates; no five-minute entry path exists."""
+        if self.ai_signal_book is not None:
+            return self._generate_ai_signal(
+                ticker, bars, as_of=as_of, universe=universe,
+                strategy_state=strategy_state, position_qty=position_qty,
+                entry_at=entry_at, entry_price=entry_price,
+            )
         if position_qty:
             return self._manage_position(
                 ticker, bars, as_of=as_of, position_qty=position_qty,
@@ -76,6 +94,66 @@ class EventSignalGenerator:
                 self.counts["signals_by_exit_mode"][signal.exit_mode] += 1
                 return signal
         return None
+
+    def _generate_ai_signal(
+        self,
+        ticker: str,
+        bars: list[dict],
+        *,
+        as_of: datetime,
+        universe: set[str],
+        strategy_state: dict,
+        position_qty: float,
+        entry_at: str | None,
+        entry_price: float | None,
+    ) -> Signal | None:
+        book = self.ai_signal_book
+        if book is None:
+            return None
+        recommendation = book.recommendation(ticker, universe=universe)
+        if position_qty:
+            if (
+                recommendation is not None
+                and recommendation.action == "sell"
+                and recommendation.confidence >= self.config.minimum_confidence
+                and position_qty > 0
+            ):
+                self.counts["ai_signals"] += 1
+                return Signal(
+                    ticker=ticker.upper(), action="sell", strategy="event_driven",
+                    reason=recommendation.reason,
+                    strength=recommendation.confidence / 100,
+                    stop_pct=self.config.stop_pct,
+                    target_weight=self.config.risk_limited_weight,
+                    event_id=recommendation.run_id,
+                )
+            # Keep owner protection deterministic when a run has no sell call,
+            # the AI snapshot is unavailable, or the holding predates this mode.
+            return self._manage_position(
+                ticker, bars, as_of=as_of, position_qty=position_qty,
+                entry_at=entry_at, entry_price=entry_price,
+                exit_mode=str(strategy_state.get(ticker.upper(), {}).get("exit_mode", "follow_through")),
+            )
+
+        if (
+            not self.config.enabled
+            or not self.config.allow_long
+            or recommendation is None
+            or recommendation.action != "buy"
+            or recommendation.confidence < self.config.minimum_confidence
+        ):
+            return None
+
+        self.counts["ai_signals"] += 1
+        return Signal(
+            ticker=ticker.upper(), action="buy", strategy="event_driven",
+            reason=recommendation.reason,
+            strength=recommendation.confidence / 100,
+            stop_pct=self.config.stop_pct,
+            strategy_group="swing",
+            target_weight=self.config.risk_limited_weight,
+            event_id=recommendation.run_id,
+        )
 
     def _manage_position(
         self, ticker: str, bars: list[dict], *, as_of: datetime,
@@ -125,10 +203,13 @@ class EventSignalGenerator:
         )
 
     def diagnostics(self, as_of: datetime | None = None) -> dict:
+        ai_diagnostics = self.ai_signal_book.diagnostics() if self.ai_signal_book else None
         return {
-            **self.calendar.diagnostics(as_of),
+            **(self.calendar.diagnostics(as_of) if self.ai_signal_book is None else {}),
             "enabled": self.config.enabled,
             "bar_horizon": "daily",
+            "signal_source": "scheduled_ai" if self.ai_signal_book else "event_calendar",
+            "ai_signal_book": ai_diagnostics,
             **self.counts,
             "filter_passed": self.event_filter.counts["passed"],
             "filter_rejected": dict(sorted(self.event_filter.counts["rejected"].items())),

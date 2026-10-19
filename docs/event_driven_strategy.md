@@ -1,8 +1,27 @@
-# Scheduled event strategy
+# Event Driven AI strategy
 
-The Algo event strategy is a sparse, long-only satellite. Version 1 reacts to
-confirmed post-event price action; it does not take pre-event positions and it
-does not read headlines or earnings-surprise values.
+`event_driven` is an active, long-horizon Algo strategy. On weekdays, its
+scheduled briefing runs the Swarm analyst workflow three times per day and
+publishes short-lived Buy, Sell, or Watch recommendations for the fixed Algo
+universe. The strategy name and identity remain `event_driven`; its live
+signals enter the same sizing, portfolio coordination, lifecycle, and paper
+execution path as the other Algo strategies.
+
+The scheduled analysis is advice, not an order submission. It discards model
+share quantities and publishes only an action, confidence, evidence-based
+reason, and run ID. `AIEventSignalBook` accepts only a valid, unexpired snapshot
+for known Algo tickers. A Buy requires confidence of at least 70 and opens a
+long position. A Sell signal can close a long position owned by `event_driven`;
+it cannot take over or close a position owned by another strategy. Watch and
+low-confidence recommendations produce no trade signal. Short selling is
+disabled. New entries are also blocked by the default volatile-regime brake.
+
+Each snapshot expires after 90 minutes (four hours maximum). The configured
+position target is capped at 1.25% of equity by the strategy's stop-risk
+budget; the live runner then applies the usual quote, sizing, portfolio
+coordinator, lifecycle, and `risk_manager.validate_trade()` checks.
+Deterministic stop, trailing-stop, and time-based owner exits remain available
+when an AI snapshot is missing or expired.
 
 ## Module layout
 
@@ -10,9 +29,12 @@ does not read headlines or earnings-surprise values.
 - `calendar.py`: point-in-time CSV calendar reader.
 - `filters.py`: universe, regime, cooldown, and weekly activity limits.
 - `reactions.py`: earnings gap continuation and macro breakout rules.
-- `signals.py`: event-to-`Signal` adapter plus counters.
+- `ai.py`: snapshot schema, validation, expiry, and atomic publication.
+- `ai_runner.py`: invokes the Swarm analyst workflow and writes the live signal
+  snapshot without calling an executor.
+- `signals.py`: AI recommendation and deterministic owner-exit adapters.
 - Algo integration: registry/regime selection, standard sizing, shared order
-  route, and the local portfolio replay.
+  route, and diagnostics.
 
 ## Event record format
 
@@ -30,10 +52,37 @@ and do not overwrite the original row in historical datasets.
 
 The reaction window is explicit because an after-close earnings report should
 map to the next actual trading session, including holidays. The daily calendar
-refresh uses Alpaca's exchange calendar for that mapping. The Algo profile now
-enables the event satellite; the standalone `EventStrategyConfig` remains off
-by default. Macro events use SPY from the fixed Algo universe. Other strategies
-stay limited to that same configured universe.
+refresh uses Alpaca's exchange calendar for that mapping. The standalone
+`EventStrategyConfig` remains off by default. Macro events use SPY from the
+fixed Algo universe. Other strategies stay limited to that same configured
+universe.
+
+## Live scheduled analysis
+
+The `algo-event-briefing` OpenClaw job runs at 10:00, 13:00, and 15:00 ET on
+weekdays. It first runs:
+
+```bash
+poetry run python -m src.algo.strategies.event_driven.ai_runner
+```
+
+The runner reads the Algo paper account and the configured Algo ticker
+universe, then calls the same `run_hedge_fund()` analyst graph used by
+`run_hedge_fund.py`. Its analyst set covers market regime, news sentiment,
+social sentiment, technicals, fundamentals, and growth. It writes
+`data/algo/event_driven/signals.json` atomically. The OpenClaw job adds sourced
+market-wide news and sentiment context and summarizes only notable monitored
+stock developments for the briefing.
+
+The Algo scanner reads the snapshot during its ordinary scans. A missing,
+invalid, or expired snapshot produces no AI entry. The scheduler is independent
+of the deterministic event-calendar refresh below; that calendar and its
+archives remain useful for deterministic research and historical examples.
+
+The AI workflow is not reconstructed by the historical event-calendar replay
+commands in this document. Those commands exercise the legacy deterministic
+calendar adapter, not the scheduled LLM recommendations, and their results
+should not be presented as AI-strategy performance.
 
 Run `poetry run python -m src.algo.research.event_calendar_refresh` to refresh
 `data/event_calendar.csv`. The `algo-event-calendar` OpenClaw job runs this at
@@ -49,7 +98,7 @@ Federal Reserve calendar includes its published tentative FOMC decision dates
 through 2027. Extend the BLS dates as they are published; calendar diagnostics
 warn when an event type has no upcoming date in the coverage window.
 
-## V1 rules and limits
+## Deterministic calendar research adapter
 
 - Earnings: use the configured first three 5-minute bars in the reaction
   window as the opening range. Require a positive overnight gap between 2% and

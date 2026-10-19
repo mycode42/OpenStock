@@ -31,7 +31,7 @@ class AlgoRuntimeSettings:
     intraday_satellite_position_pct: float = 0.01
     intraday_satellite_risk_multiplier: float = 0.25
     algo_multi_factor_enabled: bool = True
-    algo_event_driven_enabled: bool = False
+    algo_event_driven_enabled: bool = True
 
     def __post_init__(self) -> None:
         for name in (
@@ -106,6 +106,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 0.06,
             "swing_momentum": 0.06,
             "multi_factor": 0.06,
+            "event_driven": 0.04,
             "swing_mean_reversion": 0.07,
             "intraday_trend": 0.011,
             "intraday_momentum": 0.011,
@@ -117,6 +118,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 0.045,
             "swing_momentum": 0.045,
             "multi_factor": 0.045,
+            "event_driven": 0.03,
             "swing_mean_reversion": 0.05,
             "intraday_trend": 0.008,
             "intraday_momentum": 0.008,
@@ -128,6 +130,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 0.02,
             "swing_momentum": 0.02,
             "multi_factor": 0.02,
+            "event_driven": 0.02,
             "swing_mean_reversion": 0.02,
             "intraday_trend": 0.005,
             "intraday_momentum": 0.005,
@@ -142,6 +145,7 @@ ALGO_MODE_CONFIG = {
             "trend_following": 4, "momentum": 4, "swing_mean_reversion": 4,
             "swing_trend_following": 4, "swing_momentum": 4,
             "multi_factor": 4,
+            "event_driven": 2,
             "mean_reversion": 5,
             "intraday_trend": 1, "intraday_momentum": 1,
         },
@@ -179,6 +183,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 1,
             "swing_momentum": 1,
             "multi_factor": 2,
+            "event_driven": 1,
             "swing_mean_reversion": 1,
             "intraday_trend": 1,
             "intraday_momentum": 1,

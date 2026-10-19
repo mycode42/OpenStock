@@ -10,8 +10,9 @@ import math
 class EventStrategyConfig:
     enabled: bool = False
     allow_long: bool = True
-    allow_short: bool = True
+    allow_short: bool = False
     disable_in_volatile: bool = True
+    minimum_confidence: int = 70
     reaction_window_days: int = 3
     minimum_gap_pct: float = 0.02
     maximum_gap_pct: float = 0.08
@@ -43,6 +44,7 @@ class EventStrategyConfig:
             "reaction_window_days": (1, 5), "follow_through_sessions": (1, 3),
             "cooldown_days_per_ticker": (1, 30), "cooldown_hours_portfolio": (0, 168),
             "max_entries_per_week": (1, 5), "max_positions": (1, 3),
+            "minimum_confidence": (0, 100),
         }
         for key, (low, high) in integer_bounds.items():
             value = getattr(config, key)

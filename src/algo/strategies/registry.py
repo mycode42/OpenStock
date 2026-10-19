@@ -30,7 +30,7 @@ ALGO_RULE_MODULES = {
     "intraday_trend": trend_following,
     "intraday_momentum": momentum,
 }
-# Enable the conservative, risk-capped event satellite in Algo mode. The
+# Enable the conservative, risk-capped event strategy in Algo mode. The
 # strategy class itself remains disabled by default for standalone use.
 EVENT_DEFAULT_CONFIG = EventStrategyConfig(enabled=True).to_dict()
 SWING_MEAN_REVERSION_DEFAULT_CONFIG = SwingMeanReversionConfig().to_dict()

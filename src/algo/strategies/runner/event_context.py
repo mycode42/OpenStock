@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.algo.strategies.event_driven import EventCalendar, EventSignalGenerator
+from src.algo.strategies.event_driven.ai import AIEventSignalBook, DEFAULT_AI_SIGNAL_FILE
 
 
 @dataclass(frozen=True)
@@ -28,15 +29,25 @@ def load_event_context(
     checked_at: Callable[[], datetime],
     calendar_type=EventCalendar,
     generator_type=EventSignalGenerator,
+    ai_signal_path: Path | None = DEFAULT_AI_SIGNAL_FILE,
 ) -> EventContext:
-    """Load a fresh event calendar, preserving exits for existing owners."""
+    """Load scheduled AI signals, preserving legacy exits for existing owners."""
     diagnostics = calendar_type().diagnostics()
     generator = None
     available = False
     status = "disabled_by_config"
     errors: list[str] = []
 
-    if enabled:
+    if enabled and ai_signal_path is not None:
+        book = AIEventSignalBook(ai_signal_path, now=checked_at())
+        generator = generator_type(calendar_type(), event_config, ai_signal_file=str(ai_signal_path))
+        available = True
+        status = book.status
+        diagnostics = {
+            "signal_source": "scheduled_ai",
+            "ai_signal_book": book.diagnostics(),
+        }
+    elif enabled:
         try:
             calendar = calendar_type.from_csv(calendar_path)
             checked = checked_at()

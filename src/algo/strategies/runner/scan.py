@@ -177,7 +177,7 @@ def scan(
         "multi_factor_enabled": ALGO_RUNTIME_SETTINGS.algo_multi_factor_enabled,
         "event_driven_enabled": ALGO_RUNTIME_SETTINGS.algo_event_driven_enabled,
     })
-    event_satellite_enabled = event_config.enabled and satellite_config.event_driven_enabled
+    event_strategy_enabled = event_config.enabled and ALGO_RUNTIME_SETTINGS.algo_event_driven_enabled
     excluded = {str(symbol).upper() for symbol in (excluded_symbols or set())}
     track_owners = position_owners is not None
     owner_map = position_owners if position_owners is not None else {}
@@ -230,7 +230,7 @@ def scan(
     ))
     # SPY is part of the fixed Algo universe and remains available to macro
     # event signals; ordinary strategies still use their configured symbols.
-    if mode == "algo" and event_satellite_enabled and "SPY" not in strategy_symbols:
+    if mode == "algo" and event_strategy_enabled and "SPY" not in strategy_symbols:
         strategy_symbols.append("SPY")
     symbols_for_bars = list(dict.fromkeys(strategy_symbols + ["SPY"]))
 
@@ -357,7 +357,7 @@ def scan(
     default_calendar = Path(__file__).resolve().parents[4] / "data" / "event_calendar.csv"
     calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
     event_context = load_event_context(
-        enabled=mode == "algo" and event_satellite_enabled,
+        enabled=mode == "algo" and event_strategy_enabled,
         owned_event_position="event_driven" in set(owner_map.values()),
         event_config=event_config,
         calendar_path=calendar_path,
@@ -616,9 +616,9 @@ def scan(
         event_signal = None
         if (
             mode == "algo" and event_generator is not None
-            and (event_satellite_enabled or owner == "event_driven")
+            and (event_strategy_enabled or owner == "event_driven")
             and session_name in {None, "regular"}
-            and ("event_driven" in candidates or "event_driven" in allowed_satellites)
+            and "event_driven" in candidates
         ):
             try:
                 event_state = strategy_states.setdefault("event_driven", {})
@@ -1008,7 +1008,10 @@ def scan(
                     "extended_hours": True,
                 })
             signal_kind = "protective" if item.get("software_protection") else "rule"
-            identity = f"{mode}:{today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:{item.get('signal_bar_time') or ''}"
+            identity = (
+                f"{mode}:{today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:"
+                f"{item.get('event_id') or ''}:{item.get('signal_bar_time') or ''}"
+            )
             trade["client_order_id"] = f"rule-{today.replace('-', '')}-{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             trade["signal_bar_time"] = item.get("signal_bar_time")
             if mode == "algo":
@@ -1073,7 +1076,7 @@ def scan(
         "event_strategy_diagnostics": (
             {
                 **event_generator.diagnostics(datetime.now(timezone.utc)),
-                "calendar_status": event_calendar_status,
+                "signal_status": event_calendar_status,
             }
             if event_generator is not None else {
                 **event_calendar_diagnostics,
