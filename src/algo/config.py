@@ -57,8 +57,8 @@ ALGO_RUNTIME_SETTINGS = AlgoRuntimeSettings()
 # Compatibility projection for callers that still consume runtime mappings.
 ALGO_RUNTIME_CONFIG = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
 ALGO_SIGNAL_DATA_CONFIG = {
-    "signal_bar_max_age_minutes": 15,
-    "delayed_signal_bar_max_age_minutes": 35,
+    "signal_bar_max_age_minutes": 20,
+    "delayed_signal_bar_max_age_minutes": 20,
     "max_spy_daily_age_days": 5,
 }
 

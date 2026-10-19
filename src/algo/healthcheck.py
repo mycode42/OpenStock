@@ -91,12 +91,18 @@ def _positive(value: object) -> bool:
     return math.isfinite(number) and number > 0
 
 
-def _quantity(value: object) -> Decimal | None:
+def _signed_quantity(value: object) -> Decimal | None:
     try:
         number = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         return None
-    return number if number.is_finite() and number >= 0 else None
+    return number if number.is_finite() else None
+
+
+def _quantity(value: object) -> Decimal | None:
+    """Parse a nonnegative order quantity; broker position quantities may be signed."""
+    number = _signed_quantity(value)
+    return number if number is not None and number >= 0 else None
 
 
 def _exact_nested_orders(
@@ -241,7 +247,7 @@ def _bracket_stop_gaps(
             unknown.append(symbol)
             continue
         order_class = str(parent.get("order_class") or "simple").lower()
-        position_qty = _quantity(position.get("qty"))
+        position_qty = _signed_quantity(position.get("qty"))
         position_size = abs(position_qty) if position_qty is not None else None
         exit_side = "buy" if position_qty is not None and position_qty < 0 else "sell"
         if order_class == "simple":
@@ -506,7 +512,7 @@ def build_report(
     if positions is not None:
         unsupported_positions = sorted(
             symbol for symbol, position in positions.items()
-            if (quantity := _quantity(position.get("qty"))) is None or quantity == 0
+            if (quantity := _signed_quantity(position.get("qty"))) is None or quantity == 0
         )
         if unsupported_positions:
             problems.append(_problem("unsupported_positions", "Algo account has zero or invalid broker positions: " + ", ".join(unsupported_positions)))
