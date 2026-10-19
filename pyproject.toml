@@ -30,41 +30,41 @@ exclude = [
 ]
 
 [tool.poetry.dependencies]
-langchain = "^0.3.7"
-langchain-anthropic = "0.3.5"
-langchain-groq = "0.2.3"
-langchain-openai = "^0.3.5"
-langchain-deepseek = "^0.1.2"
-langchain-ollama = "0.3.6"
-langgraph = "0.2.56"
+langchain = "^1.3.9"
+langchain-anthropic = "^1.4.6"
+langchain-groq = "^1.1.3"
+langchain-openai = "^1.1.14"
+langchain-deepseek = "^1.1.1"
+langchain-ollama = "^1.1.0"
+langgraph = "^1.0.10"
 pandas = "^2.1.0"
 numpy = "^1.24.0"
-python-dotenv = "1.0.0"
-requests = "^2.32.5"
+python-dotenv = "^1.2.2"
+requests = "^2.33.0"
 matplotlib = "^3.9.2"
 tabulate = "^0.9.0"
 colorama = "^0.4.6"
 questionary = "^2.1.0"
 rich = "^13.9.4"
-langchain-google-genai = "^2.0.11"
+langchain-google-genai = "^4.4.2"
 pydantic = "^2.4.2"
-langchain-gigachat = "^0.3.12"
-langchain-xai = "^0.2.5"
+langchain-gigachat = "^0.5.1"
+langchain-xai = "^1.3.0"
 yfinance = "^1.2.0"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.4.0"
-black = "^23.7.0"
+pytest = "^9.0.3"
+black = "^24.3.0"
 isort = "^5.12.0"
 flake8 = "^6.1.0"
 cython = ">=3.0.11,<4.0.0"
-setuptools = ">=74,<82"
+setuptools = ">=83,<84"
 
 [tool.poetry.build]
 script = "scripts/build-extension.py"
 
 [build-system]
-requires = ["poetry-core", "cython>=3.0.11,<4.0.0", "setuptools>=74,<82"]
+requires = ["poetry-core", "cython>=3.0.11,<4.0.0", "setuptools>=83,<84"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.black]
