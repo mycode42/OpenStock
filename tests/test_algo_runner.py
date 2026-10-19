@@ -536,15 +536,6 @@ def test_algo_universe_keeps_fixed_membership_and_overnight_asset_flags(monkeypa
     assert not {"dynamic", "selection_source", "selected_count", "target_count"}.intersection(result)
 
 
-def test_one_shot_algo_cli_is_removed(monkeypatch):
-    monkeypatch.setattr(runner.sys, "argv", ["strategy-runner", "--mode", "algo", "--execute"])
-
-    with pytest.raises(SystemExit) as exit_status:
-        runner.main()
-
-    assert exit_status.value.code == 2
-
-
 def test_algo_scan_requires_coordinator_state():
     with pytest.raises(ValueError, match="coordinator"):
         runner.scan(mode="algo")

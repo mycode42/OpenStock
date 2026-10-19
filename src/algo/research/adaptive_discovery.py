@@ -12,14 +12,17 @@ from src.algo.strategies.registry import validate_parameter_profile
 from src.market_data import data_tier
 
 from .files import _atomic_json
+from .candidate_archive import (
+    archive_discoveries, candidate_id, evaluated_candidate_ids, parent_candidates,
+)
 from .adaptive_common import _prepare_args, _read_json_file, _write_report
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
 
 from .adaptive_search import (
     ET, _baseline_improvement, _load_window_data, _ordered_window_options,
-    _run_iterative_discovery_search, _trading_sessions,
+    _profile_for, _run_iterative_discovery_search, _trading_sessions,
 )
-from .settings import FEED, RESEARCH_WARMUP_DAYS
+from .settings import FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES, RESEARCH_WARMUP_DAYS
 
 def run_discovery(args, *, search_func=None) -> dict:
     """Run short-window discovery only and persist detailed plus summary JSON."""
@@ -38,13 +41,14 @@ def run_discovery(args, *, search_func=None) -> dict:
     selected_sessions = sessions[-window:]
     start, end = selected_sessions[0], selected_sessions[-1]
     parent_parameters, parent_metadata = _load_positive_parent(
-        args.output_dir, args.strategy, end=end,
+        getattr(args, "archive_dir", args.output_dir), args.output_dir, args.strategy,
     )
     bars, spy = _load_window_data(
         db=args.db, symbols=args.symbols_resolved, start=start, end=end,
         adjustment=args.adjustment, strategy=args.strategy,
     )
     preaggregated_daily_bars = aggregate_intraday_bars(bars)
+    excluded_candidate_ids = set(getattr(args, "excluded_candidate_ids", ()))
     report = _run_iterative_discovery_search(
         strategy=args.strategy, method=args.search_method, count=args.candidates,
         iterations=args.search_iterations, seed=args.seed,
@@ -52,6 +56,7 @@ def run_discovery(args, *, search_func=None) -> dict:
         bars=bars, spy_daily=spy, start=start, end=end, args=args,
         weights=args.fitness_weights_data, min_trades=args.min_trades,
         parent_parameters=parent_parameters,
+        excluded_candidate_ids=getattr(args, "excluded_candidate_ids", ()),
         preaggregated_daily_bars=preaggregated_daily_bars,
         search_func=search_func,
     )
@@ -60,7 +65,16 @@ def run_discovery(args, *, search_func=None) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(), "research_only": True,
         "live_configuration_changed": False, "trade_or_order_actions": 0,
         "window": {"start": start.isoformat(), "end": end.isoformat(), "completed_sessions": window},
+        "data_version": getattr(args, "data_version", None),
         "parent_candidate": parent_metadata,
+        "archive_sequence": getattr(args, "archive_sequence", None),
+        "search_seed": args.seed,
+        "adaptive_novelty": _novelty_summary(
+            args.strategy, report.get("candidates") or [], excluded_candidate_ids,
+        ),
+        "research_controls": _profile_for(
+            args.strategy, report["selected_candidate"]["parameters"],
+        )["controls"],
         "search_iterations": args.search_iterations,
         "search_iteration_summaries": report.get("iteration_summaries", []),
         "symbols": args.symbols_resolved, "database": str(Path(args.db).resolve()),
@@ -93,6 +107,14 @@ def run_window_ladder_discovery(
             preferred = int(prior["window"]["completed_sessions"])
     ordered = _ordered_window_options(options, preferred)
     end = date.fromisoformat(args.end) if args.end else datetime.now(ET).date() - timedelta(days=1)
+    archive_root = getattr(args, "archive_dir", args.output_dir)
+    seen_candidate_ids = (
+        evaluated_candidate_ids(
+            archive_root, args.strategy, data_version,
+            window_end=end.isoformat(),
+        )
+        if data_version else set()
+    )
     attempts = []
     reports = []
     for window_days in ordered:
@@ -104,10 +126,15 @@ def run_window_ladder_discovery(
         trial_args = argparse.Namespace(**vars(args))
         trial_args.output_dir = str(trial_output)
         trial_args.window_days = window_days
+        trial_args.excluded_candidate_ids = sorted(seen_candidate_ids)
         report = run_discovery(trial_args, search_func=search_func)
         detail, _ = _read_json_file(Path(report["latest_detail_artifact"]))
         if not detail:
             raise ValueError(f"adaptive discovery detail is missing for {args.strategy}, {window_days} sessions")
+        for candidate in detail.get("candidates") or []:
+            parameters = candidate.get("parameters")
+            if isinstance(parameters, dict):
+                seen_candidate_ids.add(candidate_id(args.strategy, parameters))
         comparison = detail.get("baseline_comparison") or {}
         selected = detail.get("selected_candidate") or {}
         baseline = comparison.get("baseline_candidate") or {}
@@ -115,6 +142,7 @@ def run_window_ladder_discovery(
             "window_days": window_days,
             "search_iterations": detail.get("search_iterations", 1),
             "candidate_count_evaluated": detail.get("candidate_count_evaluated"),
+            "adaptive_novelty": detail.get("adaptive_novelty"),
             "search_iteration_summaries": detail.get("search_iteration_summaries", []),
             "selection_status": detail.get("selection_status"),
             "selected_candidate": selected.get("name"),
@@ -166,31 +194,107 @@ def run_window_ladder_discovery(
         "fallback_used": len(attempts) > 1,
         "selection_rule": "require a sample-qualified positive-after-costs candidate with higher fitness than baseline",
     }
+    if args.strategy == "multi_factor":
+        detail["adaptive_window_search"]["minimum_universe_values_searched"] = sorted({
+            int((candidate.get("parameters") or {}).get("min_universe"))
+            for candidate in detail.get("candidates", [])
+            if (candidate.get("parameters") or {}).get("min_universe") is not None
+        })
+        detail["adaptive_window_search"]["minimum_universe_values_configured"] = list(
+            MULTI_FACTOR_MIN_UNIVERSE_VALUES
+        )
+    archived = archive_discoveries(
+        archive_root, args.strategy, [item[1] for item in reports],
+    )
+    baseline = next(
+        (row for row in detail.get("candidates", []) if row.get("name") == "baseline"),
+        None,
+    )
+    baseline_regimes = (baseline or {}).get("regime_metrics") or {}
+    regime_best: dict[str, dict] = {}
+    for candidate in detail.get("candidates") or []:
+        if candidate.get("name") == "baseline":
+            continue
+        parameters = candidate.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        for regime, result in (candidate.get("regime_metrics") or {}).items():
+            base_result = baseline_regimes.get(regime) or {}
+            if not isinstance(result, dict) or not result.get("eligible"):
+                continue
+            fitness = float(result.get("fitness") or 0.0)
+            baseline_fitness = float(base_result.get("fitness") or 0.0)
+            baseline_sample_met = bool(base_result.get("minimum_sample_met"))
+            if baseline_sample_met and fitness <= baseline_fitness + 1e-9:
+                continue
+            current = regime_best.get(regime)
+            if current is None or fitness > current["fitness"]:
+                regime_best[regime] = {
+                    "regime": regime,
+                    "candidate_id": candidate_id(args.strategy, parameters, regime),
+                    "parameters": parameters,
+                    "fitness": fitness,
+                    "metrics": result.get("metrics"),
+                    "source_candidate_id": candidate_id(args.strategy, parameters),
+                    "baseline_fitness": baseline_fitness,
+                    "improved_over_baseline": True,
+                }
+    regime_profiles = [regime_best[key] for key in sorted(regime_best)]
+    detail["adaptive_regime_search"] = {
+        "regimes": [row["regime"] for row in regime_profiles],
+        "profiles": regime_profiles,
+        "selection_basis": "current discovery window, sample-qualified positive-after-costs regime results that improve on the same-window baseline; future-only simulated validation remains required before live promotion",
+        "archive_candidates_added": archived,
+    }
     detail["adaptive_improvement"] = bool(successful)
     return _write_report(args.output_dir, args.strategy, "discovery", detail)
 
-def _load_positive_parent(output_dir: str, strategy: str, *, end: date) -> tuple[dict | None, dict]:
+def _load_positive_parent(archive_dir: str, output_dir: str, strategy: str) -> tuple[list[dict], dict]:
+    archived, metadata = parent_candidates(
+        archive_dir, strategy, limit=6,
+    )
+    if archived:
+        return archived, metadata
     path = Path(output_dir) / strategy / "latest-discovery.json"
     try:
         parent = json.loads(path.read_text())
-        parent_end = date.fromisoformat(str(parent.get("window", {}).get("end", "")))
+        parent_end = str(parent.get("window", {}).get("end") or "") or None
         selected = parent.get("selected_candidate") or {}
         metrics = selected.get("metrics") or {}
         valid = (
             parent.get("schema") == "swarm_algo_adaptive_discovery_v1"
             and parent.get("strategy") == strategy
             and parent.get("selection_status") == "eligible_positive_candidate"
-            and parent_end < end
             and bool(selected.get("eligible"))
             and float(metrics.get("net_return_pct") or 0) > 0
         )
         if not valid:
-            return None, {"used": False, "reason": "no prior positive candidate strictly before this window"}
+            return [], {"used": False, "reason": "no positive archived candidate or prior discovery"}
         parameters = validate_parameter_profile({strategy: selected["parameters"]})[strategy]
-        return parameters, {
+        return [parameters], {
             "used": True, "artifact": str(path.resolve()),
-            "window_end": parent_end.isoformat(),
+            "window_end": parent_end,
             "candidate": selected.get("name"),
+            "count": 1,
         }
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
-        return None, {"used": False, "reason": "no valid prior discovery artifact"}
+        return [], {"used": False, "reason": "no valid prior discovery artifact"}
+
+
+def _novelty_summary(strategy: str, candidates: list[dict], excluded_ids: set[str]) -> dict:
+    unique_ids = set()
+    novel_ids = set()
+    for row in candidates:
+        parameters = row.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        key = candidate_id(strategy, parameters)
+        unique_ids.add(key)
+        is_baseline = row.get("name") == "baseline" or str(row.get("name", "")).endswith(":baseline")
+        if not is_baseline and key not in excluded_ids:
+            novel_ids.add(key)
+    return {
+        "previously_evaluated_parameter_sets": len(excluded_ids),
+        "unique_parameter_sets_evaluated": len(unique_ids),
+        "new_parameter_variants_on_this_data": len(novel_ids),
+    }

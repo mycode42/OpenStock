@@ -63,7 +63,7 @@ def _bars(closes, volumes=None):
 
 
 def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
-    assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 16
+    assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 18
     assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 10
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.05
     assert ALGO_MODE_CONFIG["risk"]["allow_short_positions"] is True
@@ -71,13 +71,13 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["max_short_exposure_pct"] == 0.20
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
     assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.15
-    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_open_positions"] == 10
+    assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 6
-    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_open_positions"] == 6
+    assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 4
-    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["multi_factor"] == 4
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["multi_factor"] == 7
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["multi_factor"] == 2
-    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["event_driven"] == 5
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["event_driven"] == 7
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["event_driven"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["mean_reversion"] == 4
     assert STRATEGY_CONFIG["overnight_entries_enabled"] is True

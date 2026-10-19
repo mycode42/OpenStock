@@ -431,6 +431,16 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
         ),
     )
 
+    trades_by_client_id = {
+        str(trade.get("client_order_id")): trade
+        for trade in trades if trade.get("client_order_id")
+    }
+    for row in results:
+        source = trades_by_client_id.get(str(row.get("client_order_id") or ""), {})
+        for key in ("research_profile_id", "research_profile_regime", "market_regime"):
+            if key in source:
+                row[key] = source[key]
+
     for row in results:
         row.setdefault("submission_status", row.get("status"))
         row.setdefault("broker_status", None)

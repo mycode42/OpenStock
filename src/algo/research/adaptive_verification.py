@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import math
 from pathlib import Path
@@ -13,11 +14,12 @@ from src.algo.backtest import DAILY_WARMUP_DAYS, MIN_REGIME_DAILY_BARS, multi_fa
 from src.algo.market_store import SQLiteBarStore
 from src.algo.cpu import available_cpu_count
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
 from src.market_data import data_tier
 
 from .adaptive_common import _prepare_args, _write_report
 from .adaptive_search import _daily_returns, _distance, _fitness, _fit_window_ladder, _flatten, _load_window_data, _metrics, _profile_for, _run_replay, _trading_sessions
-from .settings import FEED, STRATEGY_FLAVORS
+from .settings import FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES, STRATEGY_FLAVORS
 
 def walk_forward_windows(
     trading_dates: list[date], *, train_days: int, test_days: int, step_days: int,
@@ -77,6 +79,27 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
     train_metrics = selected["metrics"]
     oos_metrics = _metrics(test_report, capital=capital_before)
     oos_fitness, oos_components = _fitness(oos_metrics, args.fitness_weights_data)
+    min_universe_sensitivity = None
+    if args.strategy == "multi_factor":
+        min_universe_sensitivity = {}
+        for min_universe in MULTI_FACTOR_MIN_UNIVERSE_VALUES:
+            parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["multi_factor"])
+            parameters["min_universe"] = min_universe
+            sensitivity_report = _run_replay(
+                strategy=args.strategy, parameters=parameters,
+                symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
+                start=test_start, end=test_end, args=args, capital=capital_before,
+                preaggregated_daily_bars=preaggregated_daily_bars,
+            )
+            min_universe_sensitivity[str(min_universe)] = {
+                "oos_metrics": _metrics(sensitivity_report, capital=capital_before),
+                "oos_trade_pnls": [
+                    float(trade.get("pnl", 0) or 0)
+                    for trade in sensitivity_report.get("closed_trades", [])
+                ],
+                "oos_daily_equity": sensitivity_report.get("daily_equity", []),
+            }
+            del sensitivity_report
     result = {
         "fold": index + 1, **window,
         "selected_candidate": selected["name"],
@@ -94,6 +117,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         "oos_metrics": oos_metrics,
         "oos_trade_pnls": [float(trade.get("pnl", 0) or 0) for trade in test_report.get("closed_trades", [])],
         "fitness_decay": round(float(selected["fitness"]) - oos_fitness, 8),
+        "min_universe_sensitivity": min_universe_sensitivity,
         "top_training_candidates": [
             {key: row[key] for key in ("name", "parameters", "fitness", "metrics", "eligible")}
             for row in discovery["leaderboard"][:5]
@@ -259,6 +283,42 @@ def run_adaptive_walk_forward(args) -> dict:
             ) > 0,
         }
     curve, oos = _stitch(folds, args.capital)
+    min_universe_sensitivity = None
+    if args.strategy == "multi_factor":
+        min_universe_sensitivity = {
+            "method": "paired rolling OOS replay using current default Multi Factor parameters; only min_universe varies",
+            "current_setting": ALGO_DEFAULT_PARAMETERS["multi_factor"]["min_universe"],
+            "thresholds": {},
+        }
+        sensitivity_summaries = {}
+        for min_universe in MULTI_FACTOR_MIN_UNIVERSE_VALUES:
+            sensitivity_folds = []
+            for fold in folds:
+                row = (fold.get("min_universe_sensitivity") or {}).get(str(min_universe))
+                if row is None:
+                    continue
+                sensitivity_folds.append({
+                    "fold": fold["fold"],
+                    "oos_daily_equity": row.get("oos_daily_equity", []),
+                    "oos_trade_pnls": row.get("oos_trade_pnls", []),
+                })
+            _, sensitivity_metrics = _stitch(sensitivity_folds, args.capital)
+            sensitivity_summaries[min_universe] = sensitivity_metrics
+        current_metrics = sensitivity_summaries.get(
+            min_universe_sensitivity["current_setting"], {},
+        )
+        for min_universe, sensitivity_metrics in sensitivity_summaries.items():
+            baseline_return = float(current_metrics.get("net_return_pct") or 0.0)
+            baseline_drawdown = float(current_metrics.get("max_drawdown_pct") or 0.0)
+            min_universe_sensitivity["thresholds"][str(min_universe)] = {
+                **sensitivity_metrics,
+                "delta_net_return_percentage_points_vs_current": round(
+                    float(sensitivity_metrics.get("net_return_pct") or 0.0) - baseline_return, 4,
+                ),
+                "delta_max_drawdown_percentage_points_vs_current": round(
+                    float(sensitivity_metrics.get("max_drawdown_pct") or 0.0) - baseline_drawdown, 4,
+                ),
+            }
     decay_values = [float(row["fitness_decay"]) for row in folds]
     average_decay = statistics.mean(decay_values) if decay_values else 0.0
     stability = _parameter_stability(folds, set(args.search_space_data))
@@ -299,6 +359,7 @@ def run_adaptive_walk_forward(args) -> dict:
         "worker_count": workers,
         "folds": folds,
         "stitched_oos_daily_equity": curve,
+        "min_universe_sensitivity": min_universe_sensitivity,
         "limitations": [
             "The search uses bounded discrete signal parameters; execution and risk settings are held fixed.",
             "Each fold begins with the stitched equity from the prior OOS segment; training searches use fixed starting capital.",
@@ -311,6 +372,7 @@ def run_adaptive_walk_forward(args) -> dict:
         "adaptive_policy_version": detail["adaptive_policy_version"],
         "detail_artifact": None, "fold_count": len(folds),
         "stitched_oos": oos, "average_fitness_decay": round(average_decay, 8),
+        "min_universe_sensitivity": min_universe_sensitivity,
         "median_fitness_decay": round(statistics.median(decay_values), 8) if decay_values else 0.0,
         "parameter_stability": stability,
         "checks": {

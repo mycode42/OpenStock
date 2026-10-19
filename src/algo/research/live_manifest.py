@@ -11,7 +11,9 @@ from src.algo.config import (
     get_algo_research_controls,
 )
 from src.algo.strategies.catalog import STRATEGY_IDS
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.strategies.registry import (
+    ACTIVE_PROFILE_METADATA, ALGO_DEFAULT_PARAMETERS, REGIME_PARAMETER_PROFILES,
+)
 from src.config import get_algo_runtime_settings
 
 
@@ -38,6 +40,20 @@ def live_configuration_manifest(strategies: list[str] | tuple[str, ...]) -> dict
         "strategy_defaults": {
             strategy: deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
             for strategy in selected if strategy in ALGO_DEFAULT_PARAMETERS
+        },
+        "regime_profiles": {
+            strategy: deepcopy(REGIME_PARAMETER_PROFILES[strategy])
+            for strategy in selected if strategy in REGIME_PARAMETER_PROFILES
+        },
+        "regime_profile_ids": {
+            strategy: {
+                regime: (ACTIVE_PROFILE_METADATA.get("profile_ids") or {}).get(
+                    f"{strategy}:{regime}", "base",
+                )
+                for regime in profiles
+            }
+            for strategy, profiles in REGIME_PARAMETER_PROFILES.items()
+            if strategy in selected
         },
     }
     snapshot = _scope_snapshot(snapshot, selected)
@@ -80,7 +96,6 @@ def _scope_snapshot(snapshot: dict, strategies: list[str]) -> dict:
             current_groups = current_risk[key]
             risk[key] = {
                 group: {
-                    "max_open_positions": value.get(group, {}).get("max_open_positions"),
                     "max_entries_per_day": value.get(group, {}).get("max_entries_per_day"),
                     "selected_members": [
                         strategy for strategy in selected
@@ -113,5 +128,13 @@ def _scope_snapshot(snapshot: dict, strategies: list[str]) -> dict:
         "research_controls": controls,
         "strategy_defaults": {
             strategy: defaults[strategy] for strategy in selected if strategy in defaults
+        },
+        "regime_profiles": {
+            strategy: (snapshot.get("regime_profiles") or {})[strategy]
+            for strategy in selected if strategy in (snapshot.get("regime_profiles") or {})
+        },
+        "regime_profile_ids": {
+            strategy: (snapshot.get("regime_profile_ids") or {})[strategy]
+            for strategy in selected if strategy in (snapshot.get("regime_profile_ids") or {})
         },
     }

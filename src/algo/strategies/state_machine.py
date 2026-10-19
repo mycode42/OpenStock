@@ -65,6 +65,9 @@ def _state_for(states: dict, strategy: str, ticker: str) -> dict:
         "submission_outcome": None,
         "last_known_qty": None,
         "entry_action": None,
+        "research_profile_id": None,
+        "research_profile_regime": None,
+        "entry_market_regime": None,
         "opened_at": None,
         "cooldown_until": None,
         "entry_day": None,
@@ -485,6 +488,9 @@ class RuleStrategyStateMachine:
             state["entry_order_id"] = None
             state["entry_client_order_id"] = trade.get("client_order_id")
             state["entry_source"] = "coordinator"
+            state["research_profile_id"] = trade.get("research_profile_id")
+            state["research_profile_regime"] = trade.get("research_profile_regime")
+            state["entry_market_regime"] = trade.get("market_regime")
             state["entry_action"] = action
             state["opened_at"] = None
             state["quarantine_reason"] = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 
 from src.algo.strategies import mean_reversion, momentum, trend_following
@@ -65,6 +66,9 @@ ALGO_DEFAULT_PARAMETERS = {
     "intraday_trend": {"enabled": True, **DAY_DEFAULT_PARAMETERS["trend_following"]},
     "intraday_momentum": {"enabled": True, **DAY_DEFAULT_PARAMETERS["momentum"]},
 }
+BASE_ALGO_DEFAULT_PARAMETERS = deepcopy(ALGO_DEFAULT_PARAMETERS)
+REGIME_PARAMETER_PROFILES: dict[str, dict[str, dict]] = {}
+ACTIVE_PROFILE_METADATA: dict = {}
 
 _registered_strategy_ids = set(ALGO_DEFAULT_PARAMETERS) - {"satellite_overlay"}
 if _registered_strategy_ids != STRATEGY_IDS:
@@ -188,6 +192,52 @@ def validate_parameter_profile(profile: dict) -> dict:
         if key in normalized.get("mean_reversion", {}) and not isinstance(normalized["mean_reversion"][key], bool):
             raise ValueError(f"mean_reversion {key} must be a boolean")
     return normalized
+
+
+def refresh_active_parameter_profile() -> dict:
+    """Reload promoted parameter manifests into the shared registry."""
+    from src.algo.profile_store import effective_profile_metadata
+
+    metadata = effective_profile_metadata()
+    effective = deepcopy(BASE_ALGO_DEFAULT_PARAMETERS)
+    for strategy, values in (metadata.get("parameters") or {}).items():
+        if strategy not in effective:
+            continue
+        merged = {**effective[strategy], **values}
+        effective[strategy] = validate_parameter_profile({strategy: merged})[strategy]
+
+    regimes: dict[str, dict[str, dict]] = {}
+    for strategy, by_regime in (metadata.get("regime_profiles") or {}).items():
+        if strategy not in effective:
+            continue
+        for regime, values in by_regime.items():
+            merged = {**effective[strategy], **values}
+            regimes.setdefault(strategy, {})[regime] = validate_parameter_profile({strategy: merged})[strategy]
+
+    ALGO_DEFAULT_PARAMETERS.clear()
+    ALGO_DEFAULT_PARAMETERS.update(effective)
+    REGIME_PARAMETER_PROFILES.clear()
+    REGIME_PARAMETER_PROFILES.update(regimes)
+    ACTIVE_PROFILE_METADATA.clear()
+    ACTIVE_PROFILE_METADATA.update(metadata)
+    return metadata
+
+
+def parameters_for_regime(strategy: str, regime: str | None = None) -> dict:
+    """Return the effective strategy parameters for the detected regime."""
+    base = deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
+    selected = (REGIME_PARAMETER_PROFILES.get(strategy) or {}).get(str(regime or ""))
+    return {**base, **(selected or {})}
+
+
+def profile_id_for_regime(strategy: str, regime: str | None = None) -> str:
+    metadata = ACTIVE_PROFILE_METADATA
+    ids = metadata.get("profile_ids") or {}
+    regime_key = f"{strategy}:{regime}" if regime else ""
+    return str(ids.get(regime_key) or ids.get(strategy) or "base")
+
+
+refresh_active_parameter_profile()
 
 
 def evaluate(

@@ -17,6 +17,7 @@ import requests
 from src.config import get_algo_runtime_settings
 from src.algo.cpu import available_cpu_count
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
+from src.algo.strategies.registry import refresh_active_parameter_profile
 from src.market_data import data_tier, regular_feed
 
 from .adaptive_pipeline import (
@@ -36,12 +37,13 @@ from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
     ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
-    ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, RESEARCH_START, RESEARCH_WARMUP_DAYS,
+    ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
+    RESEARCH_START, RESEARCH_WARMUP_DAYS,
     ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, LIVE_RESEARCH_STRATEGIES,
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v10-iterative-discovery-2024"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v13-regime-forward-validation-2024"
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +58,7 @@ def _refresh_incremental(store, *, selected_symbols, end_date):
 
 def run_daily_research(args) -> dict:
     """Run one versioned research cohort, reusing compatible artifacts when possible."""
+    refresh_active_parameter_profile()
     runtime_settings = get_algo_runtime_settings()
     total_started = perf_counter()
     if data_tier() != "algo_trader_plus" or regular_feed() != FEED:
@@ -134,6 +137,7 @@ def run_daily_research(args) -> dict:
             "verification_candidates": ADAPTIVE_VERIFICATION_CANDIDATES,
             "verification_test_days": ADAPTIVE_VERIFICATION_TEST_DAYS,
             "verification_step_days": ADAPTIVE_VERIFICATION_STEP_DAYS,
+            "multi_factor_min_universe_values": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
         },
         "strategies": list(RESEARCHABLE_STRATEGIES),
         "live_configuration_sha256": live_snapshot["sha256"],
@@ -165,7 +169,7 @@ def run_daily_research(args) -> dict:
     adaptive_discovery = (
         run_adaptive_discoveries(
             database=database, symbols=covered_symbols, latest_end=latest_end, data_version=data_version,
-            output_dir=adaptive_root, workers=args.workers, force=args.force,
+            output_dir=adaptive_root, workers=args.workers,
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
@@ -209,8 +213,23 @@ def run_daily_research(args) -> dict:
             and cached.get("orchestration", {}).get("fingerprint") == fingerprint
             and (cached.get("portfolio_coordinator_replay") or {}).get("profile_selection_source") == portfolio_source
         ):
+            validation_started = perf_counter()
+            from .forward_validation import run_forward_validation_cycle
+
+            forward_validation = run_forward_validation_cycle(
+                discovery=adaptive_discovery, verification=adaptive_verification,
+                store=store, database=database, symbols=covered_symbols,
+                end=cohort_end, data_version=data_version,
+            )
             cached = {
                 **cached,
+                "status": (
+                    "partial_error"
+                    if forward_validation.get("status") in {"error", "partial_error"}
+                    else cached.get("status", "completed")
+                ),
+                "forward_validation": forward_validation,
+                "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
                 "stage_timings": {
                     **(cached.get("stage_timings") or {}),
                     "adaptive_discovery": {
@@ -220,6 +239,10 @@ def run_daily_research(args) -> dict:
                     "adaptive_verification": {
                         "seconds": adaptive_verification_seconds,
                         "status": adaptive_verification.get("status"),
+                    },
+                    "forward_validation": {
+                        "seconds": round(perf_counter() - validation_started, 3),
+                        "status": forward_validation.get("status"),
                     },
                     "total_seconds": round(perf_counter() - total_started, 3),
                 },
@@ -238,16 +261,30 @@ def run_daily_research(args) -> dict:
                 },
                 "multi_factor_discovery": multi_factor_discovery,
             }
+            cached.setdefault("recommendation", {}).update({
+                "adaptive_parameter_promotion_requires_human_confirmation": False,
+                "forward_validation": (
+                    "Promotion is automatic after the historical gates and the minimum sample of positive forward simulated results versus the current profile."
+                ),
+            })
             cached["orchestration"] = {
                 **(cached.get("orchestration") or {}),
-                "cache_hit": True,
+                "cache_hit": False,
+                "cohort_report_reused": True,
+                "portfolio_reused": True,
             }
-            cached["cache_hit"] = True
+            cached["cache_hit"] = False
+            cached["stage_timings"]["portfolio_replay"] = {
+                "seconds": 0.0,
+                "reused": True,
+            }
             cached["run_date_et"] = datetime.now(ET).date().isoformat()
             cached = _attach_fitness_timeline(cached, Path(args.output_dir))
             _atomic_json(report_path, cached)
             _atomic_json(root / "latest.json", cached)
-            logger.info("Research stages match a cached cohort; refreshed report and fitness timeline")
+            logger.info(
+                "Discovery advanced on the existing quote cohort; reused historical verification and portfolio replay"
+            )
             return cached
 
     cohort_dir.mkdir(parents=True, exist_ok=True)
@@ -285,12 +322,31 @@ def run_daily_research(args) -> dict:
         )
 
     if args.factor_only:
+        validation_started = perf_counter()
+        from .forward_validation import run_forward_validation_cycle
+
+        forward_validation = run_forward_validation_cycle(
+            discovery=adaptive_discovery, verification=adaptive_verification,
+            store=store, database=database, symbols=covered_symbols,
+            end=cohort_end, data_version=data_version, allow_stage=False,
+        )
+        timings["forward_validation"] = {
+            "seconds": round(perf_counter() - validation_started, 3),
+            "status": forward_validation.get("status"),
+        }
         report = {
             "schema": "swarm_algo_nightly_research_v2",
-            "status": "completed", "created_at": datetime.now(timezone.utc).isoformat(),
-            "research_only": True, "live_configuration_changed": False,
+            "status": (
+                "partial_error"
+                if forward_validation.get("status") in {"error", "partial_error"}
+                else "completed"
+            ),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "research_only": not bool(forward_validation.get("live_configuration_changed")),
+            "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
             "trade_or_order_actions": 0, "factor_model": factor_report,
             "factor_only": True,
+            "forward_validation": forward_validation,
             "data": _data_summary(
                 history_start, latest_end, cohort_end, latest_age_days,
                 covered_symbols, symbols, missing, universe_meta, refresh_report,
@@ -306,6 +362,7 @@ def run_daily_research(args) -> dict:
             "limitations": [
                 "Factor fitting is research-only and does not update live weights.",
                 "No adaptive strategy discovery, verification, or portfolio replay was requested.",
+                "Existing forward simulation trials may continue or promote; this factor-only run does not stage new candidates.",
             ],
         }
         report["run_date_et"] = datetime.now(ET).date().isoformat()
@@ -362,11 +419,28 @@ def run_daily_research(args) -> dict:
         }
 
     factor_ic = (factor_report.get("adaptive_prequential_ic") or {}).get("mean_spearman_ic")
+    validation_started = perf_counter()
+    from .forward_validation import run_forward_validation_cycle
+
+    forward_validation = run_forward_validation_cycle(
+        discovery=adaptive_discovery, verification=adaptive_verification,
+        store=store, database=database, symbols=covered_symbols,
+        end=cohort_end, data_version=data_version,
+    )
+    timings["forward_validation"] = {
+        "seconds": round(perf_counter() - validation_started, 3),
+        "status": forward_validation.get("status"),
+    }
     report = {
         "schema": "swarm_algo_nightly_research_v2",
-        "status": "completed" if adaptive_portfolio_ready else "partial",
+        "status": (
+            "partial_error"
+            if forward_validation.get("status") in {"error", "partial_error"}
+            else "completed" if adaptive_portfolio_ready else "partial"
+        ),
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "research_only": True, "live_configuration_changed": False,
+        "research_only": not bool(forward_validation.get("live_configuration_changed")),
+        "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
         "trade_or_order_actions": 0,
         "data": _data_summary(
             history_start, latest_end, cohort_end, latest_age_days,
@@ -388,6 +462,7 @@ def run_daily_research(args) -> dict:
             for strategy in RESEARCHABLE_STRATEGIES
         },
         "multi_factor_discovery": multi_factor_discovery,
+        "forward_validation": forward_validation,
         "portfolio_coordinator_replay": portfolio_report,
         "portfolio_summary": (portfolio_report or {}).get("fold_summary"),
         "recommendation": {
@@ -397,11 +472,14 @@ def run_daily_research(args) -> dict:
                 else "Adaptive verification is incomplete; portfolio replay was skipped."
             ),
             "multi_factor": (
-                "Multi Factor is active through the shared live coordinator using validated default parameters; discovery candidates remain research-only."
+                "Multi Factor is active through the shared live coordinator; regime-specific candidates can update signal parameters after historical and forward simulation gates pass."
                 if factor_ic is not None and factor_ic > 0
-                else "Multi Factor is active through the shared live coordinator using validated default parameters; the latest factor diagnostics were not positive, and discovery candidates remain research-only."
+                else "Multi Factor is active through the shared live coordinator; latest factor diagnostics were not positive, and any regime-specific candidate still needs to pass historical and forward simulation gates."
             ),
-            "adaptive_parameter_promotion_requires_human_confirmation": True,
+            "adaptive_parameter_promotion_requires_human_confirmation": False,
+            "forward_validation": (
+                "Promotion is automatic after the historical gates and the minimum sample of positive forward simulated results versus the current profile."
+            ),
         },
         "orchestration": {**context, "cache_hit": False},
         "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
@@ -410,7 +488,7 @@ def run_daily_research(args) -> dict:
             "The fixed current Algo universe is used across the 2024-onward research range.",
             "The portfolio replay includes only strategies active in live config and available historical overlays.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
-            "The artifacts are research evidence, not a performance forecast or deployment approval.",
+            "Forward trial replays use only sessions after candidate staging and modeled execution costs; results are not a performance forecast.",
             *([] if adaptive_portfolio_ready else [
                 "Adaptive verification did not produce coordinator artifacts for every active strategy; the portfolio replay was skipped.",
             ]),
@@ -537,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     _atomic_json(output_dir / f"{today}.json", report)
     _atomic_json(output_dir / "latest.json", report)
+    discovery_report = ((report.get("adaptive_research") or {}).get("discovery") or {})
     print(json.dumps({
         "status": report["status"],
         "report": str((output_dir / "latest.json").resolve()),
@@ -547,9 +626,27 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "stored_coverage": report["data"].get("stored_coverage"),
         "strategies": len(report.get("adaptive_strategy_artifacts", {})),
+        "discovery": {
+            "status": discovery_report.get("status"),
+            "strategies": {
+                strategy: {
+                    "archive_sequence": item.get("archive_sequence"),
+                    "new_parameter_variants_on_this_data": (
+                        item.get("adaptive_novelty") or {}
+                    ).get("new_parameter_variants_on_this_data"),
+                }
+                for strategy, item in (discovery_report.get("strategies") or {}).items()
+            },
+        },
         "portfolio": report.get("portfolio_summary"),
         "cache_hit": report.get("orchestration", {}).get("cache_hit", False),
-        "live_configuration_changed": False,
+        "live_configuration_changed": bool(report.get("live_configuration_changed")),
+        "forward_validation": {
+            "status": (report.get("forward_validation") or {}).get("status"),
+            "active_trial_count": (report.get("forward_validation") or {}).get("active_trial_count"),
+            "staged_candidate_ids": (report.get("forward_validation") or {}).get("staged_candidate_ids", []),
+            "promoted_candidate_count": len((report.get("forward_validation") or {}).get("promoted", [])),
+        },
     }, sort_keys=True, default=str))
     return 0
 

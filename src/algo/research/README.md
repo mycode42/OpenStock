@@ -1,9 +1,9 @@
 # Algo adaptive research
 
 The scheduled entry point is `python -m src.algo.research.auto_research`.
-It refreshes and fingerprints SIP data, reuses compatible adaptive artifacts,
-runs missing parameter discovery and rolling verification, then replays the
-verified selections through the portfolio coordinator.
+It refreshes and fingerprints SIP data, runs a new seeded discovery search on
+every invocation, reuses compatible rolling verification results, then replays
+the verified selections through the portfolio coordinator when needed.
 
 The pipeline uses dynamic parameter search over bounded signal-parameter
 spaces. Discovery tries recent windows (10/20/30 sessions for intraday and
@@ -46,14 +46,17 @@ walk-forward implementation is the rolling verification stage in
 `adaptive.py`; it owns its fold construction, fitting, and out-of-sample
 evaluation.
 
-Adaptive discovery and verification artifacts are reused only when their
-strategy, data range, universe, window policy, candidate count, and policy
-version and iteration count match. Discovery evaluates candidate replays in process batches up to
+Discovery always advances each strategy's persistent search sequence and can
+use eligible archive members as parents even when the quote window is unchanged.
+The market data still determines candidate scores and the rolling verification
+range. Verification artifacts are reused only when their strategy, data range,
+universe, window policy, candidate count, and policy version and iteration
+count match. Discovery evaluates candidate replays in process batches up to
 the configured CPU budget; Bayesian proposals for each batch use the results
 from completed batches. Strategy searches run one at a time so their candidate
 workers do not oversubscribe the machine. Verification shares its CPU budget
-across strategies and folds. Research reports Multi Factor candidates but
-never changes the profile used by its live route.
+across strategies and folds. Multi Factor candidates can change the live signal
+profile only after historical verification and forward simulation pass.
 
 Each nightly invocation adds a fitness scorecard to
 `layers/fitness-history.json` and embeds the latest comparison and recent
@@ -62,9 +65,10 @@ baseline; verified fitness is computed from stitched out-of-sample results.
 Run-to-run comparisons are shown only when the strategy set, fixed universe,
 research start, configuration, and score policy match. Since the rolling OOS
 range expands over time, those changes show performance trends rather than a
-controlled test of the newest parameters. The optimizer may seed a later
-research search from an eligible positive discovery, but each candidate still
-needs rolling verification and never changes live settings automatically.
+controlled test of the newest parameters. Each invocation advances discovery
+seeds and explores eligible archive parents plus independent variants, even if
+the quote window is unchanged. Rolling verification and forward simulation
+still gate promotion to live settings.
 Equity compounds across OOS folds within a run, not across nightly reports.
 
 AutoResearch logs stage changes and per-strategy completions to the console and

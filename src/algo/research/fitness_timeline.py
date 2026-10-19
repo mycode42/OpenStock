@@ -70,6 +70,7 @@ def _fitness_scorecard(report: dict) -> dict:
             "discovery": {
                 "status": discovery.get("status", "missing"),
                 "selection_status": discovery.get("selection_status"),
+                "novelty": discovery.get("adaptive_novelty"),
                 "improvement_found": bool(window_search.get("improvement_found")),
                 "search_iterations": discovery.get("search_iterations", 1),
                 "search_iteration_summaries": discovery.get("search_iteration_summaries", []),
@@ -156,6 +157,9 @@ def _fitness_scorecard(report: dict) -> dict:
 
 def _fitness_timeline_entry(report: dict, *, source: str = "scheduled_run") -> dict:
     orchestration = report.get("orchestration") or {}
+    discoveries = (
+        (report.get("adaptive_research") or {}).get("discovery") or {}
+    ).get("strategies") or {}
     created_at = report.get("created_at") or datetime.now(timezone.utc).isoformat()
     return {
         "invocation_id": datetime.now(timezone.utc).isoformat(),
@@ -166,6 +170,15 @@ def _fitness_timeline_entry(report: dict, *, source: str = "scheduled_run") -> d
         "status": report.get("status", "unknown"),
         "cache_hit": bool(orchestration.get("cache_hit", report.get("cache_hit", False))),
         "data_end": (report.get("data") or {}).get("research_data_end"),
+        "search_sequences": {
+            strategy: item.get("archive_sequence")
+            for strategy, item in discoveries.items()
+            if item.get("archive_sequence") is not None
+        },
+        "discovery_recomputed": any(
+            item.get("status") in {"completed", "error"}
+            for item in discoveries.values()
+        ),
         "scorecard": _fitness_scorecard(report),
     }
 
@@ -243,14 +256,29 @@ def _compare_fitness_runs(current: dict, previous: dict | None) -> dict:
         if isinstance(old_return, (int, float)) and isinstance(new_return, (int, float)):
             portfolio_delta = round(float(new_return) - float(old_return), 8)
 
-    same_run = bool(current.get("run_id") and current.get("run_id") == previous.get("run_id"))
-    reason = (
-        "Same cached cohort; no new scored data or new research computation."
-        if same_run
-        else "Scores use the same strategy, data, and policy definitions. The rolling OOS range expands as new sessions arrive, so deltas are trend changes, not a controlled A/B test."
-        if comparable
-        else "Prior run is not directly comparable because these scope fields changed: " + ", ".join(reasons)
+    same_market_cohort = bool(
+        current.get("run_id") and current.get("run_id") == previous.get("run_id")
     )
+    same_search = current.get("search_sequences") == previous.get("search_sequences")
+    same_run = bool(
+        same_market_cohort and same_search
+        and not current.get("discovery_recomputed")
+    )
+    if same_run:
+        reason = "Same cached cohort and same search sequences; no new discovery was computed."
+    elif same_market_cohort and current.get("discovery_recomputed"):
+        reason = (
+            "Same quote cohort with a fresh search sequence; discovery compares candidates "
+            "on unchanged training bars and remains exploratory."
+        )
+        if not comparable:
+            reason += " Prior scores are not directly comparable because these scope fields changed: " + ", ".join(reasons)
+    elif same_market_cohort:
+        reason = "Same quote cohort; no new market data was added to the scored history."
+    elif comparable:
+        reason = "Scores use the same strategy, data, and policy definitions. The rolling OOS range expands as new sessions arrive, so deltas are trend changes, not a controlled A/B test."
+    else:
+        reason = "Prior run is not directly comparable because these scope fields changed: " + ", ".join(reasons)
     return {
         "available": True,
         "comparable": comparable,
@@ -258,6 +286,7 @@ def _compare_fitness_runs(current: dict, previous: dict | None) -> dict:
         "prior_run_date_et": previous.get("run_date_et"),
         "reason": reason,
         "same_cached_cohort": same_run,
+        "same_market_cohort": same_market_cohort,
         "strategy_changes": changes if comparable else {},
         "portfolio_compounded_return_delta_percentage_points": portfolio_delta,
     }
@@ -271,14 +300,14 @@ def _next_run_plan(scorecard: dict) -> dict:
         if verification.get("status") == "error":
             action = "Retry verification after resolving its reported error; the portfolio replay remains blocked until all required verifications complete."
         elif discovery.get("candidate_parent_for_next_run", {}).get("eligible"):
-            action = "Seed the next research search from this eligible positive recent discovery, explore nearby variants, and require a fresh rolling OOS pass before promotion."
+            action = "Use this eligible positive discovery as one parent in the next seeded search, alongside independent variants, even if quote dates are unchanged; require rolling OOS and forward simulation gates before promotion."
         elif discovery.get("status") == "error":
             action = "Retry discovery after resolving its reported error; keep live parameters unchanged."
         else:
-            action = "Keep the configured baseline because discovery found no eligible positive improvement; continue the window ladder and recheck on rolling OOS folds."
+            action = "Keep the configured baseline live; the next invocation advances the search seed and prioritizes unseen variants where available, then checks candidates against rolling OOS and forward simulation gates."
         plans[strategy] = action
     return {
-        "policy": "Recent discovery may seed the next search only as a research candidate. Baseline remains when no after-cost improvement qualifies. Every run is reverified out of sample; research never changes live parameters.",
+        "policy": "Every invocation advances persistent search seeds and explores candidates independently of quote-date changes. Eligible positive archive members may seed mutations; baseline remains live until historical and forward simulation gates pass.",
         "by_strategy": plans,
     }
 
@@ -318,6 +347,8 @@ def _attach_fitness_timeline(report: dict, output_dir: Path) -> dict:
             "status": entry.get("status"),
             "cache_hit": entry.get("cache_hit"),
             "data_end": entry.get("data_end"),
+            "search_sequences": entry.get("search_sequences"),
+            "discovery_recomputed": entry.get("discovery_recomputed"),
             "oos_scores": {
                 strategy: {
                     "fitness": (item.get("verification") or {}).get("fitness"),

@@ -21,3 +21,4 @@ class Position:
     favorable_extreme: float | None = None
     entry_commission: float = 0.0
     borrow_cost: float = 0.0
+    entry_regime: str = "unknown"

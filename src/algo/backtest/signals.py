@@ -9,6 +9,8 @@ from datetime import date, datetime, timedelta
 import statistics
 
 from .config import BAR_MINUTES, ET
+from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from src.algo.strategies.multi_factor.signals import SignalGenerator
 from src.algo.strategies.catalog import (
     CORE_STRATEGIES, INTRADAY_STRATEGIES, STRATEGY_CATALOG,
     SWING_CORE_STRATEGIES,
@@ -24,6 +26,12 @@ class ReplaySignalsMixin:
     def _multi_factor_rebalance(self, session: date) -> tuple[dict[str, dict], dict | None]:
         if not self.multi_factor_enabled:
             return {}, None
+        regime_name = str((self._current_regime or {}).get("regime", "unknown"))
+        parameters = self.parameters_for_regime("multi_factor", regime_name)
+        if parameters != self.multi_factor_config_key:
+            self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(parameters))
+            self.multi_factor_config_key = parameters
+            self.last_multi_factor_rebalance_key = None
         key = self.multi_factor_generator.rebalance_key(session)
         if key == self.last_multi_factor_rebalance_key:
             return {}, None
@@ -213,7 +221,9 @@ class ReplaySignalsMixin:
                         if daily_strategy else history
                     )
                     signal_kwargs = {
-                        "parameters": self.profile.get(strategy),
+                        "parameters": self.parameters_for_regime(
+                            strategy, str((self._current_regime or {}).get("regime", "unknown")),
+                        ),
                         "position_qty": position_qty,
                         "entry_at": held.entry_at if held is not None else None,
                         "entry_price": held.entry_price if held is not None else None,
@@ -370,11 +380,6 @@ class ReplaySignalsMixin:
             members = set(group.get("strategies", []))
             if strategy not in members:
                 continue
-            group_open = sum(position.strategy in members for position in self.positions.values())
-            group_open += sum(order["strategy"] in members for order in self.pending_entries.values())
-            if group_open >= int(group.get("max_open_positions", 10**9)):
-                self.rejections["research_strategy_group_open_cap"] += 1
-                return
             group_entries = sum(
                 count for (day, member), count in self.entry_counts_by_strategy.items()
                 if day == self.day_key and member in members

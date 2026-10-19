@@ -16,10 +16,10 @@ it cannot take over or close a position owned by another strategy. Watch and
 low-confidence recommendations produce no trade signal. Short selling is
 disabled. New entries are also blocked by the default volatile-regime brake.
 
-The strategy can hold up to five positions and open up to five new positions
+The strategy can hold up to seven positions and open up to five new positions
 per day, subject to shared portfolio limits. Each snapshot expires after 90
 minutes (four hours maximum). Each position targets at most 4% of equity, for
-a maximum 20% across five positions. The 4% target is consistent with the 4%
+a maximum 28% across seven positions. The 4% target is consistent with the 4%
 stop and 0.16% maximum event risk per position. Ticker and portfolio limits
 can reduce a position further. The live runner then applies the usual quote,
 sizing, portfolio coordinator, lifecycle, and `risk_manager.validate_trade()`
@@ -113,9 +113,9 @@ warn when an event type has no upcoming date in the coverage window.
 - Entries stop 90 minutes after `reaction_start_at`; the supplied calendar
   window can end earlier. Signals are long-only and target at most 2.5% of
   equity. A 2% stop and 0.05% equity event-risk budget bound the proposed size.
-- At most three event proposals per ISO week, a 24-hour portfolio cooldown,
-  and a five-day per-ticker cooldown. Volatile-regime days are blocked by
-  default. All of these settings are configurable.
+- Event IDs cannot be reused, and a five-day per-ticker cooldown applies.
+  Volatile-regime days are blocked by default. Shared Algo daily, swing, and
+  open-position limits govern the live scheduled-AI strategy.
 
 The generated `Signal` carries `stop_pct`, `target_weight`, and `event_id`. Live
 Algo processing turns it into the usual trade proposal through `_make_trade`;

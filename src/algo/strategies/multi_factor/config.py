@@ -46,7 +46,7 @@ class MultiFactorConfig:
     minimum_hold_sessions: int = 3
     maximum_holding_sessions: int = 15
     cooldown_days: int = 5
-    max_positions: int = 4
+    max_positions: int = 7
     enable_intraday_tilt: bool = False
 
     def __post_init__(self) -> None:
@@ -134,7 +134,7 @@ class MultiFactorConfig:
             raise ValueError("at least one factor weight must be positive")
         for name, low, high in (
             ("minimum_hold_sessions", 1, 5), ("maximum_holding_sessions", 5, 20),
-            ("cooldown_days", 1, 15), ("max_positions", 3, 5),
+            ("cooldown_days", 1, 15), ("max_positions", 3, 7),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:

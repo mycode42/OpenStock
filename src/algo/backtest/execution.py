@@ -212,6 +212,7 @@ class ReplayExecutionMixin:
         self.closed_trades.append({
             "ticker": ticker,
             "strategy": position.strategy,
+            "entry_regime": position.entry_regime,
             "direction": "short" if position.qty < 0 else "long",
             "qty": position.qty,
             "entry_at": position.entry_at,
@@ -307,6 +308,7 @@ class ReplayExecutionMixin:
                 trailing_activation_pct=order.get("trailing_activation_pct"),
                 favorable_extreme=fill_price,
                 entry_commission=commission,
+                entry_regime=str((self._current_regime or {}).get("regime", "unknown")),
             )
 
     def _fill_pending_exits(self, bars: dict[str, dict], timestamp: datetime) -> None:

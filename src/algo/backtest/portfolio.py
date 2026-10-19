@@ -26,7 +26,7 @@ from src.algo.strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig,
 )
 from src.algo.strategies.regime import rank_strategies
-from src.algo.strategies.registry import validate_parameter_profile
+from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
 from src.algo.strategies.rule_pipeline import evaluate_rule_signal
 from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.algo.strategies.swing_common import CachedDailyBarHistory
@@ -52,6 +52,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         profile: dict | None = None,
         strategies: list[str] | None = None,
         research_controls: dict | None = None,
+        regime_profiles: dict[str, dict[str, dict]] | None = None,
         event_calendar: EventCalendar | None = None,
         spread_bps: float = 3.0,
         commission_per_share: float = 0.005,
@@ -103,6 +104,13 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.short_borrow_annual_pct = float(short_borrow_annual_pct)
         self.unknown_borrow_penalty_bps = float(unknown_borrow_penalty_bps)
         self.profile = validate_parameter_profile(profile or {})
+        self.regime_profiles: dict[str, dict[str, dict]] = {}
+        for strategy, by_regime in (regime_profiles or {}).items():
+            if not isinstance(by_regime, dict):
+                raise ValueError(f"{strategy} regime profiles must be an object")
+            for regime, values in by_regime.items():
+                normalized = validate_parameter_profile({strategy: values})[strategy]
+                self.regime_profiles.setdefault(strategy, {})[regime] = normalized
         self.strategy_filter = validate_strategy_filter(strategies)
         self.borrow_availability = {
             (str(ticker).upper(), str(day)): bool(available)
@@ -146,7 +154,10 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             self.satellite_config.multi_factor_enabled
             and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
         )
-        self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(self.profile.get("multi_factor")))
+        self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(
+            self.parameters_for_regime("multi_factor", "unknown")
+        ))
+        self.multi_factor_config_key = self.multi_factor_generator.config.to_dict()
         all_daily_bars = (
             preaggregated_daily_bars
             if preaggregated_daily_bars is not None
@@ -221,3 +232,14 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             self.tactical_tickers,
             _,
         ) = _get_universe_maps("algo")
+
+    def parameters_for_regime(self, strategy: str, regime: str) -> dict:
+        """Return the current strategy profile with an optional regime override."""
+        values = {
+            **ALGO_DEFAULT_PARAMETERS[strategy],
+            **(self.profile.get(strategy) or {}),
+        }
+        return {
+            **values,
+            **((self.regime_profiles.get(strategy) or {}).get(regime) or {}),
+        }

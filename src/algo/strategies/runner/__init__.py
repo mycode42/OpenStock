@@ -33,7 +33,11 @@ from src.algo.strategies.regime import rank_strategies
 from src.algo.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
 from src.algo.strategies.regime_advisor import apply_regime_advisory
 from src.market_data import feeds_for_session, historical_delay_seconds, regular_feed
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, ALGO_RULE_MODULES, RULE_MODULES, evaluate as evaluate_strategy
+from src.algo.strategies.registry import (
+    ALGO_DEFAULT_PARAMETERS, ALGO_RULE_MODULES, RULE_MODULES,
+    evaluate as evaluate_strategy, parameters_for_regime, profile_id_for_regime,
+    refresh_active_parameter_profile,
+)
 from src.algo.strategies.rule_pipeline import evaluate_rule_signal
 from src.algo.strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
 from src.algo.strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine

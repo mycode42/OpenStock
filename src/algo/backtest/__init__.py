@@ -27,7 +27,7 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
     def __init__(
         self, *, symbols, intraday_bars, spy_daily_bars, start, end, feed, data_adjustment,
         initial_capital=100_000, slippage_bps=5, profile=None, strategies=None,
-        research_controls=None, event_calendar=None, spread_bps=3.0,
+        research_controls=None, regime_profiles=None, event_calendar=None, spread_bps=3.0,
         commission_per_share=0.005, short_borrow_annual_pct=0.03,
         unknown_borrow_penalty_bps=25.0, borrow_availability=None,
         coordinator_config=None, force_close_at_end=False,
@@ -40,6 +40,7 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
             start=start, end=end, feed=feed, data_adjustment=data_adjustment,
             initial_capital=initial_capital, slippage_bps=slippage_bps, profile=profile,
             strategies=strategies, research_controls=research_controls,
+            regime_profiles=regime_profiles,
             event_calendar=event_calendar, spread_bps=spread_bps,
             commission_per_share=commission_per_share,
             short_borrow_annual_pct=short_borrow_annual_pct,

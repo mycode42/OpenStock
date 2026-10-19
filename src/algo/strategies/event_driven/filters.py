@@ -46,16 +46,6 @@ class EventFilter:
         portfolio = state.get("_PORTFOLIO", {})
         if event.event_id in portfolio.get("fired_event_ids", []):
             return self._reject("event_already_used")
-        current_week = as_of.isocalendar()[:2]
-        weekly_entries = [
-            item for item in portfolio.get("signals", [])
-            if _week_key(item.get("at")) == current_week
-        ]
-        if len(weekly_entries) >= self.config.max_entries_per_week:
-            return self._reject("weekly_entry_cap")
-        last_global = _timestamp(portfolio.get("last_signal_at"))
-        if last_global and as_of - last_global < timedelta(hours=self.config.cooldown_hours_portfolio):
-            return self._reject("portfolio_cooldown")
         ticker_state = state.get(ticker.upper(), {})
         last_ticker = _timestamp(ticker_state.get("last_event_signal_at"))
         if last_ticker and as_of - last_ticker < timedelta(days=self.config.cooldown_days_per_ticker):
@@ -65,13 +55,8 @@ class EventFilter:
 
     @staticmethod
     def record(event: ScheduledEvent, ticker: str, as_of: datetime, state: dict) -> None:
-        # A reserved uppercase pseudo-symbol keeps portfolio-wide throttles in
-        # the existing per-strategy SQLite state map without a second store.
+        # Keep event-id deduplication in the existing strategy state map.
         portfolio = state.setdefault("_PORTFOLIO", {})
-        signals = [item for item in portfolio.get("signals", []) if _timestamp(item.get("at"))]
-        signals.append({"event_id": event.event_id, "ticker": ticker.upper(), "at": as_of.isoformat()})
-        portfolio["signals"] = signals[-64:]
-        portfolio["last_signal_at"] = as_of.isoformat()
         fired = list(portfolio.get("fired_event_ids", []))
         if event.event_id not in fired:
             fired.append(event.event_id)
@@ -88,8 +73,3 @@ def _timestamp(value: object) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else None
-
-
-def _week_key(value: object) -> tuple[int, int] | None:
-    timestamp = _timestamp(value)
-    return timestamp.isocalendar()[:2] if timestamp else None

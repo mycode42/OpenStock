@@ -25,9 +25,7 @@ class EventStrategyConfig:
     risk_multiplier: float = 0.5
     follow_through_sessions: int = 2
     cooldown_days_per_ticker: int = 5
-    cooldown_hours_portfolio: int = 24
-    max_entries_per_week: int = 3
-    max_positions: int = 5
+    max_positions: int = 7
 
     @classmethod
     def from_dict(cls, values: dict | None = None) -> "EventStrategyConfig":
@@ -42,8 +40,7 @@ class EventStrategyConfig:
             raise ValueError("event_driven enable flags must be booleans")
         integer_bounds = {
             "reaction_window_days": (1, 5), "follow_through_sessions": (1, 3),
-            "cooldown_days_per_ticker": (1, 30), "cooldown_hours_portfolio": (0, 168),
-            "max_entries_per_week": (1, 5), "max_positions": (1, 5),
+            "cooldown_days_per_ticker": (1, 30), "max_positions": (1, 7),
             "minimum_confidence": (0, 100),
         }
         for key, (low, high) in integer_bounds.items():

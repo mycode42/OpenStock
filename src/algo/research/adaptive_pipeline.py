@@ -15,17 +15,19 @@ from src.algo.cpu import available_cpu_count
 from .artifact_cache import read_json
 from .files import _atomic_json
 from .live_manifest import live_configuration_manifest
+from .candidate_archive import record_verification, reserve_search_seed
 from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
     ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
-    ADAPTIVE_WINDOW_DAYS, ADJUSTMENT, ET, FEED,
+    ADAPTIVE_WINDOW_DAYS, ADJUSTMENT, CORE_RESEARCH_CONTROLS, ET, FEED,
+    MULTI_FACTOR_MIN_UNIVERSE_VALUES,
     MAX_ADAPTIVE_FOLD_WORKERS_PER_STRATEGY, RESEARCHABLE_STRATEGIES,
     STRATEGY_FLAVORS,
 )
 
-ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v8-iterative-candidate-search-2024"
-ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v7-rolling-2024"
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v10-novelty-first-search-2026"
+ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v8-regime-archive-2024"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
     "spread_bps": 3.0,
@@ -55,48 +57,26 @@ def _adaptive_window_options(strategy: str) -> list[int]:
 
 def run_adaptive_discoveries(
     *, database: str, symbols: list[str], latest_end: date, data_version: str, output_dir: Path,
-    workers: int, force: bool,
+    workers: int,
 ) -> dict:
-    """Run recent-window discovery for every strategy, reusing today's artifacts."""
+    """Run a new seeded search for every strategy on each research invocation."""
     statuses = {}
     jobs = []
     total = len(RESEARCHABLE_STRATEGIES)
-    logger.info("Discovery: checking reusable results for %d strategies", total)
+    logger.info("Discovery: reserving new search sequences for %d strategies", total)
     for strategy in RESEARCHABLE_STRATEGIES:
         options = _adaptive_window_options(strategy)
-        latest_path = output_dir / strategy / "latest-discovery.json"
-        prior, _ = read_json(latest_path)
-        window_search = (prior or {}).get("adaptive_window_search") or {}
-        reusable = bool(
-            not force
-            and prior
-            and prior.get("schema") == "swarm_algo_adaptive_discovery_v1"
-            and prior.get("strategy") == strategy
-            and prior.get("window", {}).get("end") == latest_end.isoformat()
-            and window_search.get("pipeline_version") == ADAPTIVE_PIPELINE_VERSION
-            and window_search.get("configured_window_days") == options
-            and window_search.get("candidate_count") == ADAPTIVE_DISCOVERY_CANDIDATES
-            and window_search.get("search_iterations") == ADAPTIVE_DISCOVERY_ITERATIONS
-            and window_search.get("data_version") == data_version
-            and prior.get("data_tier") == "algo_trader_plus"
-            and prior.get("feed") == FEED
-            and prior.get("adjustment") == ADJUSTMENT
-            and set(prior.get("symbols") or []) == set(symbols)
-            and prior.get("database") == str(Path(database).resolve())
-        )
-        if reusable:
-            statuses[strategy] = _discovery_status(prior, latest_path, "reused")
-            logger.info(
-                "Discovery progress %d/%d: %s reused",
-                len(statuses), total, strategy,
-            )
-        else:
-            jobs.append((strategy, database, symbols, latest_end, data_version, output_dir, options))
+        archive_dir = output_dir / "archive"
+        seed, sequence = reserve_search_seed(archive_dir, strategy, ADAPTIVE_PIPELINE_VERSION)
+        jobs.append((
+            strategy, database, symbols, latest_end, data_version,
+            output_dir, options, archive_dir, seed, sequence,
+        ))
 
     if jobs:
         worker_count = min(max(1, workers), available_cpu_count())
         logger.info(
-            "Discovery: running %d uncached strategy searches; each candidate search can use up to %d workers",
+            "Discovery: running %d new strategy searches; each candidate search can use up to %d workers",
             len(jobs), worker_count,
         )
         for job in jobs:
@@ -125,7 +105,8 @@ def run_adaptive_discoveries(
 
 
 def _run_adaptive_discovery_job(payload: tuple) -> dict:
-    strategy, database, symbols, latest_end, data_version, output_dir, options, candidate_workers = payload
+    (strategy, database, symbols, latest_end, data_version, output_dir, options,
+     archive_dir, seed, sequence, candidate_workers) = payload
     from .adaptive import run_window_ladder_discovery
 
     discovery_args = SimpleNamespace(
@@ -133,8 +114,9 @@ def _run_adaptive_discovery_job(payload: tuple) -> dict:
         adjustment=ADJUSTMENT, search_method="bayes",
         candidates=ADAPTIVE_DISCOVERY_CANDIDATES,
         search_iterations=ADAPTIVE_DISCOVERY_ITERATIONS,
-        seed=latest_end.toordinal() + sum(map(ord, strategy)),
+        seed=seed, archive_dir=str(archive_dir), archive_sequence=sequence,
         search_space=None, fitness_weights=None, min_trades=3, capital=100_000.0,
+        data_version=data_version,
         slippage_bps=5.0, spread_bps=3.0, commission_per_share=0.005,
         short_borrow_annual_pct=3.0, unknown_borrow_penalty_bps=25.0,
         borrow_availability=None, start=None, end=latest_end.isoformat(),
@@ -149,7 +131,11 @@ def _run_adaptive_discovery_job(payload: tuple) -> dict:
     if not detail:
         raise ValueError(f"adaptive discovery artifact was not readable for {strategy}")
     latest = Path(report["latest_detail_artifact"])
-    return _discovery_status(detail, latest, "completed")
+    return {
+        **_discovery_status(detail, latest, "completed"),
+        "archive_sequence": sequence,
+        "search_seed": seed,
+    }
 
 
 def _discovery_status(detail: dict, path: Path, status: str) -> dict:
@@ -161,12 +147,16 @@ def _discovery_status(detail: dict, path: Path, status: str) -> dict:
         "adaptive_improvement": bool(detail.get("adaptive_improvement")),
         "search_iterations": detail.get("search_iterations", 1),
         "search_iteration_summaries": detail.get("search_iteration_summaries", []),
+        "adaptive_novelty": detail.get("adaptive_novelty"),
         "window": detail.get("window"),
         "window_search": detail.get("adaptive_window_search"),
+        "archive_sequence": detail.get("archive_sequence"),
+        "search_seed": detail.get("search_seed"),
         "parent_candidate": {
             "used": bool(parent.get("used")),
             "candidate": parent.get("candidate"),
             "window_end": parent.get("window_end"),
+            "candidate_ids": parent.get("candidate_ids", []),
             "reason": parent.get("reason"),
         },
         "selected_candidate": {
@@ -252,6 +242,14 @@ def run_adaptive_verifications(
                 index, total, strategy, status.get("error", "verification failed"),
             )
             continue
+        detail_path = status.get("detail_artifact")
+        if detail_path:
+            detail, _ = read_json(Path(detail_path))
+            if detail:
+                status["archive_verification_folds_added"] = record_verification(
+                    output_dir / "archive", strategy, detail,
+                )
+                statuses[strategy] = status
         detail, _ = read_json(output_dir / strategy / "latest-walk-forward.json")
         summary = status.get("summary")
         if not summary:
@@ -404,6 +402,15 @@ def _adaptive_verification_is_reusable(
         and config.get("step_days") == ADAPTIVE_VERIFICATION_STEP_DAYS
         and search.get("method") == "bayes"
         and search.get("candidates_per_fold") == ADAPTIVE_VERIFICATION_CANDIDATES
+        and all(
+            (fold.get("train_controls") or {}) == CORE_RESEARCH_CONTROLS
+            for fold in detail.get("folds", [])
+        )
+        and (
+            strategy != "multi_factor"
+            or (search.get("search_space") or {}).get("min_universe")
+            == list(MULTI_FACTOR_MIN_UNIVERSE_VALUES)
+        )
     )
 
 

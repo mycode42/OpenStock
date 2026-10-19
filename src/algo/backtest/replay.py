@@ -70,8 +70,10 @@ class ReplayLoopMixin:
                         regime=str(self._current_regime.get("regime", "unknown")),
                         held_positions=held_momentum,
                         parameters={
-                            **ALGO_DEFAULT_PARAMETERS[momentum_strategy],
-                            **(self.profile.get(momentum_strategy) or {}),
+                            **self.parameters_for_regime(
+                                momentum_strategy,
+                                str(self._current_regime.get("regime", "unknown")),
+                            ),
                             "hard_stop_pct": self.risk["stop_loss_pct_by_strategy"][momentum_strategy],
                             "trailing_stop_pct": self.risk["trailing_stop_pct_by_strategy"][momentum_strategy],
                             "trailing_activation_pct": self.risk["trailing_activation_pct_by_strategy"][momentum_strategy],
@@ -171,7 +173,10 @@ class ReplayLoopMixin:
             self.max_drawdown = max(self.max_drawdown, (self.peak_equity - equity) / self.peak_equity)
             # Capture the last replay mark for each New York trading date.
             if is_session_end:
-                self.daily_curve.append({"date": trading_day.isoformat(), "equity": round(equity, 2)})
+                self.daily_curve.append({
+                    "date": trading_day.isoformat(), "equity": round(equity, 2),
+                    "regime": str((self._current_regime or {}).get("regime", "unknown")),
+                })
 
         final_equity = self._equity()
         closed_pnls = [trade["pnl"] for trade in self.closed_trades]

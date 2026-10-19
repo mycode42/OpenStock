@@ -128,12 +128,14 @@ def test_event_calendar_records_cooldown_after_a_proposal():
     ) is None
 
 
-def test_event_config_and_profile_keep_frequency_and_holding_bounded():
+def test_event_config_keeps_holding_bounded_without_weekly_or_portfolio_throttles():
     settings = validate_parameter_profile({"event_driven": {"enabled": True}})["event_driven"]
     assert settings["follow_through_sessions"] == 2
-    assert settings["max_positions"] == 5
-    with pytest.raises(ValueError, match="max_entries_per_week"):
-        EventStrategyConfig.from_dict({"max_entries_per_week": 8})
+    assert settings["max_positions"] == 7
+    for removed_setting in ("max_entries_per_week", "cooldown_hours_portfolio"):
+        assert removed_setting not in settings
+        with pytest.raises(ValueError, match=removed_setting):
+            EventStrategyConfig.from_dict({removed_setting: 1})
 
 
 @pytest.mark.parametrize(

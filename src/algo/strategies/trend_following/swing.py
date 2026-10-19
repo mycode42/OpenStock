@@ -26,8 +26,8 @@ class SwingTrendConfig:
     trailing_stop_pct: float = 0.07
     trailing_activation_pct: float = 0.05
     cooldown_days: int = 5
-    max_positions: int = 4
-    max_entries_per_day: int = 1
+    max_positions: int = 7
+    max_entries_per_day: int = 2
     max_position_pct: float = 0.04
     risk_multiplier: float = 0.75
 
@@ -59,7 +59,7 @@ class SwingTrendConfig:
             ("fast_period", 5, 40), ("slow_period", 30, 100),
             ("slope_lookback_days", 3, 15), ("minimum_hold_sessions", 2, 5),
             ("maximum_holding_sessions", 10, 20), ("cooldown_days", 3, 10),
-            ("max_positions", 3, 5), ("max_entries_per_day", 1, 2),
+            ("max_positions", 3, 7), ("max_entries_per_day", 1, 2),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:

@@ -37,8 +37,8 @@ class SwingMeanReversionConfig:
     trailing_stop_pct: float = 0.06
     trailing_activation_pct: float = 0.04
     cooldown_days: int = 5
-    max_positions: int = 4
-    max_entries_per_day: int = 1
+    max_positions: int = 7
+    max_entries_per_day: int = 2
     max_position_pct: float = 0.04
     risk_multiplier: float = 0.75
 
@@ -66,7 +66,7 @@ class SwingMeanReversionConfig:
             "lookback_days": (10, 30), "minimum_stretch_days": (2, 5),
             "slope_lookback_days": (3, 15), "minimum_hold_sessions": (1, 3),
             "maximum_holding_sessions": (5, 15), "cooldown_days": (3, 10),
-            "max_positions": (3, 5), "max_entries_per_day": (1, 1),
+            "max_positions": (3, 7), "max_entries_per_day": (1, 2),
         }
         for key, (low, high) in integer_bounds.items():
             value = getattr(self, key)

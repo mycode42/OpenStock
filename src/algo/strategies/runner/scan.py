@@ -147,6 +147,11 @@ def scan(
     timezone = _dependencies["timezone"]
     _is_protective_sell_order = _dependencies["_is_protective_sell_order"]
     strategy_priority = _dependencies["strategy_priority"]
+    refresh_active_parameter_profile = _dependencies["refresh_active_parameter_profile"]
+    parameters_for_regime = _dependencies["parameters_for_regime"]
+    profile_id_for_regime = _dependencies["profile_id_for_regime"]
+    refresh_active_parameter_profile()
+    ALGO_DEFAULT_PARAMETERS = _dependencies["ALGO_DEFAULT_PARAMETERS"]
 
     if mode not in {"swing", "day", "algo"}:
         raise ValueError("Strategy scan mode must be swing, day, or algo")
@@ -398,6 +403,9 @@ def scan(
             entry_pause_reasons.append("deterministic SPY regime is unavailable")
             if historical_status == "ok":
                 historical_status = "degraded"
+    regime_name = str(regime.get("regime", "unknown"))
+    if mode == "algo":
+        multi_factor_parameters = parameters_for_regime("multi_factor", regime_name)
     allowed_satellites = set(regime.get("satellites", []))
     equity = float(account.get("equity", 0) or 0)
     quote_errors: list[str] = []
@@ -523,7 +531,7 @@ def scan(
     momentum_diagnostics = None
     if mode == "algo":
         try:
-            momentum_parameters = dict(ALGO_DEFAULT_PARAMETERS["momentum"])
+            momentum_parameters = parameters_for_regime("momentum", regime_name)
             momentum_parameters.update({
                 "hard_stop_pct": risk_config["stop_loss_pct_by_strategy"]["momentum"],
                 "trailing_stop_pct": risk_config["trailing_stop_pct_by_strategy"]["momentum"],
@@ -723,7 +731,7 @@ def scan(
                         protective_state = (strategy_states or {}).get(strategy_name, {}).get(ticker, {})
                         signal = evaluate_rule_signal(
                             strategy_name, ticker, signal_bars,
-                            parameters=ALGO_DEFAULT_PARAMETERS.get(strategy_name),
+                            parameters=parameters_for_regime(strategy_name, regime_name),
                             position_qty=position_qty,
                             entry_at=protective_state.get("opened_at"),
                             entry_price=(position.get("avg_entry_price") if position else None),
@@ -851,10 +859,6 @@ def scan(
         }
     }
     group_limits = risk_config.get("strategy_group_limits", {})
-    group_open_counts = {
-        name: sum(owner in set(group.get("strategies", [])) for owner in owner_map.values())
-        for name, group in group_limits.items()
-    }
     group_entry_counts = {
         name: sum(
             int(state.get("entries_today", 0) or 0)
@@ -945,10 +949,7 @@ def scan(
             for group_name, group in group_limits.items():
                 if strategy not in group.get("strategies", []):
                     continue
-                if group_open_counts.get(group_name, 0) >= int(group.get("max_open_positions", 10**9)):
-                    item["suppressed_reason"] = f"{group_name} open-position budget reached"
-                    group_blocked = True
-                elif group_entry_counts.get(group_name, 0) >= int(group.get("max_entries_per_day", 10**9)):
+                if group_entry_counts.get(group_name, 0) >= int(group.get("max_entries_per_day", 10**9)):
                     item["suppressed_reason"] = f"{group_name} daily-entry budget reached"
                     group_blocked = True
                 if group_blocked:
@@ -1015,7 +1016,18 @@ def scan(
             trade["client_order_id"] = f"rule-{today.replace('-', '')}-{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             trade["signal_bar_time"] = item.get("signal_bar_time")
             if mode == "algo":
-                trade["market_regime"] = str(regime.get("regime", "unknown"))
+                trade["market_regime"] = regime_name
+                owner_state = (strategy_states or {}).get(item["strategy"], {}).get(item["ticker"], {})
+                trade["research_profile_id"] = (
+                    owner_state.get("research_profile_id")
+                    if item["action"] in {"sell", "cover"} and owner_state.get("research_profile_id")
+                    else profile_id_for_regime(item["strategy"], regime_name)
+                )
+                trade["research_profile_regime"] = (
+                    owner_state.get("research_profile_regime", regime_name)
+                    if item["action"] in {"sell", "cover"}
+                    else regime_name
+                )
             if item.get("event_id"):
                 trade["event_id"] = item["event_id"]
             if item.get("strategy") == "event_driven" and event_generator is not None:
@@ -1055,7 +1067,6 @@ def scan(
                 for group_name, group in group_limits.items():
                     if strategy in group.get("strategies", []):
                         group_entry_counts[group_name] = group_entry_counts.get(group_name, 0) + 1
-                        group_open_counts[group_name] = group_open_counts.get(group_name, 0) + 1
             for satellite in item.get("satellite_confirmations", []):
                 if satellite in satellite_confirmation_counts:
                     satellite_confirmation_counts[satellite] += 1

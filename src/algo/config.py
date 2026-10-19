@@ -19,6 +19,7 @@ class AlgoEntryLimits:
 
 
 ALGO_ENTRY_LIMITS = AlgoEntryLimits()
+ALGO_MIN_CASH_PCT = 0.15
 
 
 @dataclass(frozen=True)
@@ -139,15 +140,13 @@ ALGO_MODE_CONFIG = {
         "weekly_loss_limit": 0.05,
         "no_buy_if_down_pct": 0.02,
         "max_trades_per_day": ALGO_ENTRY_LIMITS.max_daily_entries,
-        "max_open_positions": 16,
-        "max_positions_per_strategy": 5,
+        "max_open_positions": 18,
+        "max_positions_per_strategy": 7,
         "max_positions_per_strategy_by_strategy": {
-            "trend_following": 4, "momentum": 4, "swing_mean_reversion": 4,
-            "swing_trend_following": 4, "swing_momentum": 4,
-            "multi_factor": 4,
-            "event_driven": 5,
-            "mean_reversion": 5,
-            "intraday_trend": 1, "intraday_momentum": 1,
+            "trend_following": 7, "momentum": 7, "swing_mean_reversion": 7,
+            "swing_trend_following": 7, "swing_momentum": 7,
+            "multi_factor": 7, "event_driven": 7, "mean_reversion": 7,
+            "intraday_trend": 7, "intraday_momentum": 7,
         },
         "max_short_positions": 5,
         "max_short_exposure_pct": 0.20,
@@ -178,31 +177,31 @@ ALGO_MODE_CONFIG = {
         },
         "max_entries_per_strategy_per_day": {
             "mean_reversion": 4,
-            "trend_following": 1,
-            "momentum": 1,
+            "trend_following": 2,
+            "momentum": 2,
             "swing_trend_following": 1,
             "swing_momentum": 1,
             "multi_factor": 2,
             "event_driven": 5,
-            "swing_mean_reversion": 1,
+            "swing_mean_reversion": 2,
             "intraday_trend": 1,
             "intraday_momentum": 1,
         },
         "strategy_group_limits": {
             "swing": {
                 "strategies": list(strategy_ids_for_group("swing")),
-                "max_open_positions": 10, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_swing_entries,
+                "max_entries_per_day": ALGO_ENTRY_LIMITS.max_swing_entries,
             },
             "intraday_core": {
                 "strategies": list(strategy_ids_for_group("intraday_core")),
-                "max_open_positions": 6, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
+                "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
             },
             "intraday_satellites": {
                 "strategies": list(strategy_ids_for_group("intraday_satellites")),
-                "max_open_positions": 2, "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
+                "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
             },
         },
-        "min_cash_pct": 0.15,
+        "min_cash_pct": ALGO_MIN_CASH_PCT,
         "max_tactical_pct": 0.04,
         "max_tactical_positions": 2,
         "flatten_eod": False,
@@ -214,8 +213,9 @@ ALGO_MODE_CONFIG = {
 # Risk-manager limits remain the final approval layer after coordinator sizing.
 ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
     "max_name_pct": 0.08,
-    "max_gross_pct": 1.00,
-    "max_net_long_pct": 0.60,
+    # Shared equity-based exposure ceiling; preserves the configured cash floor.
+    "max_gross_pct": 1.0 - ALGO_MIN_CASH_PCT,
+    "max_net_long_pct": 1.0 - ALGO_MIN_CASH_PCT,
     "max_net_short_pct": 0.40,
     "max_daily_entries": ALGO_ENTRY_LIMITS.max_daily_entries,
     "max_intraday_entries": ALGO_ENTRY_LIMITS.max_intraday_entries,
@@ -238,7 +238,6 @@ ALGO_SERVICE_CONFIG = {
     "state_file": "data/algo_state.json",
     "lock_file": "/run/lock/swarm-trader-algo.lock",
 }
-
 
 def get_algo_research_controls() -> dict:
     """Return the live portfolio limits that research replays must respect."""

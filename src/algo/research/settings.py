@@ -68,3 +68,7 @@ ADAPTIVE_VERIFICATION_CANDIDATES = 8
 ADAPTIVE_VERIFICATION_TEST_DAYS = 63
 ADAPTIVE_VERIFICATION_STEP_DAYS = 63
 
+# The configured Algo universe has 22 symbols. Test thresholds around the
+# current 20-name requirement without changing the data-coverage floor above.
+MULTI_FACTOR_MIN_UNIVERSE_VALUES = (16, 18, 20, 22)
+

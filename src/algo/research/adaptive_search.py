@@ -21,8 +21,12 @@ from src.algo.backtest.execution import build_replay_timeline
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, PARAMETER_KEYS, validate_parameter_profile
 from src.algo.strategies.universe import configured_universe
+from .candidate_archive import candidate_id
 from .replay_logging import quiet_coordinator_rejections
-from .settings import ADJUSTMENT, CORE_RESEARCH_CONTROLS, FEED, RESEARCH_START, RESEARCH_WARMUP_DAYS
+from .settings import (
+    ADJUSTMENT, CORE_RESEARCH_CONTROLS, FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
+    RESEARCH_START, RESEARCH_WARMUP_DAYS,
+)
 
 ET = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -36,6 +40,8 @@ DEFAULT_FITNESS_WEIGHTS = {
     "profit_factor": 0.15,
     "drawdown": 0.10,
 }
+
+ADAPTIVE_REGIMES = ("trending_up", "trending_down", "range_bound", "volatile")
 
 DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
     "mean_reversion": {
@@ -62,6 +68,7 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
     },
     "multi_factor": {
         "rebalance_frequency": ["daily", "weekly"], "top_n": [1, 2, 3, 4],
+        "min_universe": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
         "minimum_score": [0.0, 0.05, 0.1, 0.2],
         "direction_mode": ["long_only", "regime_dependent", "long_short"],
         "factor_weights": [
@@ -90,6 +97,62 @@ def _metrics(report: dict, *, capital: float) -> dict:
     }
     raw["sortino_annualized"] = round(sortino, 4) if sortino is not None else None
     return raw
+
+
+def _metrics_by_regime(report: dict, *, capital: float, weights: dict[str, float], min_trades: int) -> dict:
+    """Score daily replay returns and closed trades in their point-in-time regime."""
+    rows = report.get("daily_equity") or []
+    trades_by_regime: dict[str, list[dict]] = {regime: [] for regime in ADAPTIVE_REGIMES}
+    for trade in report.get("closed_trades") or []:
+        regime = str(trade.get("entry_regime") or "unknown")
+        if regime in trades_by_regime:
+            trades_by_regime[regime].append(trade)
+
+    returns_by_regime: dict[str, list[float]] = {regime: [] for regime in ADAPTIVE_REGIMES}
+    previous = float(capital)
+    for row in rows:
+        try:
+            equity = float(row.get("equity"))
+        except (TypeError, ValueError):
+            continue
+        regime = str(row.get("regime") or "unknown")
+        if regime in returns_by_regime and previous > 0 and equity > 0:
+            returns_by_regime[regime].append(equity / previous - 1.0)
+        if equity > 0:
+            previous = equity
+
+    result = {}
+    for regime in ADAPTIVE_REGIMES:
+        values = returns_by_regime[regime]
+        equity = float(capital)
+        curve = []
+        for index, daily_return in enumerate(values):
+            equity *= 1.0 + daily_return
+            curve.append({"date": str(index), "equity": equity})
+        trades = trades_by_regime[regime]
+        metrics = _metrics({"daily_equity": curve}, capital=capital)
+        pnls = [float(row.get("pnl") or 0.0) for row in trades]
+        gross_profit = sum(value for value in pnls if value > 0)
+        gross_loss = -sum(value for value in pnls if value < 0)
+        metrics.update({
+            "closed_trade_count": len(trades),
+            "entry_count": len(trades),
+            "win_rate_pct": round(100.0 * sum(value > 0 for value in pnls) / len(pnls), 4) if pnls else None,
+            "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else (None if not gross_profit else float("inf")),
+            "regime_session_count": len(values),
+        })
+        fitness, components = _fitness(metrics, weights)
+        count_ok = len(trades) >= min_trades and len(values) >= 15
+        positive = float(metrics.get("net_return_pct") or 0.0) > 0
+        result[regime] = {
+            "metrics": metrics,
+            "fitness": round(fitness, 8),
+            "fitness_components": {key: round(value, 8) for key, value in components.items()},
+            "eligible": bool(count_ok and positive),
+            "minimum_sample_met": bool(count_ok),
+            "positive_after_costs": bool(positive),
+        }
+    return result
 
 def _daily_returns(curve: list[dict], initial_equity: float) -> list[float]:
     returns = []
@@ -228,29 +291,60 @@ def _bayes_proposal(space: dict[str, list], history: list[dict], seen: set[str],
 
 def _candidate_parameters(
     strategy: str, method: str, count: int, seed: int, space: dict[str, list],
-    parent_parameters: dict | None = None,
+    parent_parameters: dict | list[dict] | None = None,
+    excluded_candidate_ids: set[str] | None = None,
 ) -> list[dict]:
-    """Produce a bounded parameter bank for grid and random searches."""
+    """Produce a bounded parameter bank, prioritizing variants unseen on these bars."""
     if count < 1 or count > 512:
         raise ValueError("candidate count must be between 1 and 512")
     baseline = deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
+    excluded = set(excluded_candidate_ids or ())
+
+    def previously_evaluated(parameters: dict) -> bool:
+        return candidate_id(strategy, parameters) in excluded
+
     output = [{"name": "baseline", "parameters": validate_parameter_profile({strategy: baseline})[strategy]}]
     seen = {json.dumps(baseline, sort_keys=True, separators=(",", ":"))}
     rng = random.Random(seed)
-    if parent_parameters is not None and len(output) < count:
+    if strategy == "multi_factor" and len(output) < count:
+        for min_universe in space.get("min_universe", []):
+            variation = deepcopy(baseline)
+            variation["min_universe"] = min_universe
+            try:
+                parameters = _make_parameters(strategy, variation)
+            except ValueError:
+                continue
+            key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+            if key in seen or previously_evaluated(parameters):
+                continue
+            seen.add(key)
+            output.append({
+                "name": f"min_universe_{min_universe}", "parameters": parameters,
+            })
+            if len(output) >= count:
+                break
+    raw_parents = parent_parameters if isinstance(parent_parameters, list) else [parent_parameters]
+    parents = []
+    for raw in raw_parents:
+        if not isinstance(raw, dict):
+            continue
         try:
-            parent = validate_parameter_profile({strategy: parent_parameters})[strategy]
+            parent = validate_parameter_profile({strategy: raw})[strategy]
         except ValueError:
-            parent = None
-        if parent is not None:
+            continue
+        if parent not in parents:
+            parents.append(parent)
+    if parents and len(output) < count:
+        for index, parent in enumerate(parents[:max(1, count // 4)]):
             key = json.dumps(parent, sort_keys=True, separators=(",", ":"))
-            if key not in seen:
+            if key not in seen and not previously_evaluated(parent):
                 seen.add(key)
-                output.append({"name": "previous_positive", "parameters": parent})
-            # Reserve part of today's budget for one-parameter derivatives of
-            # yesterday's positive candidate; the remaining budget explores.
-            derivative_limit = min(count, max(len(output), count // 2))
-            for parameter, values in space.items():
+                output.append({"name": f"archive_{index + 1:02d}", "parameters": parent})
+        # Spend a stable fraction of the budget on neighboring variants from
+        # several archived elites; reserve the rest for independent exploration.
+        derivative_limit = min(count, max(len(output), count * 2 // 3))
+        for parameter, values in space.items():
+            for parent_index, parent in enumerate(parents):
                 for value in values:
                     if len(output) >= derivative_limit:
                         break
@@ -263,12 +357,17 @@ def _candidate_parameters(
                     except ValueError:
                         continue
                     key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-                    if key in seen:
+                    if key in seen or previously_evaluated(parameters):
                         continue
                     seen.add(key)
-                    output.append({"name": f"parent_{len(output):03d}", "parameters": parameters})
+                    output.append({
+                        "name": f"archive_{parent_index + 1:02d}_variant_{len(output):03d}",
+                        "parameters": parameters,
+                    })
                 if len(output) >= derivative_limit:
                     break
+            if len(output) >= derivative_limit:
+                break
     if method == "grid":
         combinations = itertools.product(*(space[key] for key in space))
         for row in combinations:
@@ -278,7 +377,7 @@ def _candidate_parameters(
             except ValueError:
                 continue
             key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-            if key in seen:
+            if key in seen or previously_evaluated(parameters):
                 continue
             seen.add(key)
             output.append({"name": f"grid_{len(output):03d}", "parameters": parameters})
@@ -293,7 +392,7 @@ def _candidate_parameters(
             except ValueError:
                 continue
             key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-            if key in seen:
+            if key in seen or previously_evaluated(parameters):
                 continue
             seen.add(key)
             output.append({"name": f"random_{len(output):03d}", "parameters": parameters})
@@ -361,6 +460,8 @@ def _run_replay(
     *, strategy: str, parameters: dict, symbols: list[str], bars: dict,
     spy_daily: list[dict], start: date, end: date, args,
     capital: float | None = None,
+    regime_profiles: dict[str, dict[str, dict]] | None = None,
+    force_close_at_end: bool = True,
     preaggregated_daily_bars: dict[str, list[dict]] | None = None,
     precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
 ) -> dict:
@@ -375,7 +476,8 @@ def _run_replay(
         unknown_borrow_penalty_bps=args.unknown_borrow_penalty_bps,
         borrow_availability=args.borrow_availability_data,
         profile=profile["parameters"], strategies=profile["strategies"],
-        research_controls=profile["controls"], force_close_at_end=True,
+        research_controls=profile["controls"], force_close_at_end=force_close_at_end,
+        regime_profiles=regime_profiles,
         preaggregated_daily_bars=preaggregated_daily_bars,
         precomputed_timeline=precomputed_timeline,
     )
@@ -405,6 +507,10 @@ def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
     )
     metrics = _metrics(report, capital=context["args"].capital)
     fitness, components = _fitness(metrics, context["weights"])
+    regime_metrics = _metrics_by_regime(
+        report, capital=context["args"].capital,
+        weights=context["weights"], min_trades=context["min_trades"],
+    )
     enough_trades = int(metrics.get("closed_trade_count") or 0) >= context["min_trades"]
     positive_after_costs = float(metrics.get("net_return_pct") or 0) > 0
     del report
@@ -412,6 +518,7 @@ def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
         "name": candidate["name"], "parameters": candidate["parameters"],
         "metrics": metrics, "fitness": round(fitness, 8), "_fitness_raw": fitness,
         "fitness_components": {key: round(value, 8) for key, value in components.items()},
+        "regime_metrics": regime_metrics,
         "eligible": enough_trades and positive_after_costs,
         "minimum_trade_count_met": enough_trades,
         "positive_after_costs": positive_after_costs,
@@ -427,7 +534,7 @@ def _run_search_with_bars(
     space: dict[str, list], symbols: list[str], bars: dict,
     spy_daily: list[dict], start: date, end: date, args,
     weights: dict[str, float], min_trades: int,
-    parent_parameters: dict | None = None,
+    parent_parameters: dict | list[dict] | None = None,
     progress_label: str | None = None,
     preaggregated_daily_bars: dict[str, list[dict]] | None = None,
     precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
@@ -451,6 +558,7 @@ def _run_search_with_bars(
     }
     candidates = _candidate_parameters(
         strategy, method, count, seed, space, parent_parameters=parent_parameters,
+        excluded_candidate_ids=getattr(args, "excluded_candidate_ids", None),
     )
     evaluated: list[dict] = []
     history: list[dict] = []
@@ -485,7 +593,8 @@ def _run_search_with_bars(
                 except ValueError:
                     continue
                 key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-                if key in seen:
+                excluded = getattr(args, "excluded_candidate_ids", ()) or ()
+                if key in seen or candidate_id(strategy, parameters) in excluded:
                     continue
                 seen.add(key)
                 batch.append({
@@ -542,7 +651,8 @@ def _run_iterative_discovery_search(
     space: dict[str, list], symbols: list[str], bars: dict,
     spy_daily: list[dict], start: date, end: date, args,
     weights: dict[str, float], min_trades: int,
-    parent_parameters: dict | None = None,
+    parent_parameters: dict | list[dict] | None = None,
+    excluded_candidate_ids: set[str] | list[str] | tuple[str, ...] = (),
     preaggregated_daily_bars: dict[str, list[dict]] | None = None,
     search_func=None,
 ) -> dict:
@@ -553,9 +663,15 @@ def _run_iterative_discovery_search(
     candidates = []
     iteration_summaries = []
     incumbent = None
+    excluded = set(excluded_candidate_ids)
     for iteration in range(1, iterations + 1):
-        active_parent = incumbent["parameters"] if incumbent else parent_parameters
-        search = (search_func or _run_search_with_bars)(
+        active_parent = (
+            [incumbent["parameters"], *(parent_parameters if isinstance(parent_parameters, list) else ([parent_parameters] if parent_parameters else []))]
+            if incumbent else parent_parameters
+        )
+        args.excluded_candidate_ids = excluded
+        search_runner = search_func or _run_search_with_bars
+        search_options = dict(
             strategy=strategy, method=method, count=count,
             seed=seed + (iteration - 1) * 104_729, space=space, symbols=symbols,
             bars=bars, spy_daily=spy_daily, start=start, end=end, args=args,
@@ -564,6 +680,7 @@ def _run_iterative_discovery_search(
             progress_label=f"iteration {iteration}/{iterations}",
             preaggregated_daily_bars=preaggregated_daily_bars,
         )
+        search = search_runner(**search_options)
         selected = search["selected_candidate"]
         comparison = _baseline_improvement(search)
         selected_name = f"iteration_{iteration:02d}:{selected.get('name', 'unknown')}"
@@ -586,6 +703,7 @@ def _run_iterative_discovery_search(
             "improved_vs_baseline": comparison["improved"],
         })
         for row in search["candidates"]:
+            excluded.add(candidate_id(strategy, row["parameters"]))
             original_name = str(row.get("name", "candidate"))
             candidates.append({
                 **row,
