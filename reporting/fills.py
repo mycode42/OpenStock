@@ -2,8 +2,8 @@
 
 The FILL endpoint supplies execution quantities and prices, including partial
 fills. FIFO basis is reconstructed from the complete fetched fill history.
-If a sell lacks preceding purchase lots, or broker positions disagree with
-the fill-derived inventory, realized P&L is unknown for that symbol.
+If a closing fill lacks preceding FIFO lots, or broker positions disagree
+with the fill-derived inventory, realized P&L is unknown for that symbol.
 
 Only exact mode-tagged journal order IDs, or broker-verified bracket child IDs
 linked to such an entry order, can attribute P&L to a strategy. This is gross
@@ -95,8 +95,10 @@ def _parse_fill(raw: dict) -> Fill:
     order_id = str(raw.get("order_id") or "").strip()
     symbol = str(raw.get("symbol") or "").upper().strip()
     side = str(raw.get("side") or "").lower().strip()
-    if not activity_id or not order_id or not symbol or side not in {"buy", "sell"}:
-        raise FillHistoryError("FILL activity lacks an ID, order ID, symbol, or valid side")
+    if not activity_id or not order_id or not symbol or side not in {
+        "buy", "sell", "sell_short", "buy_to_cover",
+    }:
+        raise FillHistoryError("FILL activity lacks an ID, order ID, symbol, or supported side")
     return Fill(
         activity_id=activity_id,
         order_id=order_id,
@@ -186,11 +188,19 @@ def fetch_positions(
 
 def _journal_side(action: object) -> str | None:
     value = str(action or "").lower().strip()
-    if value in {"buy", "cover"}:
+    if value == "buy":
         return "buy"
-    if value in {"sell", "short"}:
+    if value == "cover":
+        return "buy_to_cover"
+    if value == "sell":
         return "sell"
+    if value == "short":
+        return "sell_short"
     return None
+
+
+def _closing_side_for_open_side(side: str) -> str | None:
+    return {"buy": "sell", "sell_short": "buy_to_cover"}.get(side)
 
 
 def _journal_index(journal_entries: Iterable[dict], mode: str) -> tuple[dict[str, _JournalOrder], list[str]]:
@@ -248,8 +258,8 @@ def calculate_realized_pnl(
 ) -> dict:
     """Compute gross FIFO realized P&L from complete, validated fill history.
 
-    since is inclusive and until exclusive; both filter realized sell events
-    only. All earlier fills still establish FIFO cost basis. If basis is
+    since is inclusive and until exclusive; both filter realized closing
+    events only. All earlier fills still establish FIFO cost basis. If basis is
     incomplete for any symbol, total realized_pnl is None.
     """
     if mode not in {"swing", "day", "algo"}:
@@ -286,7 +296,10 @@ def calculate_realized_pnl(
         parent = journal_by_order.get(parent_id) if parent_id else None
         parent_strategy = None
         if parent:
-            if parent.symbol == fill.symbol and parent.side != fill.side:
+            if (
+                parent.symbol == fill.symbol
+                and _closing_side_for_open_side(parent.side) == fill.side
+            ):
                 parent_strategy = parent.strategy
             else:
                 attribution_conflicts.add(fill.order_id)
@@ -296,7 +309,8 @@ def calculate_realized_pnl(
             return None
         return direct_strategy or parent_strategy
 
-    lots: dict[str, deque[_Lot]] = defaultdict(deque)
+    long_lots: dict[str, deque[_Lot]] = defaultdict(deque)
+    short_lots: dict[str, deque[_Lot]] = defaultdict(deque)
     net_qty: dict[str, Decimal] = defaultdict(Decimal)
     basis_errors: dict[str, str] = {}
     sales: list[dict] = []
@@ -304,22 +318,32 @@ def calculate_realized_pnl(
         if fill.side == "buy":
             net_qty[fill.symbol] += fill.qty
             if fill.symbol not in basis_errors:
-                lots[fill.symbol].append(
+                long_lots[fill.symbol].append(
                     _Lot(fill.qty, fill.price, strategy_for(fill), fill.order_id)
                 )
             continue
 
-        net_qty[fill.symbol] -= fill.qty
+        if fill.side == "sell_short":
+            net_qty[fill.symbol] -= fill.qty
+            if fill.symbol not in basis_errors:
+                short_lots[fill.symbol].append(
+                    _Lot(fill.qty, fill.price, strategy_for(fill), fill.order_id)
+                )
+            continue
+
+        is_short_cover = fill.side == "buy_to_cover"
+        net_qty[fill.symbol] += fill.qty if is_short_cover else -fill.qty
         sale = {"fill": fill, "pnl": Decimal(0), "portions": []}
         sales.append(sale)
         if fill.symbol in basis_errors:
             continue
         remaining = fill.qty
         exit_strategy = strategy_for(fill)
-        while remaining > 0 and lots[fill.symbol]:
-            lot = lots[fill.symbol][0]
+        inventory_lots = short_lots[fill.symbol] if is_short_cover else long_lots[fill.symbol]
+        while remaining > 0 and inventory_lots:
+            lot = inventory_lots[0]
             matched = min(remaining, lot.qty)
-            pnl = matched * (fill.price - lot.price)
+            pnl = matched * (lot.price - fill.price if is_short_cover else fill.price - lot.price)
             strategy = lot.strategy if lot.strategy and lot.strategy == exit_strategy else None
             if lot.strategy and exit_strategy and lot.strategy != exit_strategy:
                 attribution_conflicts.add(fill.order_id)
@@ -328,9 +352,12 @@ def calculate_realized_pnl(
             remaining -= matched
             lot.qty -= matched
             if lot.qty == 0:
-                lots[fill.symbol].popleft()
+                inventory_lots.popleft()
         if remaining > 0:
-            basis_errors[fill.symbol] = "sell quantity exceeds preceding buy fills"
+            basis_errors[fill.symbol] = (
+                "buy_to_cover quantity exceeds preceding sell_short fills"
+                if is_short_cover else "sell quantity exceeds preceding buy fills"
+            )
 
     inventory_mismatches: dict[str, dict[str, str]] = {}
     if current_positions is not None:
@@ -363,6 +390,7 @@ def calculate_realized_pnl(
                 "activity_id": fill.activity_id,
                 "order_id": fill.order_id,
                 "symbol": fill.symbol,
+                "side": fill.side,
                 "qty": _money(fill.qty),
                 "transaction_time": fill.transaction_time.isoformat(),
                 "realized_pnl": None,
@@ -384,6 +412,7 @@ def calculate_realized_pnl(
             "activity_id": fill.activity_id,
             "order_id": fill.order_id,
             "symbol": fill.symbol,
+            "side": fill.side,
             "qty": _money(fill.qty),
             "transaction_time": fill.transaction_time.isoformat(),
             "realized_pnl": _money(sale["pnl"]),
@@ -395,7 +424,8 @@ def calculate_realized_pnl(
     return {
         "mode": mode,
         "fill_count": len(parsed),
-        "sell_fill_count": len(period_sales),
+        "sell_fill_count": sum(sale["fill"].side == "sell" for sale in period_sales),
+        "closing_fill_count": len(period_sales),
         "realized_pnl": _money(covered_pnl) if complete else None,
         "covered_realized_pnl": _money(covered_pnl),
         "realized_pnl_complete": complete,
@@ -415,7 +445,7 @@ def calculate_realized_pnl(
         "attribution_conflicts": sorted(attribution_conflicts),
         "realized_fills": events,
         "period": {"since": since, "until": until},
-        "basis_assumption": "FILL history includes all position-changing share transactions; fees and corporate actions are excluded",
+        "basis_assumption": "FILL history includes all position-changing long and short share transactions; fees and corporate actions are excluded",
     }
 
 
@@ -572,7 +602,7 @@ def get_account_fill_report(
     unmatched_ids = fill_order_ids - set(journal_by_order)
     parent_ids = {
         order_id for order_id, row in journal_by_order.items()
-        if row.side == "buy"
+        if row.side in {"buy", "sell_short"}
     }
     parent_links, lookup_errors = ({}, [])
     if parent_ids and unmatched_ids:

@@ -111,6 +111,27 @@ def test_partial_fills_use_decimal_fifo_across_entry_lots():
     assert report["strategy_attribution_complete"]
 
 
+def test_short_open_and_cover_fills_use_fifo_and_attribute_realized_pnl():
+    fills = [
+        activity("short-open", "short-entry", "sell_short", 2, 100, 0),
+        activity("short-cover", "cover-exit", "buy_to_cover", 2, 80, 1),
+    ]
+    rows = [journal("short-entry", "short"), journal("cover-exit", "cover")]
+
+    report = fill_analytics.calculate_realized_pnl(
+        fills, rows, mode="algo", current_positions=[],
+    )
+
+    assert report["realized_pnl_complete"]
+    assert report["position_reconciliation"] == "matched"
+    assert money(report["realized_pnl"]) == Decimal("40")
+    assert money(report["strategy_pnl"]["momentum"]) == Decimal("40")
+    assert report["sell_fill_count"] == 0
+    assert report["closing_fill_count"] == 1
+    assert report["realized_fills"][0]["side"] == "buy_to_cover"
+    assert report["strategy_attribution_complete"]
+
+
 def test_fifo_sorts_by_transaction_time_before_matching():
     fills = [
         activity("sell", "exit", "sell", 1, 110, 2),
@@ -362,6 +383,38 @@ def test_account_report_verifies_account_and_reads_only_broker_gets(monkeypatch)
     assert money(report["strategy_pnl"]["trend_following"]) == Decimal("10")
     assert report["source"] == "Alpaca paper account FILL activities"
     assert all(url.startswith(ACCOUNT.base_url) for url in calls)
+
+
+def test_account_report_links_short_bracket_cover_to_journaled_entry(monkeypatch):
+    monkeypatch.setattr(fill_analytics, "get_account_for_mode", lambda mode: ACCOUNT)
+    fills = [
+        activity("short-fill", "parent", "sell_short", 1, 100, 0),
+        activity("cover-fill", "child", "buy_to_cover", 1, 90, 1),
+    ]
+    parent = {
+        "id": "parent", "order_class": "bracket", "symbol": "AAPL", "side": "sell",
+        "legs": [{"id": "child", "symbol": "AAPL", "side": "buy"}],
+    }
+
+    def get(url, *, headers, params, timeout):
+        if url.endswith("/account"):
+            return Response({"id": "paper-account"})
+        if url.endswith("/account/activities/FILL"):
+            return Response(fills)
+        if url.endswith("/positions"):
+            return Response([])
+        if url.endswith("/orders/parent"):
+            return Response(parent)
+        raise AssertionError(f"Unexpected GET {url}")
+
+    report = fill_analytics.get_account_fill_report(
+        "algo", [journal("parent", "short", strategy="trend_following")],
+        http_get=get,
+    )
+
+    assert money(report["realized_pnl"]) == Decimal("10")
+    assert money(report["strategy_pnl"]["trend_following"]) == Decimal("10")
+    assert report["strategy_attribution_complete"]
 
 
 def test_account_report_rejects_wrong_configured_account(monkeypatch):
