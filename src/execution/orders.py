@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -29,28 +29,6 @@ class OrderHooks:
     list_open_orders: Callable
     submit_broker_order: Callable
     default_target_multiplier: float
-
-
-def _extended_session_open(hooks: OrderHooks, now: datetime) -> bool:
-    """Check Alpaca's calendar-backed premarket, after-hours, and overnight windows."""
-    local_now = now.astimezone(MARKET_TZ)
-    local_time = local_now.timetz().replace(tzinfo=None)
-    schedule_kwargs = {"flatten_by": "15:45", "mode": "algo"}
-    if local_time >= time(20):
-        next_day = hooks.get_day_schedule(
-            **schedule_kwargs, on_date=local_now.date() + timedelta(days=1),
-        )
-        return next_day is not None
-
-    today = hooks.get_day_schedule(**schedule_kwargs, on_date=local_now.date())
-    if today is None:
-        return False
-    if local_time < time(4):
-        return True
-    if time(4) <= local_time < today.opens_at.timetz().replace(tzinfo=None):
-        return True
-    after_hours_end = datetime.combine(local_now.date(), time(20), tzinfo=MARKET_TZ)
-    return today.closes_at <= local_now < after_hours_end
 
 
 def prices_equal(left: object, right: object) -> bool:
@@ -262,8 +240,7 @@ def place_order(
         if mode != "algo":
             return {"success": False, "error": "Extended-hours orders are enabled only for Algo mode"}
         if order_type == "oco":
-            if action not in {"sell", "cover"}:
-                return {"success": False, "error": "Extended-hours OCO repair requires a position-reducing sell or cover"}
+            return {"success": False, "error": "OCO orders are only supported during regular market hours"}
         elif action not in {"buy", "sell", "cover"} or order_type != "limit" or limit_price is None or float(limit_price) <= 0:
             return {"success": False, "error": "Extended-hours orders require a buy/sell/cover limit order with a positive limit price"}
         else:
@@ -297,10 +274,7 @@ def place_order(
             now = datetime.now(MARKET_TZ)
             schedule = hooks.get_day_schedule(flatten_by="15:45", mode="algo")
             regular_open = schedule is not None and schedule.market_open(now)
-            if extended_hours:
-                if regular_open or not _extended_session_open(hooks, now):
-                    return {"success": False, "error": "Extended-hours OCO repair requires an active Alpaca extended session"}
-            elif not regular_open:
+            if not regular_open:
                 return {"success": False, "error": "Algo OCO repair requires regular market hours"}
             headers = hooks.headers("algo")
             matches = [row for row in hooks.list_positions(headers) if str(row.get("symbol", "")).upper() == str(ticker).upper()]
@@ -370,8 +344,6 @@ def place_order(
             "stop_loss": {"stop_price": str(round(float(stop_price), 2))},
             "take_profit": {"limit_price": str(round(float(take_profit), 2))},
         }
-        if extended_hours:
-            order["extended_hours"] = True
     elif order_type == "limit" and limit_price is not None:
         order = {
             "symbol": ticker,

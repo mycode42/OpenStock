@@ -308,6 +308,12 @@ def recover_broker_protection(
             report["errors"].append(f"{symbol}: exact OCO exists but client-ID lookup disagrees")
             continue
 
+        # Alpaca rejects OCO submissions outside regular hours. Keep the
+        # read-only reconciliation above, but defer every new submission.
+        if extended_hours:
+            report["waiting"].append(f"{symbol}: OCO submission deferred until regular hours")
+            continue
+
         same = isinstance(recovery, dict) and _same_decision(recovery, entry_id, quantity, stop, target)
         previous_age = _age_seconds(now, recovery.get("last_submission_at") or recovery.get("prepared_at")) if client_id else None
         if client_id and (previous_age is None or previous_age < RETRY_SECONDS):

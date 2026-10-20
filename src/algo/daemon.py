@@ -427,10 +427,9 @@ def run_loop(
                         portfolio, broker, store, state_path, window,
                     )
 
-                # Restore broker-hosted protection before the strategy scan
+                # Reconcile broker-hosted protection before the strategy scan
                 # can consider new entries or software exits in every active
-                # session. Extended-session OCOs remain unverified until the
-                # broker stop child is eligible and can be confirmed in RTH.
+                # session. Replacement OCOs are submitted only in regular hours.
                 if (
                     not dry_run
                     and (portfolio.get("startup_reconciliation") or {}).get("unprotected_positions")
