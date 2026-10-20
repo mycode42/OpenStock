@@ -1,6 +1,7 @@
 import { escapeHtml } from './escape.js';
 
 const RANGES = ['1W', '1M', '3M', 'ALL'];
+const ACTIVITY_PAGE_SIZE = 10;
 const SETTING_FIELDS = [
     { key: 'overnight_entries_enabled', title: 'Overnight entries', detail: 'Allow new positions during overnight sessions.' },
     { key: 'enable_intraday_trend', title: 'Intraday trend', detail: 'Include the intraday trend strategy in scans.' },
@@ -67,7 +68,7 @@ function rangeHistory(history, range) {
     return filtered.length > 1 ? filtered : points;
 }
 
-function renderChart(history, range) {
+function renderChart(history, range, charts) {
     const points = rangeHistory(history, range);
     if (points.length < 2) return '<div class="algo-chart-empty">Equity history will appear after more account snapshots are recorded.</div>';
     const width = 800;
@@ -99,11 +100,24 @@ function renderChart(history, range) {
         const anchor = index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle';
         return `<text class="algo-chart-x-label" x="${coords[index].x}" y="252" text-anchor="${anchor}">${escapeHtml(dateOnly(points[index].date || points[index].timestamp))}</text>`;
     }).join('');
-    const circles = coords.map((point, index) => index === coords.length - 1 ? `<circle class="algo-chart-point" cx="${point.x}" cy="${point.y}" r="4"/>` : '').join('');
-    return `<svg class="algo-performance-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Algo paper account equity history for ${escapeHtml(range)}">
-        <defs><linearGradient id="algo-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#c8ff00" stop-opacity=".2"/><stop offset="100%" stop-color="#c8ff00" stop-opacity="0"/></linearGradient></defs>
-        ${grid}<path class="algo-chart-area" d="${area}"/><path class="algo-chart-line" d="${line}"/>${circles}${labels}
-    </svg>`;
+    const hoverPoints = coords.map((point, index) => ({
+        x: point.x,
+        y: point.y,
+        primary: dateOnly(points[index].date || points[index].timestamp),
+        secondary: '',
+        price: money(point.value),
+    }));
+    const chartGrid = `<defs><linearGradient id="algo-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#c8ff00" stop-opacity=".08"/><stop offset="100%" stop-color="#c8ff00" stop-opacity="0"/></linearGradient></defs><path class="algo-chart-area" d="${area}"/>${grid}${labels}`;
+    return charts.interactiveChartSvg({
+        className: 'algo-performance-chart',
+        width,
+        height,
+        grid: chartGrid,
+        lineClass: 'algo-chart-line',
+        linePoints: coords.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' '),
+        hoverPoints,
+        ariaLabel: `Algo paper account equity history for ${range}`,
+    });
 }
 
 function statusClass(value) {
@@ -118,7 +132,7 @@ function activityIcon(kind) {
     return ({ order: '⇄', scan: '◷', signal: '↗', research: '⌕' })[kind] || '·';
 }
 
-export function createAlgoTrader({ request }) {
+export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');
     let snapshot = null;
     let errorMessage = '';
@@ -129,6 +143,7 @@ export function createAlgoTrader({ request }) {
     let range = '1M';
     let researchFilter = 'all';
     let selectedRunDate = null;
+    let activityPage = 0;
     let notice = '';
     let pollTimer = null;
     let requestInFlight = false;
@@ -177,6 +192,10 @@ export function createAlgoTrader({ request }) {
         if (!runs.some(run => run.date === selectedRunDate)) selectedRunDate = runs[0]?.date || null;
         const selectedRun = runs.find(run => run.date === selectedRunDate) || null;
         const activities = snapshot.activity || [];
+        const activityPageCount = Math.max(1, Math.ceil(activities.length / ACTIVITY_PAGE_SIZE));
+        activityPage = Math.min(activityPage, activityPageCount - 1);
+        const activityStart = activityPage * ACTIVITY_PAGE_SIZE;
+        const visibleActivities = activities.slice(activityStart, activityStart + ACTIVITY_PAGE_SIZE);
         const latestSnapshot = history[history.length - 1];
         const snapshotDate = latestSnapshot?.date ? dateOnly(latestSnapshot.date) : 'no snapshots';
         const entryStatus = account.entries_paused === true ? 'ENTRIES PAUSED' : account.entries_paused === false ? 'ENTRIES ENABLED' : 'ENTRY STATUS UNKNOWN';
@@ -188,7 +207,6 @@ export function createAlgoTrader({ request }) {
                 <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ALPACA PAPER</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
             </header>
 
-            <section class="algo-demo-notice algo-live-notice"><span class="algo-notice-mark">↻</span><p><strong>Connected to /opt/algo-trader</strong> · Account and research data come from persisted Algo reports. Equity snapshot: ${escapeHtml(snapshotDate)}${account.last_scan_at ? ` · Last portfolio scan: ${escapeHtml(dateTime(account.last_scan_at))}` : ''}. Dashboard refreshes every 15 seconds.</p></section>
             ${account.entries_paused && account.entry_pause_reasons?.length ? `<section class="algo-paused-notice"><strong>New entries are paused</strong><span>${escapeHtml(account.entry_pause_reasons.join(' · '))}</span></section>` : ''}
 
             <section class="algo-kpi-grid" aria-label="Algo account KPIs">
@@ -199,11 +217,16 @@ export function createAlgoTrader({ request }) {
                 <article class="algo-kpi"><div class="algo-kpi-label">OPEN POSITIONS</div><strong>${latestSnapshot?.position_count ?? '—'}</strong><div class="algo-kpi-foot"><span>Active strategies</span><span>${account.active_strategies?.length ?? 0}</span></div></article>
             </section>
 
+            <section class="card algo-panel algo-config-panel" id="algo-config">
+                <div class="algo-section-heading algo-config-heading"><div><span class="algo-eyebrow">RUNTIME CONFIGURATION</span><h2>Algo strategy settings</h2><p>These settings are read by the Algo coordinator and autoresearch runtime.</p></div><span class="algo-local-save">CONNECTED CONFIG</span></div>
+                ${renderSettings(settings)}
+            </section>
+
             <section class="algo-primary-grid">
-                <article class="card algo-panel algo-chart-panel">
-                    <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Recorded paper-account equity · USD</p></div><div class="algo-chart-summary"><strong>${money(metrics.equity)}</strong><span class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)} since first snapshot</span></div></div>
+                <article class="card algo-panel algo-chart-panel" data-chart-readout>
+                    <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Recorded paper-account equity · USD</p></div><div class="algo-chart-summary"><strong data-chart-value data-default-chart-value="${money(metrics.equity)}">${money(metrics.equity)}</strong><span class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)} since first snapshot</span></div></div>
                     <div class="algo-range-controls" role="group" aria-label="Chart time range">${RANGES.map(value => `<button type="button" class="algo-range-btn ${range === value ? 'active' : ''}" data-range="${value}" aria-pressed="${range === value}">${value}</button>`).join('')}</div>
-                    <div class="algo-chart-wrap">${renderChart(history, range)}</div>
+                    <div class="algo-chart-wrap">${renderChart(history, range, charts)}</div>
                     <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Source: Algo daily snapshots</span></div>
                 </article>
 
@@ -219,7 +242,7 @@ export function createAlgoTrader({ request }) {
             <section class="algo-secondary-grid">
                 <article class="card algo-panel algo-activity-panel">
                     <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR &amp; JOURNAL</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> REFRESHING</span></div>
-                    ${activities.length ? `<ol class="algo-activity-list">${activities.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-content"><div class="algo-activity-title"><strong>${escapeHtml(item.title)}</strong><time>${escapeHtml(timeOnly(item.at))}</time></div><p>${escapeHtml(item.detail || '')}</p><span class="algo-activity-tag ${statusClass(item.status)}">${escapeHtml(item.status || item.kind)}</span></div></li>`).join('')}</ol>` : '<div class="algo-empty">No recent scans, signals or order journal entries are available.</div>'}
+                    ${activities.length ? `<ol class="algo-activity-list">${visibleActivities.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-content"><div class="algo-activity-title"><strong>${escapeHtml(item.title)}</strong><time>${escapeHtml(timeOnly(item.at))}</time></div><p>${escapeHtml(item.detail || '')}</p><span class="algo-activity-tag ${statusClass(item.status)}">${escapeHtml(item.status || item.kind)}</span></div></li>`).join('')}</ol><div class="journal-pagination algo-activity-pagination"><span>Showing ${activityStart + 1}–${Math.min(activityStart + visibleActivities.length, activities.length)} of ${activities.length} entries · ${ACTIVITY_PAGE_SIZE} per page</span>${activityPageCount > 1 ? `<div class="journal-pagination-actions"><button type="button" class="btn btn-secondary" data-activity-page="${activityPage - 1}" ${activityPage === 0 ? 'disabled' : ''} aria-label="Previous activity page">Previous</button><span>Page ${activityPage + 1} of ${activityPageCount}</span><button type="button" class="btn btn-secondary" data-activity-page="${activityPage + 1}" ${activityPage >= activityPageCount - 1 ? 'disabled' : ''} aria-label="Next activity page">Next</button></div>` : ''}</div>` : '<div class="algo-empty">No recent scans, signals or order journal entries are available.</div>'}
                     <div class="algo-view-more"><span>Entries are read from the Algo state and trade journal</span><span aria-hidden="true">↻</span></div>
                 </article>
 
@@ -239,11 +262,8 @@ export function createAlgoTrader({ request }) {
                     <aside class="algo-run-detail">${renderRunDetail(selectedRun)}</aside></div>
             </section>
 
-            <section class="card algo-panel algo-config-panel" id="algo-config">
-                <div class="algo-section-heading algo-config-heading"><div><span class="algo-eyebrow">RUNTIME CONFIGURATION</span><h2>Algo strategy settings</h2><p>These settings are read by the Algo coordinator and autoresearch runtime.</p></div><span class="algo-local-save">CONNECTED CONFIG</span></div>
-                ${renderSettings(settings)}
-            </section>
         </main>`;
+        charts.attachInteractiveLineCharts(host);
     }
 
     function sparklinePath(history) {
@@ -313,6 +333,12 @@ export function createAlgoTrader({ request }) {
         if (button.dataset.range) {
             range = button.dataset.range;
             render();
+        } else if (button.dataset.activityPage !== undefined) {
+            const requestedPage = Number(button.dataset.activityPage);
+            if (Number.isInteger(requestedPage)) {
+                activityPage = requestedPage;
+                render();
+            }
         } else if (button.dataset.researchFilter) {
             researchFilter = button.dataset.researchFilter;
             selectedRunDate = null;

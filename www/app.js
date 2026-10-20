@@ -4,7 +4,7 @@ import { createCharts } from './modules/charts.js';
 import { createDashboard } from './modules/dashboard.js';
 import { createConfig } from './modules/config.js';
 import { createJournal } from './modules/journal.js';
-import { createAlgoTrader } from './modules/algo-trader.js';
+import { createAlgoTrader } from './modules/algo-trader.js?v=1.4.2';
 
 // Keep the Trading module in the repository for a future re-enable, but do
 // not expose or load it while broker trading is not in use.
@@ -30,7 +30,7 @@ const context = { getStocks:()=>state.stocks, getStockMap:()=>state.stockMap, ge
 const dashboard = createDashboard(context);
 const config = createConfig(context);
 const journal = createJournal(context);
-const algoTrader = createAlgoTrader({ request:af });
+const algoTrader = createAlgoTrader({ request:af, charts });
 Object.assign(context.actions, { edit: config.es, toggle: config.ts, remove: config.rs, configureAlerts: config.openAlerts });
 function nav(hash) { const page=pageFromHash(hash); const target=page==='dashboard'?'':`#/${page}`; if(window.location.hash!==target){window.location.hash=target;return;} loadPage(page); }
 async function loadPage(page, journalPage=state.journalPage) {

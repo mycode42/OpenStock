@@ -1,9 +1,9 @@
-const CACHE_NAME = 'openstock-v1.4.0';
+const CACHE_NAME = 'openstock-v1.4.2';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.4.0&pull-refresh=1',
-  './app.js?v=1.4.0&pull-refresh=1',
+  './styles.css?v=1.4.2&pull-refresh=1',
+  './app.js?v=1.4.2&pull-refresh=1',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',
@@ -12,7 +12,7 @@ const REQUIRED_ASSETS = [
   './modules/dashboard.js',
   './modules/config.js',
   './modules/journal.js',
-  './modules/algo-trader.js',
+  './modules/algo-trader.js?v=1.4.2',
   './modules/dashboard-utils.js',
   './site.webmanifest',
   './favicon-16.png',

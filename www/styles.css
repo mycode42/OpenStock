@@ -123,3 +123,100 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 .algo-text-link{width:100%;padding:.55rem 0 0;border:0;border-top:1px solid #1b2122;background:transparent;color:#c8e76d;font:inherit;font-size:.7rem;text-align:left;cursor:pointer}.algo-view-more{cursor:default}
 
 .algo-live-notice{border-color:rgba(93,175,122,.2);background:rgba(68,143,91,.045)}.algo-live-notice strong{color:#9cceaa}.algo-live-notice .algo-notice-mark{border-color:#477756;color:#97cca6}.algo-paused-notice{display:grid;gap:.25rem;margin:-.35rem 0 1rem;padding:.7rem .85rem;border:1px solid rgba(248,113,113,.23);border-radius:.5rem;background:rgba(248,113,113,.055);color:#e5a0a0;font-size:.75rem}.algo-paused-notice span{color:#b88989;font-size:.68rem;line-height:1.45}.algo-state-pill.paused{border-color:#573436;background:rgba(248,113,113,.07);color:#e49595}.algo-state-pill.paused i{background:#f87171}.algo-state-pill.unknown{border-color:#383d3d;color:#89918e}.algo-active-strategy-list{display:flex;flex-wrap:wrap;gap:.3rem;padding:.65rem 0}.algo-active-strategy-list span{padding:.25rem .4rem;border:1px solid #29332d;border-radius:.3rem;background:#101411;color:#a9c3af;font-size:.61rem}.algo-active-strategy-list .algo-muted-text{border:0;background:transparent;color:#69766f}.algo-field-help{display:block;margin-top:.3rem;color:#68766f;font-size:.58rem;line-height:1.4}.algo-config-form .algo-config-field{align-self:center}.algo-detail-time{display:block;margin-top:.55rem;color:#65736d;font-size:.58rem}.algo-chart-empty{display:grid;place-items:center;min-height:205px;padding:1rem;color:#76827b;font-size:.72rem;text-align:center}.algo-connection-card{display:flex;flex-direction:column;align-items:flex-start;gap:.65rem;margin-top:1.5rem;padding:1.2rem;border-color:#29302b}.algo-connection-card strong{color:#e1e7e2;font-size:.9rem}.algo-connection-card p{color:#85908a;font-size:.74rem;line-height:1.5}.algo-loading-mark{color:#c8ff00;font-size:1.2rem;animation:algo-pulse 1.2s ease-in-out infinite}@keyframes algo-pulse{50%{opacity:.35;transform:rotate(100deg)}}.algo-status-pill.staged{border-color:#33414a;background:rgba(56,189,248,.06);color:#8cc9dc}.algo-config-actions .btn:disabled{opacity:.55;cursor:wait}
+
+/* Keep Algo Trader's surfaces in the Journal's graphite palette with quieter accents. */
+.algo-page{--algo-lime:#c8ff00}
+.algo-demo-tag,.algo-engine-state,.algo-feed-label,.algo-local-save{border-color:#29303b;background:rgba(255,255,255,.025);color:#aab4ad}
+.algo-demo-tag i,.algo-chart-legend i,.algo-state-pill i{background:#c8ff00;box-shadow:none}
+.algo-demo-notice,.algo-live-notice{border-color:#29303b;background:rgba(255,255,255,.025);color:#94a3b8}
+.algo-demo-notice strong,.algo-live-notice strong{color:#d8e0da}
+.algo-notice-mark,.algo-live-notice .algo-notice-mark{border-color:#47534b;color:#aab7ad}
+.algo-kpi{border-color:#29303b;background:linear-gradient(145deg,#101211,#0a0a0a)}
+.algo-panel{border-color:#29303b;background:#0a0a0a}
+.algo-kpi-featured{border-top-color:rgba(200,255,0,.45)}
+.algo-kpi-featured>strong,.algo-chart-summary strong{color:#e5e7eb}
+.algo-kpi-spark path{stroke:#c8ff00}
+.algo-chart-line{stroke:#c8ff00;filter:none}
+.algo-chart-point{fill:#c8ff00;stroke:#0a0a0a}
+.algo-chart-legend span:first-child{color:#94a3b8}
+.algo-range-btn:hover,.algo-range-btn.active{border-color:#394128;background:rgba(200,255,0,.055);color:#c8ff00}
+.algo-state-pill{border-color:#29303b;background:rgba(255,255,255,.025);color:#c8ff00}
+.algo-score-ring{border-color:#38423c;border-right-color:#c8ff00;border-top-color:#c8ff00;color:#e5e7eb}
+.algo-text-link{color:#c8ff00}
+.algo-status-pill.promising{border-color:#293b30;background:rgba(74,222,128,.055);color:#8ccea0}
+.algo-activity-icon.research{border-color:#34304a;background:rgba(167,139,250,.055);color:#b6a2e7}
+.algo-activity-tag.research{color:#b6a2e7}
+.algo-run-icon{border-color:#29303b;background:#101211;color:#cbd5e1}
+.algo-run-row:hover,.algo-run-row.selected{background:rgba(255,255,255,.025)}
+.algo-run-row.selected{box-shadow:inset 2px 0 #c8ff00}
+.algo-run-detail,.algo-history-filters,.algo-config-field input,.algo-config-field select,.algo-config-toggle{border-color:#29303b;background:#0a0a0a}
+.algo-config-toggle input:checked+span+i{border-color:#59652e;background:rgba(200,255,0,.07)}
+.algo-config-toggle input:checked+span+i:after{background:#c8ff00}
+.algo-config-toggle input:focus-visible+i{outline-color:#c8ff00}
+.algo-save-button{border-color:#59652e;background:rgba(200,255,0,.06);color:#d6ed8a}
+.algo-save-button:hover{border-color:#839d3d;background:rgba(200,255,0,.1);color:#e6ff9d}
+.algo-breadcrumb{font-size:.72rem}
+.algo-page-header h1{font-size:2.05rem}
+.algo-demo-tag,.algo-state-pill,.algo-feed-label{font-size:.68rem}
+.algo-kpi-label{font-size:.71rem}
+.algo-kpi>strong{font-size:1.48rem}
+.algo-kpi-foot{font-size:.72rem}
+.algo-eyebrow{font-size:.68rem}
+.algo-section-heading h2{font-size:1.18rem}
+.algo-section-heading p{font-size:.8rem}
+.algo-chart-summary strong{font-size:1.14rem}
+.algo-chart-summary span,.algo-chart-legend{font-size:.74rem}
+.algo-chart-y-label{font-size:12px}
+.algo-chart-x-label{font-size:11px}
+.algo-performance-chart .chart-hover-text{font-size:10px}
+.algo-performance-chart .chart-hover-primary{font-size:10px}
+.algo-performance-chart .chart-hover-secondary{font-size:12px}
+.algo-range-btn{font-size:.74rem}
+.algo-strategy-score>div:last-child strong{font-size:.9rem}
+.algo-strategy-score>div:last-child span,.algo-strategy-list>div,.algo-strategy-list strong{font-size:.77rem}
+.algo-strategy-list small{font-size:.7rem}
+.algo-active-strategy-list span{font-size:.68rem}
+.algo-activity-title strong{font-size:.81rem}
+.algo-activity-title time{font-size:.68rem}
+.algo-activity-content p{font-size:.75rem}
+.algo-activity-tag{font-size:.62rem}
+.algo-view-more{font-size:.72rem}
+.algo-status-pill{font-size:.63rem}
+.algo-latest-run strong{font-size:.81rem}
+.algo-latest-run span{font-size:.69rem}
+.algo-latest-result span,.algo-research-recommendation p{font-size:.68rem}
+.algo-latest-result strong{font-size:1rem}
+.algo-research-recommendation strong{font-size:.74rem}
+.algo-open-history{font-size:.76rem}
+.algo-history-filters button{font-size:.69rem}
+.algo-run-version,.algo-run-name{font-size:.76rem}
+.algo-run-version small,.algo-run-name small,.algo-run-return small{font-size:.66rem}
+.algo-run-return{font-size:.8rem}
+.algo-research-detail-head h3{font-size:.9rem}
+.algo-research-note{font-size:.74rem}
+.algo-run-metrics span{font-size:.66rem}
+.algo-run-metrics strong{font-size:.88rem}
+.algo-empty{font-size:.78rem}
+.algo-config-field label{font-size:.74rem}
+.algo-config-field label small{font-size:.66rem}
+.algo-config-field input,.algo-config-field select{font-size:.8rem}
+.algo-config-toggle strong{font-size:.72rem}
+.algo-config-toggle small{font-size:.66rem}
+.algo-field-help{font-size:.66rem}
+.algo-save-notice{font-size:.7rem}
+.algo-save-button{font-size:.78rem}
+.algo-page-header h1{font-size:2rem}
+.algo-chart-grid{stroke:#25272c}
+.algo-activity-icon,.algo-active-strategy-list span,.algo-run-icon{background:#0a0a0a}
+@media(max-width:520px){.algo-page-header h1{font-size:1.75rem}.algo-kpi-label{font-size:.66rem}.algo-activity-content p{font-size:.68rem}.algo-config-toggle strong{font-size:.68rem}}
+.algo-breadcrumb,.algo-kpi-label,.algo-kpi-foot,.algo-section-heading p,.algo-chart-legend,.algo-strategy-score>div:last-child span,.algo-strategy-list>div,.algo-strategy-list small,.algo-activity-title time,.algo-activity-content p,.algo-view-more,.algo-latest-run span,.algo-latest-result span,.algo-research-recommendation p,.algo-history-filters button,.algo-run-version small,.algo-run-name small,.algo-run-return small,.algo-research-note,.algo-run-metrics span,.algo-empty,.algo-config-field label,.algo-config-toggle small,.algo-field-help,.algo-save-notice{color:#94a3b8}
+.algo-eyebrow{color:#c8ff00}
+.algo-chart-y-label,.algo-chart-x-label{fill:#94a3b8}
+.algo-activity-title strong,.algo-latest-run strong,.algo-run-row,.algo-run-metrics strong,.algo-config-toggle strong{color:#e5e7eb}
+.algo-kpi-period,.algo-status-pill,.algo-research-recommendation,.algo-recommendation-mark{background:#0a0a0a}
+.algo-recommendation-mark{color:#c8ff00}
+.algo-kpi-grid .algo-kpi:nth-child(1){border-top-color:rgba(200,255,0,.45)}
+.algo-kpi-grid .algo-kpi:nth-child(2){border-top-color:rgba(56,189,248,.45)}
+.algo-kpi-grid .algo-kpi:nth-child(3){border-top-color:rgba(167,139,250,.5)}
+.algo-kpi-grid .algo-kpi:nth-child(4){border-top-color:rgba(74,222,128,.45)}
+.algo-kpi-grid .algo-kpi:nth-child(5){border-top-color:rgba(234,184,90,.45)}
