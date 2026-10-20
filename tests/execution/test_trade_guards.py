@@ -134,6 +134,8 @@ def test_pending_buy_reserves_cash_and_sector_before_new_entry(monkeypatch):
 
     monkeypatch.setattr(risk_validator, "_api", fake_api)
     monkeypatch.setattr(risk_validator, "_get_algo_orders_since", lambda *args, **kwargs: [])
+    monkeypatch.setattr(risk_validator, "_get_algo_fill_activities", lambda *args, **kwargs: [])
+    monkeypatch.setattr(risk_validator, "_easy_to_borrow_symbols", lambda mode: set())
     monkeypatch.setattr(risk_validator, "_get_open_orders", lambda mode: [{
         "id": "pending", "symbol": "AAPL", "side": "buy", "qty": "50",
         "filled_qty": "0", "limit_price": "100",
@@ -146,7 +148,7 @@ def test_pending_buy_reserves_cash_and_sector_before_new_entry(monkeypatch):
     assert state["available_cash"] == pytest.approx(19_900)
     assert state["sector_alloc"]["core_tech"] == pytest.approx(5_100)
     assert state["open_position_count"] == 1
-    blocked = risk_validator.validate_trade("MSFT", "buy", 10, 100, state, mode="algo")
+    blocked = risk_validator.validate_trade("MSFT", "buy", 100, 100, state, mode="algo")
     assert blocked.rule == "min_cash_reserve"
 
 def test_failed_order_history_blocks_algo_entries(monkeypatch):
@@ -532,6 +534,7 @@ def test_flatten_cancels_pending_orders_then_confirms_zero_exposure(monkeypatch)
     ])
     orders = iter([[{"id": "buy-pending", "symbol": "AAPL"}], [], []])
     monkeypatch.setattr(execution_runner, "_headers", lambda mode: {})
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "verify_account_for_mode", lambda mode: None)
     monkeypatch.setattr(execution_runner, "_list_positions", lambda headers: next(positions))
     monkeypatch.setattr(execution_runner, "_list_open_orders", lambda headers: next(orders))
@@ -549,6 +552,7 @@ def test_flatten_cancels_pending_orders_then_confirms_zero_exposure(monkeypatch)
 
 def test_flatten_refuses_to_close_while_buy_cancellation_is_pending(monkeypatch):
     monkeypatch.setattr(execution_runner, "_headers", lambda mode: {})
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "verify_account_for_mode", lambda mode: None)
     monkeypatch.setattr(execution_runner, "get_market_schedule", lambda **kwargs: SimpleNamespace(market_open=lambda now: True))
     monkeypatch.setattr(execution_runner, "_list_positions", lambda headers: [{"symbol": "AAPL", "qty": "5"}])
@@ -572,6 +576,7 @@ def test_executor_keeps_submission_separate_from_broker_fill(tmp_path, monkeypat
     account = {"equity": "100000", "cash": "90000", "last_equity": "100000"}
     risk_references = []
     monkeypatch.setattr(execution_runner, "get_account_for_mode", lambda mode: SimpleNamespace(name="Algo"))
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "verify_account_for_mode", lambda mode: (None, account))
     monkeypatch.setattr(execution_runner, "get_positions", lambda: {})
     monkeypatch.setattr(execution_runner, "get_latest_ask", lambda ticker, mode: 200.0)
@@ -607,6 +612,7 @@ def test_direct_algo_order_requires_coordinator_lease(monkeypatch):
 
 def test_duplicate_client_order_id_reconciles_without_another_order(monkeypatch):
     monkeypatch.setattr(execution_runner, "_active_mode", "algo")
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "_headers", lambda *args: {})
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {
@@ -627,6 +633,7 @@ def test_duplicate_client_order_id_reconciles_without_another_order(monkeypatch)
 
 def test_replayed_order_rejects_different_time_in_force(monkeypatch):
     monkeypatch.setattr(execution_runner, "_active_mode", "algo")
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "_headers", lambda *args: {})
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {
@@ -646,6 +653,7 @@ def test_replayed_order_rejects_different_time_in_force(monkeypatch):
 
 def test_replayed_oco_rejects_different_stop_leg(monkeypatch):
     monkeypatch.setattr(execution_runner, "_active_mode", "algo")
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "_headers", lambda *args: {})
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {
@@ -672,6 +680,7 @@ def test_replayed_oco_rejects_different_stop_leg(monkeypatch):
 
 def test_client_order_id_mismatch_preserves_broker_id_for_reconciliation(monkeypatch):
     monkeypatch.setattr(execution_runner, "_active_mode", "algo")
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "_headers", lambda *args: {})
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {

@@ -10,6 +10,7 @@ from portfolio.config import ALGO_MODE_CONFIG
 from strategies import universe as strategy_universe
 import strategies.runner.scan as runner
 import strategies.runner.data as runner_data
+import strategies.runner.signal_generation as runner_signal_generation
 from strategies.signals import Signal
 from strategies.runner.data import fetch_latest_quotes
 
@@ -282,7 +283,7 @@ def test_strategy_rule_sell_proceeds_with_active_broker_protection(
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
-        runner, "evaluate_rule_signal",
+        runner_signal_generation, "evaluate_rule_signal",
         lambda *args, **kwargs: Signal("AAPL", "sell", "trend_following", "rule exit", strength=1.0),
     )
     states = {"trend_following": {"AAPL": {
@@ -418,7 +419,7 @@ def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
-        runner, "evaluate_rule_signal",
+        runner_signal_generation, "evaluate_rule_signal",
         lambda *args, **kwargs: Signal("AAPL", "buy", "momentum", "test", strength=1.0),
     )
 

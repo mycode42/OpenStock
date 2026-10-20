@@ -186,12 +186,12 @@ def test_algo_entry_count_reserves_slot_for_pending_opening_order():
     assert count == 1
 
 
-def test_algo_order_timestamps_use_new_york_session_date():
-    assert risk_validator._is_market_session_date(
-        "2026-10-08T02:15:00Z", "2026-10-07",
+def test_algo_order_timestamps_use_coordinator_trade_date():
+    assert risk_validator._is_in_algo_session(
+        "2026-10-08T02:15:00Z", "2026-10-08",
     )
-    assert not risk_validator._is_market_session_date(
-        "2026-10-08T05:00:00Z", "2026-10-07",
+    assert not risk_validator._is_in_algo_session(
+        "2026-10-08T02:15:00Z", "2026-10-07",
     )
 
 

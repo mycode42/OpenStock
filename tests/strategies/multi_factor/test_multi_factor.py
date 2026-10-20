@@ -347,9 +347,11 @@ def test_live_rebalance_ranks_cross_sectional_input_and_persists_weekly_key():
 
     signals, diagnostics = _multi_factor_rebalance_signals(
         states, daily_bars, symbols, {}, session,
+        parameters={"factor_weight_mode": "static"},
     )
     repeated, repeated_diagnostics = _multi_factor_rebalance_signals(
         states, daily_bars, symbols, {}, session,
+        parameters={"factor_weight_mode": "static"},
     )
 
     assert diagnostics["minimum_universe_met"] is True
@@ -372,6 +374,7 @@ def test_bearish_factor_short_recommendation_persists_for_core_targets():
     session = date(2026, 10, 2)
     signals, diagnostics = _multi_factor_rebalance_signals(
         states, daily_bars, symbols, {}, session, regime="trending_down",
+        parameters={"factor_weight_mode": "static"},
     )
 
     assert diagnostics["selected_short_count"] > 0

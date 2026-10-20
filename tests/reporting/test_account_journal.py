@@ -1,6 +1,7 @@
 """Regression checks for account routing and submission versus fill reporting."""
 
 import json
+import sys
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -142,9 +143,9 @@ def test_close_snapshot_requires_broker_close_and_skips_holidays(monkeypatch, tm
         "invested": 50000, "position_count": 1, "daily_pnl": 0,
         "daily_pnl_pct": 0,
     })
-    monkeypatch.setattr(tracker.yf, "Ticker", lambda symbol: SimpleNamespace(
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(Ticker=lambda symbol: SimpleNamespace(
         history=lambda **kwargs: SimpleNamespace(empty=True)
-    ))
+    )))
     monkeypatch.setattr(tracker, "get_market_schedule", lambda **kwargs: SimpleNamespace(
         closes_at=datetime(2026, 10, 8, 16, 0, tzinfo=et)
     ))
