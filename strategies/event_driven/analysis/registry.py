@@ -10,7 +10,7 @@ from .technicals import technical_analyst_agent
 
 ANALYSTS = {
     "market_regime": market_regime_agent,
-    "news_sentiment_analyst": news_sentiment_analyst_agent,
+    "news_sentiment_analyst": news_sentiment_agent,
     "sentiment_analyst": sentiment_analyst_agent,
     "technical_analyst": technical_analyst_agent,
     "fundamentals_analyst": fundamentals_analyst_agent,

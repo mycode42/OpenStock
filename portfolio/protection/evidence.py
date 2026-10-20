@@ -18,6 +18,20 @@ def to_finite_decimal(value: object) -> Decimal | None:
     return result if result.is_finite() else None
 
 
+def broker_prices_match(actual: object, expected: object) -> bool:
+    """Compare prices using the executor's two-decimal broker submission value."""
+    actual_price = to_finite_decimal(actual)
+    expected_price = to_finite_decimal(expected)
+    if actual_price is None or expected_price is None:
+        return False
+    try:
+        # execution.orders rounds bracket/OCO prices with round(float(value), 2).
+        broker_expected = to_finite_decimal(round(float(expected_price), 2))
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return broker_expected is not None and actual_price == broker_expected
+
+
 def remaining_order_quantity(order: dict) -> Decimal | None:
     quantity = to_finite_decimal(order.get("qty"))
     filled = to_finite_decimal(order.get("filled_qty") or 0)
@@ -77,7 +91,7 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
         or str(parent.get("order_class") or "").lower() != "oco"
         or str(parent.get("status") or "").lower() not in ACTIVE_ORDER_STATUSES
         or remaining_order_quantity(parent) != quantity
-        or to_finite_decimal(parent.get("limit_price")) != target
+        or not broker_prices_match(parent.get("limit_price"), target)
     ):
         return None
 
@@ -92,7 +106,7 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
         or str(child.get("type") or "").lower() not in {"stop", "stop_limit"}
         or str(child.get("status") or "").lower() not in ACTIVE_ORDER_STATUSES
         or remaining_order_quantity(child) != quantity
-        or to_finite_decimal(child.get("stop_price")) != stop
+        or not broker_prices_match(child.get("stop_price"), stop)
     ):
         return None
     return parent
@@ -103,4 +117,4 @@ def verified_recovery_oco(nested_orders: list[dict], state: dict, position_qty: 
     return recovery_oco_order(nested_orders, state, position_qty) is not None
 
 
-__all__ = ["ACTIVE_ORDER_STATUSES", "recovery_oco_order", "remaining_order_quantity", "to_finite_decimal", "verified_recovery_oco"]
+__all__ = ["ACTIVE_ORDER_STATUSES", "broker_prices_match", "recovery_oco_order", "remaining_order_quantity", "to_finite_decimal", "verified_recovery_oco"]

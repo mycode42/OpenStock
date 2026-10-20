@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from portfolio.protection.evidence import (
     ACTIVE_ORDER_STATUSES,
+    broker_prices_match,
     recovery_oco_order,
     remaining_order_quantity,
     to_finite_decimal,
@@ -66,7 +67,7 @@ def _bracket_stop(parent: dict, state: dict, qty: Decimal) -> tuple[dict | None,
         and str(leg.get("type") or "").lower() == "limit"
         and str(leg.get("status") or "").lower() in OPEN_ORDER_STATUSES
         and remaining_order_quantity(leg) == abs(signed_qty)
-        and to_finite_decimal(leg.get("limit_price")) == to_finite_decimal(state.get("take_profit"))
+        and broker_prices_match(leg.get("limit_price"), state.get("take_profit"))
     ]
     if len(stops) != 1 or len(targets) != 1 or not stops[0].get("id"):
         return None, "bracket stop and target do not prove exact full-size protection"
