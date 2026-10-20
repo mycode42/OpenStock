@@ -1,7 +1,7 @@
 [project]
 name = "algo-trader"
-version = "2.0.0"
-description = "Paper-trading strategy portfolios and research tools"
+version = "3.0.0"
+description = "Coordinated paper trading and research for equity and options strategies"
 authors = [{ name = "Algo Trader maintainers" }]
 readme = "README.md"
 license = "MIT"

@@ -1,82 +1,119 @@
 # Algo Trader
 
-Algo Trader is a paper-trading system with a continuous portfolio coordinator,
-risk-checked Alpaca execution, and a separate research pipeline.
+**Research-led automation for systematic equities and options.**
 
-## Core workflows
+[![Release](https://img.shields.io/badge/release-v3.0.0-2563eb)](https://github.com/mycode42/algo-trader/releases/tag/v3.0.0)
+[![Python](https://img.shields.io/badge/python-3.11%2B-3776ab)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 
-- The live coordinator in portfolio/ owns account state, reconciliation, and safety checks.
-- Strategies in strategies/ are shared by live trading, replay, and research.
-- autoresearch/ contains adaptive research and deterministic backtests.
-- execution/ owns order routing and hard risk validation.
-- broker/ and market/ contain account, calendar, and market-data integrations.
-- reporting/ contains account, journal, monitoring, fill, and validation reports.
-- runtime/ contains paths shared by live and research code.
-- strategies/event_driven/analysis/ contains the LLM analyst workflow that creates event-driven signals.
+Algo Trader brings strategy research, portfolio coordination, paper execution,
+and reporting into one Python platform. Equity strategies run under a persistent
+portfolio coordinator. Options trade through a separate paper account, with
+their exposure included in combined portfolio risk checks.
 
-The strategy names `swing_*` and `intraday_*` describe holding periods. The live
-service uses one Algo paper-account route.
+> **Paper trading only.** Broker routes are pinned to Alpaca Paper. Research
+> results and parameter candidates are never promoted automatically.
 
-## Setup
+## What it does
 
-Requirements: Python 3.11+, Poetry, and an Alpaca paper account. Copy .env.example
-to .env, then configure the Algo paper credentials, market-data tier, and any LLM
-keys you use. Keep .env private; it is ignored by Git.
+| | Capability |
+| --- | --- |
+| **Equity strategies** | Regime-aware trend, momentum, mean-reversion, multi-factor, and scheduled-event strategies; long and short signals within portfolio limits. |
+| **Options sleeves** | Volatility risk premium, event-driven structures, and an optional directional overlay. Supports spreads, iron condors, straddles, strangles, protective puts, and collars. |
+| **Portfolio controls** | Persistent strategy state, broker reconciliation, entry coordination, exposure budgets, and a final risk-manager approval before Algo orders. |
+| **Options risk** | Separate options account and journal; combined equity/options delta, Greeks, defined loss, buying power, stress, and assignment checks. |
+| **Research** | Independent equity and options research loops, with walk-forward validation, execution costs, regime breakdowns, stress checks, and holdouts. |
+| **Reporting** | Health and account reports, order/fill reconciliation, strategy attribution, and FIFO realized P&L for long and short trades. |
 
-    git clone git@github.com:mycode42/algo-trader.git
-    cd algo-trader
-    poetry install --with ai,ml,research
-    cp .env.example .env
+**Signal → portfolio coordinator → risk checks → Alpaca Paper.** Strategies
+propose trades; the coordinator manages portfolio context and ownership; the
+risk manager has the final say. The options paper runner is independently
+invoked and verifies its own account route.
 
-The systemd unit is algo-trader.service and runs from /opt/algo-trader.
+## Quick start
 
-    sudo install -m 0644 ops/systemd/algo-trader.service /etc/systemd/system/algo-trader.service
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now algo-trader.service
+Requires Python 3.11+, Poetry, and an Alpaca paper account.
 
-## Useful commands
+```sh
+git clone https://github.com/mycode42/algo-trader.git
+cd algo-trader
+poetry install --with ai,ml,research
+cp .env.example .env
+```
 
-    # Read-only service, scan, and broker-protection status
-    poetry run python -m portfolio.healthcheck
+Configure `ALPACA_ALGO_API_KEY`, `ALPACA_ALGO_API_SECRET`, and
+`ALPACA_ALGO_ACCOUNT_ID` for the equity coordinator. To use the options sleeve,
+also configure `ALPACA_OPTIONS_API_KEY`, `ALPACA_OPTIONS_API_SECRET`, and
+`ALPACA_OPTIONS_ACCOUNT_ID`. Keep `.env` private; it is ignored by Git.
 
-    # Read-only account and strategy report
-    poetry run python -m reporting.monitor
+The `ai`, `ml`, and `research` dependency groups are optional. They provide
+event analysis, learned models, and additional research/data features.
 
-    # Adaptive research cycle; writes artifacts but does not trade
-    poetry run python -m autoresearch.auto_research --workers 8
+## Run it
 
-    # Research-only portfolio replay
-    poetry run python -m autoresearch.backtest --help
+```sh
+# Check coordinator, account, and broker-protection health
+poetry run python -m portfolio.healthcheck
 
-    # Validate and execute decisions from standard input or a file
-    poetry run python -m execution --dry-run --file decisions.json
+# Start the continuous Algo coordinator
+poetry run python -m portfolio.daemon --mode algo
 
-Scheduled jobs and report prompts are documented in ops/. Research behavior is
-described in docs/adaptive_research.md and docs/event_driven_strategy.md.
-The independent options sleeves and paper workflow are documented in
-docs/options_trading.md. Their separate cost-aware research and validation
-runner is documented in docs/options_research.md.
+# Account report with broker fill-based realized P&L
+poetry run python -m reporting.performance --mode algo --json --fill-report
 
-The optional `ai`, `ml`, and `research` dependency groups add the event analyst,
-statistical/tree models, and yfinance-backed research/reporting features. A
-minimal coordinator install can omit them with `poetry install`; install the
-groups used by the configured strategies and scheduled jobs.
+# Equity research and portfolio replay
+poetry run python -m autoresearch.auto_research --workers 8
 
-## Layout
+# Options paper scan (dry run by default)
+poetry run python -m options.paper
 
-    autoresearch/ Research pipelines, historical events, backtesting, and benchmarks
-    broker/       Alpaca account and portfolio adapters
-    execution/    Order routing, risk validation, and execution adapters
-    market/       Market data, API models, calendars, sessions, and regimes
-    portfolio/    Live daemon, config, state, and protection
-    reporting/    Monitoring, performance, fills, journal, and validation reports
-    runtime/      Shared runtime paths and local-state locations
-    strategies/   Strategy implementations, coordination, and event analysis
-    data/         Local runtime state and research artifacts (ignored by Git)
-    docs/         Current guides
-    ops/          Automations, prompts, and systemd service unit
-    scripts/      Build and validation utilities
-    tests/        Unit and integration tests
+# Submit approved options orders to the options paper account
+poetry run python -m options.paper --submit
 
-All trading commands use the Algo paper account. Only the Algo coordinator may
-submit Algo orders.
+# Research one options sleeve using historical chains or an IV-surface dataset
+poetry run python -m options.research --strategy vrp --data data/options/research/chains.jsonl
+```
+
+For a continuously managed host, the systemd unit is
+[`ops/systemd/algo-trader.service`](ops/systemd/algo-trader.service). Scheduled
+OpenClaw jobs can run equity and options research in parallel and publish the
+results in separate report sections; see [automation notes](ops/openclaw-crons.md).
+
+## Research and configuration
+
+Equity AutoResearch and options research are intentionally separate. The
+options pipeline searches one sleeve at a time and validates rolling,
+purged/embargoed folds plus an untouched holdout. It models spread-crossing
+slippage and commissions, filters weak chain data, tracks Greeks, and checks
+assignment, cost sensitivity, and trade-sequence risk. Missing historical
+chains are reported as missing data; they do not become synthetic evidence of
+strategy performance.
+
+Paper and research settings are file-based:
+
+- Equity strategy profiles and portfolio limits: `strategies/registry.py` and
+  `portfolio/config.py`.
+- Options paper settings: copy `options/config.default.json` to
+  `data/options/config.json`.
+- Options research windows, costs, filters, and candidate grids:
+  `options/research/config.default.json`.
+- Local state, journals, reports, and datasets live under `data/` and are not
+  part of the source release.
+
+## Project map
+
+| Package | Role |
+| --- | --- |
+| `strategies/` | Equity, event-driven, and options strategy modules; coordinator logic |
+| `portfolio/`, `execution/` | Persistent runtime, reconciliation, order routing, and risk gates |
+| `options/`, `broker/`, `market/` | Options models and paper route, Alpaca adapters, and market data |
+| `autoresearch/`, `options/research/` | Separate equity and options validation pipelines |
+| `reporting/`, `ops/` | Account/fill reports, service unit, and scheduled automation notes |
+
+## Guides
+
+- [Options paper trading](docs/options_trading.md)
+- [Options research and validation](docs/options_research.md)
+- [Equity adaptive research](docs/adaptive_research.md)
+- [Event-driven strategy](docs/event_driven_strategy.md)
+- [Automation schedules](ops/openclaw-crons.md)

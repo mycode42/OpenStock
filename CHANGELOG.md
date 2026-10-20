@@ -2,10 +2,32 @@
 
 ## Unreleased
 
-- Renamed the project and service to Algo Trader, with the deployment rooted at `/opt/algo-trader`.
-- Reorganized runtime code into domain packages, consolidated research and backtesting under `autoresearch/`, and removed legacy import facades.
-- Removed the unused standalone Swing/Day application, peer-signal exchange, generic backtester, duplicate reports, and inactive analyst agents.
-- Kept the shared analyst graph, Algo research replay, active strategies, broker execution, risk controls, and coordinator protections.
+_No changes yet._
+
+## [3.0.0] - 2026-10-20
+
+Major release: independent options paper trading and validation join the
+coordinated Algo equity portfolio.
+
+### Added
+
+- A dedicated Alpaca Paper options route with VRP, event-driven, and optional
+  directional strategy sleeves, separate order/fill journals, and combined
+  equity/options risk checks.
+- Options-specific rolling walk-forward research with realistic execution
+  costs, chain-quality filters, Greek exposure tracking, assignment checks,
+  stress tests, and an untouched holdout.
+- Parallel nightly options research alongside equity AutoResearch, with its
+  own report section and artifacts.
+- Broker fill-based FIFO realized P&L reporting for long and short positions.
+
+### Changed
+
+- Refreshed the project guide, command examples, configuration map, and release
+  metadata for the current coordinator, research, reporting, and paper-trading
+  workflows.
+- Consolidated the runtime into domain packages and kept the Algo strategy
+  coordinator as the only route for Algo equity orders.
 
 ## [2.0.0] - 2026-10-09
 
