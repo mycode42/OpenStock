@@ -1,6 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 
 const DEFAULT_SETTINGS = Object.freeze({
     overnight_entries_enabled: true,
@@ -341,9 +341,305 @@ async function buildPayload(root) {
     };
 }
 
+function mergeConfig(base, override) {
+    const result = { ...base };
+    for (const [key, value] of Object.entries(safeObject(override))) {
+        result[key] = value && typeof value === 'object' && !Array.isArray(value)
+            && base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])
+            ? mergeConfig(base[key], value)
+            : value;
+    }
+    return result;
+}
+
+function validateConfigShape(value, template, prefix = '') {
+    if (template && typeof template === 'object' && !Array.isArray(template)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${prefix || 'settings'} must be an object`);
+        for (const [key, item] of Object.entries(value)) {
+            if (!Object.hasOwn(template, key)) {
+                if (prefix === 'dividends') {
+                    if (typeof item !== 'number' || !Number.isFinite(item) || item < 0) throw new Error(`dividends.${key} must be a finite non-negative number`);
+                    continue;
+                }
+                throw new Error(`Unsupported setting: ${prefix ? `${prefix}.` : ''}${key}`);
+            }
+            validateConfigShape(item, template[key], prefix ? `${prefix}.${key}` : key);
+        }
+        return;
+    }
+    if (Array.isArray(template)) {
+        if (!Array.isArray(value) || value.some(item => typeof item !== typeof template[0])) throw new Error(`${prefix} must be an array of ${typeof template[0]}`);
+        if (value.some(item => typeof item === 'number' && !Number.isFinite(item))) throw new Error(`${prefix} values must be finite`);
+        return;
+    }
+    if (typeof template === 'number') {
+        if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${prefix} must be a finite number`);
+        return;
+    }
+    if (typeof value !== typeof template) throw new Error(`${prefix} must be ${typeof template}`);
+}
+
+function validateOptionsConfig(config) {
+    const nonNegative = [
+        ['risk', 'max_risk_per_trade_pct'], ['risk', 'max_total_defined_risk_pct'], ['risk', 'max_daily_loss_pct'],
+        ['risk', 'max_delta_notional_pct'], ['risk', 'max_vega_per_vol_point_pct'], ['risk', 'max_gamma_1pct_loss_pct'],
+        ['risk', 'max_theta_loss_per_day_pct'], ['risk', 'max_margin_pct'], ['vrp', 'min_iv_minus_rv'],
+        ['vrp', 'short_delta_min'], ['vrp', 'short_delta_max'], ['vrp', 'wing_delta_max'],
+        ['event_driven', 'min_move_edge_pct'], ['event_driven', 'min_llm_confidence'],
+    ];
+    for (const [section, key] of nonNegative) {
+        if (config[section][key] < 0) throw new Error(`${section}.${key} must be non-negative`);
+    }
+    if (config.market_data_feed !== 'opra' && config.market_data_feed !== 'indicative') throw new Error('market_data_feed must be opra or indicative');
+    if (config.risk.max_risk_per_trade_pct <= 0 || config.risk.max_contracts_per_trade < 1) throw new Error('risk budget and max_contracts_per_trade must be positive');
+    if (config.vrp.short_delta_min > config.vrp.short_delta_max || config.vrp.max_dte < config.vrp.min_dte) throw new Error('VRP ranges are inverted');
+    for (const [key, value] of Object.entries(config.regime_risk_multipliers || {})) {
+        if (!Number.isFinite(value) || value < 0 || value > 2) throw new Error(`regime_risk_multipliers.${key} must be between 0 and 2`);
+    }
+    return config;
+}
+
+function optionsConfigPath(root) {
+    const overridePath = process.env.ALPACA_OPTIONS_CONFIG;
+    return overridePath ? path.resolve(root, overridePath) : path.join(root, 'data', 'options', 'config.json');
+}
+
+async function loadOptionsSettings(root) {
+    const defaults = await readJson(path.join(root, 'options', 'config.default.json'));
+    const override = await readJson(optionsConfigPath(root), { optional: true }) || {};
+    const settings = mergeConfig(defaults, override);
+    if (process.env.ALPACA_OPTIONS_FEED) settings.market_data_feed = process.env.ALPACA_OPTIONS_FEED.trim().toLowerCase();
+    validateConfigShape(settings, defaults);
+    return validateOptionsConfig(settings);
+}
+
+async function writeOptionsSettings(root, settings) {
+    const defaults = await readJson(path.join(root, 'options', 'config.default.json'));
+    const merged = mergeConfig(await loadOptionsSettings(root), settings);
+    validateConfigShape(merged, defaults);
+    validateOptionsConfig(merged);
+    const destination = optionsConfigPath(root);
+    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+    const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+    try {
+        const handle = await fs.open(temporary, 'wx', 0o600);
+        try {
+            await handle.writeFile(`${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+            await handle.sync();
+        } finally {
+            await handle.close();
+        }
+        await fs.rename(temporary, destination);
+    } catch (error) {
+        await fs.rm(temporary, { force: true });
+        throw error;
+    }
+}
+
+async function readJsonLines(filePath, limit = 500) {
+    let handle;
+    try { handle = await fs.open(filePath, 'r'); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    try {
+        const stat = await handle.stat();
+        const length = Math.min(stat.size, 2 * 1024 * 1024);
+        const buffer = Buffer.alloc(length);
+        await handle.read(buffer, 0, length, stat.size - length);
+        let lines = buffer.toString('utf8').split(/\r?\n/);
+        if (stat.size > length) lines = lines.slice(1);
+        const rows = [];
+        for (const line of lines.slice(-limit)) {
+            try { const row = JSON.parse(line); if (row && typeof row === 'object' && !Array.isArray(row)) rows.push(row); }
+            catch { /* Ignore a partial or malformed append-only row. */ }
+        }
+        return rows;
+    } finally {
+        await handle.close();
+    }
+}
+
+async function optionsAccountDirectory(dataDir) {
+    const accountId = String(process.env.ALPACA_OPTIONS_ACCOUNT_ID || '').trim();
+    if (accountId) {
+        const digest = createHash('sha256').update(accountId).digest('hex').slice(0, 16);
+        return path.join(dataDir, 'options', 'accounts', digest);
+    }
+    const directory = path.join(dataDir, 'options', 'accounts');
+    try {
+        const names = (await fs.readdir(directory, { withFileTypes: true }))
+            .filter(entry => entry.isDirectory() && /^[a-f0-9]{16}$/.test(entry.name))
+            .map(entry => entry.name);
+        return names.length === 1 ? path.join(directory, names[0]) : null;
+    } catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+    }
+}
+
+function summarizeOptionsResearch(report) {
+    if (!report) return null;
+    const strategies = Object.entries(safeObject(report.strategies)).map(([name, row]) => ({
+        name,
+        status: String(row.status || 'unknown'),
+        approved: row.approved === true,
+        underlying: String(row.underlying || ''),
+        data_mode: String(row.data_mode || ''),
+        walk_forward: safeObject(row.walk_forward),
+        holdout: safeObject(row.holdout),
+    }));
+    const approved = strategies.filter(row => row.approved).length;
+    const completed = strategies.filter(row => row.status === 'completed').length;
+    const result = strategies.map(row => `${row.name.replaceAll('_', ' ')} · ${row.status}`).join(' / ')
+        || String(report.reason || report.status || 'No options research results');
+    return {
+        date: String(report.run_date_et || report.created_at || '').slice(0, 10),
+        created_at: isoTimestamp(report.created_at),
+        status: String(report.status || 'unknown'),
+        result,
+        active_trials: strategies.length,
+        promoted: approved,
+        staged: Math.max(0, completed - approved),
+        rejected: strategies.length - completed,
+        portfolio_return_pct: null,
+        portfolio_status: 'research only',
+        options_strategies: strategies,
+    };
+}
+
+async function readOptionsResearch(dataDir) {
+    const directory = path.join(dataDir, 'options', 'research', 'automation');
+    let names;
+    try { names = await fs.readdir(directory); }
+    catch (error) { if (error.code === 'ENOENT') return { latest: null, history: [] }; throw error; }
+    const dated = names.filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort().slice(-90);
+    const history = [];
+    for (const name of dated) {
+        try { history.push(summarizeOptionsResearch(await readJson(path.join(directory, name)))); }
+        catch { /* One malformed research archive does not hide the rest. */ }
+    }
+    let latest = null;
+    try { latest = summarizeOptionsResearch(await readJson(path.join(directory, 'latest.json'))); }
+    catch { /* The latest report is optional until options research runs. */ }
+    if (!latest && history.length) latest = history[history.length - 1];
+    if (latest && !history.some(item => item?.date === latest.date)) history.push(latest);
+    return { latest, history: history.filter(Boolean).sort((a, b) => b.date.localeCompare(a.date)) };
+}
+
+function optionsSnapshotView(row, previous) {
+    const equity = finite(row.options_equity ?? safeObject(row.options_account_summary).options_equity);
+    const previousEquity = finite(previous?.options_equity ?? safeObject(previous?.options_account_summary).options_equity);
+    const dailyPnl = equity !== null && previousEquity !== null ? equity - previousEquity : null;
+    return {
+        date: String(row.logged_at || '').slice(0, 10),
+        timestamp: isoTimestamp(row.logged_at),
+        snapshot_kind: 'options',
+        equity,
+        cash: null,
+        invested: null,
+        position_count: Array.isArray(row.open_option_positions) ? row.open_option_positions.length : 0,
+        daily_pnl: dailyPnl,
+        daily_pnl_pct: dailyPnl !== null && previousEquity > 0 ? dailyPnl / previousEquity * 100 : null,
+    };
+}
+
+function optionsActivityView(decisions, orders, assignments, research) {
+    const activities = [];
+    for (const row of decisions) {
+        const signal = safeObject(row.signal);
+        const underlying = String(signal.underlying || '').toUpperCase();
+        const strategy = String(signal.strategy || 'Options strategy').replaceAll('_', ' ');
+        activities.push({
+            at: isoTimestamp(row.logged_at), kind: 'signal',
+            title: `${row.approved === true ? 'Approved' : 'Blocked'} options signal${underlying ? ` · ${underlying}` : ''}`,
+            detail: `${strategy}${row.reason ? ` · ${String(row.reason).slice(0, 110)}` : ''}`,
+            status: row.approved === true ? 'approved' : 'rejected',
+        });
+    }
+    for (const row of orders) {
+        const signal = safeObject(row.signal);
+        const underlying = String(signal.underlying || '').toUpperCase();
+        const status = String(row.status || safeObject(row.broker_response).status || 'recorded').toLowerCase();
+        activities.push({
+            at: isoTimestamp(row.logged_at), kind: 'order',
+            title: `${status === 'dry_run' ? 'Paper order preview' : 'Options order'}${underlying ? ` · ${underlying}` : ''}`,
+            detail: `${String(signal.strategy || 'Options strategy').replaceAll('_', ' ')} · ${status}`,
+            status,
+        });
+    }
+    for (const row of assignments) {
+        const event = safeObject(row.broker_activity || row.simulation);
+        activities.push({
+            at: isoTimestamp(row.logged_at), kind: 'signal',
+            title: 'Assignment activity',
+            detail: String(event.type || event.symbol || 'Options assignment recorded').slice(0, 120),
+            status: 'recorded',
+        });
+    }
+    if (research?.latest?.created_at) activities.push({
+        at: research.latest.created_at, kind: 'research', title: 'Options research completed',
+        detail: `${research.latest.result} · ${research.latest.status}`, status: research.latest.status,
+    });
+    return activities.filter(item => item.at).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 24);
+}
+
+async function buildOptionsPayload(root) {
+    const dataDir = path.join(root, 'data');
+    const settings = await loadOptionsSettings(root);
+    const accountDir = await optionsAccountDirectory(dataDir);
+    const [riskRows, decisions, orders, assignments, research] = await Promise.all([
+        accountDir ? readJsonLines(path.join(accountDir, 'risk_daily.jsonl')) : [],
+        accountDir ? readJsonLines(path.join(accountDir, 'decisions.jsonl')) : [],
+        accountDir ? readJsonLines(path.join(accountDir, 'orders.jsonl')) : [],
+        accountDir ? readJsonLines(path.join(accountDir, 'assignment_events.jsonl')) : [],
+        readOptionsResearch(dataDir),
+    ]);
+    const chronologicalRiskRows = [...riskRows].sort((a, b) => String(a.logged_at || '').localeCompare(String(b.logged_at || '')));
+    const history = [];
+    let currentDay = '';
+    let lastRowOfDay = null;
+    let previousDayRow = null;
+    for (const row of chronologicalRiskRows) {
+        const day = String(row.logged_at || '').slice(0, 10);
+        if (currentDay && day !== currentDay) previousDayRow = lastRowOfDay;
+        if (day !== currentDay) currentDay = day;
+        const point = optionsSnapshotView(row, previousDayRow);
+        if (point.date && point.equity !== null) history.push(point);
+        lastRowOfDay = row;
+    }
+    const latestRisk = riskRows[riskRows.length - 1] || {};
+    const activeStrategies = [...new Set(decisions.slice(-50).map(row => safeObject(row.signal).strategy).filter(Boolean))];
+    const universe = [...new Set(decisions.slice(-50).map(row => safeObject(row.signal).underlying).filter(Boolean))];
+    const disabled = !settings.enabled;
+    const unconfigured = !accountDir;
+    const entryPauseReasons = [];
+    if (disabled) entryPauseReasons.push('Options paper route is disabled in options configuration');
+    if (unconfigured) entryPauseReasons.push('No options paper account journal was found');
+    const latestTimestamp = isoTimestamp(latestRisk.logged_at);
+    return {
+        account: {
+            mode: 'paper',
+            market_state: String(latestRisk.regime || latestRisk.volatility_state || 'OPTIONS PAPER'),
+            last_scan_at: latestTimestamp,
+            last_scan_status: latestTimestamp ? 'complete' : 'no options scan recorded',
+            entries_paused: disabled || unconfigured ? true : null,
+            entry_pause_reasons: entryPauseReasons,
+            active_strategies: activeStrategies,
+            universe_count: universe.length,
+        },
+        performance: { history, metrics: calculateMetrics(history) },
+        activity: optionsActivityView(decisions, orders, assignments, research),
+        research,
+        settings,
+        settings_readonly_fields: process.env.ALPACA_OPTIONS_FEED ? ['market_data_feed'] : [],
+        account_type: 'options',
+    };
+}
+
 module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALGO_TRADER_ROOT || '/opt/algo-trader' }) {
-    app.get('/api/algo-trader', async (_req, res) => {
-        try { res.json(await buildPayload(root)); }
+    app.get('/api/algo-trader', async (req, res) => {
+        const account = req.query?.account || 'equity';
+        if (!['equity', 'options'].includes(account)) return res.status(400).json({ error: 'Unsupported Algo Trader account' });
+        try { res.json(account === 'options' ? await buildOptionsPayload(root) : await buildPayload(root)); }
         catch (error) {
             console.error(`Algo Trader dashboard unavailable: ${error.message}`);
             res.status(503).json({ error: 'Algo Trader data is unavailable' });
@@ -351,7 +647,15 @@ module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALG
     });
 
     app.put('/api/algo-trader/config', async (req, res) => {
+        const account = req.query?.account || req.body?.account || 'equity';
+        if (!['equity', 'options'].includes(account)) return res.status(400).json({ error: 'Unsupported Algo Trader account' });
         try {
+            if (account === 'options') {
+                if (!req.body || !req.body.settings || typeof req.body.settings !== 'object' || Array.isArray(req.body.settings)) throw new Error('settings must be an object');
+                await writeOptionsSettings(root, req.body.settings);
+                res.json({ settings: await loadOptionsSettings(root), applied: 'next options paper scan' });
+                return;
+            }
             const current = await loadSettings(path.join(root, 'data'));
             const body = safeObject(req.body);
             if (!req.body || !req.body.settings || typeof req.body.settings !== 'object' || Array.isArray(req.body.settings)) throw new Error('settings must be an object');
@@ -359,7 +663,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALG
             await writeSettings(path.join(root, 'data'), settings);
             res.json({ settings, applied: 'next portfolio scan' });
         } catch (error) {
-            const isValidationError = /must be|Unsupported setting/.test(error.message);
+            const isValidationError = /must be|Unsupported setting|Unsupported Algo Trader account|inverted|positive|between/.test(error.message);
             if (!isValidationError) console.error(`Unable to save Algo Trader settings: ${error.message}`);
             res.status(isValidationError ? 400 : 503).json({ error: isValidationError ? error.message : 'Algo Trader settings could not be saved' });
         }
