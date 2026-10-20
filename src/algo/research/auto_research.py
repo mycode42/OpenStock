@@ -45,7 +45,7 @@ from .settings import (
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v17-pit-ridge-replay-2026"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v18-pit-boosted-tree-replay-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -264,10 +264,12 @@ def run_daily_research(args) -> dict:
     factor_path = cohort_dir / "factor_model.json"
     factor_cached, _ = read_json(factor_path)
     from .factor_research import COST_MODEL_VERSION, LOGIC_VERSION, train_factor_model
+    from .tree_factor_models import TREE_LOGIC_VERSIONS
 
     factor_fingerprint = stable_hash({
         "cohort_fingerprint": fingerprint,
         "factor_logic_version": LOGIC_VERSION,
+        "tree_factor_logic_versions": TREE_LOGIC_VERSIONS,
         "factor_cost_model_version": COST_MODEL_VERSION,
         "sector_map": ALGO_FACTOR_SECTOR_BY_SYMBOL,
         "fundamentals_data_version": fundamentals_data_version,
@@ -277,7 +279,7 @@ def run_daily_research(args) -> dict:
         factor_model_timing = {"seconds": 0.0, "reused": True}
         logger.info("Multi Factor diagnostics: reusing cached result")
     else:
-        logger.info("Multi Factor diagnostics: fitting purged Ridge timeline before replay discovery")
+        logger.info("Multi Factor diagnostics: fitting purged Ridge and boosted tree models before replay discovery")
         history = _load_daily_history(
             store, covered_symbols, start=warmup_start.isoformat(), end=cohort_end.isoformat(),
         )
@@ -546,6 +548,7 @@ def run_daily_research(args) -> dict:
         report["run_date_et"] = datetime.now(ET).date().isoformat()
         report = _attach_fitness_timeline(report, Path(args.output_dir))
         _atomic_json(report_path, report)
+        _atomic_json(root / "latest.json", report)
         return report
 
     portfolio_path = cohort_dir / "portfolio"

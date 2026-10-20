@@ -404,6 +404,18 @@ def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str,
                 "factor_neutralization": "sector",
                 "min_universe": 15,
             }),
+            ("lightgbm_walk_forward_scores", {
+                "factor_weight_mode": "lightgbm_walk_forward",
+                "regime_factor_weights": {},
+                "factor_neutralization": "sector",
+                "min_universe": 15,
+            }),
+            ("xgboost_walk_forward_scores", {
+                "factor_weight_mode": "xgboost_walk_forward",
+                "regime_factor_weights": {},
+                "factor_neutralization": "sector",
+                "min_universe": 15,
+            }),
             ("momentum_only", {"factor_weights": {
                 "momentum_1m": 0.33, "momentum_3m": 0.34, "momentum_6m": 0.33,
             }, "regime_factor_weights": {}}),

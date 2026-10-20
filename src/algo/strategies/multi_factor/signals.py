@@ -73,11 +73,15 @@ class SignalGenerator:
         groups_by_symbol: dict[str, str] | None = None,
         tradable_symbols: set[str] | None = None,
         learned_factor_weights: dict[str, float] | None = None,
+        learned_factor_model: dict | None = None,
         factor_model_diagnostics: dict | None = None,
     ) -> tuple[list[MultiFactorSignal], dict]:
         symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
         regime_override = None
         learned_weights_status = "not_requested"
+        is_tree_model = self.config.factor_weight_mode in {
+            "lightgbm_walk_forward", "xgboost_walk_forward",
+        }
         if self.config.factor_weight_mode == "ridge_walk_forward":
             learned_factor_weights = learned_factor_weights or {}
             factor_weights = {
@@ -95,12 +99,29 @@ class SignalGenerator:
                 learned_weights_status = "loaded"
             else:
                 learned_weights_status = "unavailable"
+        elif is_tree_model:
+            model = learned_factor_model if isinstance(learned_factor_model, dict) else {}
+            model_factors = model.get("factor_names")
+            expected_format = "lightgbm_text" if self.config.factor_weight_mode == "lightgbm_walk_forward" else "xgboost_json"
+            if (
+                model.get("model_mode") == self.config.factor_weight_mode
+                and isinstance(model_factors, list)
+                and model_factors
+                and not (set(model_factors) - SUPPORTED_FACTORS)
+                and isinstance(model.get("model_payload"), str)
+                and model.get("model_format") == expected_format
+            ):
+                factor_weights = {name: 1.0 for name in model_factors}
+                learned_weights_status = "loaded"
+            else:
+                factor_weights = {}
+                learned_weights_status = "unavailable"
         else:
             factor_weights = dict(self.config.factor_weights)
             regime_override = self.config.regime_factor_weights.get(str(regime).lower())
             if regime_override:
                 factor_weights.update(regime_override)
-        if self.config.factor_weight_mode == "ridge_walk_forward" and learned_weights_status != "loaded":
+        if self.config.factor_weight_mode != "static" and learned_weights_status != "loaded":
             return [], {
                 "as_of": as_of.isoformat(),
                 "rebalance_key": self.rebalance_key(session),
@@ -111,7 +132,7 @@ class SignalGenerator:
                 "factor_model": factor_model_diagnostics or {},
                 "factor_timing_status": "learned_snapshot_unavailable",
                 "minimum_universe_met": False,
-                "omitted_factors": ["No purged Ridge weight snapshot was valid as of this session."],
+                "omitted_factors": ["No purged factor model snapshot was valid as of this session."],
             }
         active_config = replace(self.config, factor_weights=factor_weights)
         calculator = FactorCalculator(active_config)
@@ -124,6 +145,7 @@ class SignalGenerator:
         ranked = ranker.rank(
             features,
             groups_by_symbol=(groups_by_symbol if self.config.factor_neutralization == "sector" else None),
+            scoring_model=learned_factor_model if is_tree_model else None,
         )
         factor_coverage = {
             factor: sum(
@@ -157,7 +179,8 @@ class SignalGenerator:
             "factor_weight_source": (
                 "ridge_walk_forward" if self.config.factor_weight_mode == "ridge_walk_forward"
                 and learned_weights_status == "loaded"
-                else "unavailable" if self.config.factor_weight_mode == "ridge_walk_forward"
+                else self.config.factor_weight_mode + "_scores" if is_tree_model and learned_weights_status == "loaded"
+                else "unavailable" if self.config.factor_weight_mode != "static"
                 else "static"
             ),
             "factor_model": factor_model_diagnostics or {},
@@ -166,9 +189,13 @@ class SignalGenerator:
             "feature_count": len(features),
             "ranked_count": len(ranked),
             "selected_factors": selected_factors,
-            "active_factor_weights": factor_weights,
+            "active_factor_weights": factor_weights if not is_tree_model else None,
+            "active_factor_features": sorted(factor_weights),
+            "model_feature_importance": (
+                (learned_factor_model or {}).get("feature_importance") if is_tree_model else None
+            ),
             "factor_timing_status": (
-                "learned_walk_forward" if self.config.factor_weight_mode == "ridge_walk_forward"
+                "learned_walk_forward" if self.config.factor_weight_mode != "static"
                 else "regime_override" if regime_override else "static_weights"
             ),
             "factor_coverage": factor_coverage,

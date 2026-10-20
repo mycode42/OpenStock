@@ -20,6 +20,9 @@ SUPPORTED_FACTORS = {
     "quality_balance_sheet",
 }
 MOMENTUM_FACTORS = {"momentum_1m", "momentum_3m", "momentum_6m"}
+LEARNED_FACTOR_MODES = {
+    "ridge_walk_forward", "lightgbm_walk_forward", "xgboost_walk_forward",
+}
 REGIMES = {"unknown", "trending_up", "trending_down", "range_bound", "sideways", "volatile", "risk_off", "bullish", "bearish"}
 REGIME_FACTOR_WEIGHT_PROFILES = {
     "trending_up": {
@@ -135,8 +138,11 @@ class MultiFactorConfig:
             raise ValueError("direction_mode must be long_only, long_short, or regime_dependent")
         if not isinstance(self.factor_neutralization, str) or self.factor_neutralization not in {"none", "sector"}:
             raise ValueError("factor_neutralization must be none or sector")
-        if self.factor_weight_mode not in {"static", "ridge_walk_forward"}:
-            raise ValueError("factor_weight_mode must be static or ridge_walk_forward")
+        if self.factor_weight_mode not in {"static", *LEARNED_FACTOR_MODES}:
+            raise ValueError(
+                "factor_weight_mode must be static, ridge_walk_forward, "
+                "lightgbm_walk_forward, or xgboost_walk_forward"
+            )
         if not isinstance(self.portfolio_weight_method, str) or self.portfolio_weight_method not in {"equal", "shrinkage_min_variance"}:
             raise ValueError("portfolio_weight_method must be equal or shrinkage_min_variance")
         if not isinstance(self.disable_in_volatile, bool):

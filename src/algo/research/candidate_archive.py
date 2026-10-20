@@ -24,7 +24,7 @@ STRATEGY_LOGIC_VERSIONS = {
     "swing_trend_following": "swing-trend-2",
     "momentum": "swing-momentum-2",
     "swing_momentum": "swing-momentum-2",
-    "multi_factor": "multi-factor-rank-4-ridge-walk-forward",
+    "multi_factor": "multi-factor-rank-5-boosted-walk-forward",
 }
 
 
@@ -90,11 +90,16 @@ def model_family(strategy: str, parameters: dict) -> str:
             name for name, weight in (values.get("factor_weights") or {}).items()
             if isinstance(weight, (int, float)) and weight > 0
         )) or "none"
-        if weight_mode == "ridge_walk_forward":
+        if weight_mode in {
+            "ridge_walk_forward", "lightgbm_walk_forward", "xgboost_walk_forward",
+        }:
             active_factors = "research_model_factors"
         timing = "regime_timed" if values.get("regime_factor_weights") else "static"
+        combination = "tree_regression_scores" if weight_mode in {
+            "lightgbm_walk_forward", "xgboost_walk_forward",
+        } else "linear_composite"
         return ":".join((
-            "multi_factor", weight_mode, "linear_composite", active_factors,
+            "multi_factor", weight_mode, combination, active_factors,
             str(values.get("factor_neutralization", "none")), timing,
             str(values.get("portfolio_weight_method", "equal")),
         ))

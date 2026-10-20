@@ -258,12 +258,17 @@ def load_point_in_time_fundamentals(
 
 def requested_fundamental_factors(
     config, regime: str = "unknown", learned_factor_weights: dict[str, float] | None = None,
+    learned_factor_model: dict | None = None,
 ) -> bool:
     """Whether a factor profile asks for value or quality inputs."""
     if config.factor_weight_mode == "ridge_walk_forward":
         if learned_factor_weights is None:
             return True
         weights = learned_factor_weights
+    elif config.factor_weight_mode in {"lightgbm_walk_forward", "xgboost_walk_forward"}:
+        if not isinstance(learned_factor_model, dict):
+            return True
+        weights = {name: 1.0 for name in learned_factor_model.get("factor_names", [])}
     else:
         weights = dict(config.factor_weights)
         weights.update(config.regime_factor_weights.get(str(regime).lower(), {}))

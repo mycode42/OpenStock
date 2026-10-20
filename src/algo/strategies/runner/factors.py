@@ -60,12 +60,20 @@ def _multi_factor_rebalance_signals(
     if not any(by_symbol.get(ticker, {}).get("last_rebalance_period") != period for ticker in tracked):
         return {}, None
     learned_factor_weights = None
+    learned_factor_model = None
     factor_model_diagnostics = None
     if generator.config.factor_weight_mode == "ridge_walk_forward":
         from src.algo.strategies.multi_factor.learned_weights import load_live_factor_weights
 
         learned_factor_weights, factor_model_diagnostics = load_live_factor_weights(
             as_of=session - timedelta(days=1),
+        )
+    elif generator.config.factor_weight_mode in {"lightgbm_walk_forward", "xgboost_walk_forward"}:
+        from src.algo.strategies.multi_factor.learned_weights import load_live_tree_factor_model
+
+        learned_factor_model, factor_model_diagnostics = load_live_tree_factor_model(
+            as_of=session - timedelta(days=1),
+            model_mode=generator.config.factor_weight_mode,
         )
     signals, diagnostics = generator.generate(
         daily_bars,
@@ -79,6 +87,7 @@ def _multi_factor_rebalance_signals(
         groups_by_symbol=groups_by_symbol,
         tradable_symbols=tradable_symbols,
         learned_factor_weights=learned_factor_weights,
+        learned_factor_model=learned_factor_model,
         factor_model_diagnostics=factor_model_diagnostics,
     )
     if not diagnostics["minimum_universe_met"]:

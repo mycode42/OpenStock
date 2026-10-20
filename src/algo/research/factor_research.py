@@ -21,6 +21,10 @@ from src.algo.strategies.multi_factor.diagnostics import information_coefficient
 from src.algo.strategies.multi_factor.features import _available_value
 from src.algo.strategies.multi_factor.ranking import FactorRanker
 from .candidate_archive import candidate_id as archive_candidate_id
+from .tree_factor_models import (
+    TREE_LOGIC_VERSIONS, TREE_MODEL_FAMILIES, fit_tree_factor_model,
+    predict_tree_factor_model,
+)
 
 
 FACTORS = ("momentum_1m", "momentum_3m", "momentum_6m", "low_volatility")
@@ -251,6 +255,22 @@ def _scores(observation: dict, weights: dict[str, float]) -> dict[str, float]:
     }
 
 
+def _tree_scores(observation: dict, artifact: dict) -> dict[str, float]:
+    names = artifact["factor_names"]
+    symbols = [
+        symbol for symbol, factors in sorted(observation["zscores"].items())
+        if symbol in observation["returns"] and all(name in factors for name in names)
+    ]
+    if not symbols:
+        return {}
+    matrix = np.asarray(
+        [[observation["zscores"][symbol][name] for name in names] for symbol in symbols],
+        dtype=float,
+    )
+    predictions = predict_tree_factor_model(artifact, matrix)
+    return {symbol: float(value) for symbol, value in zip(symbols, predictions)}
+
+
 def _ic_summary(observations: list[dict], weights: dict[str, float]) -> dict:
     values = []
     for observation in observations:
@@ -413,6 +433,7 @@ def train_factor_model(
         if legacy_weight_total > 0 else equal_weights
     )
     adaptive_observations = []
+    tree_timelines: dict[str, list[dict]] = {mode: [] for mode in TREE_MODEL_FAMILIES}
     for index, observation in enumerate(observations):
         # Labels must finish before the prediction date; retain only the
         # latest year of eligible observations to follow recent regimes.
@@ -424,9 +445,26 @@ def train_factor_model(
             continue
         weights, equal_weight_fallback = _fit_weights(prior, RIDGE_ALPHA, factor_names)
         predictions = _scores(observation, weights)
+        tree_scores = {}
+        matrix, target = _training_arrays(prior, factor_names)
+        for mode in TREE_MODEL_FAMILIES:
+            artifact = fit_tree_factor_model(mode, matrix, target, factor_names)
+            model_scores = _tree_scores(observation, artifact)
+            snapshot = {
+                **artifact,
+                "effective_date": observation["date"].isoformat(),
+                "training_label_cutoff": max(row["label_end"] for row in prior).isoformat(),
+                "training_observation_count": len(prior),
+                "cost_model_version": COST_MODEL_VERSION,
+                "data_version": data_version,
+                "fundamentals_data_version": fundamentals_data_version,
+            }
+            tree_timelines[mode].append(snapshot)
+            tree_scores[mode] = model_scores
         adaptive_observations.append({
             **observation,
             "_scores": predictions,
+            "_tree_scores": tree_scores,
             "_weights": weights,
             "_weight_fit_fallback": equal_weight_fallback,
             "_training_label_cutoff": max(row["label_end"] for row in prior).isoformat(),
@@ -498,6 +536,93 @@ def train_factor_model(
     paired_return_delta = [
         learned_net_by_date[day] - legacy_net_by_date[day] for day in paired_dates
     ]
+    latest_date = session_dates[-1]
+    current_train = [
+        row for row in observations if row["label_end"] < latest_date
+    ][-FACTOR_TRAINING_SAMPLES:]
+    if len(current_train) < FACTOR_TRAINING_SAMPLES:
+        raise ValueError("Not enough recent factor observations to fit current weights")
+    current_weights, current_fallback = _fit_weights(current_train, RIDGE_ALPHA, factor_names)
+    current_matrix, current_target = _training_arrays(current_train, factor_names)
+    current_models = {}
+    for mode in TREE_MODEL_FAMILIES:
+        artifact = fit_tree_factor_model(mode, current_matrix, current_target, factor_names)
+        current_models[mode] = {
+            **artifact,
+            "effective_date": latest_date.isoformat(),
+            "training_label_cutoff": max(row["label_end"] for row in current_train).isoformat(),
+            "training_observation_count": len(current_train),
+            "cost_model_version": COST_MODEL_VERSION,
+            "data_version": data_version,
+            "fundamentals_data_version": fundamentals_data_version,
+            "current_fit": True,
+        }
+    tree_model_comparisons = {}
+    for mode, family in TREE_MODEL_FAMILIES.items():
+        rows = [
+            row for row in adaptive_observations
+            if row.get("_tree_scores", {}).get(mode)
+        ]
+        tree_net_ics = [
+            value for row in rows
+            if (value := information_coefficient(row["_tree_scores"][mode], row["net_returns"])) is not None
+        ]
+        tree_gross_ics = [
+            value for row in rows
+            if (value := information_coefficient(row["_tree_scores"][mode], row["returns"])) is not None
+        ]
+        tree_returns = [
+            value for row in rows
+            if (value := _after_cost_long_short(
+                row, row["_tree_scores"][mode], spread_bps=spread_bps,
+                slippage_bps=slippage_bps, commission_per_share=commission_per_share,
+                short_borrow_annual_pct=short_borrow_annual_pct,
+            )) is not None
+        ]
+        tree_return_by_date = {
+            row["date"].isoformat(): _after_cost_long_short(
+                row, row["_tree_scores"][mode], spread_bps=spread_bps,
+                slippage_bps=slippage_bps, commission_per_share=commission_per_share,
+                short_borrow_annual_pct=short_borrow_annual_pct,
+            )
+            for row in rows
+        }
+        paired_tree_dates = sorted(
+            day for day in tree_return_by_date
+            if tree_return_by_date[day] is not None and day in legacy_net_by_date
+        )
+        paired_tree_delta = [
+            tree_return_by_date[day] - legacy_net_by_date[day]
+            for day in paired_tree_dates
+        ]
+        model_id_payload = {
+            "model_family": family,
+            "logic_version": TREE_LOGIC_VERSIONS[mode],
+            "factor_names": factor_names,
+            "current_feature_importance": current_models[mode]["feature_importance"],
+            "data_version": data_version,
+            "fundamentals_data_version": fundamentals_data_version,
+            "cost_model_version": COST_MODEL_VERSION,
+            "model_parameters": current_models[mode]["model_mode"],
+            "training_label_cutoff": current_models[mode]["training_label_cutoff"],
+        }
+        tree_model_comparisons[mode] = {
+            "model_family": family,
+            "logic_version": TREE_LOGIC_VERSIONS[mode],
+            "candidate_id": hashlib.sha256(
+                json.dumps(model_id_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+            "gross_ic": _metric_summary(tree_gross_ics),
+            "net_of_costs_ic": _metric_summary(tree_net_ics),
+            "after_cost_long_short_return": _metric_summary(tree_returns),
+            "after_cost_return_delta_vs_legacy_static": {
+                "mean": round(statistics.mean(paired_tree_delta), 6) if paired_tree_delta else None,
+                "paired_oos_sample_count": len(paired_tree_dates),
+            },
+            "feature_importance": current_models[mode]["feature_importance"],
+            "evaluation_count": len(rows),
+            "training_lookback_observations": FACTOR_TRAINING_SAMPLES,
+        }
     regime_timed_rows = []
     for row in adaptive_observations:
         weights = _configured_regime_weights(factor_names, row["market_regime"])
@@ -516,13 +641,6 @@ def train_factor_model(
     regime_timed_net_ic = [row["net_ic"] for row in regime_timed_rows if row["net_ic"] is not None]
     regime_timed_net_return = [row["net_return"] for row in regime_timed_rows if row["net_return"] is not None]
 
-    latest_date = session_dates[-1]
-    current_train = [
-        row for row in observations if row["label_end"] < latest_date
-    ][-FACTOR_TRAINING_SAMPLES:]
-    if len(current_train) < FACTOR_TRAINING_SAMPLES:
-        raise ValueError("Not enough recent factor observations to fit current weights")
-    current_weights, current_fallback = _fit_weights(current_train, RIDGE_ALPHA, factor_names)
     weight_timeline = [
         {
             "effective_date": row["date"].isoformat(),
@@ -545,6 +663,7 @@ def train_factor_model(
         "logic_version": LOGIC_VERSION,
         "current_fit": True,
     })
+    ridge_timeline = list(weight_timeline)
     by_year = {}
     for year in sorted({row["date"].year for row in adaptive_observations}):
         year_rows = [row for row in adaptive_observations if row["date"].year == year]
@@ -637,11 +756,44 @@ def train_factor_model(
     candidate_id = hashlib.sha256(
         json.dumps(candidate_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-
-    return {
-        "method": "rolling_recent_ridge_cross_sectional_21_session_purged",
+    replay_model_timeline = [*ridge_timeline]
+    for snapshots in tree_timelines.values():
+        replay_model_timeline.extend(snapshots)
+    tree_model_comparisons["ridge_walk_forward"] = {
         "model_family": MODEL_FAMILY,
         "logic_version": LOGIC_VERSION,
+        "candidate_id": candidate_id,
+        "gross_ic": adaptive_summary,
+        "net_of_costs_ic": adaptive_net_ic,
+        "after_cost_long_short_return": _metric_summary(adaptive_net),
+        "after_cost_return_delta_vs_legacy_static": {
+            "mean": round(statistics.mean(paired_return_delta), 6) if paired_return_delta else None,
+            "paired_oos_sample_count": len(paired_dates),
+        },
+        "feature_importance": current_weights,
+        "evaluation_count": len(adaptive_observations),
+        "training_lookback_observations": FACTOR_TRAINING_SAMPLES,
+    }
+    tree_model_comparisons["legacy_static"] = {
+        "model_family": "static_linear_composite",
+        "gross_ic": adaptive_legacy_static,
+        "net_of_costs_ic": legacy_static_net_ic,
+        "after_cost_long_short_return": _metric_summary(legacy_static_net),
+        "evaluation_count": len(adaptive_observations),
+    }
+    tree_model_comparisons["equal_weight"] = {
+        "model_family": "equal_weight_linear_composite",
+        "gross_ic": adaptive_equal,
+        "net_of_costs_ic": equal_net_ic,
+        "after_cost_long_short_return": _metric_summary(equal_net),
+        "evaluation_count": len(adaptive_observations),
+    }
+
+    return {
+        "method": "rolling_recent_purged_multi_model_cross_sectional_21_session_comparison",
+        "model_family": MODEL_FAMILY,
+        "logic_version": LOGIC_VERSION,
+        "primary_model_mode": "ridge_walk_forward",
         "candidate_id": candidate_id,
         "parent_candidate": "multi_factor_equal_weight_baseline_v1",
         "parent_candidate_id": parent_candidate_id,
@@ -661,6 +813,15 @@ def train_factor_model(
             name for name in FUNDAMENTAL_FACTORS if name in factor_names
         ],
         "feature_importance": dict(sorted(current_weights.items(), key=lambda item: (-item[1], item[0]))),
+        "model_comparisons": tree_model_comparisons,
+        "current_models": current_models,
+        "model_comparison_protocol": {
+            "oos_predictions": "all model families use the same cross-sections and 21-session forward labels",
+            "purge_rule": "the training labels must mature strictly before each evaluation feature date",
+            "training_window_observations": FACTOR_TRAINING_SAMPLES,
+            "training_target": "cross-sectionally centered and scaled 21-session returns net of estimated trading costs",
+            "tree_regularization": "31 estimators, depth 2, shrinkage, row/column subsampling, L1/L2, one CPU thread",
+        },
         "factor_oos_ic": factor_ic,
         "forward_horizon_sessions": FORWARD_SESSIONS,
         "sampling_step_sessions": FORWARD_SESSIONS,
@@ -719,7 +880,11 @@ def train_factor_model(
             "average_dollar_volume_mask_applied_when_full_volume_history_is_available": True,
         },
         "current_candidate_weights": current_weights,
-        "weight_timeline": weight_timeline,
+        "weight_timeline": replay_model_timeline,
+        "model_snapshot_count_by_family": {
+            "ridge_cross_sectional": len(ridge_timeline),
+            **{family: len(tree_timelines[mode]) for mode, family in TREE_MODEL_FAMILIES.items()},
+        },
         "current_fit_equal_weight_fallback": current_fallback,
         "current_training_label_cutoff": max(row["label_end"] for row in current_train).isoformat(),
         "purge_rule": "Every 21-session forward label must end strictly before the feature date used for prediction.",

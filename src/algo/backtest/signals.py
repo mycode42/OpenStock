@@ -38,12 +38,20 @@ class ReplaySignalsMixin:
             return {}, None
         as_of = session - timedelta(days=1)
         learned_factor_weights = None
+        learned_factor_model = None
         factor_model_diagnostics = None
-        if self.multi_factor_generator.config.factor_weight_mode == "ridge_walk_forward":
+        model_mode = self.multi_factor_generator.config.factor_weight_mode
+        if model_mode == "ridge_walk_forward":
             from src.algo.strategies.multi_factor.learned_weights import resolve_walk_forward_weights
 
             learned_factor_weights, factor_model_diagnostics = resolve_walk_forward_weights(
                 getattr(self, "factor_weight_timeline", None), as_of=as_of,
+            )
+        elif model_mode in {"lightgbm_walk_forward", "xgboost_walk_forward"}:
+            from src.algo.strategies.multi_factor.learned_weights import resolve_walk_forward_tree_model
+
+            learned_factor_model, factor_model_diagnostics = resolve_walk_forward_tree_model(
+                getattr(self, "factor_weight_timeline", None), model_mode=model_mode, as_of=as_of,
             )
         from src.algo.strategies.multi_factor.fundamentals import (
             load_point_in_time_fundamentals, requested_fundamental_factors,
@@ -53,6 +61,7 @@ class ReplaySignalsMixin:
         fundamentals_diagnostics = {"status": "not_requested", "source": None}
         if requested_fundamental_factors(
             self.multi_factor_generator.config, regime_name, learned_factor_weights,
+            learned_factor_model,
         ):
             cache_key = as_of.isoformat()
             cached_fundamentals = self.multi_factor_fundamentals_cache.get(cache_key)
@@ -93,6 +102,7 @@ class ReplaySignalsMixin:
             held_positions=held,
             groups_by_symbol=getattr(self, "sector_by_symbol", None),
             learned_factor_weights=learned_factor_weights,
+            learned_factor_model=learned_factor_model,
             factor_model_diagnostics=factor_model_diagnostics,
         )
         if not diagnostics["minimum_universe_met"]:

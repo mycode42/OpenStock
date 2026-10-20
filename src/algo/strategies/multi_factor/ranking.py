@@ -5,7 +5,10 @@ from __future__ import annotations
 import math
 from statistics import mean, pstdev
 
+import numpy as np
+
 from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from src.algo.research.tree_factor_models import predict_tree_factor_model
 
 
 def _quantile(values: list[float], fraction: float) -> float:
@@ -75,6 +78,7 @@ class FactorRanker:
         factor_values: dict[str, dict[str, float]],
         *,
         groups_by_symbol: dict[str, str] | None = None,
+        scoring_model: dict | None = None,
     ) -> list[dict]:
         active = [name for name, weight in self.config.factor_weights.items() if weight > 0]
         usable = [
@@ -126,4 +130,43 @@ class FactorRanker:
             deviation = pstdev(clipped.values())
             for symbol, value in clipped.items():
                 zscores[symbol][factor] = (value - center) / deviation if deviation > 0 else 0.0
-        return self.combiner.combine(zscores, factor_values, usable)
+        if scoring_model is None:
+            return self.combiner.combine(zscores, factor_values, usable)
+
+        model_factors = scoring_model.get("factor_names")
+        if (
+            not isinstance(model_factors, list)
+            or not model_factors
+            or any(name not in usable for name in model_factors)
+        ):
+            return []
+        symbols = [
+            symbol for symbol in sorted(zscores)
+            if all(name in zscores[symbol] for name in model_factors)
+        ]
+        if len(symbols) < self.config.min_universe:
+            return []
+        matrix = np.asarray(
+            [[zscores[symbol][name] for name in model_factors] for symbol in symbols],
+            dtype=float,
+        )
+        predictions = predict_tree_factor_model(scoring_model, matrix)
+        if len(predictions) != len(symbols) or not np.isfinite(predictions).all():
+            return []
+        deviation = float(np.std(predictions))
+        if deviation > 0:
+            predictions = (predictions - float(np.mean(predictions))) / deviation
+        else:
+            predictions = np.zeros_like(predictions)
+        rows = []
+        for symbol, score in zip(symbols, predictions):
+            rows.append({
+                "symbol": symbol,
+                "score": float(score),
+                "factor_values": {name: factor_values[symbol][name] for name in model_factors},
+                "factor_zscores": {name: zscores[symbol][name] for name in model_factors},
+            })
+        rows.sort(key=lambda row: (-row["score"], row["symbol"]))
+        for rank, row in enumerate(rows, start=1):
+            row["rank"] = rank
+        return rows
