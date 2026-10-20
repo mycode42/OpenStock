@@ -203,3 +203,23 @@ def test_backtest_reports_correlated_and_overlapping_strategy_pairs():
     assert len(flagged) == 1
     assert flagged[0]["daily_pnl_correlation"] == 1.0
     assert flagged[0]["same_ticker_same_direction_overlap_days"] == 2
+
+
+def test_options_delta_notional_is_included_in_shared_name_and_gross_exposure():
+    book = PortfolioCoordinator().new_book(
+        equity=100_000,
+        options_delta_notional_by_underlying={"SPY": 12_500},
+    )
+
+    assert book.name_signed["SPY"] == 12_500
+    assert sum(book.group_gross.values()) == 12_500
+
+
+def test_non_finite_options_delta_notional_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="finite notionals"):
+        PortfolioCoordinator().new_book(
+            equity=100_000,
+            options_delta_notional_by_underlying={"SPY": float("nan")},
+        )

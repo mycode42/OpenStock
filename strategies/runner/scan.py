@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from options.risk import load_options_delta_overlay
+
 from market.data import feeds_for_session, historical_delay_seconds, regular_feed
 from market.regime import load_fred_regime_series
 from portfolio.config import (
@@ -647,16 +649,20 @@ def scan(
                 continue
             target = pending_buys if side == "buy" else pending_shorts
             target[ticker] = target.get(ticker, 0.0) + qty * reference
+        options_delta_overlay, options_overlay_status = load_options_delta_overlay()
         coordinator_book = coordinator.new_book(
             equity=equity,
             positions=positions,
             position_owners=owner_map,
             pending_buy_values=pending_buys,
             pending_short_values=pending_shorts,
+            options_delta_notional_by_underlying=options_delta_overlay,
             entries_today=entries_today,
             intraday_entries_today=intraday_entries_today,
             swing_entries_today=group_entry_counts.get("swing", 0),
         )
+    else:
+        options_delta_overlay, options_overlay_status = {}, {"available": False, "reason": "equity options overlay is Algo-only"}
 
     # Resolve shared limits in strategy-priority order so lower-priority
     # candidates cannot consume the daily budget before the core swing book.
@@ -841,6 +847,11 @@ def scan(
         "portfolio_coordinator": (
             {
                 "enabled": mode == "algo",
+                "options_delta_overlay": {
+                    "enabled": bool(options_delta_overlay),
+                    "underlyings": options_delta_overlay,
+                    "status": options_overlay_status,
+                },
                 "max_name_pct": coordinator_config.max_name_pct if mode == "algo" else None,
                 "sector_caps": dict(coordinator_config.sector_caps) if mode == "algo" else {},
                 "max_gross_pct": coordinator_config.max_gross_pct if mode == "algo" else None,

@@ -53,6 +53,9 @@ The systemd unit is algo-trader.service and runs from /opt/algo-trader.
 
 Scheduled jobs and report prompts are documented in ops/. Research behavior is
 described in docs/adaptive_research.md and docs/event_driven_strategy.md.
+The independent options sleeves and paper workflow are documented in
+docs/options_trading.md. Their separate cost-aware research and validation
+runner is documented in docs/options_research.md.
 
 The optional `ai`, `ml`, and `research` dependency groups add the event analyst,
 statistical/tree models, and yfinance-backed research/reporting features. A

@@ -1,15 +1,22 @@
-First inspect the runner with `openclaw automations list --all`, then read `/opt/algo-trader/data/research/algo-auto/latest.json`. This is a read-only report. Do not edit settings, restart services, place or modify orders, or present a research candidate as live.
+Pipeline steps
+1. Run exactly one combined nightly cycle:
+cd /opt/algo-trader && /usr/bin/nice -n 2 poetry run python -m autoresearch.nightly --workers 8
+The command starts the unchanged equity AutoResearch pipeline and the separate configured options research batch concurrently. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
+2. Read /opt/algo-trader/data/research/algo-auto/latest.json and /opt/algo-trader/data/options/research/automation/latest.json. The equity report also has a top-level options_research field. Report equity and options under separate headings. Do not edit settings, restart services, or place or modify trades.
 
-If the runner is still running, do not summarize an older report. If the latest report is missing, invalid, stale for today's America/New_York date, or has status `error`, say so clearly.
+If a report is missing, invalid, stale for today's America/New_York date, or has status error, say so clearly. A fresh options status of waiting_for_data means the configured historical chain dataset is absent; report its path and do not describe it as a strategy failure.
 
-Keep the Telegram report under 2,000 characters. Use the report's `fitness_timeline` first; read referenced verification artifacts only when needed to explain dates or diagnostics. Never scan the artifact directory or report strategies absent from this run's `orchestration.strategies`.
+Keep the Telegram report under 2,000 characters. Use the equity report's fitness_timeline first; read referenced verification artifacts only when needed to explain dates or diagnostics. Never scan the artifact directory or report equity strategies absent from orchestration.strategies.
 
-Include:
-- Run id/date/status, cache reuse, Plus SIP/feed, stored coverage, latest session age, refresh result, and the 2024-onward scored range. Distinguish indicator warm-up from scored OOS dates.
+Equity section:
+- Include run id/date/status, cache reuse, Plus SIP/feed, stored coverage, latest session age, refresh result, and the 2024-onward scored range. Distinguish indicator warm-up from scored OOS dates.
 - For current strategies, summarize discovery window/attempts and candidate fitness delta versus its training baseline, then verification folds/date range, stitched OOS fitness, return, Sharpe, decay, stability, gate, and errors. Training improvement is not an OOS pass.
-- Compare with `fitness_timeline.comparison_to_previous`. If not comparable or no prior score exists, explain why. Call score changes across the expanding OOS range trend changes, not a controlled A/B result. Use `recent_runs` for the timeline.
-- Explain what improved or failed using these metrics. Describe the next search from `fitness_timeline.next_run_plan`; note whether an eligible recent candidate can seed research and that it must pass rolling OOS verification. Keep the baseline when no candidate beats it after costs.
-- Say portfolio replay combines the same verified OOS folds using each fold's selected profile. Include its compounded fold return and fold counts only when present; otherwise state that incomplete verification skipped replay.
-- Multi Factor is active through the shared Algo coordinator on the Alpaca paper route using configured defaults, with a two-entry daily cap. Discovery parameters do not auto-change live settings. State that the fixed current-symbol universe is an accepted assumption and that positions/risk state reset between folds.
+- Compare with fitness_timeline.comparison_to_previous. If not comparable or no prior score exists, explain why. Treat score changes across the expanding OOS range as trend changes, not a controlled A/B result. Use recent_runs for the timeline.
+- Explain what improved or failed using these metrics. Describe the next search from fitness_timeline.next_run_plan; say whether an eligible recent candidate can seed research and that it must pass rolling OOS verification. Keep the baseline when no candidate beats it after costs.
+- Say portfolio replay combines the same verified OOS folds using each fold's selected profile. Include compounded fold return and fold counts only when present; otherwise say incomplete verification skipped replay.
 
-Explain that portfolio equity compounds across OOS folds within each run. Separate nightly runs are scored and compared; their returns are not added together. Close by saying AutoResearch made no live-setting or order changes and no orders were placed.
+Options section (separate from equity):
+- State the standalone report status/date, data availability/mode, and which configured sleeves ran. For waiting_for_data, say options research was skipped because the historical chain dataset is missing and give the configured path.
+- If a sleeve completed, include rolling OOS trades/return/Sharpe, untouched holdout return/Sharpe, and whether validation gates passed. Call outputs candidates only; they do not change paper or live settings. Link the standalone report path when useful.
+
+Say that AutoResearch made no order changes and placed no orders. Options research does not read broker credentials or submit orders.

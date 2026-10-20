@@ -1,0 +1,74 @@
+{
+  "enabled": true,
+  "market_data_feed": "opra",
+  "max_quote_age_seconds": 120,
+  "max_quote_spread_pct": 0.25,
+  "min_open_interest": 100,
+  "rate": 0.04,
+  "dividend_yield": 0.015,
+  "assignment_extrinsic_threshold": 0.02,
+  "dividends": {},
+  "regime_risk_multipliers": {
+    "range_bound": 1.0,
+    "trending_up": 0.75,
+    "trending_down": 0.5,
+    "unknown": 0.0
+  },
+  "costs": {
+    "commission_per_contract_usd": 0.65,
+    "slippage_per_contract_usd": 5.0
+  },
+  "risk": {
+    "max_risk_per_trade_pct": 0.005,
+    "max_total_defined_risk_pct": 0.10,
+    "max_open_structures": 3,
+    "max_entries_per_day": 2,
+    "max_daily_loss_pct": 0.02,
+    "max_contracts_per_trade": 1,
+    "max_delta_notional_pct": 0.75,
+    "max_vega_per_vol_point_pct": 0.01,
+    "max_gamma_1pct_loss_pct": 0.005,
+    "max_theta_loss_per_day_pct": 0.001,
+    "max_assignment_shares": 200,
+    "max_margin_pct": 0.15,
+    "stress_spot_shocks": [0.05, 0.10],
+    "stress_iv_shock": 0.10
+  },
+  "vrp": {
+    "enabled": true,
+    "underlying": "SPY",
+    "min_dte": 25,
+    "max_dte": 45,
+    "min_iv_minus_rv": 0.04,
+    "realized_lookback_sessions": 20,
+    "short_delta_min": 0.10,
+    "short_delta_max": 0.20,
+    "wing_delta_max": 0.07,
+    "allowed_regimes": ["range_bound", "trending_up", "trending_down"],
+    "max_entries_per_day": 1
+  },
+  "event_driven": {
+    "enabled": true,
+    "min_days_before_event": 0,
+    "max_days_before_event": 5,
+    "min_historical_events": 3,
+    "min_move_edge_pct": 0.15,
+    "min_llm_confidence": 0.60,
+    "min_dte": 3,
+    "max_dte": 35,
+    "max_spread_pct": 0.20,
+    "realized_lookback_days": 730
+  },
+  "directional_overlay": {
+    "enabled": false,
+    "underlying": "SPY",
+    "min_dte": 25,
+    "max_dte": 60,
+    "target_dte": 40,
+    "long_delta": 0.50,
+    "short_delta": 0.25,
+    "min_signal_confidence": 0.60,
+    "max_spread_pct": 0.20,
+    "min_open_interest": 100
+  }
+}

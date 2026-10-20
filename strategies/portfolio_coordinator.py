@@ -192,6 +192,7 @@ class CoordinatorBook:
         position_owners: Mapping[str, str] | None = None,
         pending_buy_values: Mapping[str, float] | None = None,
         pending_short_values: Mapping[str, float] | None = None,
+        options_delta_notional_by_underlying: Mapping[str, float] | None = None,
         entries_today: int = 0,
         intraday_entries_today: int = 0,
         swing_entries_today: int = 0,
@@ -228,6 +229,17 @@ class CoordinatorBook:
                 self.name_signed[key] = self.name_signed.get(key, 0.0) + sign * amount
                 self._add_group_value(key, amount)
                 self.pending_names.add(key)
+        # The options account is separate at the broker, but delta-equivalent
+        # notional participates in the shared equity coordinator's gross/net
+        # book. Gamma, vega, margin, and assignment are checked by its options
+        # risk manager before option orders are submitted.
+        for ticker, value in (options_delta_notional_by_underlying or {}).items():
+            amount = float(value)
+            if not math.isfinite(amount):
+                raise ValueError("options delta overlay must contain finite notionals")
+            key = str(ticker).upper()
+            self.name_signed[key] = self.name_signed.get(key, 0.0) + amount
+            self._add_group_value(key, abs(amount))
 
     def _group(self, ticker: str) -> str:
         return self.ticker_groups.get(ticker.upper(), "other")

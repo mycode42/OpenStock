@@ -8,9 +8,9 @@ The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `Ameri
 | `event-briefing` | 10:00, 13:00, and 15:00 ET, weekdays | Refresh the read-only Event Driven signal snapshot and report market context. |
 | `midday` | 11:35 ET, weekdays | Send a concise Algo account and strategy update. |
 | `close-snapshot` | 16:07 ET, weekdays | Save a broker-calendar-verified account close snapshot. |
-| `autoresearch` | 20:15 ET, daily | Run one research cycle and report its verification results. Research may write artifacts; it does not place trades or alter live settings. |
+| `autoresearch` | 20:15 ET, daily | Run equity AutoResearch alongside the independent VRP and event-driven options research batch, then report them in separate sections. Research may write artifacts; it does not place trades or alter live settings. |
 | `morning` | 04:00 ET, weekdays | Send an overnight session, order, risk, and fill-attribution report. |
 
 The live OpenClaw Gateway is the source of truth for job schedules and prompts. Use `openclaw automations list --all` and `openclaw automations get <job-id>` to inspect the declarations. Report templates are in [`openclaw_prompts/`](openclaw_prompts/).
 
-Only the continuously running Algo coordinator can submit Algo orders. The scheduled briefing and report jobs are read-only; the AutoResearch job writes only its normal research artifacts.
+Only the continuously running Algo coordinator can submit Algo orders. The scheduled briefing and report jobs are read-only; the AutoResearch job writes equity artifacts plus separate options research reports under `data/options/research/automation/`. Missing historical options chains are reported as `waiting_for_data` and do not fail the equity research run.
