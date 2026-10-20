@@ -16,12 +16,12 @@ import json
 
 import numpy as np
 
-from src.algo.strategies.multi_factor.config import MultiFactorConfig, REGIME_FACTOR_WEIGHT_PROFILES
-from src.algo.strategies.multi_factor.diagnostics import information_coefficient
-from src.algo.strategies.multi_factor.features import _available_value
-from src.algo.strategies.multi_factor.ranking import FactorRanker
-from .candidate_archive import candidate_id as archive_candidate_id
-from .tree_factor_models import (
+from strategies.multi_factor.config import MultiFactorConfig, REGIME_FACTOR_WEIGHT_PROFILES
+from strategies.multi_factor.diagnostics import information_coefficient
+from strategies.multi_factor.features import _available_value
+from strategies.multi_factor.ranking import FactorRanker
+from .artifacts.candidate_archive import candidate_id as archive_candidate_id
+from strategies.multi_factor.tree_models import (
     TREE_LOGIC_VERSIONS, TREE_MODEL_FAMILIES, fit_tree_factor_model,
     predict_tree_factor_model,
 )

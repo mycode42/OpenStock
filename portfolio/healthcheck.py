@@ -9,23 +9,23 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.algo.alpaca import AlgoAlpaca
-from src.algo.protection import verified_recovery_oco
-from src.algo.reconciliation import OPEN_ORDER_STATUSES
-from src.algo.sessions import ET, TradingWindow, get_trading_window
-from src.algo.state_store import AlgoStateStore, StateStoreError
-from src.algo.config import ALGO_SERVICE_CONFIG
-from src.config import STRATEGY_CONFIG
+from broker.algo import AlgoAlpaca
+from portfolio.protection.evidence import verified_recovery_oco
+from portfolio.reconciliation import OPEN_ORDER_STATUSES
+from market.sessions import ET, TradingWindow, get_trading_window
+from portfolio.state_store import AlgoStateStore, StateStoreError
+from portfolio.config import ALGO_SERVICE_CONFIG
+from portfolio.config import STRATEGY_CONFIG
 
 
-ROOT = Path(__file__).resolve().parents[2]
+from runtime.paths import ROOT
+from runtime.systemd import service_is_active
 STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
 SERVICE = "algo-trader.service"
 WARMUP_GRACE_SECONDS = {"premarket": 10 * 60, "regular": 10 * 60, "overnight": 25 * 60}
@@ -48,17 +48,6 @@ EXPECTED_OVERNIGHT_PAUSE = "overnight entries are disabled by configuration"
 
 def _problem(code: str, detail: str) -> dict[str, str]:
     return {"code": code, "detail": detail[:240]}
-
-
-def _systemd_active() -> bool | None:
-    try:
-        return subprocess.run(
-            ["systemctl", "is-active", "--quiet", SERVICE],
-            check=False,
-            timeout=5,
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return None
 
 
 def _timestamp(value: object) -> datetime | None:
@@ -320,7 +309,7 @@ def build_report(
     now_et = now.astimezone(ET)
     problems: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
-    service_active = _systemd_active() if service_active is None else service_active
+    service_active = service_is_active(SERVICE) if service_active is None else service_active
     if service_active is None:
         problems.append(_problem("service_status_unavailable", "Cannot determine Algo systemd service status"))
     elif not service_active:

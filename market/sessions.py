@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from src.market_data import feeds_for_session
+from market.data import feeds_for_session
 
 
 ET = ZoneInfo("America/New_York")

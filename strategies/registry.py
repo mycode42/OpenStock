@@ -5,18 +5,18 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import replace
 
-from src.algo.strategies import mean_reversion, momentum, trend_following
-from src.algo.strategies.catalog import STRATEGY_CATALOG, STRATEGY_IDS
-from src.algo.strategies.mean_reversion import swing as swing_mean_reversion
-from src.algo.strategies.momentum import swing as swing_momentum
-from src.algo.strategies.trend_following import swing as swing_trend_following
-from src.algo.strategies.event_driven.config import EventStrategyConfig
-from src.algo.strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
-from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
-from src.algo.strategies.mean_reversion.swing import SwingMeanReversionConfig
-from src.algo.strategies.momentum.swing import SwingMomentumConfig
-from src.algo.strategies.trend_following.swing import SwingTrendConfig
-from src.config import get_algo_runtime_settings
+from strategies import mean_reversion, momentum, trend_following
+from strategies.catalog import STRATEGY_CATALOG, STRATEGY_IDS
+from strategies.mean_reversion import swing as swing_mean_reversion
+from strategies.momentum import swing as swing_momentum
+from strategies.trend_following import swing as swing_trend_following
+from strategies.event_driven.config import EventStrategyConfig
+from strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
+from strategies.satellite_overlay import SatelliteOverlayConfig
+from strategies.mean_reversion.swing import SwingMeanReversionConfig
+from strategies.momentum.swing import SwingMomentumConfig
+from strategies.trend_following.swing import SwingTrendConfig
+from portfolio.config import get_algo_runtime_settings
 
 
 RULE_MODULES = {
@@ -132,7 +132,7 @@ def validate_parameter_profile(profile: dict) -> dict:
         if unknown:
             raise ValueError(f"Unsupported {strategy} parameter(s): {', '.join(sorted(unknown))}")
         if strategy == "multi_factor":
-            from src.algo.strategies.multi_factor.config import MultiFactorConfig
+            from strategies.multi_factor.config import MultiFactorConfig
             normalized[strategy] = MultiFactorConfig.from_dict(values).to_dict()
             continue
         if strategy == "event_driven":
@@ -224,7 +224,7 @@ def validate_parameter_profile(profile: dict) -> dict:
 
 def refresh_active_parameter_profile() -> dict:
     """Reload promoted parameter manifests into the shared registry."""
-    from src.algo.profile_store import effective_profile_metadata
+    from portfolio.profile_store import effective_profile_metadata
 
     metadata = effective_profile_metadata()
     effective = deepcopy(BASE_ALGO_DEFAULT_PARAMETERS)

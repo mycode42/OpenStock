@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from src.config import STRATEGY_CONFIG
+from portfolio.config import STRATEGY_CONFIG
 
 
 def _is_protective_sell_order(order: dict, position_qty: float = 1) -> bool:

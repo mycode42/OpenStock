@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-RESEARCH_ROOT = ROOT / "data" / "research" / "algo-auto"
+from runtime.paths import DATA_DIR, ROOT
+RESEARCH_ROOT = DATA_DIR / "research" / "algo-auto"
 PROMOTED_PROFILE_PATH = RESEARCH_ROOT / "promoted-profile.json"
 FORWARD_VALIDATION_PATH = RESEARCH_ROOT / "forward-validation.json"
 

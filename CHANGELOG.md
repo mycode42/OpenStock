@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Renamed the project and service to Algo Trader, with the deployment rooted at `/opt/algo-trader`.
+- Reorganized runtime code into domain packages, consolidated research and backtesting under `autoresearch/`, and removed legacy import facades.
 - Removed the unused standalone Swing/Day application, peer-signal exchange, generic backtester, duplicate reports, and inactive analyst agents.
 - Kept the shared analyst graph, Algo research replay, active strategies, broker execution, risk controls, and coordinator protections.
 

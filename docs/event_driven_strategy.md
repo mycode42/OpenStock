@@ -22,14 +22,14 @@ minutes (four hours maximum). Each position targets at most 4% of equity, for
 a maximum 28% across seven positions. The 4% target is consistent with the 4%
 stop and 0.16% maximum event risk per position. Ticker and portfolio limits
 can reduce a position further. The live runner then applies the usual quote,
-sizing, portfolio coordinator, lifecycle, and `risk_manager.validate_trade()`
+sizing, portfolio coordinator, lifecycle, and `execution.risk.validate_trade()`
 checks.
 Deterministic stop, trailing-stop, and time-based owner exits remain available
 when an AI snapshot is missing or expired.
 
 ## Module layout
 
-- `src/algo/strategies/event_driven/models.py`: validated event records.
+- `strategies/event_driven/models.py`: validated event records.
 - `calendar.py`: point-in-time CSV calendar reader.
 - `filters.py`: universe, regime, cooldown, and weekly activity limits.
 - `reactions.py`: earnings gap continuation and macro breakout rules.
@@ -67,14 +67,14 @@ The `algo-event-briefing` OpenClaw job runs at 10:00, 13:00, and 15:00 ET on
 weekdays. It first runs:
 
 ```bash
-poetry run python -m src.algo.strategies.event_driven.ai_runner
+poetry run python -m strategies.event_driven.ai_runner
 ```
 
 The runner reads the Algo paper account and the configured Algo ticker
-universe, then calls the same `run_analyst_graph()` workflow implemented in
-`src/analyst_graph.py`. Its analyst set covers market regime, news sentiment,
-social sentiment, technicals, fundamentals, and growth. It writes
-`data/algo/event_driven/signals.json` atomically. The OpenClaw job adds sourced
+universe, then calls `run_event_analysis()` from
+`strategies/event_driven/analysis/workflow.py`. Its analysts cover market
+regime, news sentiment, social sentiment, technicals, fundamentals, and growth.
+It writes `data/algo/event_driven/signals.json` atomically. The OpenClaw job adds sourced
 market-wide news and sentiment context and summarizes only notable monitored
 stock developments for the briefing.
 
@@ -85,7 +85,7 @@ archives remain useful for deterministic research and historical examples.
 
 Historical event-calendar replays exercise the deterministic calendar adapter. They do not reproduce the scheduled LLM recommendations, so their results should not be presented as AI-strategy performance.
 
-Run `poetry run python -m src.algo.research.event_calendar_refresh` to refresh
+Run `poetry run python -m autoresearch.event_calendar_refresh` to refresh
 `data/event_calendar.csv`. The `algo-event-calendar` OpenClaw job runs this at
 04:05 ET on weekdays. It reads the configured fixed Algo universe, obtains scheduled
 earnings and pre/post-market classifications from Nasdaq's public earnings
@@ -116,7 +116,7 @@ warn when an event type has no upcoming date in the coverage window.
 
 The generated `Signal` carries `stop_pct`, `target_weight`, and `event_id`. Live
 Algo processing turns it into the usual trade proposal through `_make_trade`;
-`execute_trades.py` then runs the normal `risk_manager.validate_trade()` checks
+`python -m execution` then runs the normal `execution.risk.validate_trade()` checks
 before Alpaca submission. The local replay uses the same `_make_trade` sizing
 and `validate_trade()` gate, and fills accepted signals no earlier than the
 next 5-minute bar.
@@ -147,11 +147,11 @@ release dates and Federal Reserve FOMC schedule. For a replay, ingest split-
 adjusted 5-minute SIP bars and run:
 
 ```bash
-poetry run python -m src.algo.backtest fetch \
+poetry run python -m autoresearch.backtest fetch \
   --symbols AAPL,SPY --start 2025-07-31 --end 2025-09-17 \
   --strategies event_driven --adjustment split
 
-poetry run python -m src.algo.backtest run \
+poetry run python -m autoresearch.backtest run \
   --symbols AAPL,SPY \
   --start 2025-07-31 --end 2025-09-17 \
   --strategies event_driven \

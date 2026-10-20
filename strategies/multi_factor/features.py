@@ -9,10 +9,10 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.algo.strategies.multi_factor.config import MultiFactorConfig
+from strategies.multi_factor.config import MultiFactorConfig
 
 try:
-    from src.algo.strategies.multi_factor._features_cy import aggregate_intraday_bars as _aggregate_intraday_bars_cy
+    from strategies.multi_factor._features_cy import aggregate_intraday_bars as _aggregate_intraday_bars_cy
 except ImportError:  # The extension is optional until the package build compiles it.
     _aggregate_intraday_bars_cy = None
 

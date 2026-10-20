@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from src.algo.incidents import open_incident_symbols, resolve_incident
-from src.algo.protection import recovery_oco_order, verified_recovery_oco
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
-from src.algo.strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
+from portfolio.incidents import open_incident_symbols, resolve_incident
+from portfolio.protection.evidence import recovery_oco_order, verified_recovery_oco
+from strategies.registry import ALGO_DEFAULT_PARAMETERS
+from strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
 
 
 OPEN_ORDER_STATUSES = {"new", "held", "accepted", "pending_new", "partially_filled", "accepted_for_bidding"}

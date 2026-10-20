@@ -13,26 +13,26 @@ from setuptools.command.build_ext import build_ext
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSIONS = (
     (
-        "src.algo.strategies.multi_factor._features_cy",
-        ROOT / "src/algo/strategies/multi_factor/_features_cy.pyx",
+        "strategies.multi_factor._features_cy",
+        ROOT / "strategies/multi_factor/_features_cy.pyx",
     ),
     (
-        "src.algo.backtest._execution_cy",
-        ROOT / "src/algo/backtest/_execution_cy.pyx",
+        "autoresearch.backtest._execution_cy",
+        ROOT / "autoresearch/backtest/_execution_cy.pyx",
     ),
     (
-        "src.algo.backtest._signals_cy",
-        ROOT / "src/algo/backtest/signals.py",
+        "autoresearch.backtest._signals_cy",
+        ROOT / "autoresearch/backtest/signals.py",
     ),
     (
-        "src.algo.strategies._swing_common_cy",
-        ROOT / "src/algo/strategies/_swing_common_cy.pyx",
+        "strategies._swing_common_cy",
+        ROOT / "strategies/_swing_common_cy.pyx",
     ),
 )
 
 
 def build() -> None:
-    """Compile the extension and copy it into the source package for Poetry."""
+    """Compile the extension and copy it into the package tree for Poetry."""
     build_root = ROOT / "build/cython-extension"
     build_lib = build_root / "lib"
     build_temp = build_root / "temp"

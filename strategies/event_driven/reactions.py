@@ -6,9 +6,9 @@ from datetime import datetime
 import math
 from statistics import mean
 
-from src.algo.strategies.event_driven.config import EventStrategyConfig
-from src.algo.strategies.event_driven.models import ScheduledEvent
-from src.algo.strategies.swing_common import SwingSignal, clean_daily_bars
+from strategies.event_driven.config import EventStrategyConfig
+from strategies.event_driven.models import ScheduledEvent
+from strategies.swing_common import SwingSignal, clean_daily_bars
 
 
 class EventSignal(SwingSignal):

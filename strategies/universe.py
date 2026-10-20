@@ -7,8 +7,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from src.accounts import get_account_for_mode
-from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
+from broker.accounts import get_account_for_mode
+from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
 
 
 ET = ZoneInfo("America/New_York")

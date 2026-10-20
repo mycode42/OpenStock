@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Trade Journal — Persistent log of every Cassius trade decision and outcome.
+Trade Journal — Persistent log of Algo Trader decisions and outcomes.
 
 Append mode:
-  poetry run python trade_journal.py --log decisions.json    # Log from executor output
-  echo '{"results":[...]}' | poetry run python trade_journal.py --log -
+  poetry run python -m reporting.journal --log decisions.json    # Log from executor output
+  echo '{"results":[...]}' | poetry run python -m reporting.journal --log -
 
 Query mode:
-  poetry run python trade_journal.py --show                   # Last 10 trades
-  poetry run python trade_journal.py --show --limit 50        # Last 50
-  poetry run python trade_journal.py --show --ticker NVDA     # Filter by ticker
-  poetry run python trade_journal.py --stats                  # Win/loss stats
-  poetry run python trade_journal.py --stats --days 7         # Stats for last 7 days
-  poetry run python trade_journal.py --telegram               # Summary for Telegram
+  poetry run python -m reporting.journal --show                   # Last 10 trades
+  poetry run python -m reporting.journal --show --limit 50        # Last 50
+  poetry run python -m reporting.journal --show --ticker NVDA     # Filter by ticker
+  poetry run python -m reporting.journal --stats                  # Win/loss stats
+  poetry run python -m reporting.journal --stats --days 7         # Stats for last 7 days
+  poetry run python -m reporting.journal --telegram               # Summary for Telegram
 """
 
 import argparse
@@ -23,7 +23,9 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
+from runtime.paths import DATA_DIR
+
+JOURNAL_PATH = DATA_DIR / "trade_journal.jsonl"
 BROKER_ORDER_STATUSES = {
     "accepted", "accepted_for_bidding", "calculated", "canceled", "done_for_day",
     "expired", "filled", "held", "new", "partially_filled", "pending_cancel",
@@ -78,7 +80,7 @@ def dedupe_journal_entries(entries: list[dict]) -> list[dict]:
 
 
 def append_trades(execution_result: dict):
-    """Append order submissions and rejections from execute_trades.py output."""
+    """Append order submissions and rejections from execution command output."""
     ensure_dir()
     results = execution_result.get("results", [])
     timestamp = execution_result.get("timestamp", datetime.now().isoformat())
@@ -249,7 +251,7 @@ def show_trades(entries):
 def show_stats(stats):
     """Display stats in terminal."""
     print(f"{'='*50}")
-    print(f"  CASSIUS TRADE JOURNAL — STATS")
+    print(f"  ALGO TRADER JOURNAL — STATS")
     print(f"{'='*50}")
     print(f"  Total entries:   {stats['total_entries']}")
     print(f"  Submitted:       {stats['submitted']}")
@@ -278,7 +280,7 @@ def telegram_summary(stats, entries):
     """Telegram-formatted summary."""
     last_5 = entries[-5:] if entries else []
 
-    print("📓 Cassius Trade Journal")
+    print("📓 Algo Trader Journal")
     print(f"📊 {stats['submitted']} submitted | {stats['filled']} broker-confirmed filled | {stats['blocked']} blocked | {stats['failed']} failed")
     print(f"📈 {stats['buys']} buy submissions | 📉 {stats['sells']} sell submissions | 🎯 {stats['unique_tickers']} tickers")
     print(f"📅 {stats['active_days']} active trading days")
@@ -295,7 +297,7 @@ def telegram_summary(stats, entries):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Cassius Trade Journal")
+    parser = argparse.ArgumentParser(description="Algo Trader trade journal")
     parser.add_argument("--log", type=str, help="Log trades from executor JSON output (file or - for stdin)")
     parser.add_argument("--show", action="store_true", help="Show recent trades")
     parser.add_argument("--stats", action="store_true", help="Show trade statistics")

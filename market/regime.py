@@ -15,7 +15,7 @@ from threading import Lock
 
 import requests
 
-from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
+from market.store import DEFAULT_DB, SQLiteBarStore
 
 
 LOG = logging.getLogger("algo_regime_macro")

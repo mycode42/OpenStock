@@ -9,24 +9,34 @@ requires-python = ">=3.11,<4.0"
 dynamic = ["dependencies"]
 
 [tool.poetry]
-packages = [{ include = "src", from = "." }]
+packages = [
+    { include = "autoresearch" },
+    { include = "broker" },
+    { include = "execution" },
+    { include = "market" },
+    { include = "portfolio" },
+    { include = "reporting" },
+    { include = "runtime" },
+    { include = "strategies" },
+]
 include = [
-    { path = "risk_manager.py", format = ["sdist", "wheel"] },
     { path = "scripts/build-extension.py", format = ["sdist", "wheel"] },
-    { path = "src/algo/strategies/multi_factor/_features_cy.pyx", format = "sdist" },
-    { path = "src/algo/strategies/multi_factor/*.so", format = "wheel" },
-    { path = "src/algo/strategies/multi_factor/*.pyd", format = "wheel" },
-    { path = "src/algo/backtest/_execution_cy.pyx", format = "sdist" },
-    { path = "src/algo/backtest/*.so", format = "wheel" },
-    { path = "src/algo/backtest/*.pyd", format = "wheel" },
-    { path = "src/algo/strategies/_swing_common_cy.pyx", format = "sdist" },
-    { path = "src/algo/strategies/*.so", format = "wheel" },
-    { path = "src/algo/strategies/*.pyd", format = "wheel" },
+    { path = "strategies/event_driven/analysis/api_models.json", format = ["sdist", "wheel"] },
+    { path = "strategies/event_driven/analysis/ollama_models.json", format = ["sdist", "wheel"] },
+    { path = "strategies/multi_factor/_features_cy.pyx", format = "sdist" },
+    { path = "strategies/multi_factor/*.so", format = "wheel" },
+    { path = "strategies/multi_factor/*.pyd", format = "wheel" },
+    { path = "autoresearch/backtest/_execution_cy.pyx", format = "sdist" },
+    { path = "autoresearch/backtest/*.so", format = "wheel" },
+    { path = "autoresearch/backtest/*.pyd", format = "wheel" },
+    { path = "strategies/_swing_common_cy.pyx", format = "sdist" },
+    { path = "strategies/*.so", format = "wheel" },
+    { path = "strategies/*.pyd", format = "wheel" },
 ]
 exclude = [
-    "src/algo/strategies/multi_factor/_features_cy.pyx",
-    "src/algo/backtest/_execution_cy.pyx",
-    "src/algo/strategies/_swing_common_cy.pyx",
+    "strategies/multi_factor/_features_cy.pyx",
+    "autoresearch/backtest/_execution_cy.pyx",
+    "strategies/_swing_common_cy.pyx",
 ]
 
 [tool.poetry.dependencies]

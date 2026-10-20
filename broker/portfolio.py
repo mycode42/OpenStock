@@ -2,7 +2,7 @@
 
 import requests
 
-from src.accounts import get_account_for_mode
+from broker.accounts import get_account_for_mode
 
 
 ALPACA_BASE_URL = "https://paper-api.alpaca.markets/v2"

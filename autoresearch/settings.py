@@ -6,19 +6,19 @@ from datetime import date, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from src.algo.config import get_algo_research_controls
-from src.algo.strategies.catalog import (
+from portfolio.config import get_algo_research_controls
+from strategies.catalog import (
     STRATEGY_CATALOG, strategy_ids_for_research_workflow,
 )
-from src.config import get_algo_runtime_settings
+from portfolio.config import get_algo_runtime_settings
 
-ROOT = Path(__file__).resolve().parents[3]
+from runtime.paths import DATA_DIR, ROOT
 
 ET = ZoneInfo("America/New_York")
 
-DEFAULT_OUTPUT_DIR = ROOT / "data" / "research" / "algo-auto"
+DEFAULT_OUTPUT_DIR = DATA_DIR / "research" / "algo-auto"
 
-LOCK_FILE = ROOT / "data" / "locks" / "algo-auto-research.lock"
+LOCK_FILE = DATA_DIR / "locks" / "algo-auto-research.lock"
 
 FEED = "sip"
 

@@ -13,10 +13,10 @@ from pathlib import Path
 import sys
 from uuid import uuid4
 
-from src.algo.strategies.event_driven.ai import DEFAULT_AI_SIGNAL_FILE, write_ai_event_snapshot
-from src.algo.strategies.universe import configured_universe
-from src.alpaca_integration import convert_to_portfolio, get_alpaca_account, get_alpaca_positions
-from src.analyst_graph import run_analyst_graph
+from strategies.event_driven.ai import DEFAULT_AI_SIGNAL_FILE, write_ai_event_snapshot
+from strategies.universe import configured_universe
+from broker.portfolio import convert_to_portfolio, get_alpaca_account, get_alpaca_positions
+from strategies.event_driven.analysis.workflow import run_event_analysis
 
 
 ANALYSTS = [
@@ -126,7 +126,7 @@ def run_analysis(
     positions = get_alpaca_positions(mode="algo")
     portfolio = convert_to_portfolio(positions, account, universe)
 
-    # The legacy analyst workflow is reused as an analysis-only library call.
+    # The analyst workflow only produces evidence-based recommendations.
     # Its suggested share quantities are intentionally discarded downstream.
     end_date = datetime.now(timezone.utc).date()
     start_date = end_date - timedelta(days=90)
@@ -136,7 +136,7 @@ def run_analysis(
     model_provider = os.getenv("LLM_PROVIDER", "Ollama")
 
     with redirect_stdout(io.StringIO()):
-        result = run_analyst_graph(
+        result = run_event_analysis(
             tickers=universe,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),

@@ -105,7 +105,7 @@ class RuleStrategyStateMachine:
         max_positions_per_strategy: int | None = None,
         max_positions_per_strategy_by_strategy: dict[str, int] | None = None,
     ):
-        from src.config import get_mode_config
+        from portfolio.config import get_mode_config
 
         risk = get_mode_config("algo")["risk"]
         self.states = states

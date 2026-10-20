@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.algo.strategies.indicators import closes, moving_average
-from src.algo.strategies.signals import Signal
+from strategies.indicators import closes, moving_average
+from strategies.signals import Signal
 
 
 def signal(

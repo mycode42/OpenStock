@@ -9,7 +9,7 @@ import math
 from .config import BAR_MINUTES, ET, STRATEGY_NAMES
 from .models import Position
 from .market_sessions import market_session, trading_date
-from src.algo.strategies.catalog import INTRADAY_STRATEGIES
+from strategies.catalog import INTRADAY_STRATEGIES
 
 try:
     from ._execution_cy import build_timeline as _build_timeline_cy

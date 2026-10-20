@@ -17,8 +17,8 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.algo.strategies.catalog import STRATEGY_IDS
-from src.algo.strategies.state_machine import ACTIVE_PHASES, PHASES
+from strategies.catalog import STRATEGY_IDS
+from strategies.state_machine import ACTIVE_PHASES, PHASES
 
 
 SCHEMA_VERSION = 1

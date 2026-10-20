@@ -9,10 +9,10 @@ from datetime import date
 
 import numpy as np
 
-from src.algo.strategies.multi_factor.config import MultiFactorConfig, SUPPORTED_FACTORS
-from src.algo.strategies.multi_factor.features import FactorCalculator
-from src.algo.strategies.multi_factor.ranking import FactorRanker
-from src.algo.strategies.swing_common import clean_daily_bars, held_sessions
+from strategies.multi_factor.config import MultiFactorConfig, SUPPORTED_FACTORS
+from strategies.multi_factor.features import FactorCalculator
+from strategies.multi_factor.ranking import FactorRanker
+from strategies.swing_common import clean_daily_bars, held_sessions
 
 
 LOG = logging.getLogger("algo_trader.multi_factor")

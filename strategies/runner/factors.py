@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
-from src.algo.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
+from strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
+from strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
 
 
 def _multi_factor_rebalance_signals(
@@ -29,7 +29,7 @@ def _multi_factor_rebalance_signals(
     fundamentals_by_symbol = None
     fundamentals_diagnostics = {"status": "not_requested", "source": None}
     try:
-        from src.algo.strategies.multi_factor.fundamentals import (
+        from strategies.multi_factor.fundamentals import (
             load_point_in_time_fundamentals, requested_fundamental_factors,
         )
 
@@ -63,13 +63,13 @@ def _multi_factor_rebalance_signals(
     learned_factor_model = None
     factor_model_diagnostics = None
     if generator.config.factor_weight_mode == "ridge_walk_forward":
-        from src.algo.strategies.multi_factor.learned_weights import load_live_factor_weights
+        from strategies.multi_factor.learned_weights import load_live_factor_weights
 
         learned_factor_weights, factor_model_diagnostics = load_live_factor_weights(
             as_of=session - timedelta(days=1),
         )
     elif generator.config.factor_weight_mode in {"lightgbm_walk_forward", "xgboost_walk_forward"}:
-        from src.algo.strategies.multi_factor.learned_weights import load_live_tree_factor_model
+        from strategies.multi_factor.learned_weights import load_live_tree_factor_model
 
         learned_factor_model, factor_model_diagnostics = load_live_tree_factor_model(
             as_of=session - timedelta(days=1),

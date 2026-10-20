@@ -3,7 +3,7 @@
 import argparse
 import json
 
-from risk_manager import capture_account_inception_baseline
+from execution.risk import capture_account_inception_baseline
 
 
 def main() -> int:

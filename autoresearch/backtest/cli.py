@@ -9,7 +9,7 @@ from pathlib import Path
 
 import requests
 
-from .shared import DEFAULT_DB, SQLiteBarStore
+from market.store import DEFAULT_DB, SQLiteBarStore
 from .data import fetch_dataset, run_backtest
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Replay the live Algo strategy portfolio on stored Alpaca bars")

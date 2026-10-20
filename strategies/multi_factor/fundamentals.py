@@ -167,7 +167,7 @@ def load_point_in_time_fundamentals(
     Filings are treated as usable on the calendar day after the SEC filing date
     because companyfacts provides a date, not an intraday acceptance timestamp.
     """
-    from src.tools import api_free
+    from market import research_data as api_free
 
     requested = list(dict.fromkeys(str(symbol).upper().strip() for symbol in symbols if str(symbol).strip()))
     coverage_as_of = as_of or datetime.now(timezone.utc).date()

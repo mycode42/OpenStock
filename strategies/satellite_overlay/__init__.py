@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 
-from src.algo.strategies.catalog import CORE_STRATEGIES, SATELLITE_STRATEGIES
+from strategies.catalog import CORE_STRATEGIES, SATELLITE_STRATEGIES
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ def apply_satellite_confirmations(
 
     The position remains attributed to the core strategy. A confirmation adds
     priority and a small capped risk-budget multiplier; normal position caps
-    and the risk manager still govern the resulting order.
+    and the risk validator still govern the resulting order.
     """
     settings = config or SatelliteOverlayConfig()
     result = dict(signal)

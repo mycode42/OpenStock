@@ -2,79 +2,88 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
+import hashlib
+import logging
+import os
+from pathlib import Path
 from threading import RLock
-from typing import Any, TypedDict
+from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from market.data import feeds_for_session, historical_delay_seconds, regular_feed
+from market.regime import load_fred_regime_series
+from portfolio.config import (
+    ALGO_REGIME_CONFIG,
+    ALGO_REGIME_WARMUP_CALENDAR_DAYS,
+    ALGO_SIGNAL_DATA_CONFIG,
+    STRATEGY_CONFIG,
+    get_algo_runtime_settings,
+    get_mode_config,
+)
+from strategies.catalog import STRATEGY_CATALOG
+from strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
+from .event_context import load_event_context
+from strategies.portfolio_coordinator import (
+    INTRADAY_STRATEGIES,
+    PortfolioCoordinator,
+    PortfolioCoordinatorConfig,
+    choose_priority,
+    strategy_priority,
+    throttle_signal,
+)
+from strategies.regime import rank_strategies
+from strategies.regime_advisor import apply_regime_advisory
+from strategies.registry import (
+    ALGO_DEFAULT_PARAMETERS,
+    ALGO_RULE_MODULES,
+    RULE_MODULES,
+    evaluate as evaluate_strategy,
+    parameters_for_regime,
+    profile_id_for_regime,
+    refresh_active_parameter_profile,
+)
+from strategies.rule_pipeline import evaluate_rule_signal
+from strategies.runner.data import (
+    _completed_daily,
+    _completed_intraday,
+    _latest_bar_age_seconds,
+    current_portfolio as _current_portfolio,
+    fetch_bars as _fetch_bars,
+    fetch_latest_quotes as _fetch_latest_quotes,
+)
+from strategies.runner.factors import (
+    _multi_factor_current_targets,
+    _multi_factor_rebalance_signals,
+    multi_factor_parameters_for_session as _multi_factor_parameters_for_session,
+)
+from strategies.runner.sizing import (
+    _is_protective_sell_order,
+    _make_trade,
+    _positive_price_level,
+    _update_trailing_stop,
+)
+from strategies.satellite_overlay import (
+    CORE_STRATEGIES,
+    SATELLITE_STRATEGIES,
+    SatelliteOverlayConfig,
+    apply_satellite_confirmations,
+)
+from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
+from strategies.universe import configured_universe, load_algo_universe
+from strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
+from strategies.multi_factor import MultiFactorConfig, MultiFactorSignal
+
+LOG = logging.getLogger("strategy_runner")
+ET = ZoneInfo("America/New_York")
+MAX_SPY_DAILY_AGE_DAYS = ALGO_SIGNAL_DATA_CONFIG["max_spy_daily_age_days"]
 
 
 _DAILY_BAR_CACHE_LOCK = RLock()
 _DAILY_BAR_CACHE: dict[tuple, dict[str, list[dict]]] = {}
-
-
-class ScanDependencies(TypedDict):
-    """Facade-provided collaborators used by the scan orchestration."""
-
-    ALGO_DEFAULT_PARAMETERS: Any
-    ALGO_REGIME_CONFIG: Any
-    ALGO_REGIME_WARMUP_CALENDAR_DAYS: Any
-    ALGO_RULE_MODULES: Any
-    ALGO_SIGNAL_DATA_CONFIG: Any
-    ACTIVE_PHASES: Any
-    CORE_STRATEGIES: Any
-    ET: Any
-    EventCalendar: Any
-    EventSignalGenerator: Any
-    EventStrategyConfig: Any
-    INTRADAY_STRATEGIES: Any
-    LOG: Any
-    MAX_SPY_DAILY_AGE_DAYS: Any
-    MultiFactorConfig: Any
-    Path: Any
-    PortfolioCoordinator: Any
-    PortfolioCoordinatorConfig: Any
-    RULE_MODULES: Any
-    RuleStrategyStateMachine: Any
-    SATELLITE_STRATEGIES: Any
-    STRATEGY_CATALOG: Any
-    STRATEGY_CONFIG: Any
-    SatelliteOverlayConfig: Any
-    __file__: Any
-    _completed_daily: Any
-    _completed_intraday: Any
-    _current_portfolio: Any
-    _fetch_bars: Any
-    _fetch_latest_quotes: Any
-    _latest_bar_age_seconds: Any
-    _make_trade: Any
-    _multi_factor_rebalance_signals: Any
-    _multi_factor_current_targets: Any
-    _multi_factor_parameters_for_session: Any
-    _positive_price_level: Any
-    _update_trailing_stop: Any
-    apply_regime_advisory: Any
-    apply_satellite_confirmations: Any
-    choose_priority: Any
-    configured_universe: Any
-    date: Any
-    datetime: Any
-    evaluate_rule_signal: Any
-    evaluate_strategy: Any
-    feeds_for_session: Any
-    generate_swing_momentum_signals: Any
-    get_mode_config: Any
-    get_algo_runtime_settings: Any
-    hashlib: Any
-    historical_delay_seconds: Any
-    load_algo_universe: Any
-    load_event_context: Any
-    load_fred_regime_series: Any
-    os: Any
-    rank_strategies: Any
-    regular_feed: Any
-    throttle_signal: Any
-    timedelta: Any
-    timezone: Any
-    _is_protective_sell_order: Any
-    strategy_priority: Any
 
 
 def scan(
@@ -92,83 +101,16 @@ def scan(
     data_feed: str | None = None,
     quote_feed: str | None = None,
     overnight_tradable_tickers: set[str] | None = None,
-    _dependencies: ScanDependencies,
 ) -> dict:
-    """Run one complete scan using the compatibility facade dependencies."""
-    # Binding the facade namespace here keeps legacy monkeypatches and adapters effective.
-    ALGO_DEFAULT_PARAMETERS = _dependencies["ALGO_DEFAULT_PARAMETERS"]
-    ALGO_REGIME_CONFIG = _dependencies["ALGO_REGIME_CONFIG"]
-    ALGO_REGIME_WARMUP_CALENDAR_DAYS = _dependencies["ALGO_REGIME_WARMUP_CALENDAR_DAYS"]
-    ALGO_RUNTIME_SETTINGS = _dependencies["get_algo_runtime_settings"]()
-    ALGO_RULE_MODULES = _dependencies["ALGO_RULE_MODULES"]
-    ALGO_SIGNAL_DATA_CONFIG = _dependencies["ALGO_SIGNAL_DATA_CONFIG"]
-    ACTIVE_PHASES = _dependencies["ACTIVE_PHASES"]
-    CORE_STRATEGIES = _dependencies["CORE_STRATEGIES"]
-    ET = _dependencies["ET"]
-    EventCalendar = _dependencies["EventCalendar"]
-    EventSignalGenerator = _dependencies["EventSignalGenerator"]
-    EventStrategyConfig = _dependencies["EventStrategyConfig"]
-    INTRADAY_STRATEGIES = _dependencies["INTRADAY_STRATEGIES"]
-    LOG = _dependencies["LOG"]
-    MAX_SPY_DAILY_AGE_DAYS = _dependencies["MAX_SPY_DAILY_AGE_DAYS"]
-    MultiFactorConfig = _dependencies["MultiFactorConfig"]
-    Path = _dependencies["Path"]
-    PortfolioCoordinator = _dependencies["PortfolioCoordinator"]
-    PortfolioCoordinatorConfig = _dependencies["PortfolioCoordinatorConfig"]
-    RULE_MODULES = _dependencies["RULE_MODULES"]
-    RuleStrategyStateMachine = _dependencies["RuleStrategyStateMachine"]
-    SATELLITE_STRATEGIES = _dependencies["SATELLITE_STRATEGIES"]
-    STRATEGY_CATALOG = _dependencies["STRATEGY_CATALOG"]
-    STRATEGY_CONFIG = _dependencies["STRATEGY_CONFIG"]
-    SatelliteOverlayConfig = _dependencies["SatelliteOverlayConfig"]
-    __file__ = _dependencies["__file__"]
-    _completed_daily = _dependencies["_completed_daily"]
-    _completed_intraday = _dependencies["_completed_intraday"]
-    _current_portfolio = _dependencies["_current_portfolio"]
-    _fetch_bars = _dependencies["_fetch_bars"]
-    _fetch_latest_quotes = _dependencies["_fetch_latest_quotes"]
-    _latest_bar_age_seconds = _dependencies["_latest_bar_age_seconds"]
-    _make_trade = _dependencies["_make_trade"]
-    _multi_factor_rebalance_signals = _dependencies["_multi_factor_rebalance_signals"]
-    _multi_factor_current_targets = _dependencies["_multi_factor_current_targets"]
-    _multi_factor_parameters_for_session = _dependencies["_multi_factor_parameters_for_session"]
-    _positive_price_level = _dependencies["_positive_price_level"]
-    _update_trailing_stop = _dependencies["_update_trailing_stop"]
-    apply_regime_advisory = _dependencies["apply_regime_advisory"]
-    apply_satellite_confirmations = _dependencies["apply_satellite_confirmations"]
-    choose_priority = _dependencies["choose_priority"]
-    configured_universe = _dependencies["configured_universe"]
-    date = _dependencies["date"]
-    datetime = _dependencies["datetime"]
-    evaluate_rule_signal = _dependencies["evaluate_rule_signal"]
-    evaluate_strategy = _dependencies["evaluate_strategy"]
-    feeds_for_session = _dependencies["feeds_for_session"]
-    generate_swing_momentum_signals = _dependencies["generate_swing_momentum_signals"]
-    get_mode_config = _dependencies["get_mode_config"]
-    hashlib = _dependencies["hashlib"]
-    historical_delay_seconds = _dependencies["historical_delay_seconds"]
-    load_algo_universe = _dependencies["load_algo_universe"]
-    load_event_context = _dependencies["load_event_context"]
-    load_fred_regime_series = _dependencies["load_fred_regime_series"]
-    os = _dependencies["os"]
-    rank_strategies = _dependencies["rank_strategies"]
-    regular_feed = _dependencies["regular_feed"]
-    throttle_signal = _dependencies["throttle_signal"]
-    timedelta = _dependencies["timedelta"]
-    timezone = _dependencies["timezone"]
-    _is_protective_sell_order = _dependencies["_is_protective_sell_order"]
-    strategy_priority = _dependencies["strategy_priority"]
-    refresh_active_parameter_profile = _dependencies["refresh_active_parameter_profile"]
-    parameters_for_regime = _dependencies["parameters_for_regime"]
-    profile_id_for_regime = _dependencies["profile_id_for_regime"]
+    """Run one complete scan using the coordinator's portfolio state."""
+    ALGO_RUNTIME_SETTINGS = get_algo_runtime_settings()
     refresh_active_parameter_profile()
-    ALGO_DEFAULT_PARAMETERS = _dependencies["ALGO_DEFAULT_PARAMETERS"]
 
-    if mode not in {"swing", "day", "algo"}:
-        raise ValueError("Strategy scan mode must be swing, day, or algo")
-    if mode == "algo" and (position_owners is None or strategy_states is None):
+    if mode != "algo":
+        raise ValueError("Only the algo portfolio scan is supported")
+    if position_owners is None or strategy_states is None:
         raise ValueError("Algo scans require the coordinator's position owners and strategy states")
-    if mode == "algo" and session_name:
+    if session_name:
         default_bar_feed, default_quote_feed = feeds_for_session(session_name)
         # Plus uses BOATS for both overnight bars and quotes.
         data_feed = default_bar_feed if session_name == "overnight" else (data_feed or default_bar_feed)
@@ -182,10 +124,8 @@ def scan(
     multi_factor_parameters, multi_factor_parameter_source = _multi_factor_parameters_for_session()
     if universe_result is not None:
         universe = universe_result
-    elif mode == "algo":
-        universe = load_algo_universe()
     else:
-        universe = configured_universe(mode)
+        universe = load_algo_universe()
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
     event_config = EventStrategyConfig.from_dict(ALGO_DEFAULT_PARAMETERS.get("event_driven"))
     satellite_config = SatelliteOverlayConfig.from_dict({
@@ -198,12 +138,12 @@ def scan(
     track_owners = position_owners is not None
     owner_map = position_owners if position_owners is not None else {}
     risk_config = mode_config["risk"]
-    coordinator_config = PortfolioCoordinatorConfig.from_dict() if mode == "algo" else None
+    coordinator_config = PortfolioCoordinatorConfig.from_dict()
     scan_errors: list[str] = []
     entry_pause_reasons: list[str] = []
-    if mode == "algo" and not selected_symbols:
+    if not selected_symbols:
         entry_pause_reasons.append("the Algo universe is empty")
-    if mode == "algo" and session_name == "overnight" and not bool(
+    if session_name == "overnight" and not bool(
         ALGO_RUNTIME_SETTINGS.overnight_entries_enabled
     ):
         entry_pause_reasons.append("overnight entries are disabled by configuration")
@@ -231,7 +171,7 @@ def scan(
         ticker for ticker, position in positions.items()
         if float(position.get("qty", 0) or 0) != 0 and ticker not in owner_map
     ) if track_owners else []
-    if mode == "algo" and unowned_positions:
+    if unowned_positions:
         entry_pause_reasons.append("broker positions have no verified strategy owner")
 
     held_symbol_set = {str(symbol).upper() for symbol in owner_map} if track_owners else set()
@@ -240,17 +180,16 @@ def scan(
             for symbol, state in by_symbol.items():
                 if state.get("phase") in ACTIVE_PHASES:
                     held_symbol_set.add(str(symbol).upper())
-    held_symbols = sorted(held_symbol_set if mode == "algo" else held_symbol_set - excluded)
+    held_symbols = sorted(held_symbol_set)
     strategy_symbols = list(dict.fromkeys(
         [symbol for symbol in selected_symbols if symbol not in excluded] + held_symbols
     ))
     # SPY is part of the fixed Algo universe and remains available to macro
     # event signals; ordinary strategies still use their configured symbols.
-    if mode == "algo" and event_strategy_enabled and "SPY" not in strategy_symbols:
+    if event_strategy_enabled and "SPY" not in strategy_symbols:
         strategy_symbols.append("SPY")
     regime_context_symbols = (
         configured_universe("algo")["tickers"] + ["HYG", "LQD"]
-        if mode == "algo" else []
     )
     symbols_for_bars = list(dict.fromkeys(strategy_symbols + ["SPY"] + regime_context_symbols))
 
@@ -260,9 +199,9 @@ def scan(
     factor_config = MultiFactorConfig.from_dict(factor_config_values)
     daily_history_days = max(
         factor_config.warmup_calendar_days(), ALGO_REGIME_WARMUP_CALENDAR_DAYS,
-    ) if mode == "algo" else 220
+    )
     daily_start = (now_utc - timedelta(days=daily_history_days)).date().isoformat()
-    daily_feed = regular_feed() if mode == "algo" else data_feed
+    daily_feed = regular_feed()
     historical_status = "ok"
     historical_bar_end: str | None = None
     try:
@@ -275,135 +214,115 @@ def scan(
             today, daily_start, daily_feed, tuple(symbols_for_bars), snapshot_phase,
             _fetch_bars,
         )
-        if mode == "algo":
-            with _DAILY_BAR_CACHE_LOCK:
-                cached = _DAILY_BAR_CACHE.get(cache_key)
-                if cached is None:
-                    cached = _fetch_bars(
-                        symbols_for_bars, mode=mode, timeframe="1Day",
-                        start=daily_start, end=now_utc.isoformat(), limit=10000,
-                        feed=daily_feed, adjustment="split",
-                    )
-                    _DAILY_BAR_CACHE.clear()
-                    _DAILY_BAR_CACHE[cache_key] = {
-                        ticker: list(rows) for ticker, rows in cached.items()
-                    }
-                daily_bars = {ticker: list(rows) for ticker, rows in cached.items()}
-        else:
-            daily_bars = _fetch_bars(
-                symbols_for_bars,
-                mode=mode,
-                timeframe="1Day",
-                start=daily_start,
-                end=now_utc.isoformat(),
-                limit=10000,
-                feed=daily_feed,
-                adjustment=None,
-            )
+        with _DAILY_BAR_CACHE_LOCK:
+            cached = _DAILY_BAR_CACHE.get(cache_key)
+            if cached is None:
+                cached = _fetch_bars(
+                    symbols_for_bars, mode=mode, timeframe="1Day",
+                    start=daily_start, end=now_utc.isoformat(), limit=10000,
+                    feed=daily_feed, adjustment="split",
+                )
+                _DAILY_BAR_CACHE.clear()
+                _DAILY_BAR_CACHE[cache_key] = {
+                    ticker: list(rows) for ticker, rows in cached.items()
+                }
+            daily_bars = {ticker: list(rows) for ticker, rows in cached.items()}
         daily_bars = {ticker: _completed_daily(bars, today) for ticker, bars in daily_bars.items()}
     except Exception as exc:
-        if mode != "algo":
-            raise
         daily_bars = {}
         historical_status = "degraded"
         scan_errors.append(f"daily historical bars: {type(exc).__name__}: {exc}")
         entry_pause_reasons.append("daily historical bars are unavailable")
 
-    if mode in {"day", "algo"}:
-        intraday_bars = {}
-        if mode == "algo" and session_name:
-            if session_name == "overnight":
-                bar_day = now.date() if now.hour >= 20 else now.date() - timedelta(days=1)
-                start_at = datetime.combine(bar_day, datetime.min.time(), tzinfo=ET).replace(hour=20)
-            elif session_name == "premarket":
-                start_at = datetime.fromisoformat(f"{today}T04:00:00").replace(tzinfo=ET)
-            else:
-                start_at = datetime.fromisoformat(f"{today}T09:30:00").replace(tzinfo=ET)
-            delay_seconds = historical_delay_seconds(data_feed, session_name)
-            bar_end = now - timedelta(seconds=delay_seconds) if delay_seconds else now
-            historical_bar_end = bar_end.isoformat()
-            if bar_end > start_at:
-                try:
-                    intraday_bars = _fetch_bars(
-                        strategy_symbols,
-                        mode=mode,
-                        timeframe="5Min",
-                        start=start_at.isoformat(),
-                        end=historical_bar_end,
-                        limit=10000,
-                        feed=data_feed,
-                    )
-                except Exception as exc:
-                    historical_status = "degraded"
-                    scan_errors.append(f"intraday historical bars ({data_feed}): {type(exc).__name__}: {exc}")
-                    entry_pause_reasons.append("intraday historical bars are unavailable")
-            elif historical_status == "ok":
-                historical_status = "warming_up"
-                entry_pause_reasons.append("waiting for completed intraday historical bars")
-        elif now >= now.replace(hour=9, minute=30, second=0, microsecond=0):
-            session_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-            intraday_bars = _fetch_bars(
-                strategy_symbols,
-                mode=mode,
-                timeframe="5Min",
-                start=session_open.isoformat(),
-                end=now.isoformat(),
-                limit=10000,
-                feed=data_feed,
-            )
-        try:
-            bars_by_symbol = {
-                ticker: _completed_intraday(bars, now=now)
-                for ticker, bars in intraday_bars.items()
-            }
-        except Exception as exc:
-            if mode != "algo":
-                raise
-            bars_by_symbol = {}
-            historical_status = "degraded"
-            scan_errors.append(f"intraday bar validation: {type(exc).__name__}: {exc}")
-            entry_pause_reasons.append("intraday historical bars are invalid")
-        if mode == "algo" and strategy_symbols and not any(bars_by_symbol.values()) and historical_status == "ok":
+    intraday_bars = {}
+    if session_name:
+        if session_name == "overnight":
+            bar_day = now.date() if now.hour >= 20 else now.date() - timedelta(days=1)
+            start_at = datetime.combine(bar_day, datetime.min.time(), tzinfo=ET).replace(hour=20)
+        elif session_name == "premarket":
+            start_at = datetime.fromisoformat(f"{today}T04:00:00").replace(tzinfo=ET)
+        else:
+            start_at = datetime.fromisoformat(f"{today}T09:30:00").replace(tzinfo=ET)
+        delay_seconds = historical_delay_seconds(data_feed, session_name)
+        bar_end = now - timedelta(seconds=delay_seconds) if delay_seconds else now
+        historical_bar_end = bar_end.isoformat()
+        if bar_end > start_at:
+            try:
+                intraday_bars = _fetch_bars(
+                    strategy_symbols,
+                    mode=mode,
+                    timeframe="5Min",
+                    start=start_at.isoformat(),
+                    end=historical_bar_end,
+                    limit=10000,
+                    feed=data_feed,
+                )
+            except Exception as exc:
+                historical_status = "degraded"
+                scan_errors.append(f"intraday historical bars ({data_feed}): {type(exc).__name__}: {exc}")
+                entry_pause_reasons.append("intraday historical bars are unavailable")
+        elif historical_status == "ok":
             historical_status = "warming_up"
-            entry_pause_reasons.append("no completed intraday historical bars are available yet")
-    else:
-        bars_by_symbol = daily_bars
+            entry_pause_reasons.append("waiting for completed intraday historical bars")
+    elif now >= now.replace(hour=9, minute=30, second=0, microsecond=0):
+        session_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        intraday_bars = _fetch_bars(
+            strategy_symbols,
+            mode=mode,
+            timeframe="5Min",
+            start=session_open.isoformat(),
+            end=now.isoformat(),
+            limit=10000,
+            feed=data_feed,
+        )
+    try:
+        bars_by_symbol = {
+            ticker: _completed_intraday(bars, now=now)
+            for ticker, bars in intraday_bars.items()
+        }
+    except Exception as exc:
+        bars_by_symbol = {}
+        historical_status = "degraded"
+        scan_errors.append(f"intraday bar validation: {type(exc).__name__}: {exc}")
+        entry_pause_reasons.append("intraday historical bars are invalid")
+    if strategy_symbols and not any(bars_by_symbol.values()) and historical_status == "ok":
+        historical_status = "warming_up"
+        entry_pause_reasons.append("no completed intraday historical bars are available yet")
 
-    delay_seconds = historical_delay_seconds(data_feed, session_name or "") if mode == "algo" else 0
+    delay_seconds = historical_delay_seconds(data_feed, session_name or "")
     signal_bar_max_age_seconds = (
         ALGO_SIGNAL_DATA_CONFIG["delayed_signal_bar_max_age_minutes"] if delay_seconds
         else ALGO_SIGNAL_DATA_CONFIG["signal_bar_max_age_minutes"]
     ) * 60
     fresh_signal_bar_symbols = set()
-    if mode == "algo":
-        fresh_signal_bar_symbols = {
-            ticker for ticker, bars in bars_by_symbol.items()
-            if (age := _latest_bar_age_seconds(bars, now)) is not None
-            and 0 <= age <= signal_bar_max_age_seconds
-        }
-        if selected_symbols and not fresh_signal_bar_symbols.intersection(selected_symbols):
-            entry_pause_reasons.append("the Algo universe has no recent completed signal bars")
-            if historical_status == "ok":
-                historical_status = "stale"
+    fresh_signal_bar_symbols = {
+        ticker for ticker, bars in bars_by_symbol.items()
+        if (age := _latest_bar_age_seconds(bars, now)) is not None
+        and 0 <= age <= signal_bar_max_age_seconds
+    }
+    if selected_symbols and not fresh_signal_bar_symbols.intersection(selected_symbols):
+        entry_pause_reasons.append("the Algo universe has no recent completed signal bars")
+        if historical_status == "ok":
+            historical_status = "stale"
 
     spy_last_completed_date: str | None = None
     spy_daily_age_days: int | None = None
-    if mode == "algo":
-        if daily_bars.get("SPY"):
-            try:
-                spy_last_completed_date = str(daily_bars["SPY"][-1]["t"])[:10]
-                spy_daily_age_days = (date.fromisoformat(today) - date.fromisoformat(spy_last_completed_date)).days
-            except (KeyError, TypeError, ValueError):
-                spy_daily_age_days = None
-        if spy_daily_age_days is None or not 1 <= spy_daily_age_days <= MAX_SPY_DAILY_AGE_DAYS:
-            entry_pause_reasons.append("the latest completed SPY daily bar is stale or invalid")
-            if historical_status == "ok":
-                historical_status = "stale"
+    if daily_bars.get("SPY"):
+        try:
+            spy_last_completed_date = str(daily_bars["SPY"][-1]["t"])[:10]
+            spy_daily_age_days = (date.fromisoformat(today) - date.fromisoformat(spy_last_completed_date)).days
+        except (KeyError, TypeError, ValueError):
+            spy_daily_age_days = None
+    if spy_daily_age_days is None or not 1 <= spy_daily_age_days <= MAX_SPY_DAILY_AGE_DAYS:
+        entry_pause_reasons.append("the latest completed SPY daily bar is stale or invalid")
+        if historical_status == "ok":
+            historical_status = "stale"
 
-    default_calendar = Path(__file__).resolve().parents[4] / "data" / "event_calendar.csv"
+    from runtime.paths import DATA_DIR
+    default_calendar = DATA_DIR / "event_calendar.csv"
     calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(default_calendar)))
     event_context = load_event_context(
-        enabled=mode == "algo" and event_strategy_enabled,
+        enabled=event_strategy_enabled,
         owned_event_position="event_driven" in set(owner_map.values()),
         event_config=event_config,
         calendar_path=calendar_path,
@@ -418,59 +337,51 @@ def scan(
     scan_errors.extend(event_context.errors)
     regime_macro_series = {}
     regime_macro_diagnostics = {"status": "not_loaded"}
-    if mode == "algo":
-        try:
-            regime_macro_series, regime_macro_diagnostics = load_fred_regime_series(refresh=True)
-        except Exception as exc:
-            regime_macro_diagnostics = {"status": "unavailable", "error": type(exc).__name__}
-            scan_errors.append(f"regime macro data: {type(exc).__name__}: {exc}")
     try:
-        if mode == "algo":
-            regime = rank_strategies(
-                daily_bars.get("SPY", []), mode=mode, event_enabled=event_strategy_available,
-                event_disable_in_volatile=event_config.disable_in_volatile,
-                intraday_trend_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_trend,
-                intraday_momentum_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_momentum,
-                feature_set=ALGO_REGIME_CONFIG["feature_set"],
-                engine=ALGO_REGIME_CONFIG["engine"],
-                strategy_policy=ALGO_REGIME_CONFIG["strategy_policy"],
-                context_bars=daily_bars,
-                macro_series=regime_macro_series,
-                include_models=ALGO_REGIME_CONFIG["include_models"],
-                model_training_window=ALGO_REGIME_CONFIG["model_training_window"],
-                model_min_confidence=ALGO_REGIME_CONFIG["min_model_confidence"],
-            )
-            regime["macro_data"] = regime_macro_diagnostics
-        else:
-            regime = rank_strategies(daily_bars.get("SPY", []), mode=mode)
+        regime_macro_series, regime_macro_diagnostics = load_fred_regime_series(refresh=True)
     except Exception as exc:
-        if mode != "algo":
-            raise
+        regime_macro_diagnostics = {"status": "unavailable", "error": type(exc).__name__}
+        scan_errors.append(f"regime macro data: {type(exc).__name__}: {exc}")
+    try:
+        regime = rank_strategies(
+            daily_bars.get("SPY", []), mode=mode, event_enabled=event_strategy_available,
+            event_disable_in_volatile=event_config.disable_in_volatile,
+            intraday_trend_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_trend,
+            intraday_momentum_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_momentum,
+            feature_set=ALGO_REGIME_CONFIG["feature_set"],
+            engine=ALGO_REGIME_CONFIG["engine"],
+            strategy_policy=ALGO_REGIME_CONFIG["strategy_policy"],
+            context_bars=daily_bars,
+            macro_series=regime_macro_series,
+            include_models=ALGO_REGIME_CONFIG["include_models"],
+            model_training_window=ALGO_REGIME_CONFIG["model_training_window"],
+            model_min_confidence=ALGO_REGIME_CONFIG["min_model_confidence"],
+        )
+        regime["macro_data"] = regime_macro_diagnostics
+    except Exception as exc:
         regime = {"regime": "unknown", "reason": "SPY regime calculation failed", "ranked": [], "active": []}
         scan_errors.append(f"SPY regime calculation: {type(exc).__name__}: {exc}")
         entry_pause_reasons.append("SPY regime calculation failed")
-    if mode == "algo":
-        try:
-            regime = apply_regime_advisory(regime)
-        except Exception as exc:
-            # The optional ranking advisor must never interrupt deterministic
-            # strategy exits or quote-driven protection.
-            scan_errors.append(f"optional regime advisor: {type(exc).__name__}: {exc}")
-            regime["regime_advisory"] = {"status": "fallback", "error": str(exc)}
-        if regime.get("regime") == "unknown":
-            entry_pause_reasons.append("deterministic SPY regime is unavailable")
-            if historical_status == "ok":
-                historical_status = "degraded"
+    try:
+        regime = apply_regime_advisory(regime)
+    except Exception as exc:
+        # The optional ranking advisor must never interrupt deterministic
+        # strategy exits or quote-driven protection.
+        scan_errors.append(f"optional regime advisor: {type(exc).__name__}: {exc}")
+        regime["regime_advisory"] = {"status": "fallback", "error": str(exc)}
+    if regime.get("regime") == "unknown":
+        entry_pause_reasons.append("deterministic SPY regime is unavailable")
+        if historical_status == "ok":
+            historical_status = "degraded"
     regime_name = str(regime.get("regime", "unknown"))
-    if mode == "algo":
-        multi_factor_parameters = parameters_for_regime("multi_factor", regime_name)
+    multi_factor_parameters = parameters_for_regime("multi_factor", regime_name)
     allowed_satellites = set(regime.get("satellites", []))
     equity = float(account.get("equity", 0) or 0)
     quote_errors: list[str] = []
     quote_fetch_diagnostics: dict[str, dict] = {}
     latest_quotes = _fetch_latest_quotes(
         strategy_symbols, mode=mode, feed=quote_feed,
-        errors=quote_errors if mode == "algo" else None,
+        errors=quote_errors,
         diagnostics=quote_fetch_diagnostics,
     )
     freshness_limit = int(STRATEGY_CONFIG["quote_stale_seconds"])

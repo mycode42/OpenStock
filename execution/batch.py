@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 @dataclass(frozen=True)
 class BatchHooks:
-    risk_manager_available: bool
+    risk_validator_available: bool
     rm_validate_trade: Callable
     rm_stage_approved_trade: Callable
     get_latest_ask: Callable
@@ -38,7 +38,7 @@ def execute_trade_batch(
     would_execute_count = 0
     seen_client_order_ids: set[str] = set()
 
-    # The risk manager counts and validates entries against staged portfolio
+    # The risk validator counts and validates entries against staged portfolio
     # state. Do not truncate this list: exits later in the batch must still be
     # allowed after the day's entry quota is full.
     for trade_index, trade in enumerate(trades):
@@ -79,8 +79,8 @@ def execute_trade_batch(
             results.append({"ticker": ticker, "action": action, "status": "skipped", "reason": "Hold or zero qty"})
             continue
 
-        if not hooks.risk_manager_available:
-            reason = "V2 risk manager unavailable; order blocked"
+        if not hooks.risk_validator_available:
+            reason = "risk validator unavailable; order blocked"
             hooks.log.error(reason)
             results.append(
                 {
@@ -94,8 +94,8 @@ def execute_trade_batch(
             )
             continue
 
-        # ── V2 Risk Manager validation ───────────────────────────────────────
-        if action in ("buy", "short") and hooks.risk_manager_available:
+        # ── Risk validator ──────────────────────────────────────────────────
+        if action in ("buy", "short") and hooks.risk_validator_available:
             pos = positions.get(ticker, {})
             try:
                 hinted_price = float(entry_price or 0)
@@ -208,7 +208,7 @@ def execute_trade_batch(
             )
             if not rm_result.approved:
                 hooks.log.warning(
-                    "V2 risk manager BLOCKED %s %s %s %s (%s): %s",
+                    "risk validator BLOCKED %s %s %s %s (%s): %s",
                     strategy,
                     timeframe,
                     direction,
@@ -229,14 +229,14 @@ def execute_trade_batch(
                 )
                 continue
             hooks.log.info(
-                "V2 risk manager approved %s %s %s %s (%s)",
+                "risk validator approved %s %s %s %s (%s)",
                 strategy,
                 timeframe,
                 direction,
                 ticker,
                 action,
             )
-        elif action in ("sell", "cover") and hooks.risk_manager_available:
+        elif action in ("sell", "cover") and hooks.risk_validator_available:
             # The central validator explicitly allows exits; route them through
             # it too so every submitted signal uses the same policy boundary.
             rm_result = hooks.rm_validate_trade(
@@ -301,7 +301,7 @@ def execute_trade_batch(
                 dry_entry["cancel_open_orders"] = True
             results.append(dry_entry)
             would_execute_count += 1
-            if action in {"buy", "short"} and hooks.risk_manager_available and rm_portfolio_state is not None:
+            if action in {"buy", "short"} and hooks.risk_validator_available and rm_portfolio_state is not None:
                 rm_portfolio_state = hooks.rm_stage_approved_trade(
                     rm_portfolio_state,
                     ticker,
@@ -400,7 +400,7 @@ def execute_trade_batch(
             if result["success"]:
                 if not result.get("idempotent_replay"):
                     submitted_count += 1
-                if action in {"buy", "short"} and not result.get("idempotent_replay") and hooks.risk_manager_available and rm_portfolio_state is not None:
+                if action in {"buy", "short"} and not result.get("idempotent_replay") and hooks.risk_validator_available and rm_portfolio_state is not None:
                     rm_portfolio_state = hooks.rm_stage_approved_trade(
                         rm_portfolio_state,
                         ticker,

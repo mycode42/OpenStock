@@ -15,7 +15,7 @@ from functools import lru_cache
 
 from openai import OpenAI, OpenAIError
 
-from src.config import STRATEGY_CONFIG
+from portfolio.config import STRATEGY_CONFIG
 
 
 LOG = logging.getLogger("strategy_regime_advisor")

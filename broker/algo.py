@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from src.market_data import regular_feed
+from market.data import regular_feed
 
 
 PAPER_BASE = "https://paper-api.alpaca.markets/v2"

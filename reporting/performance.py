@@ -18,10 +18,10 @@ load_dotenv(override=True)
 
 import requests
 import yfinance as yf
-from src.accounts import get_account_for_mode, verify_account_for_mode
-from src.market_calendar import get_market_schedule
-from src.fill_analytics import FillHistoryError, get_account_fill_report
-from trade_journal import dedupe_journal_entries
+from broker.accounts import get_account_for_mode, verify_account_for_mode
+from market.calendar import get_market_schedule
+from reporting.fills import FillHistoryError, get_account_fill_report
+from reporting.journal import dedupe_journal_entries
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +32,9 @@ log = logging.getLogger("perf_v2")
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
 
-TRADE_JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
+from runtime.paths import DATA_DIR
+
+TRADE_JOURNAL_PATH = DATA_DIR / "trade_journal.jsonl"
 
 RISK_FREE_RATE_ANNUAL = 0.045  # ~4.5% annualised (T-bill proxy)
 RISK_FREE_DAILY = RISK_FREE_RATE_ANNUAL / 252
@@ -102,10 +104,10 @@ def get_benchmark_return(symbol: str, period_days: int = 1) -> float | None:
 
 
 def _snapshot_dir(mode: str) -> Path:
-    """Return the isolated Algo snapshot directory."""
+    """Return the Algo snapshot directory."""
     if mode != "algo":
         raise ValueError("Only the algo account route is supported")
-    return Path(__file__).parent / "data" / "snapshots" / "algo"
+    return DATA_DIR / "snapshots"
 
 
 def load_snapshots(days: int | None = None, mode: str = "algo", account_id: str | None = None) -> list[dict]:
@@ -634,7 +636,7 @@ def main() -> int:
             log.error("Cannot reconcile %s broker fills: %s", args.mode, exc)
             return 1
         # The summary is concise enough for cron reports. Full per-fill
-        # details remain available through src.fill_analytics directly.
+        # details remain available through reporting.fills directly.
         fill_report.pop("realized_fills", None)
 
     if args.json:

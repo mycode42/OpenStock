@@ -14,14 +14,14 @@ from .settings import (
     RESEARCH_START, RESEARCH_WARMUP_DAYS, FORWARD_TRIAL_MAX_DAYS,
     SIP_EXTENDED_LOCAL_FEED, ET,
 )
-from .files import _atomic_json
-from src.algo.backtest import _regular_session_bars
-from src.algo.market_store import SQLiteBarStore, fetch_alpaca_bars
-from src.algo.strategies.event_driven import EventCalendar
-from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
-from src.algo.strategies.universe import configured_universe
-from src.market_data import data_tier, regular_feed
-from src.algo.backtest.market_sessions import extended_session_bars
+from .artifacts.files import _atomic_json
+from autoresearch.backtest import _regular_session_bars
+from market.store import SQLiteBarStore, fetch_alpaca_bars
+from strategies.event_driven import EventCalendar
+from strategies.multi_factor.features import aggregate_intraday_bars
+from strategies.universe import configured_universe
+from market.data import data_tier, regular_feed
+from autoresearch.backtest.market_sessions import extended_session_bars
 
 
 def _parse_date(value: str) -> date:
@@ -171,7 +171,7 @@ def _refresh_incremental(
             f"after refresh; at least {MIN_COVERED_UNIVERSE} are required"
         )
 
-    from src.algo.strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
+    from strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
 
     forward_trial_symbols = [
         symbol for symbol in selected_symbols
@@ -194,7 +194,7 @@ def _refresh_incremental(
     )), None)
     daily_rows_written = 0
     if spy_daily is None:
-        from src.algo.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
+        from portfolio.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
 
         daily_start = (
             RESEARCH_START - timedelta(days=ALGO_REGIME_WARMUP_CALENDAR_DAYS)
@@ -273,7 +273,7 @@ def _latest_dates(store: SQLiteBarStore, symbols: list[str]) -> tuple[date, date
 def _prepare_event_calendar(
     *, start: date, end: date, db: str, output_dir: Path,
 ) -> tuple[EventCalendar | None, dict]:
-    from src.algo.research.historical_events import build_historical_event_calendar
+    from autoresearch.historical_events import build_historical_event_calendar
 
     calendar_path = output_dir / "event-calendar-historical.csv"
     metadata_path = output_dir / "event-calendar-historical.json"

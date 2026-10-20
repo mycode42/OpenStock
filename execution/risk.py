@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Risk Manager — Hard rules enforcer for Algo Trader.
+Trade risk validation — hard rules for Algo Trader orders.
 
 Every proposed trade passes through validate_trade() before execution.
 Rules are non-negotiable and code-enforced; no LLM can override them.
 
 Usage (standalone check):
-  poetry run python risk_manager.py --status
-  poetry run python risk_manager.py --status --mode algo
+  poetry run python -m execution.risk --status
+  poetry run python -m execution.risk --status --mode algo
 
 Importable:
-  from risk_manager import validate_trade, get_portfolio_state
+  from execution.risk import validate_trade, get_portfolio_state
 """
 
 import logging
@@ -34,16 +34,16 @@ load_dotenv(override=True)
 
 import requests
 
-from src.config import get_mode_config
+from portfolio.config import get_mode_config
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [risk_manager] %(levelname)s — %(message)s",
+    format="%(asctime)s [execution.risk] %(levelname)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log = logging.getLogger("risk_manager")
+log = logging.getLogger("execution.risk")
 
-from src.accounts import get_account_for_mode, verify_account_for_mode
+from broker.accounts import get_account_for_mode, verify_account_for_mode
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -581,7 +581,7 @@ def stage_approved_trade(
 ) -> dict:
     """Reserve an approved long or short entry before validating the next signal.
 
-    execute_trades.py can receive multiple strategy signals at once. Staging
+    The execution command can receive multiple strategy signals at once. Staging
     successful or dry-run entries prevents each signal from being checked
     against the same pre-batch cash, position, and sector totals.
     """
@@ -637,15 +637,18 @@ def stage_approved_trade(
 
 
 def _snapshot_dir(mode: str) -> Path:
-    """Match the account-isolated paths written by performance_tracker_v2."""
-    root = Path(__file__).parent
+    """Return the Algo snapshot directory used by performance reporting."""
+    from runtime.paths import DATA_DIR
+
     if mode != "algo":
         raise ValueError("Only the algo account route is supported")
-    return root / "data" / "snapshots" / "algo"
+    return DATA_DIR / "snapshots"
 
 
 def _risk_baseline_dir(mode: str) -> Path:
-    return Path(__file__).parent / "data" / "risk_baselines" / mode
+    from runtime.paths import DATA_DIR
+
+    return DATA_DIR / "risk_baselines" / mode
 
 
 def capture_account_inception_baseline(mode: str, *, now: datetime | None = None) -> dict:
@@ -1163,7 +1166,7 @@ def print_status(portfolio_state: dict, mode: str = "algo") -> None:
 
     eq = portfolio_state["equity"]
     print(f"{'='*60}")
-    print(f"  ALGO TRADER — RISK MANAGER STATUS")
+    print(f"  ALGO TRADER — RISK VALIDATOR STATUS")
     print(f"  Mode: {mode.upper()} — {mode_config['label']}")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
@@ -1209,7 +1212,7 @@ def print_status(portfolio_state: dict, mode: str = "algo") -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Algo Trader Risk Manager")
+    parser = argparse.ArgumentParser(description="Algo Trader risk validator")
     parser.add_argument("--status", action="store_true", help="Show current risk status")
     parser.add_argument(
         "--mode",

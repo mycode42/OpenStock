@@ -10,17 +10,17 @@ import statistics
 
 from .config import BAR_MINUTES, ET
 from .market_sessions import market_session
-from src.algo.strategies.multi_factor.config import MultiFactorConfig
-from src.algo.strategies.multi_factor.signals import SignalGenerator
-from src.algo.strategies.catalog import (
+from strategies.multi_factor.config import MultiFactorConfig
+from strategies.multi_factor.signals import SignalGenerator
+from strategies.catalog import (
     CORE_STRATEGIES, INTRADAY_STRATEGIES, STRATEGY_CATALOG,
     SWING_CORE_STRATEGIES,
 )
-from src.algo.strategies.multi_factor.diagnostics import information_coefficient, turnover
-from src.algo.strategies.portfolio_coordinator import throttle_signal
-from src.algo.strategies.satellite_overlay import apply_satellite_confirmations
-from src.algo.strategies.runner import _make_trade
-from src.algo.strategies.swing_common import CachedDailyBarHistory
+from strategies.multi_factor.diagnostics import information_coefficient, turnover
+from strategies.portfolio_coordinator import throttle_signal
+from strategies.satellite_overlay import apply_satellite_confirmations
+from strategies.runner.sizing import _make_trade
+from strategies.swing_common import CachedDailyBarHistory
 
 
 class ReplaySignalsMixin:
@@ -42,18 +42,18 @@ class ReplaySignalsMixin:
         factor_model_diagnostics = None
         model_mode = self.multi_factor_generator.config.factor_weight_mode
         if model_mode == "ridge_walk_forward":
-            from src.algo.strategies.multi_factor.learned_weights import resolve_walk_forward_weights
+            from strategies.multi_factor.learned_weights import resolve_walk_forward_weights
 
             learned_factor_weights, factor_model_diagnostics = resolve_walk_forward_weights(
                 getattr(self, "factor_weight_timeline", None), as_of=as_of,
             )
         elif model_mode in {"lightgbm_walk_forward", "xgboost_walk_forward"}:
-            from src.algo.strategies.multi_factor.learned_weights import resolve_walk_forward_tree_model
+            from strategies.multi_factor.learned_weights import resolve_walk_forward_tree_model
 
             learned_factor_model, factor_model_diagnostics = resolve_walk_forward_tree_model(
                 getattr(self, "factor_weight_timeline", None), model_mode=model_mode, as_of=as_of,
             )
-        from src.algo.strategies.multi_factor.fundamentals import (
+        from strategies.multi_factor.fundamentals import (
             load_point_in_time_fundamentals, requested_fundamental_factors,
         )
 

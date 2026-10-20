@@ -1,4 +1,4 @@
-"""Deterministic Algo portfolio backtest and compatibility API."""
+"""Deterministic Algo portfolio backtest public API."""
 
 from __future__ import annotations
 
@@ -8,11 +8,13 @@ from .config import (
     multi_factor_warmup_days, strategy_warmup_days,
     validate_research_controls, validate_strategy_filter,
 )
-from .shared import (
-    DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars, STRATEGY_CONFIG,
-    evaluate_rule_signal, validate_trade, EventCalendar, get_mode_config, data_tier, regular_feed,
-    rank_strategies,
-)
+from execution.risk import validate_trade
+from market.data import data_tier, regular_feed
+from market.store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
+from portfolio.config import STRATEGY_CONFIG, get_mode_config
+from strategies.event_driven import EventCalendar
+from strategies.regime import rank_strategies
+from strategies.rule_pipeline import evaluate_rule_signal
 from .models import Position
 from .portfolio import PortfolioBacktest
 from .data import (

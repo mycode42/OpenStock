@@ -1,5 +1,4 @@
-"""
-Drop-in replacement for api.py using free public data sources.
+"""Research data access through public market and SEC sources.
 - Prices: yfinance
 - Financial metrics: SEC EDGAR XBRL companyfacts + yfinance
 - Line items: SEC EDGAR XBRL companyfacts
@@ -16,26 +15,19 @@ import hashlib
 import json
 import os
 import time
-import traceback
-from pathlib import Path
 
 import pandas as pd
 import requests
 
-from src.data.cache import get_cache
-from src.data.models import (
+from market.cache import get_cache
+from market.models import (
     CompanyNews,
-    CompanyNewsResponse,
     FinancialMetrics,
-    FinancialMetricsResponse,
     Price,
-    PriceResponse,
     LineItem,
-    LineItemResponse,
     InsiderTrade,
-    InsiderTradeResponse,
-    CompanyFactsResponse,
     CompanyFacts,
+    CompanyFactsResponse,
 )
 
 # ---------------------------------------------------------------------------
@@ -44,7 +36,7 @@ from src.data.models import (
 
 _cache = get_cache()
 
-CACHE_DIR = Path(__file__).resolve().parents[2] / ".cache"
+from runtime.paths import CACHE_DIR
 CACHE_DIR.mkdir(exist_ok=True)
 
 SEC_USER_AGENT = os.environ.get(
@@ -186,7 +178,7 @@ def _extract_xbrl_values(facts: dict, concept: str, namespace: str = "us-gaap", 
 
 
 # ---------------------------------------------------------------------------
-# Public API — identical signatures to api.py
+# Public research-data API
 # ---------------------------------------------------------------------------
 
 

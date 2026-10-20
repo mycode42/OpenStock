@@ -13,9 +13,9 @@ import math
 from statistics import mean
 from typing import Any
 
-from src.algo.strategies.indicators import adx, efficiency_ratio, population_std, rsi
-from src.algo.strategies.signals import Signal
-from src.algo.strategies.swing_common import SwingSignal, clean_daily_bars, entry_session, position_entry_price
+from strategies.indicators import adx, efficiency_ratio, population_std, rsi
+from strategies.signals import Signal
+from strategies.swing_common import SwingSignal, clean_daily_bars, entry_session, position_entry_price
 
 
 @dataclass(frozen=True)

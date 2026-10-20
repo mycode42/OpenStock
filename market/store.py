@@ -14,11 +14,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.accounts import get_account_for_mode
+from broker.accounts import get_account_for_mode
 
 
 DATA_BASE = "https://data.alpaca.markets/v2"
-DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "algo_market.sqlite3"
+from runtime.paths import DATA_DIR
+
+DEFAULT_DB = DATA_DIR / "algo_market.sqlite3"
 
 
 def _utc_timestamp(value: object) -> str:

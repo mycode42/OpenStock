@@ -6,7 +6,7 @@ import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.algo.strategies.event_driven.models import ScheduledEvent, parse_timestamp
+from strategies.event_driven.models import ScheduledEvent, parse_timestamp
 
 
 CSV_FIELDS = (

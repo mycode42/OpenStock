@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 
-from src.algo.strategies.indicators import average_true_range
-from src.algo.strategies.swing_common import (
+from strategies.indicators import average_true_range
+from strategies.swing_common import (
     CachedDailyBarHistory, SwingSignal, clean_daily_bars, held_sessions,
     position_entry_price,
 )

@@ -10,18 +10,18 @@ import sys
 
 import requests
 
-from src.algo.cpu import available_cpu_count
-from src.config import get_algo_runtime_settings
+from autoresearch.cpu import available_cpu_count
+from portfolio.config import get_algo_runtime_settings
 
-from .adaptive import add_cli_commands as _add_adaptive_commands
-from .files import _atomic_json
-from .portfolio_simulation import run_coordinated_portfolio
+from .pipeline.cli import add_cli_commands as _add_adaptive_commands
+from .artifacts.files import _atomic_json
+from .validation.portfolio_simulation import run_coordinated_portfolio
 from .settings import DEFAULT_OUTPUT_DIR, LIVE_RESEARCH_STRATEGIES
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m src.algo.research",
+        prog="python -m autoresearch",
         description="Run adaptive Algo discovery, rolling verification, and portfolio replay",
     )
     commands = parser.add_subparsers(dest="command", required=True)

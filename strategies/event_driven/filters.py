@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from src.algo.strategies.event_driven.config import EventStrategyConfig
-from src.algo.strategies.event_driven.models import ScheduledEvent
+from strategies.event_driven.config import EventStrategyConfig
+from strategies.event_driven.models import ScheduledEvent
 
 
 class EventFilter:

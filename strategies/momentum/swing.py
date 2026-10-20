@@ -7,7 +7,7 @@ from datetime import date
 import math
 from statistics import mean
 
-from src.algo.strategies.swing_common import SwingSignal, clean_daily_bars, held_sessions, position_entry_price
+from strategies.swing_common import SwingSignal, clean_daily_bars, held_sessions, position_entry_price
 
 
 @dataclass(frozen=True)

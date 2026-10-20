@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Trade Executor — Takes Agent's JSON decisions and executes via Alpaca.
+Order execution — validates and submits approved decisions through Alpaca.
 
 Input: JSON on stdin or --file with format:
 {
@@ -19,12 +19,12 @@ Order types: market (default), limit, bracket, stop, oco, trailing_stop
 Actions: buy, sell, hold, short, cover
 
 Usage:
-  echo '{"trades":[...]}' | poetry run python execute_trades.py
-  poetry run python execute_trades.py --file decisions.json
-  poetry run python execute_trades.py --file decisions.json --dry-run
-  poetry run python execute_trades.py --flatten               # Sell all positions at market
-  poetry run python execute_trades.py --flatten --dry-run     # Preview flatten
-  poetry run python execute_trades.py --mode algo --file decisions.json
+  echo '{"trades":[...]}' | poetry run python -m execution
+  poetry run python -m execution --file decisions.json
+  poetry run python -m execution --file decisions.json --dry-run
+  poetry run python -m execution --flatten               # Sell all positions at market
+  poetry run python -m execution --flatten --dry-run     # Preview flatten
+  poetry run python -m execution --mode algo --file decisions.json
 """
 
 import argparse
@@ -43,30 +43,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Kept on this compatibility module so existing integrations can patch the
-# shared requests/time modules through ``execute_trades``.
 import requests
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [execute_trades] %(levelname)s — %(message)s",
+    format="%(asctime)s [execution] %(levelname)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-log = logging.getLogger("execute_trades")
+log = logging.getLogger("execution.runner")
 
-from src.accounts import get_account_for_mode, verify_account_for_mode
-from src.market_calendar import get_market_schedule
-from src.execution import batch, broker, liquidation, orders
-from src.execution.liquidation import LiquidationHooks
-from src.execution.orders import OrderHooks
+from broker.accounts import get_account_for_mode, verify_account_for_mode
+from market.calendar import get_market_schedule
+from execution import batch, broker, liquidation, orders
+from execution.liquidation import LiquidationHooks
+from execution.orders import OrderHooks
 
-from src.config import ALGO_SERVICE_CONFIG, get_mode_config
+from portfolio.config import ALGO_SERVICE_CONFIG, get_mode_config
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from runtime.paths import DATA_DIR, ROOT
+
+REPO_ROOT = ROOT
 API_BASE = broker.API_BASE
 DATA_BASE = broker.DATA_BASE
 MARKET_TZ = ZoneInfo("America/New_York")
-LOCK_DIR = REPO_ROOT / "data" / "locks"
+LOCK_DIR = DATA_DIR / "locks"
 
 # Module-level mode — set once in main(), used by helpers
 _active_mode: str = "algo"
@@ -77,19 +77,19 @@ def _headers(mode: str = None) -> dict:
     return get_account_for_mode(mode or _active_mode).headers
 
 
-# V2 risk manager — required for every non-hold order
+# risk validator — required for every non-hold order
 try:
-    from risk_manager import (
+    from execution.risk import (
         validate_trade as rm_validate_trade,
         get_portfolio_state as rm_get_portfolio_state,
         stage_approved_trade as rm_stage_approved_trade,
     )
 
-    RISK_MANAGER_AVAILABLE = True
-    log.info("V2 risk manager loaded")
+    RISK_VALIDATOR_AVAILABLE = True
+    log.info("risk validator loaded")
 except ImportError:
-    RISK_MANAGER_AVAILABLE = False
-    log.error("risk_manager.py not found — all orders will be blocked")
+    RISK_VALIDATOR_AVAILABLE = False
+    log.error("execution.risk is unavailable — all orders will be blocked")
 
 
 def get_account():
@@ -274,7 +274,7 @@ def get_daily_pnl(account: dict) -> float:
 
 def _verify_algo_execution_lease() -> None:
     """Permit Algo writes only from the currently leased coordinator process."""
-    from src.algo.state_store import AlgoStateStore
+    from portfolio.state_store import AlgoStateStore
 
     state_path = Path(ALGO_SERVICE_CONFIG["state_file"])
     if not state_path.is_absolute():
@@ -299,12 +299,6 @@ def validate_position_reduction(ticker, action, qty, positions):
         return False, f"Cover quantity {qty} exceeds the {abs(current_shares):g} short shares in {ticker}"
 
     return True, ""
-
-
-def main() -> int:
-    from src.execution.cli import main as cli_main
-
-    return cli_main()
 
 
 def _run_main(args: argparse.Namespace, mode: str) -> int:
@@ -357,10 +351,10 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
 
     # Pre-fetch V2 portfolio state once (shared across all trade validations)
     rm_portfolio_state = None
-    if RISK_MANAGER_AVAILABLE:
+    if RISK_VALIDATOR_AVAILABLE:
         try:
             rm_portfolio_state = rm_get_portfolio_state(mode=mode)
-            log.info("V2 risk manager portfolio state loaded")
+            log.info("risk validator portfolio state loaded")
         except Exception as e:
             log.warning(f"Could not pre-fetch V2 portfolio state: {e}. Will validate per-trade.")
 
@@ -372,7 +366,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
         positions=positions,
         rm_portfolio_state=rm_portfolio_state,
         hooks=batch.BatchHooks(
-            risk_manager_available=RISK_MANAGER_AVAILABLE,
+            risk_validator_available=RISK_VALIDATOR_AVAILABLE,
             rm_validate_trade=rm_validate_trade,
             rm_stage_approved_trade=rm_stage_approved_trade,
             get_latest_ask=get_latest_ask,
@@ -421,7 +415,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
     # Auto-log to trade journal
     if not args.dry_run:
         try:
-            from trade_journal import append_trades
+            from reporting.journal import append_trades
 
             logged = append_trades(output)
             print(f"📓 Logged {logged} trades to journal", file=sys.stderr)
@@ -429,7 +423,3 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             print(f"⚠️ Journal logging failed: {e}", file=sys.stderr)
 
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

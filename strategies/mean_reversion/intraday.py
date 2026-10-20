@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from src.algo.strategies.indicators import (
+from strategies.indicators import (
     adx, closes, efficiency_ratio, moving_average, population_std, rsi,
 )
-from src.algo.strategies.signals import Signal
+from strategies.signals import Signal
 
 
 def signal(

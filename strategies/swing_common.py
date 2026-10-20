@@ -7,13 +7,13 @@ import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.algo.strategies.signals import Signal
+from strategies.signals import Signal
 
 
 ET = ZoneInfo("America/New_York")
 
 try:
-    from src.algo.strategies._swing_common_cy import clean_daily_bars as _clean_daily_bars_cy
+    from strategies._swing_common_cy import clean_daily_bars as _clean_daily_bars_cy
 except ImportError:
     _clean_daily_bars_cy = None
 

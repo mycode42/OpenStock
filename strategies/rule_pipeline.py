@@ -6,15 +6,15 @@ from datetime import datetime
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from src.algo.strategies.catalog import STRATEGY_CATALOG
-from src.algo.strategies.indicators import adx, closes, efficiency_ratio, moving_average
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
-from src.algo.strategies.signals import Signal
-from src.config import get_algo_runtime_settings
-from src.algo.strategies.swing_common import SwingSignal
-from src.algo.strategies.mean_reversion.swing import SwingMeanReversionConfig
-from src.algo.strategies.momentum.swing import SwingMomentumConfig
-from src.algo.strategies.trend_following.swing import SwingTrendConfig
+from strategies.catalog import STRATEGY_CATALOG
+from strategies.indicators import adx, closes, efficiency_ratio, moving_average
+from strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
+from strategies.signals import Signal
+from portfolio.config import get_algo_runtime_settings
+from strategies.swing_common import SwingSignal
+from strategies.mean_reversion.swing import SwingMeanReversionConfig
+from strategies.momentum.swing import SwingMomentumConfig
+from strategies.trend_following.swing import SwingTrendConfig
 
 
 ET = ZoneInfo("America/New_York")
@@ -221,7 +221,7 @@ def evaluate_rule_signal(
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
     # Stop distances are live risk settings, not research-tunable signal
     # parameters. Apply the horizon-specific Algo values after profile merge.
-    from src.algo.config import ALGO_MODE_CONFIG
+    from portfolio.config import ALGO_MODE_CONFIG
     algo_risk = ALGO_MODE_CONFIG["risk"]
     if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
         params["hard_stop_pct"] = algo_risk["stop_loss_pct_by_strategy"][name]
@@ -233,14 +233,14 @@ def evaluate_rule_signal(
 
     if name == "swing_mean_reversion":
         config = SwingMeanReversionConfig.from_dict(rule_params)
-        from src.algo.strategies.mean_reversion.swing import signal as swing_signal
+        from strategies.mean_reversion.swing import signal as swing_signal
         return swing_signal(
             ticker, bars, position_qty=position_qty, parameters=config.to_dict(),
             entry_at=entry_at, entry_price=entry_price, position_target=position_target,
         )
 
     if name in {"trend_following", "swing_trend_following"}:
-        from src.algo.strategies.trend_following.swing import signal as swing_trend_signal
+        from strategies.trend_following.swing import signal as swing_trend_signal
         config = _trend_config(rule_params)
         return swing_trend_signal(
             ticker, bars, position_qty=position_qty, parameters=config,

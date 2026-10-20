@@ -12,16 +12,16 @@ import statistics
 
 from .config import BAR_MINUTES, ET, MIN_REGIME_DAILY_BARS, STRATEGY_NAMES
 from .market_sessions import market_session
-from src.algo.strategies.catalog import INTRADAY_STRATEGIES
-from src.algo.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
-from src.algo.strategies.portfolio_coordinator import strategy_priority
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
-from src.config import STRATEGY_CONFIG
+from strategies.catalog import INTRADAY_STRATEGIES
+from strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
+from strategies.portfolio_coordinator import strategy_priority
+from strategies.registry import ALGO_DEFAULT_PARAMETERS
+from portfolio.config import STRATEGY_CONFIG
 
 
 class ReplayLoopMixin:
     def run(self) -> dict:
-        logger = logging.getLogger("risk_manager")
+        logger = logging.getLogger("execution.risk")
         previous_level = logger.level
         logger.setLevel(logging.ERROR)
         try:

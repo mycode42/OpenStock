@@ -11,7 +11,9 @@ from pathlib import Path
 import tempfile
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+from runtime.paths import ROOT
+
+REPOSITORY_ROOT = ROOT
 DEFAULT_AI_SIGNAL_FILE = REPOSITORY_ROOT / "data" / "algo" / "event_driven" / "signals.json"
 MAX_SNAPSHOT_AGE = timedelta(hours=4)
 

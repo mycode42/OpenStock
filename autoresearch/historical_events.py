@@ -25,14 +25,14 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
-from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
-from src.algo.strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
-from src.algo.strategies.event_driven.models import ScheduledEvent
-from src.algo.strategies.universe import configured_universe
+from market.store import DEFAULT_DB, SQLiteBarStore
+from strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
+from strategies.event_driven.models import ScheduledEvent
+from strategies.universe import configured_universe
 
 
 LOG = logging.getLogger("historical_events")
-ROOT = Path(__file__).resolve().parents[3]
+from runtime.paths import ROOT
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"

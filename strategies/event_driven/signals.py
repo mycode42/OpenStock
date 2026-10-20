@@ -5,14 +5,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from src.algo.strategies.event_driven.calendar import EventCalendar
-from src.algo.strategies.event_driven.config import EventStrategyConfig
-from src.algo.strategies.event_driven.filters import EventFilter
-from src.algo.strategies.event_driven.models import ScheduledEvent
-from src.algo.strategies.event_driven.reactions import EventSignal, daily_event_reaction
-from src.algo.strategies.event_driven.ai import AIEventSignalBook, DEFAULT_AI_SIGNAL_FILE
-from src.algo.strategies.swing_common import clean_daily_bars, held_sessions, position_entry_price
-from src.algo.strategies.signals import Signal
+from strategies.event_driven.calendar import EventCalendar
+from strategies.event_driven.config import EventStrategyConfig
+from strategies.event_driven.filters import EventFilter
+from strategies.event_driven.models import ScheduledEvent
+from strategies.event_driven.reactions import EventSignal, daily_event_reaction
+from strategies.event_driven.ai import AIEventSignalBook, DEFAULT_AI_SIGNAL_FILE
+from strategies.swing_common import clean_daily_bars, held_sessions, position_entry_price
+from strategies.signals import Signal
 
 
 ET = ZoneInfo("America/New_York")

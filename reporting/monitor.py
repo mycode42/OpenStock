@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -13,18 +12,19 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 
-ROOT = Path(__file__).resolve().parents[2]
+from runtime.paths import DATA_DIR, ROOT
+from runtime.systemd import service_is_active
 load_dotenv(ROOT / ".env", override=True)
 
-from risk_manager import get_portfolio_state  # noqa: E402
-from src.algo.alpaca import AlgoAlpaca  # noqa: E402
-from src.algo.state_store import AlgoStateStore, StateStoreError  # noqa: E402
-from src.algo.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG  # noqa: E402
+from execution.risk import get_portfolio_state  # noqa: E402
+from broker.algo import AlgoAlpaca  # noqa: E402
+from portfolio.state_store import AlgoStateStore, StateStoreError  # noqa: E402
+from portfolio.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG  # noqa: E402
 
 
 ET = ZoneInfo("America/New_York")
 STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
-SNAPSHOT_PATH = ROOT / "data" / "algo_monitor_snapshot.json"
+SNAPSHOT_PATH = DATA_DIR / "algo_monitor_snapshot.json"
 ALGO_JOURNAL_MODES = {"algo"}
 
 
@@ -34,17 +34,6 @@ def _read_json(path: Path) -> dict:
         return value if isinstance(value, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
-
-
-def _systemd_active(unit: str) -> bool:
-    try:
-        return subprocess.run(
-            ["systemctl", "is-active", "--quiet", unit],
-            check=False,
-            timeout=5,
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
 
 
 def _journal_rows(path: Path) -> tuple[list[str], list[dict]]:
@@ -310,7 +299,7 @@ def build_report() -> dict:
     else:
         risk_summary = {"error": "unavailable"}
 
-    active_units = ["algo-trader.service"] if _systemd_active("algo-trader.service") else []
+    active_units = ["algo-trader.service"] if service_is_active("algo-trader.service") is True else []
     last_scan_at = portfolio.get("last_scan_at")
     last_successful_scan_at = portfolio.get("last_successful_scan_at") or last_scan_at
     scan_age_seconds = None

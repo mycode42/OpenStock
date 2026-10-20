@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import date
 from zoneinfo import ZoneInfo
 
-from src.config import get_mode_config
-from src.algo.strategies.multi_factor.config import MultiFactorConfig
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
-from src.algo.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
+from portfolio.config import get_mode_config
+from strategies.multi_factor.config import MultiFactorConfig
+from strategies.registry import ALGO_DEFAULT_PARAMETERS
+from portfolio.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
 
 ET = ZoneInfo("America/New_York")
 

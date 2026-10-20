@@ -1,0 +1,29 @@
+[Unit]
+Description=Algo Trader autonomous strategy portfolio daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/algo-trader
+EnvironmentFile=/opt/algo-trader/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/local/bin/poetry run python -m portfolio.daemon --mode algo
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/algo-trader/data /run/lock
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=algo-trader
+
+[Install]
+WantedBy=multi-user.target

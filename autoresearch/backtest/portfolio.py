@@ -25,23 +25,23 @@ except ImportError:
     from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin
 from .replay import ReplayLoopMixin
-from src.algo.strategies.event_driven import (
+from strategies.event_driven import (
     EventCalendar, EventSignalGenerator, EventStrategyConfig,
 )
-from src.algo.strategies.multi_factor.config import MultiFactorConfig
-from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
-from src.algo.strategies.multi_factor.signals import SignalGenerator
-from src.algo.strategies.portfolio_coordinator import (
+from strategies.multi_factor.config import MultiFactorConfig
+from strategies.multi_factor.features import aggregate_intraday_bars
+from strategies.multi_factor.signals import SignalGenerator
+from strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig,
 )
-from src.algo.strategies.regime import _cached_feature_history, rank_strategies
-from src.algo.config import ALGO_REGIME_CONFIG
-from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
-from src.algo.strategies.rule_pipeline import evaluate_rule_signal
-from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
-from src.algo.strategies.swing_common import CachedDailyBarHistory
-from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings, get_mode_config
-from risk_manager import _get_universe_maps, validate_trade
+from strategies.regime import _cached_feature_history, rank_strategies
+from portfolio.config import ALGO_REGIME_CONFIG
+from strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
+from strategies.rule_pipeline import evaluate_rule_signal
+from strategies.satellite_overlay import SatelliteOverlayConfig
+from strategies.swing_common import CachedDailyBarHistory
+from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings, get_mode_config
+from execution.risk import _get_universe_maps, validate_trade
 
 
 class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportingMixin, ReplayLoopMixin):

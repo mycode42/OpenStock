@@ -13,28 +13,28 @@ from time import perf_counter
 from types import SimpleNamespace
 from uuid import uuid4
 
-from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings
-from src.algo.cpu import available_cpu_count
-from src.algo.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
-from src.algo.market_store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
-from src.algo.strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
-from src.algo.strategies.registry import refresh_active_parameter_profile
-from src.market_data import data_tier, regular_feed
+from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings
+from autoresearch.cpu import available_cpu_count
+from portfolio.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
+from market.store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
+from strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
+from strategies.registry import refresh_active_parameter_profile
+from market.data import data_tier, regular_feed
 
-from .adaptive_pipeline import (
+from .pipeline.adaptive_pipeline import (
     ADAPTIVE_PIPELINE_VERSION, ADAPTIVE_VERIFICATION_VERSION,
     run_adaptive_discoveries, run_adaptive_verifications,
 )
-from .artifact_cache import read_json, research_data_version, stable_hash
+from .artifacts.artifact_cache import read_json, research_data_version, stable_hash
 from .data import (
     _latest_dates, _load_daily_history,
     _refresh_incremental as _refresh_incremental_impl,
     load_algo_universe,
 )
-from .files import _atomic_json, _research_lock
-from .fitness_timeline import _attach_fitness_timeline
-from .live_manifest import live_configuration_manifest
-from .research_ledger import ResearchLedger
+from .artifacts.files import _atomic_json, _research_lock
+from .artifacts.fitness_timeline import _attach_fitness_timeline
+from .artifacts.live_manifest import live_configuration_manifest
+from .artifacts.research_ledger import ResearchLedger
 from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
     ADAPTIVE_VERIFICATION_CANDIDATES,
@@ -117,7 +117,7 @@ def run_daily_research(args) -> dict:
             f"is {latest_age_days} calendar days old"
         )
 
-    from .final_holdout import (
+    from .validation.final_holdout import (
         advance_final_holdout, holdout_is_quarantining, initialize_final_holdout,
         read_final_holdout_state,
     )
@@ -142,7 +142,7 @@ def run_daily_research(args) -> dict:
         database, start=warmup_start, end=cohort_end,
         symbols=[*covered_symbols, *context_symbols], feed=FEED, adjustment=ADJUSTMENT,
     )
-    from src.algo.regime_macro import load_fred_regime_series
+    from market.regime import load_fred_regime_series
 
     macro_series, macro_diagnostics = load_fred_regime_series(
         store, refresh=not args.no_refresh,
@@ -159,7 +159,7 @@ def run_daily_research(args) -> dict:
         start=RESEARCH_START - timedelta(days=ALGO_REGIME_WARMUP_CALENDAR_DAYS),
         end=cohort_end, symbols=[], feed=FEED, adjustment=ADJUSTMENT,
     )
-    from src.algo.strategies.multi_factor.fundamentals import load_point_in_time_fundamentals
+    from strategies.multi_factor.fundamentals import load_point_in_time_fundamentals
 
     try:
         equity_symbols = [symbol for symbol in covered_symbols if symbol in ALGO_FACTOR_SECTOR_BY_SYMBOL]
@@ -264,7 +264,7 @@ def run_daily_research(args) -> dict:
     factor_path = cohort_dir / "factor_model.json"
     factor_cached, _ = read_json(factor_path)
     from .factor_research import COST_MODEL_VERSION, LOGIC_VERSION, train_factor_model
-    from .tree_factor_models import TREE_LOGIC_VERSIONS
+    from strategies.multi_factor.tree_models import TREE_LOGIC_VERSIONS
 
     factor_fingerprint = stable_hash({
         "cohort_fingerprint": fingerprint,
@@ -343,7 +343,7 @@ def run_daily_research(args) -> dict:
         "Rolling verification finished: %s in %.1fs",
         adaptive_verification.get("status"), adaptive_verification_seconds,
     )
-    from .drift_monitor import update_research_drift_monitor
+    from .validation.drift_monitor import update_research_drift_monitor
 
     completed_holdout = holdout_report.get("result") or {}
     holdout_end = (completed_holdout.get("holdout_range") or {}).get("end")
@@ -375,7 +375,7 @@ def run_daily_research(args) -> dict:
             and (cached.get("portfolio_coordinator_replay") or {}).get("profile_selection_source") == portfolio_source
         ):
             validation_started = perf_counter()
-            from .forward_validation import run_forward_validation_cycle
+            from .validation.forward_validation import run_forward_validation_cycle
 
             forward_validation = run_forward_validation_cycle(
                 discovery=adaptive_discovery, verification=adaptive_verification,
@@ -487,7 +487,7 @@ def run_daily_research(args) -> dict:
     }
     if args.factor_only:
         validation_started = perf_counter()
-        from .forward_validation import run_forward_validation_cycle
+        from .validation.forward_validation import run_forward_validation_cycle
 
         forward_validation = run_forward_validation_cycle(
             discovery=adaptive_discovery, verification=adaptive_verification,
@@ -566,7 +566,7 @@ def run_daily_research(args) -> dict:
             logger.info("Portfolio replay: reusing cached result")
         else:
             logger.info("Portfolio replay starting for %d active strategies", len(LIVE_RESEARCH_STRATEGIES))
-            from .portfolio_simulation import run_coordinated_portfolio
+            from .validation.portfolio_simulation import run_coordinated_portfolio
 
             portfolio_args = SimpleNamespace(
                 strategies=",".join(LIVE_RESEARCH_STRATEGIES),
@@ -602,7 +602,7 @@ def run_daily_research(args) -> dict:
 
     factor_ic = (factor_report.get("adaptive_prequential_ic") or {}).get("mean_spearman_ic")
     validation_started = perf_counter()
-    from .forward_validation import run_forward_validation_cycle
+    from .validation.forward_validation import run_forward_validation_cycle
 
     forward_validation = run_forward_validation_cycle(
         discovery=adaptive_discovery, verification=adaptive_verification,

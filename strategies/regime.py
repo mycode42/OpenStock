@@ -5,12 +5,12 @@ from __future__ import annotations
 import math
 from threading import RLock
 
-from src.algo.strategies.indicators import closes, moving_average
-from src.algo.strategies.regime_features import (
+from strategies.indicators import closes, moving_average
+from strategies.regime_features import (
     FEATURE_SETS, MODEL_CORE_FEATURES, MODEL_EXTENDED_FEATURES,
     compute_regime_feature_history,
 )
-from src.algo.strategies.regime_models import infer_regime_model
+from strategies.regime_models import infer_regime_model
 
 
 REGIME_ENGINE_VERSION = "2"

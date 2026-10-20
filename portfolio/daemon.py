@@ -16,19 +16,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.algo.alpaca import AlgoAccountMismatchError, AlgoAlpaca
-from src.algo.incidents import open_incident_symbols, record_incident
-from src.algo.protection_recovery import recover_broker_protection
-from src.algo.protection_sync import sync_broker_stops
-from src.algo.reconciliation import reconcile_startup
-from src.algo.sessions import ET, get_trading_window, next_session_start
-from src.algo.state_store import AlgoStateStore, StateStoreError
-from src.algo.config import ALGO_SERVICE_CONFIG
-from src.config import STRATEGY_CONFIG
-from src.algo.strategies.runner import execute_trades as execute_strategy_trades
-from src.algo.strategies.runner import scan as scan_strategy_portfolio
-from src.algo.strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
-from src.algo.strategies.universe import configured_universe, load_algo_universe
+from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
+from portfolio.incidents import open_incident_symbols, record_incident
+from portfolio.protection.recovery import recover_broker_protection
+from portfolio.protection.sync import sync_broker_stops
+from portfolio.reconciliation import reconcile_startup
+from market.sessions import ET, get_trading_window, next_session_start
+from portfolio.state_store import AlgoStateStore, StateStoreError
+from portfolio.config import ALGO_SERVICE_CONFIG
+from portfolio.config import STRATEGY_CONFIG
+from execution.strategy import execute_strategy_trades
+from strategies.runner.scan import scan as scan_strategy_portfolio
+from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
+from strategies.universe import configured_universe, load_algo_universe
 
 
 LOG = logging.getLogger("algo_trader.algo")
@@ -46,7 +46,8 @@ class ReconciliationOrders:
 def _state_path() -> Path:
     path = Path(ALGO_SERVICE_CONFIG["state_file"])
     if not path.is_absolute():
-        path = Path(__file__).resolve().parents[2] / path
+        from runtime.paths import ROOT
+        path = ROOT / path
     return path
 
 

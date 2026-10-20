@@ -1,4 +1,4 @@
-"""Shared deterministic portfolio constraints applied before risk_manager."""
+"""Shared deterministic portfolio constraints applied before execution risk checks."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ import math
 from typing import Mapping
 from zoneinfo import ZoneInfo
 
-from src.algo.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
-from src.algo.strategies.catalog import (
+from portfolio.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
+from strategies.catalog import (
     INTRADAY_STRATEGIES,
     SATELLITE_STRATEGIES, SWING_CORE_STRATEGIES, SWING_STRATEGIES,
 )
-from src.config import get_algo_runtime_settings, get_mode_config
+from portfolio.config import get_algo_runtime_settings, get_mode_config
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -22,7 +22,7 @@ ET = ZoneInfo("America/New_York")
 
 @dataclass(frozen=True)
 class PortfolioCoordinatorConfig:
-    """Portfolio-level ceilings; risk_manager remains the final authority."""
+    """Portfolio-level ceilings; execution risk checks remain the final authority."""
 
     max_name_pct: float = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_name_pct"]
     max_gross_pct: float = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_gross_pct"]

@@ -7,9 +7,9 @@ import json
 import math
 from pathlib import Path
 
-from src.algo.profile_store import RESEARCH_ROOT
-from src.algo.strategies.multi_factor.config import SUPPORTED_FACTORS
-from src.algo.research.tree_factor_models import TREE_LOGIC_VERSIONS
+from portfolio.profile_store import RESEARCH_ROOT
+from strategies.multi_factor.config import SUPPORTED_FACTORS
+from strategies.multi_factor.tree_models import TREE_LOGIC_VERSIONS
 
 
 DEFAULT_MODEL_REPORT = RESEARCH_ROOT / "layers" / "latest.json"

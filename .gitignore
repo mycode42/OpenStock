@@ -27,6 +27,7 @@ ENV/
 # Environment Variables
 .env
 /MEMORY.md
+/ops/openclaw/MEMORY.md
 
 # IDE
 .idea/
@@ -69,9 +70,6 @@ outputs/
 # Alembic (keep migration files, but ignore generated/cache files)
 app/backend/alembic/versions/__pycache__/.cache/
 .cache/
-autoresearch/data_cache/
 
 # Runtime data (generated per-deployment)
-snapshots/
 data/
-autoresearch/experiments/

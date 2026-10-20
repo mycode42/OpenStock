@@ -7,8 +7,8 @@ from statistics import mean, pstdev
 
 import numpy as np
 
-from src.algo.strategies.multi_factor.config import MultiFactorConfig
-from src.algo.research.tree_factor_models import predict_tree_factor_model
+from strategies.multi_factor.config import MultiFactorConfig
+from strategies.multi_factor.tree_models import predict_tree_factor_model
 
 
 def _quantile(values: list[float], fraction: float) -> float:

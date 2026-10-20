@@ -1,6 +1,6 @@
 # Algo adaptive research
 
-The scheduled entry point is `python -m src.algo.research.auto_research`.
+The scheduled entry point is `python -m autoresearch.auto_research`.
 It refreshes and fingerprints SIP data, runs a new seeded discovery search on
 every invocation, reuses compatible rolling verification results, then replays
 the verified selections through the portfolio coordinator when needed.
@@ -31,20 +31,20 @@ Standalone commands are available for adaptive search, adaptive rolling
 verification, and coordinator replay:
 
 ```bash
-python -m src.algo.research adaptive-search --strategy momentum --end 2026-10-09
-python -m src.algo.research adaptive-search --strategy momentum \
+python -m autoresearch adaptive-search --strategy momentum --end 2026-10-09
+python -m autoresearch adaptive-search --strategy momentum \
   --end 2026-10-09 --search-iterations 5
-python -m src.algo.research adaptive-walk-forward --strategy momentum \
+python -m autoresearch adaptive-walk-forward --strategy momentum \
   --start 2024-01-01 --end 2026-10-09 \
   --train-window-options 10 20 30 --test-days 63 --step-days 63
-python -m src.algo.research portfolio --workers 8
+python -m autoresearch portfolio --workers 8
 ```
 
 The `research` and `optimize` profile-bank commands and the standalone
 candidate-profile walk-forward runner have been removed. The remaining
 walk-forward implementation is the rolling verification stage in
-`adaptive.py`; it owns its fold construction, fitting, and out-of-sample
-evaluation.
+`pipeline/adaptive_verification.py`; it owns fold construction, fitting, and
+out-of-sample evaluation.
 
 Discovery always advances each strategy's persistent search sequence and can
 use eligible archive members as parents even when the quote window is unchanged.
@@ -77,19 +77,15 @@ the current run with `tail -f data/research/algo-auto/logs/auto-research.log`.
 When `--output-dir` is set, the log is written under that directory instead.
 
 `auto_research.py` owns the scheduled entry point and top-level orchestration.
-`adaptive_pipeline.py` runs discovery, rolling verification, and coordinator
-artifact generation; `fitness_timeline.py` records scorecards and run comparisons.
-`adaptive.py` keeps the CLI and compatibility entry points. Its implementation
-lives in `adaptive_search.py` (scoring, replay, candidate search, and fit-window
-selection), `adaptive_discovery.py` (recent-window search and incumbent reuse),
-`adaptive_verification.py` (rolling out-of-sample folds and stitched scoring),
-and `adaptive_common.py` (argument validation and artifact writing).
-`portfolio_simulation.py` replays verified selections, `data.py` handles SIP
-data and event preparation, and `factor_research.py` fits Multi Factor
-diagnostics. Event history and live calendar refresh remain available through
-their package commands:
+The `pipeline/` package runs adaptive discovery and rolling verification;
+`artifacts/` owns research ledgers, candidate archives, caches, and scorecards;
+`validation/` owns out-of-sample checks, robustness analysis, and portfolio
+replay. `backtest/` owns deterministic replay, while `benchmarks/` contains
+profiling tools. `data.py` handles SIP data preparation and `factor_research.py`
+fits Multi Factor diagnostics. Event history and live calendar refresh remain
+available through their package commands:
 
 ```bash
-python -m src.algo.research.historical_events --start 2024-01-01
-python -m src.algo.research.event_calendar_refresh
+python -m autoresearch.historical_events --start 2024-01-01
+python -m autoresearch.event_calendar_refresh
 ```

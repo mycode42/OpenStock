@@ -2,11 +2,11 @@
 
 import argparse
 
-from src.execution import runner
+from execution import runner
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Execute Agent's trade decisions")
+    parser = argparse.ArgumentParser(description="Execute validated trade decisions")
     parser.add_argument("--file", type=str, help="JSON file with trade decisions")
     parser.add_argument("--dry-run", action="store_true", help="Validate but don't execute")
     parser.add_argument(

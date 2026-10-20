@@ -22,10 +22,10 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
-from src.algo.alpaca import AlgoAlpaca
-from src.algo.strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
-from src.algo.strategies.event_driven.models import ScheduledEvent
-from src.algo.strategies.universe import configured_universe
+from broker.algo import AlgoAlpaca
+from strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
+from strategies.event_driven.models import ScheduledEvent
+from strategies.universe import configured_universe
 
 
 LOG = logging.getLogger("algo_event_calendar")
@@ -63,7 +63,8 @@ MACRO_RELEASES = (
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    from runtime.paths import ROOT
+    return ROOT
 
 
 def _coordinator_universe() -> list[str]:

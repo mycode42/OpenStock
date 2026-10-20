@@ -1,6 +1,6 @@
 # Algo backtest package
 
-`src.algo.backtest` remains the public import and command path. The package
+`autoresearch.backtest` remains the public import and command path. The package
 separates the deterministic replay by responsibility:
 
 - `portfolio.py` builds replay state and composes the replay mixins.

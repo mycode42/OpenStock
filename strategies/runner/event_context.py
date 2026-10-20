@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from src.algo.strategies.event_driven import EventCalendar, EventSignalGenerator
-from src.algo.strategies.event_driven.ai import AIEventSignalBook, DEFAULT_AI_SIGNAL_FILE
+from strategies.event_driven import EventCalendar, EventSignalGenerator
+from strategies.event_driven.ai import AIEventSignalBook, DEFAULT_AI_SIGNAL_FILE
 
 
 @dataclass(frozen=True)

@@ -13,13 +13,13 @@ import requests
 
 from .config import REGIME_WARMUP_DAYS, ET
 from .config import multi_factor_warmup_days, validate_research_controls, validate_strategy_filter
-from src.algo.market_store import SQLiteBarStore, fetch_alpaca_bars
-from src.algo.strategies.event_driven import EventCalendar
-from src.algo.strategies.registry import validate_parameter_profile
-from src.algo.config import ALGO_PORTFOLIO_UNIVERSE
-from src.algo.config import ALGO_REGIME_CONFIG
-from src.algo.regime_macro import load_fred_regime_series
-from src.market_data import data_tier, regular_feed
+from market.store import SQLiteBarStore, fetch_alpaca_bars
+from strategies.event_driven import EventCalendar
+from strategies.registry import validate_parameter_profile
+from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
+from portfolio.config import ALGO_REGIME_CONFIG
+from market.regime import load_fred_regime_series
+from market.data import data_tier, regular_feed
 
 
 def _split_symbols(value: str) -> list[str]:
