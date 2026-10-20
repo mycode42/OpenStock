@@ -103,6 +103,16 @@ def _same_decision(recovery: dict, entry_id: str, qty: Decimal, stop: Decimal, t
     )
 
 
+def _definitive_extended_hours_rejection(recovery: dict) -> bool:
+    """Whether Alpaca definitively rejected an OCO for extended-hours eligibility."""
+    error = str(recovery.get("last_error") or "").lower()
+    return (
+        str(recovery.get("submission_status") or "").lower() in {"failed", "rejected"}
+        and "40310000" in error
+        and "oco orders do not support extended hours trading" in error
+    )
+
+
 def _lookup_matches(order: dict, symbol: str, recovery: dict) -> bool:
     expected_side = str(recovery.get("side") or "sell").lower()
     return (
@@ -314,7 +324,13 @@ def recover_broker_protection(
             report["waiting"].append(f"{symbol}: OCO submission deferred until regular hours")
             continue
 
-        same = isinstance(recovery, dict) and _same_decision(recovery, entry_id, quantity, stop, target)
+        # This specific broker 403 proves the prior client ID was rejected,
+        # so retry the unchanged protection decision with a fresh ID in RTH.
+        same = (
+            isinstance(recovery, dict)
+            and _same_decision(recovery, entry_id, quantity, stop, target)
+            and not _definitive_extended_hours_rejection(recovery)
+        )
         previous_age = _age_seconds(now, recovery.get("last_submission_at") or recovery.get("prepared_at")) if client_id else None
         if client_id and (previous_age is None or previous_age < RETRY_SECONDS):
             report["waiting"].append(f"{symbol}: waiting for prior OCO decision to settle")
