@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Risk Manager — Hard rules enforcer for Swarm Trader.
+Risk Manager — Hard rules enforcer for Algo Trader.
 
 Every proposed trade passes through validate_trade() before execution.
 Rules are non-negotiable and code-enforced; no LLM can override them.
 
 Usage (standalone check):
   poetry run python risk_manager.py --status
-  poetry run python risk_manager.py --status --mode day
   poetry run python risk_manager.py --status --mode algo
 
 Importable:
@@ -36,7 +35,6 @@ load_dotenv(override=True)
 import requests
 
 from src.config import get_mode_config
-from src.market_calendar import get_day_schedule
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +48,7 @@ from src.accounts import get_account_for_mode, verify_account_for_mode
 API_BASE = "https://paper-api.alpaca.markets/v2"
 MARKET_TZ = ZoneInfo("America/New_York")
 
-# Leveraged ETFs — blocked in swing mode, allowed in day mode
+# Leveraged ETFs — blocked by the Algo portfolio policy.
 LEVERAGED_ETFS = {
     "TQQQ", "SOXL", "UPRO", "SPXL", "TECL", "LABU", "SOXS", "TECS",
     "SPXS", "SQQQ", "SDOW", "UDOW", "NAIL", "CURE", "HIBL", "HIBS",
@@ -113,17 +111,6 @@ def _api(endpoint: str, mode: str = None) -> dict | list:
     return r.json()
 
 
-def _is_market_session_date(timestamp_value: str, session_date: str) -> bool:
-    """Compare an Alpaca timestamp to a trading day in New York time."""
-    try:
-        timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return False
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return timestamp.astimezone(MARKET_TZ).date().isoformat() == session_date
-
-
 def _algo_session_bounds(session_date: str) -> tuple[datetime, datetime]:
     """The Algo trade date runs from the prior 20:00 ET to 20:00 ET."""
     trade_day = date.fromisoformat(session_date)
@@ -146,7 +133,7 @@ def _is_in_algo_session(timestamp_value: str, session_date: str) -> bool:
 
 
 def _get_algo_orders_since(session_start: str, mode: str) -> list[dict]:
-    """Fetch all mode orders since the ET session start using broker cursors."""
+    """Fetch Algo orders since the ET session start using broker cursors."""
     orders: list[dict] = []
     after_order_id = None
     for _ in range(100):
@@ -399,8 +386,7 @@ def get_portfolio_state(mode: str = None) -> dict:
     Fetch live portfolio state from Alpaca.
 
     Args:
-        mode: "swing", "day", or the dedicated "algo" account route.
-              Reads TRADING_MODE env if not specified.
+        mode: Algo account route; defaults to Algo.
 
     Returns a dict with:
       equity and its daily/weekly dollar baselines and P&L, cash, cash_pct,
@@ -408,11 +394,10 @@ def get_portfolio_state(mode: str = None) -> dict:
       positions (symbol → position dict),
       sector_alloc (sector → $ value),
       trade_count_today (all nonterminal long and short entry orders),
-      entry_count_today (new-position entries for Algo; long/short entries otherwise),
+      entry_count_today (new-position entries counted in the Algo session),
       open_position_count.
     """
-    if mode is None:
-        mode = os.environ.get("TRADING_MODE", "swing")
+    mode = mode or "algo"
     risk = get_mode_config(mode)["risk"]
     allow_short_positions = bool(risk.get("allow_short_positions", False))
     ticker_sector, _, _, _ = _get_universe_maps(mode)
@@ -454,31 +439,22 @@ def get_portfolio_state(mode: str = None) -> dict:
         sector = ticker_sector.get(sym, "other")
         sector_alloc[sector] = sector_alloc.get(sector, 0) + abs(market_value)
 
-    is_algo = mode == "algo"
     now_et = datetime.now(MARKET_TZ)
-    session_day = now_et.date() + timedelta(days=1) if is_algo and now_et.hour >= 20 else now_et.date()
+    session_day = now_et.date() + timedelta(days=1) if now_et.hour >= 20 else now_et.date()
     session_date = session_day.isoformat()
-    if is_algo:
-        session_start_et, _ = _algo_session_bounds(session_date)
-    else:
-        session_start_et = datetime(
-            now_et.year, now_et.month, now_et.day, tzinfo=MARKET_TZ,
-        )
+    session_start_et, _ = _algo_session_bounds(session_date)
     session_start = session_start_et.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     entry_count_today = None
     entry_count_available = True
     entry_count_error = None
     try:
-        # The same paginated New York session query is required for all
-        # accounts. A 100-order first page can omit earlier Day entries.
         orders = _get_algo_orders_since(session_start, mode=mode)
         entry_orders_today = [
             o for o in orders
             if str(o.get("side", "")).lower() in {"buy", "sell"}
             and (
                 _is_in_algo_session(o.get("submitted_at", ""), session_date)
-                if is_algo else _is_market_session_date(o.get("submitted_at", ""), session_date)
             )
             and (
                 o.get("status") not in ("canceled", "expired", "rejected")
@@ -494,14 +470,11 @@ def get_portfolio_state(mode: str = None) -> dict:
             )
         ]
         trade_count_today = len(entry_orders_today)
-        if is_algo:
-            fills = _get_algo_fill_activities(session_start, mode=mode)
-            entry_count_today = _count_algo_new_entries_today(
-                orders, fills, positions, session_date,
-            )
-            trade_count_today = entry_count_today
-        else:
-            entry_count_today = trade_count_today
+        fills = _get_algo_fill_activities(session_start, mode=mode)
+        entry_count_today = _count_algo_new_entries_today(
+            orders, fills, positions, session_date,
+        )
+        trade_count_today = entry_count_today
     except Exception as exc:
         log.warning("Could not read %s order history: %s", mode, exc)
         trade_count_today = None
@@ -616,8 +589,7 @@ def stage_approved_trade(
     action = action.lower()
     if action not in {"buy", "short"} or qty <= 0 or entry_price <= 0:
         return state
-    if mode is None:
-        mode = os.environ.get("TRADING_MODE", "swing")
+    mode = mode or "algo"
     ticker = ticker.upper()
     trade_value = int(qty) * float(entry_price)
     equity = float(state.get("equity", 0) or 0)
@@ -653,7 +625,7 @@ def stage_approved_trade(
         previous_entry_count = int(
             state.get("entry_count_today", previous_trade_count) or 0
         )
-        if mode != "algo" or is_new_position:
+        if is_new_position:
             state["entry_count_today"] = previous_entry_count + 1
 
     ticker_sector, _, _, _ = _get_universe_maps(mode)
@@ -667,11 +639,9 @@ def stage_approved_trade(
 def _snapshot_dir(mode: str) -> Path:
     """Match the account-isolated paths written by performance_tracker_v2."""
     root = Path(__file__).parent
-    if mode == "algo":
-        return root / "data" / "snapshots" / "algo"
-    if mode == "swing":
-        return root / "snapshots"
-    return root / "snapshots" / mode
+    if mode != "algo":
+        raise ValueError("Only the algo account route is supported")
+    return root / "data" / "snapshots" / "algo"
 
 
 def _risk_baseline_dir(mode: str) -> Path:
@@ -684,14 +654,14 @@ def capture_account_inception_baseline(mode: str, *, now: datetime | None = None
     This is an explicit one-time operation after an Alpaca paper-account reset.
     The first trade must not be allowed to move the baseline forward.
     """
-    if mode not in {"swing", "day", "algo"}:
-        raise ValueError("An explicit swing, day, or algo account mode is required")
+    if mode != "algo":
+        raise ValueError("An explicit algo account route is required")
     account, broker = verify_account_for_mode(mode)
     broker_id = str(broker.get("id") or "")
     if not broker_id:
         raise ValueError("Broker account has no ID")
     current = (now or datetime.now(timezone.utc)).astimezone(MARKET_TZ)
-    session_day = current.date() + timedelta(days=1) if mode == "algo" and current.hour >= 20 else current.date()
+    session_day = current.date() + timedelta(days=1) if current.hour >= 20 else current.date()
     week_start = session_day - timedelta(days=session_day.weekday())
     try:
         created_at = datetime.fromisoformat(str(broker["created_at"]).replace("Z", "+00:00"))
@@ -759,7 +729,7 @@ def _find_weekly_equity_baseline(
     *, mode: str, account_id: str | None, session_day: date | None = None,
 ) -> dict | None:
     """Return the account-bound weekly equity baseline and its provenance."""
-    mode = mode or "swing"
+    mode = mode or "algo"
     if not account_id:
         return None
     today = session_day or datetime.now(MARKET_TZ).date()
@@ -817,7 +787,7 @@ def _find_weekly_equity_baseline(
 
 def _estimate_weekly_pnl(
     current_equity: float,
-    mode: str = None,
+    mode: str = "algo",
     *,
     account_id: str | None = None,
     session_day: date | None = None,
@@ -826,7 +796,7 @@ def _estimate_weekly_pnl(
     if not math.isfinite(current_equity) or current_equity <= 0:
         return None
     baseline = _find_weekly_equity_baseline(
-        mode=mode or "swing", account_id=account_id, session_day=session_day,
+        mode=mode or "algo", account_id=account_id, session_day=session_day,
     )
     if baseline is None:
         return None
@@ -843,7 +813,7 @@ def validate_trade(
     strategy: str | None = None,
 ) -> ValidationResult:
     """
-    Validate a proposed trade against all hard rules for the given mode.
+    Validate a proposed trade against Algo's hard risk rules.
 
     Args:
         ticker:           Stock symbol (e.g. "NVDA").
@@ -851,21 +821,19 @@ def validate_trade(
         qty:              Number of shares.
         entry_price:      Expected fill price (used for position size calc).
         portfolio_state:  Pre-fetched state dict. If None, fetches live.
-        mode:             "swing", "day", or the dedicated "algo" account route.
-                          Reads TRADING_MODE env if not specified.
+        mode:             Algo account route.
 
     Returns:
         ValidationResult with approved=True/False and a reason string.
     """
-    if mode is None:
-        mode = os.environ.get("TRADING_MODE", "swing")
+    mode = mode or "algo"
     mode_config = get_mode_config(mode)
     risk = mode_config["risk"]
     ticker_sector, ticker_max_pct, tactical_tickers, universe = _get_universe_maps(mode)
 
     action = action.lower()
 
-    if mode == "algo" and action in {"buy", "short"} and strategy == "event_driven":
+    if action in {"buy", "short"} and strategy == "event_driven":
         return ValidationResult(
             False,
             "Event Driven is confirmation-only and cannot own entries.",
@@ -929,17 +897,6 @@ def validate_trade(
             "outside_risk_catalog",
         )
 
-    if mode == "day":
-        try:
-            schedule = get_day_schedule(
-                flatten_by=risk.get("flatten_by", "15:45"),
-                flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
-                entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
-            )
-        except Exception as exc:
-            return ValidationResult(False, f"Day market calendar unavailable: {exc}", "day_calendar_unavailable")
-        if schedule is None or not schedule.entries_allowed(datetime.now(MARKET_TZ)):
-            return ValidationResult(False, "Day entry window has closed or the market is shut.", "day_entry_cutoff")
     if portfolio_state is None:
         try:
             portfolio_state = get_portfolio_state(mode=mode)
@@ -960,13 +917,13 @@ def validate_trade(
         )
 
     # ── Rule 1: Leveraged ETFs ──────────────────────────────────────────────
-    # Allowed in day mode (they're in the day universe). Banned in swing mode.
+    # Leveraged ETFs are not eligible for this Algo account.
     if ticker.upper() in LEVERAGED_ETFS and not risk["allow_leveraged_etfs"]:
         msg = f"BLOCKED: {ticker} is a leveraged ETF — not allowed in {mode} mode."
         log.warning(msg)
         return ValidationResult(approved=False, reason=msg, rule="no_leveraged_etfs")
 
-    # ── Rule 2: Moonshots hard-blocked in all modes ─────────────────────────
+    # ── Rule 2: Moonshots hard-blocked ──────────────────────────────────────
     if ticker.upper() in MOONSHOTS:
         msg = f"BLOCKED: {ticker} is on the moonshot blocklist (removed in V2)."
         log.warning(msg)
@@ -1025,37 +982,24 @@ def validate_trade(
     is_new_position = abs(existing_qty) <= 1e-9 and not (pending_buy or pending_short)
 
     # ── Rule 6: Max trades / new entries per day ────────────────────────────
-    if mode == "algo":
-        # Algo's quota counts buys or shorts that open a flat ticker. Scale-ins
-        # and exits do not use entry slots; Rule 9 still caps total size.
-        if action in {"buy", "short"} and is_new_position:
-            entry_count = portfolio_state.get(
-                "entry_count_today", portfolio_state.get("trade_count_today")
+    # Algo's quota counts buys or shorts that open a flat ticker. Scale-ins
+    # and exits do not use entry slots; Rule 9 still caps total size.
+    if action in {"buy", "short"} and is_new_position:
+        entry_count = portfolio_state.get(
+            "entry_count_today", portfolio_state.get("trade_count_today")
+        )
+        count_available = portfolio_state.get("entry_count_available", entry_count is not None)
+        if not count_available or entry_count is None:
+            msg = "BLOCKED: Algo new-entry count unavailable; refusing an uncounted entry."
+            log.warning(msg)
+            return ValidationResult(approved=False, reason=msg, rule="entry_count_unavailable")
+        if entry_count >= risk["max_trades_per_day"]:
+            msg = (
+                f"BLOCKED: Algo max {risk['max_trades_per_day']} new entries/day reached "
+                f"({entry_count} already today)."
             )
-            count_available = portfolio_state.get("entry_count_available", entry_count is not None)
-            if not count_available or entry_count is None:
-                msg = "BLOCKED: Algo new-entry count unavailable; refusing an uncounted entry."
-                log.warning(msg)
-                return ValidationResult(approved=False, reason=msg, rule="entry_count_unavailable")
-            if entry_count >= risk["max_trades_per_day"]:
-                msg = (
-                    f"BLOCKED: Algo max {risk['max_trades_per_day']} new entries/day reached "
-                    f"({entry_count} already today)."
-                )
-                log.warning(msg)
-                return ValidationResult(approved=False, reason=msg, rule="max_trades_per_day")
-    elif not portfolio_state.get("entry_count_available", True) or portfolio_state.get("trade_count_today") is None:
-        return ValidationResult(
-            False, "Daily entry count is unavailable; refusing an uncounted entry.",
-            "entry_count_unavailable",
-        )
-    elif portfolio_state["trade_count_today"] >= risk["max_trades_per_day"]:
-        msg = (
-            f"BLOCKED: Max {risk['max_trades_per_day']} trades/day reached "
-            f"({portfolio_state['trade_count_today']} already today)."
-        )
-        log.warning(msg)
-        return ValidationResult(approved=False, reason=msg, rule="max_trades_per_day")
+            log.warning(msg)
+            return ValidationResult(approved=False, reason=msg, rule="max_trades_per_day")
 
     # ── Rule 7: Max open positions ──────────────────────────────────────────
     if is_new_position and portfolio_state["open_position_count"] >= risk["max_open_positions"]:
@@ -1144,7 +1088,6 @@ def validate_trade(
             return ValidationResult(approved=False, reason=msg, rule="max_sector_pct")
 
     # ── Rule 11: Tactical bucket cap ────────────────────────────────────────
-    # In day mode max_tactical_pct=1.0, so this rule never fires.
     if tactical_tickers and risk["max_tactical_pct"] < 1.0:
         if ticker.upper() in tactical_tickers or ticker.upper() in MOONSHOTS:
             max_tactical_positions = risk.get("max_tactical_positions")
@@ -1211,17 +1154,16 @@ def validate_trade(
     return ValidationResult(approved=True, reason=approved_msg)
 
 
-def print_status(portfolio_state: dict, mode: str = None) -> None:
+def print_status(portfolio_state: dict, mode: str = "algo") -> None:
     """Pretty-print current risk status to stdout."""
-    if mode is None:
-        mode = os.environ.get("TRADING_MODE", "swing")
+    mode = mode or "algo"
     mode_config = get_mode_config(mode)
     risk = mode_config["risk"]
     ticker_sector, _, _, universe = _get_universe_maps(mode)
 
     eq = portfolio_state["equity"]
     print(f"{'='*60}")
-    print(f"  SWARM TRADER — RISK MANAGER STATUS")
+    print(f"  ALGO TRADER — RISK MANAGER STATUS")
     print(f"  Mode: {mode.upper()} — {mode_config['label']}")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'='*60}")
@@ -1235,14 +1177,9 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
     weekly_display = f"{weekly_pnl*100:+.2f}%" if weekly_pnl is not None else "unavailable"
     print(f"  Weekly P&L:       {weekly_display:>12}")
     print(f"  Open Positions:  {portfolio_state['open_position_count']:>13}  / {risk['max_open_positions']} max")
-    if mode == "algo":
-        entry_count = portfolio_state.get("entry_count_today")
-        count_label = "New Entries Today"
-        count_display = "unavailable" if entry_count is None or not portfolio_state.get("entry_count_available", True) else str(entry_count)
-    else:
-        entry_count = portfolio_state["trade_count_today"]
-        count_label = "Trades Today"
-        count_display = "unavailable" if entry_count is None or not portfolio_state.get("entry_count_available", True) else str(entry_count)
+    entry_count = portfolio_state.get("entry_count_today")
+    count_label = "New Entries Today"
+    count_display = "unavailable" if entry_count is None or not portfolio_state.get("entry_count_available", True) else str(entry_count)
     print(f"  {count_label:<18}{count_display:>13}  / {risk['max_trades_per_day']} max")
     print()
 
@@ -1257,9 +1194,6 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
     weekly_status = "⚪ UNAVAILABLE" if weekly_pnl is None else ("🔴 ACTIVE" if weekly_cb else "🟢 OK")
     print(f"    Weekly (-{risk['weekly_loss_limit']*100:.0f}%): {weekly_status}")
     print(f"    Cash   (>{risk['min_cash_pct']*100:.0f}%):   {'🟢 OK' if cash_ok else '🔴 LOW'}")
-    if mode == "day":
-        flatten_by = risk.get("flatten_by", "15:45")
-        print(f"    Flatten EOD ({flatten_by} ET): enabled")
     print()
 
     if portfolio_state["sector_alloc"]:
@@ -1275,17 +1209,17 @@ def print_status(portfolio_state: dict, mode: str = None) -> None:
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Swarm Trader Risk Manager")
+    parser = argparse.ArgumentParser(description="Algo Trader Risk Manager")
     parser.add_argument("--status", action="store_true", help="Show current risk status")
     parser.add_argument(
         "--mode",
-        choices=["swing", "day", "algo"],
-        default=None,
-        help="Trading mode (overrides TRADING_MODE env, default: swing)",
+        choices=["algo"],
+        default="algo",
+        help="Account route (only the Algo paper account is supported)",
     )
     args = parser.parse_args()
 
-    mode = args.mode or os.environ.get("TRADING_MODE", "swing")
+    mode = args.mode
 
     if args.status:
         try:

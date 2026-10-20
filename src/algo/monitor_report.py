@@ -310,7 +310,7 @@ def build_report() -> dict:
     else:
         risk_summary = {"error": "unavailable"}
 
-    active_units = ["swarm-trader-algo.service"] if _systemd_active("swarm-trader-algo.service") else []
+    active_units = ["algo-trader.service"] if _systemd_active("algo-trader.service") else []
     last_scan_at = portfolio.get("last_scan_at")
     last_successful_scan_at = portfolio.get("last_successful_scan_at") or last_scan_at
     scan_age_seconds = None
@@ -329,7 +329,7 @@ def build_report() -> dict:
     report = {
         "reported_at": now.isoformat(),
         "service": {
-            "unit": "swarm-trader-algo.service",
+            "unit": "algo-trader.service",
             "active": bool(active_units),
             "active_units": active_units,
             "persisted_mode": portfolio.get("runtime_mode", "unknown"),

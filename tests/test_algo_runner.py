@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import requests
 
-from src.config import ALGO_MODE_CONFIG, get_mode_config
+from src.config import ALGO_MODE_CONFIG
 from src.algo.strategies import runner, universe as strategy_universe
 from src.algo.strategies.signals import Signal
 from src.algo.strategies.runner.data import fetch_latest_quotes
@@ -79,51 +79,6 @@ def test_latest_quote_fetch_diagnostics_distinguish_missing_and_invalid():
     assert errors == ["latest quotes boats: Timeout: "]
 
 
-def test_swing_and_day_use_their_fixed_configured_universes():
-    swing = strategy_universe.configured_universe("swing")
-    day = strategy_universe.configured_universe("day")
-
-    assert swing["tickers"] == [
-        "NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN",
-        "PLTR", "AMD", "CRM", "SNOW", "NET", "PANW",
-        "JPM", "V", "UNH", "JNJ", "PG", "KO",
-        "COIN", "MSTR", "RKLB", "SMCI", "SPY", "QQQ", "GLD", "TLT",
-    ]
-    assert day["tickers"] == [
-        "NVDA", "AVGO", "TSM", "AMD", "MSFT", "AAPL", "META", "GOOGL", "AMZN",
-        "PLTR", "TQQQ", "COIN", "SPY", "QQQ",
-    ]
-    assert swing["categories"]["COIN"] == "tactical"
-    assert day["categories"]["TQQQ"] == "momentum"
-    assert {
-        key: bucket["max_sector_pct"]
-        for key, bucket in get_mode_config("swing")["universe"].items()
-    } == {
-        "core_tech": 0.30,
-        "growth": 0.25,
-        "value_dividend": 0.25,
-        "tactical": 0.03,
-        "hedge": 0.15,
-    }
-    assert {
-        key: bucket["max_sector_pct"]
-        for key, bucket in get_mode_config("day")["universe"].items()
-    } == {
-        "mega_cap": 0.50,
-        "momentum": 0.35,
-        "etf_direction": 0.30,
-    }
-    assert {
-        key: bucket["max_sector_pct"]
-        for key, bucket in ALGO_MODE_CONFIG["universe"].items()
-    } == {
-        "core_tech": 0.40,
-        "diversifiers": 0.30,
-        "hedge": 0.20,
-        "tactical": 0.04,
-    }
-
-
 def test_algo_uses_the_configured_22_symbol_universe():
     algo = strategy_universe.configured_universe("algo")
 
@@ -139,25 +94,6 @@ def test_algo_uses_the_configured_22_symbol_universe():
     assert ALGO_MODE_CONFIG["universe"]["tactical"]["max_per_stock_pct"] == 0.02
     assert ALGO_MODE_CONFIG["risk"]["max_tactical_pct"] == 0.04
     assert ALGO_MODE_CONFIG["risk"]["max_tactical_positions"] == 2
-
-
-@pytest.mark.parametrize("mode", ["swing", "day"])
-def test_swing_and_day_scans_use_only_their_configured_universe(monkeypatch, mode):
-    _mock_common(monkeypatch)
-    monkeypatch.setattr(
-        runner, "load_algo_universe",
-        lambda: (_ for _ in ()).throw(AssertionError("Algo universe loader called")),
-    )
-    monkeypatch.setattr(runner, "_fetch_bars", lambda *args, **kwargs: {})
-    monkeypatch.setattr(runner, "_fetch_latest_quotes", lambda *args, **kwargs: {})
-    monkeypatch.setattr(
-        runner, "rank_strategies",
-        lambda bars, mode, **kwargs: {"regime": "range_bound", "reason": "test", "ranked": [], "active": []},
-    )
-
-    result = runner.scan(mode=mode)
-
-    assert result["universe"]["tickers"] == strategy_universe.configured_universe(mode)["tickers"]
 
 
 def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):

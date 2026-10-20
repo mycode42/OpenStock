@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-# CANONICAL TRACKER — This is the authoritative performance tracker. performance_tracker.py (V1) has been removed.
-"""
-Performance Tracker V2 — Swarm Trader daily performance with benchmark comparison.
-
-Tracks portfolio vs SPY and QQQ, computes rolling 21-day Sharpe ratio,
-win rate, and average win/loss per trade. Saves snapshots per account: Swing
-under snapshots/, Day under snapshots/day/, and Algo under snapshots/algo/.
-
-Usage:
-  poetry run python performance_tracker_v2.py --snapshot          # Record today
-  poetry run python performance_tracker_v2.py --snapshot --force  # Overwrite today
-  poetry run python performance_tracker_v2.py --report            # Terminal summary
-  poetry run python performance_tracker_v2.py --json              # JSON output
-  poetry run python performance_tracker_v2.py --days 21           # Last 21 days
-  poetry run python performance_tracker_v2.py --mode day --snapshot --force
-  poetry run python performance_tracker_v2.py --mode algo --json --fill-report
-"""
+"""Algo account performance, benchmark comparison, and broker-fill reports."""
 
 import argparse
 import json
@@ -35,7 +19,7 @@ load_dotenv(override=True)
 import requests
 import yfinance as yf
 from src.accounts import get_account_for_mode, verify_account_for_mode
-from src.market_calendar import get_day_schedule
+from src.market_calendar import get_market_schedule
 from src.fill_analytics import FillHistoryError, get_account_fill_report
 from trade_journal import dedupe_journal_entries
 
@@ -48,7 +32,6 @@ log = logging.getLogger("perf_v2")
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
 
-SNAPSHOTS_DIR = Path(__file__).parent / "snapshots"
 TRADE_JOURNAL_PATH = Path(__file__).parent / "data" / "trade_journal.jsonl"
 
 RISK_FREE_RATE_ANNUAL = 0.045  # ~4.5% annualised (T-bill proxy)
@@ -61,7 +44,7 @@ SUBMITTED_STATUSES = {"submitted", "executed", "accepted", "new", "pending_new",
 # Data helpers
 # ---------------------------------------------------------------------------
 
-def _alpaca_get(endpoint: str, mode: str = "swing") -> dict | list:
+def _alpaca_get(endpoint: str, mode: str = "algo") -> dict | list:
     r = requests.get(
         f"{API_BASE}/{endpoint}",
         headers=get_account_for_mode(mode).headers,
@@ -71,8 +54,8 @@ def _alpaca_get(endpoint: str, mode: str = "swing") -> dict | list:
     return r.json()
 
 
-def get_portfolio(mode: str = "swing") -> dict:
-    """Fetch current Alpaca account + positions for one trading mode."""
+def get_portfolio(mode: str = "algo") -> dict:
+    """Fetch the Algo Alpaca account and its positions."""
     alpaca_account, account = verify_account_for_mode(mode)
     positions_raw = _alpaca_get("positions", mode=mode)
     equity = float(account["equity"])
@@ -119,15 +102,13 @@ def get_benchmark_return(symbol: str, period_days: int = 1) -> float | None:
 
 
 def _snapshot_dir(mode: str) -> Path:
-    """Keep Swing's established path and isolate additional account histories."""
-    if mode == "swing":
-        return SNAPSHOTS_DIR
-    if mode == "algo":
-        return Path(__file__).parent / "data" / "snapshots" / "algo"
-    return SNAPSHOTS_DIR / mode
+    """Return the isolated Algo snapshot directory."""
+    if mode != "algo":
+        raise ValueError("Only the algo account route is supported")
+    return Path(__file__).parent / "data" / "snapshots" / "algo"
 
 
-def load_snapshots(days: int | None = None, mode: str = "swing", account_id: str | None = None) -> list[dict]:
+def load_snapshots(days: int | None = None, mode: str = "algo", account_id: str | None = None) -> list[dict]:
     """Load snapshots for one broker account and mode when its ID is given."""
     snapshot_dir = _snapshot_dir(mode)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -152,7 +133,7 @@ def load_snapshots(days: int | None = None, mode: str = "swing", account_id: str
     return snapshots
 
 
-def load_trade_journal(mode: str = "swing", account_id: str | None = None) -> list[dict]:
+def load_trade_journal(mode: str = "algo", account_id: str | None = None) -> list[dict]:
     """Load submissions for one mode and, when supplied, one broker account."""
     trades = []
     unclassified = 0
@@ -400,8 +381,8 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
     return {
         "period_start": first.get("date"),
         "period_end": latest.get("date"),
-        "trading_mode": latest.get("trading_mode", "swing"),
-        "account_name": latest.get("account_name", "Swing"),
+        "trading_mode": latest.get("trading_mode", "algo"),
+        "account_name": latest.get("account_name", "Algo"),
         "snapshots_count": len(snapshots),
         "starting_equity": base_equity,
         "current_equity": curr_equity,
@@ -426,8 +407,8 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
 # Snapshot
 # ---------------------------------------------------------------------------
 
-def take_snapshot(force: bool = False, mode: str = "swing", snapshot_kind: str | None = None) -> dict | None:
-    """Record today's equity and benchmark data for a specific trading mode."""
+def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | None = None) -> dict | None:
+    """Record today's Algo equity and benchmark data."""
     if snapshot_kind not in (None, "close"):
         raise ValueError(f"Unsupported snapshot kind: {snapshot_kind}")
     snapshot_dir = _snapshot_dir(mode)
@@ -437,7 +418,7 @@ def take_snapshot(force: bool = False, mode: str = "swing", snapshot_kind: str |
     snap_file = snapshot_dir / f"{today}.json"
 
     if snapshot_kind == "close":
-        schedule = get_day_schedule(flatten_by="15:45", on_date=now.date(), mode=mode)
+        schedule = get_market_schedule(on_date=now.date(), mode=mode)
         if schedule is None:
             return {"date": today, "skipped": True, "reason": "no equity market session"}
         if now < schedule.closes_at:
@@ -525,14 +506,14 @@ def take_snapshot(force: bool = False, mode: str = "swing", snapshot_kind: str |
 # Output
 # ---------------------------------------------------------------------------
 
-def terminal_report(perf: dict, trade_stats: dict, mode: str = "swing") -> None:
+def terminal_report(perf: dict, trade_stats: dict, mode: str = "algo") -> None:
     """Pretty-print performance summary to stdout."""
     if not perf:
         print("No performance data yet. Run --snapshot first.")
         return
 
     print(f"{'='*65}")
-    print(f"  SWARM TRADER — {mode.upper()} PERFORMANCE TRACKER ({perf.get('account_name', mode.title())})")
+    print(f"  ALGO TRADER — {mode.upper()} PERFORMANCE TRACKER ({perf.get('account_name', mode.title())})")
     print(f"  {perf['period_start']} → {perf['period_end']}  ({perf['snapshots_count']} snapshots)")
     print(f"{'='*65}")
     print(f"  Starting Equity:    ${perf['starting_equity']:>13,.2f}")
@@ -595,7 +576,7 @@ def terminal_report(perf: dict, trade_stats: dict, mode: str = "swing") -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Swarm Trader Performance Tracker")
+    parser = argparse.ArgumentParser(description="Algo Trader Performance Tracker")
     parser.add_argument("--snapshot", action="store_true", help="Record today's snapshot")
     parser.add_argument("--force", action="store_true", help="Overwrite today's snapshot")
     parser.add_argument("--snapshot-kind", choices=["close"],
@@ -605,8 +586,8 @@ def main() -> int:
     parser.add_argument("--fill-report", action="store_true",
                         help="Reconcile gross realized P&L from broker FILL activities")
     parser.add_argument("--days", type=int, help="Limit to last N days")
-    parser.add_argument("--mode", choices=["swing", "day", "algo"], default="swing",
-                        help="Account/mode to snapshot or report (default: swing)")
+    parser.add_argument("--mode", choices=["algo"], default="algo",
+                        help="Account route (only the Algo paper account is supported)")
     args = parser.parse_args()
     if args.snapshot_kind and not args.snapshot:
         parser.error("--snapshot-kind requires --snapshot")

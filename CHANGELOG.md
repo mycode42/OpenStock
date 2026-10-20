@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Renamed the project and service to Algo Trader, with the deployment rooted at `/opt/algo-trader`.
+- Removed the unused standalone Swing/Day application, peer-signal exchange, generic backtester, duplicate reports, and inactive analyst agents.
+- Kept the shared analyst graph, Algo research replay, active strategies, broker execution, risk controls, and coordinator protections.
+
 ## [2.0.0] - 2026-10-09
 
 V2.0.0 makes the Algo portfolio a coordinated, multi-horizon long/short system and adds a strict research promotion gate. Swing, Day, and Algo continue to use separate fixed universes and paper-account routes.

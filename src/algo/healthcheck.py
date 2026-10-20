@@ -27,7 +27,7 @@ from src.config import STRATEGY_CONFIG
 
 ROOT = Path(__file__).resolve().parents[2]
 STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
-SERVICE = "swarm-trader-algo.service"
+SERVICE = "algo-trader.service"
 WARMUP_GRACE_SECONDS = {"premarket": 10 * 60, "regular": 10 * 60, "overnight": 25 * 60}
 WARMUP_PAUSE_REASONS = frozenset({
     "waiting for completed intraday historical bars",

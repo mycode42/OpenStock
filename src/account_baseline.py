@@ -8,7 +8,7 @@ from risk_manager import capture_account_inception_baseline
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("swing", "day", "algo"), required=True)
+    parser.add_argument("--mode", choices=("algo",), default="algo")
     args = parser.parse_args()
     baseline = capture_account_inception_baseline(args.mode)
     print(json.dumps({

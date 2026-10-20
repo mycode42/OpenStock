@@ -1,9 +1,7 @@
 """Regression checks for account routing and submission versus fill reporting."""
 
 import json
-from contextlib import nullcontext
 from datetime import datetime
-from decimal import Decimal
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -12,8 +10,6 @@ import pytest
 from src import accounts
 import trade_journal
 import performance_tracker_v2 as tracker
-import rebalance
-from src import alpaca_integration
 from src.algo import monitor_report
 
 
@@ -29,26 +25,26 @@ class FakeResponse:
 
 
 def test_account_verification_fails_closed_on_wrong_account_or_block(monkeypatch):
-    route = accounts.AlpacaAccount("DayTrading", "day-id", "day-key", "day-secret")
-    monkeypatch.setattr(accounts, "_ACCOUNTS", {"day": route})
+    route = accounts.AlpacaAccount("Algo", "algo-id", "algo-key", "algo-secret")
+    monkeypatch.setattr(accounts, "_ACCOUNT", route)
 
     monkeypatch.setattr(accounts.requests, "get", lambda *args, **kwargs: FakeResponse({
-        "id": "swing-id", "status": "ACTIVE", "trading_blocked": False,
+        "id": "other-id", "status": "ACTIVE", "trading_blocked": False,
     }))
     with pytest.raises(ValueError, match="different Alpaca account"):
-        accounts.verify_account_for_mode("day")
+        accounts.verify_account_for_mode("algo")
 
     monkeypatch.setattr(accounts.requests, "get", lambda *args, **kwargs: FakeResponse({
-        "id": "day-id", "status": "ACTIVE", "trading_blocked": True,
+        "id": "algo-id", "status": "ACTIVE", "trading_blocked": True,
     }))
     with pytest.raises(ValueError, match="trading blocked"):
-        accounts.verify_account_for_mode("day")
+        accounts.verify_account_for_mode("algo")
 
     monkeypatch.setattr(accounts.requests, "get", lambda *args, **kwargs: FakeResponse({
-        "id": "day-id", "status": "ACTIVE", "trading_blocked": False,
+        "id": "algo-id", "status": "ACTIVE", "trading_blocked": False,
     }))
-    selected, _ = accounts.verify_account_for_mode("day")
-    assert selected.api_key == "day-key"
+    selected, _ = accounts.verify_account_for_mode("algo")
+    assert selected.api_key == "algo-key"
 
 
 def test_submitted_order_is_not_counted_as_filled_until_broker_confirms(monkeypatch, tmp_path):
@@ -149,7 +145,7 @@ def test_close_snapshot_requires_broker_close_and_skips_holidays(monkeypatch, tm
     monkeypatch.setattr(tracker.yf, "Ticker", lambda symbol: SimpleNamespace(
         history=lambda **kwargs: SimpleNamespace(empty=True)
     ))
-    monkeypatch.setattr(tracker, "get_day_schedule", lambda **kwargs: SimpleNamespace(
+    monkeypatch.setattr(tracker, "get_market_schedule", lambda **kwargs: SimpleNamespace(
         closes_at=datetime(2026, 10, 8, 16, 0, tzinfo=et)
     ))
     saved = tracker.take_snapshot(mode="algo", snapshot_kind="close", force=True)
@@ -157,51 +153,9 @@ def test_close_snapshot_requires_broker_close_and_skips_holidays(monkeypatch, tm
     assert saved["account_id"] == "paper-algo"
     assert json.loads((tmp_path / "2026-10-08.json").read_text())["snapshot_kind"] == "close"
 
-    monkeypatch.setattr(tracker, "get_day_schedule", lambda **kwargs: None)
+    monkeypatch.setattr(tracker, "get_market_schedule", lambda **kwargs: None)
     skipped = tracker.take_snapshot(mode="algo", snapshot_kind="close", force=True)
     assert skipped["skipped"] is True
-
-
-def test_rebalance_rechecks_position_and_open_orders_under_account_lock(monkeypatch):
-    account = SimpleNamespace(account_id="swing-account")
-    events = []
-    monkeypatch.setattr(rebalance, "account_execution_lock", lambda mode: nullcontext())
-    monkeypatch.setattr(rebalance, "verify_account_for_mode", lambda mode: (account, {}))
-    monkeypatch.setattr(rebalance, "get_positions", lambda route: {"AAPL": {"symbol": "AAPL", "qty": "3"}})
-    monkeypatch.setattr(rebalance, "get_open_order_symbols", lambda route: {"AAPL"})
-    monkeypatch.setattr(rebalance, "_submit_broker_order", lambda *args, **kwargs: events.append(args))
-
-    changed = rebalance.place_sell_order("swing", "AAPL", Decimal("2"))
-    assert not changed["success"] and "changed" in changed["error"]
-    conflict = rebalance.place_sell_order("swing", "AAPL", Decimal("3"))
-    assert not conflict["success"] and "Open order" in conflict["error"]
-    assert not events
-
-    monkeypatch.setattr(rebalance, "get_open_order_symbols", lambda route: set())
-    monkeypatch.setattr(rebalance, "_submit_broker_order", lambda order, kind, mode: {
-        "success": True, "order_id": "sell-1", "broker_status": "pending_new",
-        "client_order_id": order["client_order_id"],
-    })
-    accepted = rebalance.place_sell_order("swing", "AAPL", Decimal("3"))
-    assert accepted["success"]
-    assert accepted["client_order_id"].startswith("rebalance-")
-
-
-def test_legacy_integration_cannot_submit_or_flatten_directly(monkeypatch):
-    monkeypatch.setattr(
-        alpaca_integration.requests, "post",
-        lambda *args, **kwargs: pytest.fail("legacy broker POST"),
-    )
-    monkeypatch.setattr(
-        alpaca_integration.requests, "delete",
-        lambda *args, **kwargs: pytest.fail("legacy broker DELETE"),
-    )
-    with pytest.raises(RuntimeError, match="execute_trades.py"):
-        alpaca_integration.execute_decisions({}, [], {}, dry_run=False, mode="swing")
-    with pytest.raises(RuntimeError, match="execute_trades.py"):
-        alpaca_integration.flatten_positions([], dry_run=False, mode="swing")
-    with pytest.raises(RuntimeError, match="execute_trades.py"):
-        alpaca_integration._place_alpaca_order("AAPL", "buy", 1, mode="swing")
 
 
 def test_algo_monitor_excludes_previous_account_journal_rows():

@@ -1,7 +1,0 @@
-[
-  {"name":"baseline","strategies":["momentum"],"parameters":{}},
-  {"name":"baseline_cap2_cd60","strategies":["momentum"],"parameters":{},"controls":{"max_entries_per_strategy_per_day":{"momentum":2},"cooldown_minutes_by_strategy":{"momentum":60}}},
-  {"name":"90m_strict_cd60","strategies":["momentum"],"parameters":{"momentum":{"lookback":18,"minimum_return":0.02,"minimum_volume_ratio":1.4,"max_extension_pct":0.03}},"controls":{"max_entries_per_strategy_per_day":{"momentum":2},"cooldown_minutes_by_strategy":{"momentum":60}}},
-  {"name":"120m_strict_cd90","strategies":["momentum"],"parameters":{"momentum":{"lookback":24,"minimum_return":0.025,"minimum_volume_ratio":1.5,"max_extension_pct":0.03}},"controls":{"max_entries_per_strategy_per_day":{"momentum":2},"cooldown_minutes_by_strategy":{"momentum":90}}},
-  {"name":"90m_high_threshold_cd90","strategies":["momentum"],"parameters":{"momentum":{"lookback":18,"minimum_return":0.025,"minimum_volume_ratio":1.6,"max_extension_pct":0.03}},"controls":{"max_entries_per_strategy_per_day":{"momentum":2},"cooldown_minutes_by_strategy":{"momentum":90}}}
-]

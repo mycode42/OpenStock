@@ -1,7 +1,7 @@
 # Event Driven AI strategy
 
 `event_driven` is an active, long-horizon Algo strategy. On weekdays, its
-scheduled briefing runs the Swarm analyst workflow three times per day and
+scheduled briefing runs the shared analyst graph three times per day and
 publishes short-lived Buy, Sell, or Watch recommendations for the fixed Algo
 universe. The strategy name and identity remain `event_driven`; its live
 signals enter the same sizing, portfolio coordination, lifecycle, and paper
@@ -34,7 +34,7 @@ when an AI snapshot is missing or expired.
 - `filters.py`: universe, regime, cooldown, and weekly activity limits.
 - `reactions.py`: earnings gap continuation and macro breakout rules.
 - `ai.py`: snapshot schema, validation, expiry, and atomic publication.
-- `ai_runner.py`: invokes the Swarm analyst workflow and writes the live signal
+- `ai_runner.py`: invokes the shared analyst graph and writes the live signal
   snapshot without calling an executor.
 - `signals.py`: AI recommendation and deterministic owner-exit adapters.
 - Algo integration: registry/regime selection, standard sizing, shared order
@@ -71,8 +71,8 @@ poetry run python -m src.algo.strategies.event_driven.ai_runner
 ```
 
 The runner reads the Algo paper account and the configured Algo ticker
-universe, then calls the same `run_hedge_fund()` analyst graph used by
-`run_hedge_fund.py`. Its analyst set covers market regime, news sentiment,
+universe, then calls the same `run_analyst_graph()` workflow implemented in
+`src/analyst_graph.py`. Its analyst set covers market regime, news sentiment,
 social sentiment, technicals, fundamentals, and growth. It writes
 `data/algo/event_driven/signals.json` atomically. The OpenClaw job adds sourced
 market-wide news and sentiment context and summarizes only notable monitored
@@ -83,10 +83,7 @@ invalid, or expired snapshot produces no AI entry. The scheduler is independent
 of the deterministic event-calendar refresh below; that calendar and its
 archives remain useful for deterministic research and historical examples.
 
-The AI workflow is not reconstructed by the historical event-calendar replay
-commands in this document. Those commands exercise the legacy deterministic
-calendar adapter, not the scheduled LLM recommendations, and their results
-should not be presented as AI-strategy performance.
+Historical event-calendar replays exercise the deterministic calendar adapter. They do not reproduce the scheduled LLM recommendations, so their results should not be presented as AI-strategy performance.
 
 Run `poetry run python -m src.algo.research.event_calendar_refresh` to refresh
 `data/event_calendar.csv`. The `algo-event-calendar` OpenClaw job runs this at

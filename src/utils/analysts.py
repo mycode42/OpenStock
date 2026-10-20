@@ -1,219 +1,81 @@
-"""Constants and utilities related to analysts configuration."""
+"""Analyst nodes used by the Algo Event Driven research snapshot."""
 
-from src.agents import portfolio_manager
-from src.agents.aswath_damodaran import aswath_damodaran_agent
-from src.agents.ben_graham import ben_graham_agent
-from src.agents.bill_ackman import bill_ackman_agent
-from src.agents.cathie_wood import cathie_wood_agent
-from src.agents.charlie_munger import charlie_munger_agent
 from src.agents.fundamentals import fundamentals_analyst_agent
-from src.agents.michael_burry import michael_burry_agent
-from src.agents.phil_fisher import phil_fisher_agent
-from src.agents.peter_lynch import peter_lynch_agent
-from src.agents.sentiment import sentiment_analyst_agent
-from src.agents.stanley_druckenmiller import stanley_druckenmiller_agent
-from src.agents.technicals import technical_analyst_agent
-from src.agents.valuation import valuation_analyst_agent
-from src.agents.warren_buffett import warren_buffett_agent
-from src.agents.rakesh_jhunjhunwala import rakesh_jhunjhunwala_agent
-from src.agents.mohnish_pabrai import mohnish_pabrai_agent
-from src.agents.news_sentiment import news_sentiment_agent
 from src.agents.growth_agent import growth_analyst_agent
-from src.agents.apex import apex_agent
-from src.agents.autoresearch_agent import autoresearch_agent
 from src.agents.market_regime import market_regime_agent
-from src.agents.andreas_x42 import andreas_x42_agent
+from src.agents.news_sentiment import news_sentiment_agent
+from src.agents.sentiment import sentiment_analyst_agent
+from src.agents.technicals import technical_analyst_agent
 
-# Define analyst configuration - single source of truth!
+
 ANALYST_CONFIG = {
-    "aswath_damodaran": {
-        "display_name": "Aswath Damodaran",
-        "description": "The Dean of Valuation",
-        "investing_style": "Focuses on intrinsic value and financial metrics to assess investment opportunities through rigorous valuation analysis.",
-        "agent_func": aswath_damodaran_agent,
+    "market_regime": {
+        "display_name": "Market Regime",
+        "description": "Classifies current market conditions.",
+        "investing_style": "Uses broad market data to label the regime.",
+        "agent_func": market_regime_agent,
         "type": "analyst",
         "order": 0,
     },
-    "ben_graham": {
-        "display_name": "Ben Graham",
-        "description": "The Father of Value Investing",
-        "investing_style": "Emphasizes a margin of safety and invests in undervalued companies with strong fundamentals through systematic value analysis.",
-        "agent_func": ben_graham_agent,
+    "news_sentiment_analyst": {
+        "display_name": "News Sentiment Analyst",
+        "description": "Reviews current company and market news.",
+        "investing_style": "Summarizes news-driven evidence and sentiment.",
+        "agent_func": news_sentiment_agent,
         "type": "analyst",
         "order": 1,
     },
-    "bill_ackman": {
-        "display_name": "Bill Ackman",
-        "description": "The Activist Investor",
-        "investing_style": "Seeks to influence management and unlock value through strategic activism and contrarian investment positions.",
-        "agent_func": bill_ackman_agent,
+    "sentiment_analyst": {
+        "display_name": "Sentiment Analyst",
+        "description": "Reviews market sentiment indicators.",
+        "investing_style": "Uses sentiment and investor behavior as supporting evidence.",
+        "agent_func": sentiment_analyst_agent,
         "type": "analyst",
         "order": 2,
     },
-    "cathie_wood": {
-        "display_name": "Cathie Wood",
-        "description": "The Queen of Growth Investing",
-        "investing_style": "Focuses on disruptive innovation and growth, investing in companies that are leading technological advancements and market disruption.",
-        "agent_func": cathie_wood_agent,
+    "technical_analyst": {
+        "display_name": "Technical Analyst",
+        "description": "Reviews price action and technical indicators.",
+        "investing_style": "Uses chart and trend evidence to assess setups.",
+        "agent_func": technical_analyst_agent,
         "type": "analyst",
         "order": 3,
     },
-    "charlie_munger": {
-        "display_name": "Charlie Munger",
-        "description": "The Rational Thinker",
-        "investing_style": "Advocates for value investing with a focus on quality businesses and long-term growth through rational decision-making.",
-        "agent_func": charlie_munger_agent,
+    "fundamentals_analyst": {
+        "display_name": "Fundamentals Analyst",
+        "description": "Reviews company fundamentals.",
+        "investing_style": "Uses financial statements and business metrics as supporting evidence.",
+        "agent_func": fundamentals_analyst_agent,
         "type": "analyst",
         "order": 4,
     },
-    "michael_burry": {
-        "display_name": "Michael Burry",
-        "description": "The Big Short Contrarian",
-        "investing_style": "Makes contrarian bets, often shorting overvalued markets and investing in undervalued assets through deep fundamental analysis.",
-        "agent_func": michael_burry_agent,
+    "growth_analyst": {
+        "display_name": "Growth Analyst",
+        "description": "Reviews company growth trends.",
+        "investing_style": "Uses revenue and operating growth as supporting evidence.",
+        "agent_func": growth_analyst_agent,
         "type": "analyst",
         "order": 5,
     },
-    "mohnish_pabrai": {
-        "display_name": "Mohnish Pabrai",
-        "description": "The Dhandho Investor",
-        "investing_style": "Focuses on value investing and long-term growth through fundamental analysis and a margin of safety.",
-        "agent_func": mohnish_pabrai_agent,
-        "type": "analyst",
-        "order": 6,
-    },
-    "peter_lynch": {
-        "display_name": "Peter Lynch",
-        "description": "The 10-Bagger Investor",
-        "investing_style": "Invests in companies with understandable business models and strong growth potential using the 'buy what you know' strategy.",
-        "agent_func": peter_lynch_agent,
-        "type": "analyst",
-        "order": 7,
-    },
-    "phil_fisher": {
-        "display_name": "Phil Fisher",
-        "description": "The Scuttlebutt Investor",
-        "investing_style": "Emphasizes investing in companies with strong management and innovative products, focusing on long-term growth through scuttlebutt research.",
-        "agent_func": phil_fisher_agent,
-        "type": "analyst",
-        "order": 8,
-    },
-    "rakesh_jhunjhunwala": {
-        "display_name": "Rakesh Jhunjhunwala",
-        "description": "The Big Bull Of India",
-        "investing_style": "Leverages macroeconomic insights to invest in high-growth sectors, particularly within emerging markets and domestic opportunities.",
-        "agent_func": rakesh_jhunjhunwala_agent,
-        "type": "analyst",
-        "order": 9,
-    },
-    "stanley_druckenmiller": {
-        "display_name": "Stanley Druckenmiller",
-        "description": "The Macro Investor",
-        "investing_style": "Focuses on macroeconomic trends, making large bets on currencies, commodities, and interest rates through top-down analysis.",
-        "agent_func": stanley_druckenmiller_agent,
-        "type": "analyst",
-        "order": 10,
-    },
-    "warren_buffett": {
-        "display_name": "Warren Buffett",
-        "description": "The Oracle of Omaha",
-        "investing_style": "Seeks companies with strong fundamentals and competitive advantages through value investing and long-term ownership.",
-        "agent_func": warren_buffett_agent,
-        "type": "analyst",
-        "order": 11,
-    },
-    "technical_analyst": {
-        "display_name": "Technical Analyst",
-        "description": "Chart Pattern Specialist",
-        "investing_style": "Focuses on chart patterns and market trends to make investment decisions, often using technical indicators and price action analysis.",
-        "agent_func": technical_analyst_agent,
-        "type": "analyst",
-        "order": 12,
-    },
-    "fundamentals_analyst": {
-        "display_name": "Fundamentals Analyst",
-        "description": "Financial Statement Specialist",
-        "investing_style": "Delves into financial statements and economic indicators to assess the intrinsic value of companies through fundamental analysis.",
-        "agent_func": fundamentals_analyst_agent,
-        "type": "analyst",
-        "order": 13,
-    },
-    "growth_analyst": {
-        "display_name": "Growth Analyst",
-        "description": "Growth Specialist",
-        "investing_style": "Analyzes growth trends and valuation to identify growth opportunities through growth analysis.",
-        "agent_func": growth_analyst_agent,
-        "type": "analyst",
-        "order": 14,
-    },
-    "news_sentiment_analyst": {
-        "display_name": "News Sentiment Analyst",
-        "description": "News Sentiment Specialist",
-        "investing_style": "Analyzes news sentiment to predict market movements and identify opportunities through news analysis.",
-        "agent_func": news_sentiment_agent,
-        "type": "analyst",
-        "order": 15,
-    },
-    "sentiment_analyst": {
-        "display_name": "Sentiment Analyst",
-        "description": "Market Sentiment Specialist",
-        "investing_style": "Gauges market sentiment and investor behavior to predict market movements and identify opportunities through behavioral analysis.",
-        "agent_func": sentiment_analyst_agent,
-        "type": "analyst",
-        "order": 16,
-    },
-    "valuation_analyst": {
-        "display_name": "Valuation Analyst",
-        "description": "Company Valuation Specialist",
-        "investing_style": "Specializes in determining the fair value of companies, using various valuation models and financial metrics for investment decisions.",
-        "agent_func": valuation_analyst_agent,
-        "type": "analyst",
-        "order": 17,
-    },
-    "apex": {
-        "display_name": "Apex",
-        "description": "Intraday Day Trading Specialist",
-        "investing_style": "Intraday day trader focused on liquid mega-cap tech and momentum names. Technical-first: VWAP, RSI, volume, key levels. Trades with the market regime. Always defines stop before entry. Cuts losers at stop, lets winners run to target.",
-        "agent_func": apex_agent,
-        "type": "analyst",
-        "order": 18,
-    },
-    "autoresearch": {
-        "display_name": "AutoResearch",
-        "description": "Evolved Strategy Signal (Deterministic)",
-        "investing_style": "Deterministic signals from an autonomously evolved pure-Python strategy. Zero LLM calls. Uses RSI bridge tiers, VWAP deviation, volume confirmation, MACD, and market regime multipliers. Parameters are evolved nightly via backtesting against historical data. Current strategy fitness and experiment name are logged for PM awareness.",
-        "agent_func": autoresearch_agent,
-        "type": "analyst",
-        "order": 19,
-    },
-    "market_regime": {
-        "display_name": "Market Regime",
-        "description": "Intraday Market Regime Classifier",
-        "investing_style": "Classifies the current intraday market regime (trending_up, trending_down, range_bound, volatile) using SPY/QQQ intraday data. Feeds into Apex so it adapts strategy to the tape. Run this before Apex for best results.",
-        "agent_func": market_regime_agent,
-        "type": "analyst",
-        "order": 20,
-    },
 }
 
-# Derive ANALYST_ORDER from ANALYST_CONFIG for backwards compatibility
-ANALYST_ORDER = [(config["display_name"], key) for key, config in sorted(ANALYST_CONFIG.items(), key=lambda x: x[1]["order"])]
+ANALYST_ORDER = [(item["display_name"], key) for key, item in ANALYST_CONFIG.items()]
 
 
 def get_analyst_nodes():
-    """Get the mapping of analyst keys to their (node_name, agent_func) tuples."""
-    return {key: (f"{key}_agent", config["agent_func"]) for key, config in ANALYST_CONFIG.items()}
+    """Return the graph node name and function for each supported analyst."""
+    return {key: (f"{key}_agent", item["agent_func"]) for key, item in ANALYST_CONFIG.items()}
 
 
 def get_agents_list():
-    """Get the list of agents for API responses."""
+    """Return serializable descriptions of the supported analyst nodes."""
     return [
         {
             "key": key,
-            "display_name": config["display_name"],
-            "description": config["description"],
-            "investing_style": config["investing_style"],
-            "order": config["order"]
+            "display_name": item["display_name"],
+            "description": item["description"],
+            "investing_style": item["investing_style"],
+            "order": item["order"],
         }
-        for key, config in sorted(ANALYST_CONFIG.items(), key=lambda x: x[1]["order"])
+        for key, item in ANALYST_CONFIG.items()
     ]

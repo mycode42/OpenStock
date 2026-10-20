@@ -1,5 +1,5 @@
 [Unit]
-Description=Swarm Trader autonomous rule-based algo portfolio daemon
+Description=Algo Trader autonomous strategy portfolio daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=openclaw
 Group=openclaw
-WorkingDirectory=/opt/swarm-trader
-EnvironmentFile=/opt/swarm-trader/.env
+WorkingDirectory=/opt/algo-trader
+EnvironmentFile=/opt/algo-trader/.env
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/local/bin/poetry run python -m src.algo.daemon --mode algo
 Restart=on-failure
@@ -20,10 +20,10 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/opt/swarm-trader/data /run/lock
+ReadWritePaths=/opt/algo-trader/data /run/lock
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=swarm-trader-algo
+SyslogIdentifier=algo-trader
 
 [Install]
 WantedBy=multi-user.target

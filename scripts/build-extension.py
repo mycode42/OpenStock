@@ -45,7 +45,7 @@ def build() -> None:
         compiler_directives={"language_level": 3, "annotation_typing": False},
         force=True,
     )
-    distribution = Distribution({"name": "swarm-trader", "ext_modules": extensions})
+    distribution = Distribution({"name": "algo-trader", "ext_modules": extensions})
     command = build_ext(distribution)
     command.build_lib = str(build_lib)
     command.build_temp = str(build_temp)

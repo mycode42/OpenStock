@@ -23,12 +23,11 @@ class OrderHooks:
     lookup_client_order: Callable
     get_nested_order: Callable
     get_mode_config: Callable
-    get_day_schedule: Callable
+    get_market_schedule: Callable
     list_positions: Callable
     position_qty: Callable
     list_open_orders: Callable
     submit_broker_order: Callable
-    default_target_multiplier: float
 
 
 def prices_equal(left: object, right: object) -> bool:
@@ -193,7 +192,6 @@ def place_order(
     limit_price=None,
     trail_percent=None,
     entry_price=None,
-    stop_pct=None,
     client_order_id=None,
     extended_hours=False,
 ):
@@ -221,19 +219,6 @@ def place_order(
         return {"success": False, "error": "Stop and trailing-stop orders cannot include bracket or limit fields"}
     if order_type == "oco" and (limit_price is not None or trail_percent is not None):
         return {"success": False, "error": "OCO take-profit and stop prices must use their dedicated fields"}
-
-    if mode == "day" and action in {"buy", "short"}:
-        try:
-            risk = hooks.get_mode_config("day")["risk"]
-            schedule = hooks.get_day_schedule(
-                flatten_by=risk.get("flatten_by", "15:45"),
-                flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
-                entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
-            )
-        except Exception as exc:
-            return {"success": False, "error": f"Day calendar unavailable: {exc}"}
-        if schedule is None or not schedule.entries_allowed(datetime.now(MARKET_TZ)):
-            return {"success": False, "error": "Day entry cutoff has passed or market is closed"}
 
     side = "buy" if action in ("buy", "cover") else "sell"
     if extended_hours:
@@ -272,7 +257,7 @@ def place_order(
     if mode == "algo" and order_type == "oco":
         try:
             now = datetime.now(MARKET_TZ)
-            schedule = hooks.get_day_schedule(flatten_by="15:45", mode="algo")
+            schedule = hooks.get_market_schedule(mode="algo")
             regular_open = schedule is not None and schedule.market_open(now)
             if not regular_open:
                 return {"success": False, "error": "Algo OCO repair requires regular market hours"}
@@ -285,15 +270,6 @@ def place_order(
                 return {"success": False, "error": "Algo OCO repair found an open broker order for this symbol"}
         except (requests.RequestException, ValueError, InvalidOperation) as exc:
             return {"success": False, "error": f"Algo OCO repair preflight unavailable: {exc}"}
-
-    if action in {"buy", "short"} and order_type not in ("limit", "stop", "trailing_stop", "oco"):
-        ref_price = entry_price or limit_price or 0
-        if ref_price > 0 and stop_pct is not None:
-            if stop_price is None:
-                stop_price = round(ref_price * (1 + stop_pct), 2) if action == "short" else round(ref_price * (1 - stop_pct), 2)
-            if take_profit is None and stop_price is not None:
-                stop_dist = abs(ref_price - float(stop_price))
-                take_profit = round(ref_price - stop_dist * hooks.default_target_multiplier, 2) if action == "short" else round(ref_price + stop_dist * hooks.default_target_multiplier, 2)
 
     if order_type in {"market", "limit", "bracket"}:
         if (stop_price is None) != (take_profit is None):

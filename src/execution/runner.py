@@ -24,7 +24,7 @@ Usage:
   poetry run python execute_trades.py --file decisions.json --dry-run
   poetry run python execute_trades.py --flatten               # Sell all positions at market
   poetry run python execute_trades.py --flatten --dry-run     # Preview flatten
-  poetry run python execute_trades.py --mode day --file decisions.json
+  poetry run python execute_trades.py --mode algo --file decisions.json
 """
 
 import argparse
@@ -55,12 +55,12 @@ logging.basicConfig(
 log = logging.getLogger("execute_trades")
 
 from src.accounts import get_account_for_mode, verify_account_for_mode
-from src.market_calendar import get_day_schedule
+from src.market_calendar import get_market_schedule
 from src.execution import batch, broker, liquidation, orders
 from src.execution.liquidation import LiquidationHooks
 from src.execution.orders import OrderHooks
 
-from src.config import ALGO_SERVICE_CONFIG, get_mode_config, DEFAULT_TARGET_MULTIPLIER
+from src.config import ALGO_SERVICE_CONFIG, get_mode_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 API_BASE = broker.API_BASE
@@ -69,7 +69,7 @@ MARKET_TZ = ZoneInfo("America/New_York")
 LOCK_DIR = REPO_ROOT / "data" / "locks"
 
 # Module-level mode — set once in main(), used by helpers
-_active_mode: str = "swing"
+_active_mode: str = "algo"
 
 
 def _headers(mode: str = None) -> dict:
@@ -168,12 +168,11 @@ def _order_hooks(mode: str = None) -> OrderHooks:
         lookup_client_order=_lookup_client_order,
         get_nested_order=_get_nested_order,
         get_mode_config=get_mode_config,
-        get_day_schedule=get_day_schedule,
+        get_market_schedule=get_market_schedule,
         list_positions=_list_positions,
         position_qty=_position_qty,
         list_open_orders=_list_open_orders,
         submit_broker_order=_submit_broker_order,
-        default_target_multiplier=DEFAULT_TARGET_MULTIPLIER,
     )
 
 
@@ -186,8 +185,6 @@ def _liquidation_hooks() -> LiquidationHooks:
         headers=_headers,
         verify_algo_execution_lease=_verify_algo_execution_lease,
         verify_account_for_mode=verify_account_for_mode,
-        get_mode_config=get_mode_config,
-        get_day_schedule=get_day_schedule,
         list_positions=_list_positions,
         list_open_orders=_list_open_orders,
         position_qty=_position_qty,
@@ -199,7 +196,7 @@ def _liquidation_hooks() -> LiquidationHooks:
 
 def _flatten_all_unlocked(
     dry_run: bool = False,
-    mode: str = "day",
+    mode: str = "algo",
     poll_attempts: int = 10,
     poll_interval: float = 1.0,
 ) -> dict:
@@ -233,7 +230,6 @@ def place_order(
     limit_price=None,
     trail_percent=None,
     entry_price=None,
-    stop_pct=None,
     client_order_id=None,
     extended_hours=False,
 ):
@@ -248,7 +244,6 @@ def place_order(
         limit_price=limit_price,
         trail_percent=trail_percent,
         entry_price=entry_price,
-        stop_pct=stop_pct,
         client_order_id=client_order_id,
         extended_hours=extended_hours,
     )
@@ -284,24 +279,13 @@ def _verify_algo_execution_lease() -> None:
     state_path = Path(ALGO_SERVICE_CONFIG["state_file"])
     if not state_path.is_absolute():
         state_path = REPO_ROOT / state_path
-    token = os.environ.get("SWARM_ALGO_COORDINATOR_TOKEN")
+    token = os.environ.get("ALGO_COORDINATOR_TOKEN")
     if not AlgoStateStore(state_path).verify_coordinator_token(token, os.getppid()):
         raise PermissionError("Live Algo orders require the active coordinator lease")
 
 
-def validate_trade_legacy(
-    ticker,
-    action,
-    qty,
-    positions,
-    portfolio_value=None,
-    max_trade_pct=None,
-):
-    """Verify fresh position-reducing quantities after order cancellation.
-
-    The optional legacy sizing arguments remain accepted for import
-    compatibility. Entry sizing and opposing-position policy belong to V2.
-    """
+def validate_position_reduction(ticker, action, qty, positions):
+    """Verify fresh position-reducing quantities after order cancellation."""
     pos = positions.get(ticker, {})
     current_shares = float(pos.get("qty", 0))
 
@@ -338,35 +322,10 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
     # before any live order. Keep the broker payload for the risk snapshot.
     broker_account = None
     if not args.dry_run:
-        if mode == "algo":
-            _verify_algo_execution_lease()
+        _verify_algo_execution_lease()
         _, broker_account = verify_account_for_mode(mode)
 
-    if args.flatten_if_due:
-        try:
-            schedule = get_day_schedule(
-                flatten_by=mode_risk.get("flatten_by", "15:45"),
-                flatten_lead_minutes=mode_risk.get("flatten_lead_minutes", 15),
-                entry_cutoff_minutes=mode_risk.get("entry_cutoff_minutes", 15),
-            )
-            if schedule is not None and not schedule.flatten_due(datetime.now(MARKET_TZ)):
-                result = {
-                    "timestamp": datetime.now(MARKET_TZ).isoformat(),
-                    "trading_mode": mode,
-                    "status": "not_due",
-                    "flatten_at": schedule.flatten_at.isoformat(),
-                    "success": True,
-                }
-                print(json.dumps(result, indent=2))
-                return 0
-        except Exception as exc:
-            print(json.dumps({"trading_mode": mode, "status": "failed", "errors": [f"Day calendar unavailable: {exc}"]}, indent=2))
-            return 2
-        result = _flatten_all_unlocked(dry_run=args.dry_run, mode=mode)
-        print(json.dumps(result, indent=2))
-        return 0 if args.dry_run or result["success"] else 2
-
-    # Handle flatten command separately (works in both modes)
+    # Handle a verified Algo account flatten separately from entry decisions.
     if args.flatten:
         result = _flatten_all_unlocked(dry_run=args.dry_run, mode=mode)
         print(json.dumps(result, indent=2))
@@ -392,7 +351,6 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
     daily_pnl_pct = get_daily_pnl(account)
 
     daily_loss_limit = mode_risk["daily_loss_limit"]
-    stop_loss_pct = mode_risk["stop_loss_pct"]
 
     if daily_pnl_pct <= -daily_loss_limit:
         log.warning(f"Circuit breaker ACTIVE: down {abs(daily_pnl_pct)*100:.1f}% today " f"(limit {daily_loss_limit*100:.0f}%). New buy/short entries blocked.")
@@ -412,7 +370,6 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
         args=args,
         mode=mode,
         positions=positions,
-        stop_loss_pct=stop_loss_pct,
         rm_portfolio_state=rm_portfolio_state,
         hooks=batch.BatchHooks(
             risk_manager_available=RISK_MANAGER_AVAILABLE,
@@ -421,11 +378,10 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             get_latest_ask=get_latest_ask,
             get_latest_bid=get_latest_bid,
             get_latest_price=get_latest_price,
-            validate_trade_legacy=validate_trade_legacy,
+            validate_position_reduction=validate_position_reduction,
             cancel_open_orders_for_symbol=cancel_open_orders_for_symbol,
             get_positions=get_positions,
             place_order=place_order,
-            default_target_multiplier=DEFAULT_TARGET_MULTIPLIER,
             market_tz=MARKET_TZ,
             log=log,
         ),

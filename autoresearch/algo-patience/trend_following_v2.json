@@ -1,8 +1,0 @@
-[
-  {"name":"baseline","strategies":["trend_following"],"parameters":{}},
-  {"name":"baseline_cap2_cd60","strategies":["trend_following"],"parameters":{},"controls":{"max_entries_per_strategy_per_day":{"trend_following":2},"cooldown_minutes_by_strategy":{"trend_following":60}}},
-  {"name":"12_26_confirm3_cap2_cd60","strategies":["trend_following"],"parameters":{"trend_following":{"fast_period":12,"slow_period":26,"confirmation_bars":3,"minimum_slope_pct":0.002}},"controls":{"max_entries_per_strategy_per_day":{"trend_following":2},"cooldown_minutes_by_strategy":{"trend_following":60}}},
-  {"name":"20_50_confirm3_cap2_cd90","strategies":["trend_following"],"parameters":{"trend_following":{"fast_period":20,"slow_period":50,"confirmation_bars":3,"minimum_slope_pct":0.002}},"controls":{"max_entries_per_strategy_per_day":{"trend_following":2},"cooldown_minutes_by_strategy":{"trend_following":90}}},
-  {"name":"20_50_slope05_cap2_cd90","strategies":["trend_following"],"parameters":{"trend_following":{"fast_period":20,"slow_period":50,"confirmation_bars":3,"minimum_slope_pct":0.005}},"controls":{"max_entries_per_strategy_per_day":{"trend_following":2},"cooldown_minutes_by_strategy":{"trend_following":90}}},
-  {"name":"20_50_confirm4_slope05_cap2_cd90","strategies":["trend_following"],"parameters":{"trend_following":{"fast_period":20,"slow_period":50,"confirmation_bars":4,"minimum_slope_pct":0.005}},"controls":{"max_entries_per_strategy_per_day":{"trend_following":2},"cooldown_minutes_by_strategy":{"trend_following":90}}}
-]

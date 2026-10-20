@@ -16,11 +16,10 @@ class BatchHooks:
     get_latest_ask: Callable
     get_latest_bid: Callable
     get_latest_price: Callable
-    validate_trade_legacy: Callable
+    validate_position_reduction: Callable
     cancel_open_orders_for_symbol: Callable
     get_positions: Callable
     place_order: Callable
-    default_target_multiplier: float
     market_tz: ZoneInfo
     log: logging.Logger
 
@@ -31,7 +30,6 @@ def execute_trade_batch(
     args,
     mode: str,
     positions: dict,
-    stop_loss_pct: float,
     rm_portfolio_state: dict | None,
     hooks: BatchHooks,
 ) -> tuple[list[dict], int, int]:
@@ -179,20 +177,8 @@ def execute_trade_batch(
                         ref_price = 0.0
                         hooks.log.warning("No reference price for %s: %s", ticker, exc)
             if action == "short":
-                # Require broker-side protection for every short. For market
-                # entries, derive missing levels from the mode's configured
-                # hard stop and the shared target multiple. Limit entries need
-                # explicit levels because the fill may differ from the mark.
-                auto_bracket = mode in {"swing", "day"} and (order_type == "market" or (order_type == "bracket" and limit_price is None))
-                if auto_bracket and ref_price > 0:
-                    if stop_price is None:
-                        stop_price = round(ref_price * (1 + stop_loss_pct), 2)
-                    if take_profit is None:
-                        stop_dist = abs(ref_price - float(stop_price))
-                        take_profit = round(
-                            ref_price - stop_dist * hooks.default_target_multiplier,
-                            2,
-                        )
+                # Algo shorts require explicit broker-side protection. The
+                # signal generator supplies levels before execution.
                 try:
                     stop_value = float(stop_price)
                     target_value = float(take_profit)
@@ -289,20 +275,6 @@ def execute_trade_batch(
             )
             continue
 
-        # ── Auto-calculate swing long brackets (mandatory stops) ──────────────
-        if mode == "swing" and action == "buy" and order_type not in ("limit", "stop", "trailing_stop", "oco"):
-            pos = positions.get(ticker, {})
-            ref = entry_price or limit_price or float(pos.get("current_price", 0))
-            if ref > 0:
-                if stop_price is None:
-                    stop_price = round(ref * (1 - stop_loss_pct), 2)
-                if take_profit is None and stop_price is not None:
-                    stop_dist = abs(ref - float(stop_price))
-                    take_profit = round(ref + stop_dist * hooks.default_target_multiplier, 2)
-
-            if stop_price is not None:
-                hooks.log.info(f"{action.upper()} {ticker}: bracket order with stop=${stop_price:.2f} " f"target=${take_profit:.2f}")
-
         if args.dry_run:
             dry_entry = {
                 "ticker": ticker,
@@ -377,7 +349,7 @@ def execute_trade_batch(
                         }
                     )
                     continue
-                valid, reason = hooks.validate_trade_legacy(
+                valid, reason = hooks.validate_position_reduction(
                     ticker,
                     action,
                     qty,
@@ -396,8 +368,7 @@ def execute_trade_batch(
                         }
                     )
                     continue
-            # Short brackets are populated from the fresh quote above. Swing
-            # longs may use hooks.place_order()'s stop_pct fallback.
+            # Long and short entry levels are supplied by the Algo signal.
             result = hooks.place_order(
                 ticker,
                 action,
@@ -408,7 +379,6 @@ def execute_trade_batch(
                 limit_price=limit_price,
                 trail_percent=trail_percent,
                 entry_price=entry_price,
-                stop_pct=stop_loss_pct if mode == "swing" and action == "buy" else None,
                 client_order_id=client_order_id,
                 extended_hours=extended_hours,
             )

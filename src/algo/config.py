@@ -67,8 +67,7 @@ ALGO_SIGNAL_DATA_CONFIG = {
 # HMM/GMM fits on roughly three years of prior observations.
 ALGO_REGIME_WARMUP_CALENDAR_DAYS = 1400
 
-# Algo has its own fixed universe while signal and portfolio behavior are
-# validated. Swing and Day retain their separately configured fixed lists.
+# Algo's fixed portfolio universe used by live coordination and research.
 ALGO_PORTFOLIO_UNIVERSE = {
     "core_tech": {
         "label": "Mega-liquid Tech / Growth",
@@ -110,7 +109,7 @@ ALGO_MODE_CONFIG = {
     "universe": ALGO_PORTFOLIO_UNIVERSE,
     "risk": {
         "max_position_pct": 0.07,
-        # Algo-specific sizing override; Swing/Day keep their shared 5% cap.
+        # Strategy sizing cap used across Algo's holding-period groups.
         "max_strategy_position_pct": 0.07,
         "max_sector_pct": 0.40,
         # Conservative fallback plus explicit horizon-specific protection.
@@ -279,7 +278,7 @@ ALGO_REGIME_CONFIG = {
 ALGO_SERVICE_CONFIG = {
     "poll_seconds": 15,
     "state_file": "data/algo_state.json",
-    "lock_file": "/run/lock/swarm-trader-algo.lock",
+    "lock_file": "/run/lock/algo-trader.lock",
 }
 
 def get_algo_research_controls() -> dict:

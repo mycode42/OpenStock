@@ -1,33 +1,16 @@
-# OpenClaw trader schedules
+# Algo Trader automations
 
-All cron expressions below use `America/New_York`, so daylight saving changes do not shift the market-time schedule. The deterministic jobs run on the Gateway with `--command-argv` and `--command-cwd /opt/swarm-trader`. Their normal stdout is not delivered; OpenClaw sends the configured Telegram failure alert when a job fails. Existing report jobs still announce to the same chat and now fail if delivery fails.
+The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `America/New_York`; the morning report runs at 04:00 ET to cover the overnight session.
 
-| Job | Cron | Action | Failure alert |
-| --- | --- | --- | --- |
-| `swing-morning` | `30 9 * * 1-5` | Original README health check: Swing monitor, Swing risk status, and Swing performance snapshot. | After 1 error; 1-hour cooldown. |
-| `swing-midday` | `0 12 * * 1-5` | Original README Swing data review and trade proposal/execution instructions. | After 1 error; 1-hour cooldown. |
-| `swing-afternoon` | `0 15 * * 1-5` | Original README Swing monitor, performance snapshot, and EOD report. | After 1 error; 1-hour cooldown. |
-| `day-morning` | `35 9 * * 1-5` | Original README pre-market scan with VIX/calendar, market scanner, and Day data. | After 1 error; 1-hour cooldown. |
-| `day-midday` | `0 12 * * 1-5` | Original README Day account monitor, afternoon setup review, and trade proposal/execution instructions. | After 1 error; 1-hour cooldown. |
-| `day-flatten` | `45 15 * * 1-5` | Original README mandatory Day flatten, verification, performance snapshot, and EOD report. Commands explicitly select Day mode. | After 1 error; 1-hour cooldown. |
-| `swing-close-snapshot` | `5 16 * * 1-5` | Record the broker-calendar-verified Swing close snapshot. | After 1 error or skipped run; 1-hour cooldown. |
-| `day-close-snapshot` | `6 16 * * 1-5` | Record the broker-calendar-verified Day close snapshot. | After 1 error or skipped run; 1-hour cooldown. |
-| `algo-close-snapshot` | `7 16 * * 1-5` | Record the broker-calendar-verified Algo close snapshot. | After 1 error or skipped run; 1-hour cooldown. |
-| `algo-health` | `0 * * * *` | Run the read-only Algo service, scan and persisted-state health check. | After 1 error or skipped run; 2-hour cooldown. |
-| `algo-event-calendar` | `5 4 * * 1-5` | Refresh upcoming Nasdaq earnings events for the fixed 22-symbol Algo universe and merge published BLS/Fed dates into `data/event_calendar.csv`; report macro schedule coverage gaps. | After 1 error or skipped run; 1-hour cooldown. |
-| `algo-auto-research-run` | `15 17 * * *` | Refresh Plus SIP bars, discover from the latest 10–90 sessions, fit rolling verification from January 2024, test successive 63-session folds after the initial 90-session fit, then replay those same OOS folds as a combined portfolio. Reuse only artifacts with the current 2024 policy fingerprint. Research only; no live settings or orders. | After 1 error or skipped run; 1-hour cooldown. |
-| `algo-auto-research-report` | `0 6 * * 1-5` (`Europe/Berlin`) | Read `data/research/algo-auto/latest.json` and report the prior US trading session's scorecard, run-to-run fitness timeline, discovery wins/failures, next search plan, data coverage, verification and portfolio replay when available. | After 1 error or skipped run; 1-hour cooldown. |
-| `autoresearch-run` | `0 17 * * 1-5` | Run the original Swarm Trader LLM-driven strategy evolution for 50 iterations and write `/tmp/autoresearch-latest.log`. | After 1 error; 1-hour cooldown. |
-| `autoresearch-report` | `0 20 * * 1-5` | Summarize `/tmp/autoresearch-latest.log`. This legacy Swarm Trader research is separate from Algo AutoResearch. | After 1 error; 1-hour cooldown. |
+| Job | Schedule | Purpose |
+| --- | --- | --- |
+| `health` | Hourly | Read-only service, scan, state, and broker-protection check. |
+| `event-briefing` | 10:00, 13:00, and 15:00 ET, weekdays | Refresh the read-only Event Driven signal snapshot and report market context. |
+| `midday` | 11:35 ET, weekdays | Send a concise Algo account and strategy update. |
+| `close-snapshot` | 16:07 ET, weekdays | Save a broker-calendar-verified account close snapshot. |
+| `autoresearch` | 20:15 ET, daily | Run one research cycle and report its verification results. Research may write artifacts; it does not place trades or alter live settings. |
+| `morning` | 04:00 ET, weekdays | Send an overnight session, order, risk, and fill-attribution report. |
 
-The Algo AutoResearch runner runs daily at 17:15 America/New_York, including weekends. Its report, six canonical Swing/Day trading jobs, three close snapshots, and the original Swarm Trader AutoResearch jobs run Monday through Friday. The two additional Day setup jobs, `day-brunch` and `day-afternoon`, are disabled so the Day agent returns to the original three analysis/flatten checkpoints. The live Gateway inventory currently contains the three canonical Day jobs (`day-morning`, `day-midday`, and `day-flatten`); separate Day opening-recovery and flatten-guard jobs are not installed. `algo-health` runs hourly every day because the Algo service also covers Sunday night. Close snapshots run only after the exchange close; a market holiday is a successful skip. The six canonical trading jobs retain their existing New York schedules and explicitly select the correct mode on data, snapshot, and flatten commands where needed.
+The live OpenClaw Gateway is the source of truth for job schedules and prompts. Use `openclaw automations list --all` and `openclaw automations get <job-id>` to inspect the declarations. Report templates are in [`openclaw_prompts/`](openclaw_prompts/).
 
-The four Algo trading reports use [`algo_report.txt`](openclaw_prompts/algo_report.txt) or the close variant [`algo_close_report.txt`](openclaw_prompts/algo_close_report.txt). They distinguish journal submissions from broker-confirmed fills and label delayed BOATS historical bars during overnight sessions. The Algo AutoResearch report job carries its read-only Telegram instructions in its OpenClaw declaration; it cannot write live settings or submit orders. The Swing/Day `autoresearch-run` and `autoresearch-report` jobs retain the original LLM-driven workflow and a separate experiment log.
-
-The Day morning scan is a two-step data flow: run `scan_market.py --json`, take its `tickers` array, and pass those tickers to `gather_data.py --mode day --tickers ...`. Running the gatherer without `--tickers` does not consume the scanner output; it selects held positions and adds SPY/QQQ anchors, which can leave the report with no discovered candidates. The scanner and gatherer use the Day Alpaca account and the shared SIP feed configured by `src/market_data.py`. Day data includes `last_bar_age_minutes`; the report checks that age and five-minute bar coverage before describing a setup.
-
-The active `day-midday` agent follows the upstream Day data flow: from `/opt/swarm-trader`, run the scanner-to-gather sequence in one shell invocation: `TICKERS=$(poetry run python scan_market.py --max 25) && test -n "$TICKERS" && poetry run python gather_data.py --mode day --tickers "$TICKERS" --output /tmp/data.json`. This checkout routes the scanner and Day-mode gatherer through `src/accounts.py` to the DayTrading Alpaca account; intraday bars use the configured Alpaca feed. Read only the fresh output from that run. Require `mode=day`, current `generated_at`, current-session five-minute bars, and the existing 15-minute latest-bar freshness limit; never substitute a Swing/Algo snapshot. The scanner discovers candidates but does not provide setup-grade bars/indicators. The Day agent assesses the gathered data directly; `run_hedge_fund.py` is not part of this automation. Keep the existing `execute_trades.py --mode day` path and risk checks unchanged.
-
-Swarm Trader and Algo keep separate agents, strategy state, schedules, and account routes while sharing the repository's Alpaca integration and risk-checked execution boundary. Algo-owned strategy code lives under `src/algo/`; only the shared account selector, executor, and risk manager cross that boundary.
-
-Inspect the live declarations with `openclaw cron list --all --json`. The pre-change and post-change job declarations are backed up as `openclaw-crons-before.json` and `openclaw-crons-after.json` under `data/backups/pre-migration-20261008T073438Z/`.
+Only the continuously running Algo coordinator can submit Algo orders. The scheduled briefing and report jobs are read-only; the AutoResearch job writes only its normal research artifacts.

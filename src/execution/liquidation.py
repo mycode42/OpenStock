@@ -21,24 +21,12 @@ class LiquidationHooks:
     headers: Callable
     verify_algo_execution_lease: Callable
     verify_account_for_mode: Callable
-    get_mode_config: Callable
-    get_day_schedule: Callable
     list_positions: Callable
     list_open_orders: Callable
     position_qty: Callable
     cancel_orders: Callable
     submit_flatten_order: Callable
     get_order_status: Callable
-
-
-def _day_market_is_open(hooks: LiquidationHooks, mode: str) -> bool:
-    risk = hooks.get_mode_config(mode)["risk"]
-    schedule = hooks.get_day_schedule(
-        flatten_by=risk.get("flatten_by", "15:45"),
-        flatten_lead_minutes=risk.get("flatten_lead_minutes", 15),
-        entry_cutoff_minutes=risk.get("entry_cutoff_minutes", 15),
-    )
-    return schedule is not None and schedule.market_open(datetime.now(MARKET_TZ))
 
 
 @contextmanager
@@ -66,7 +54,7 @@ def account_execution_lock(mode: str, lock_dir: Path, timeout_seconds: float = 1
 def flatten_all_unlocked(
     hooks: LiquidationHooks,
     dry_run: bool = False,
-    mode: str = "day",
+    mode: str = "algo",
     poll_attempts: int = 10,
     poll_interval: float = 1.0,
 ) -> dict:
@@ -111,8 +99,7 @@ def flatten_all_unlocked(
 
     try:
         if not dry_run:
-            if mode == "algo":
-                hooks.verify_algo_execution_lease()
+            hooks.verify_algo_execution_lease()
             hooks.verify_account_for_mode(mode)
         positions = hooks.list_positions(headers)
         open_orders = hooks.list_open_orders(headers)
@@ -129,13 +116,6 @@ def flatten_all_unlocked(
                 if hooks.position_qty(position) != 0
             )
             return report("dry_run")
-
-        if mode == "day" and any(hooks.position_qty(position) != 0 for position in positions):
-            # Protect Day holdings when the market is closed; cancelling their
-            # protective orders without being able to close would expose them.
-            if not _day_market_is_open(hooks, mode):
-                errors.append("Day market is closed; existing position orders were left intact")
-                return report("failed")
 
         for attempt in range(poll_attempts):
             if not open_orders:
@@ -155,11 +135,6 @@ def flatten_all_unlocked(
         positions = hooks.list_positions(headers)
         if not any(hooks.position_qty(position) != 0 for position in positions):
             return report("already_flat" if initial_count == 0 else "flattened")
-
-        if mode == "day":
-            if not _day_market_is_open(hooks, mode):
-                errors.append("Day market is closed; a market close cannot be verified before the bell")
-                return report("failed")
 
         for position in positions:
             if hooks.position_qty(position) != 0:
@@ -190,7 +165,7 @@ def flatten_all(
     hooks: LiquidationHooks,
     lock_dir: Path,
     dry_run: bool = False,
-    mode: str = "day",
+    mode: str = "algo",
     poll_attempts: int = 10,
     poll_interval: float = 1.0,
 ) -> dict:

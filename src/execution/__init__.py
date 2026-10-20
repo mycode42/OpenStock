@@ -1,1 +1,1 @@
-"""Execution services for the swing, day, and Algo trading modes."""
+"""Broker execution and safety services for Algo Trader."""

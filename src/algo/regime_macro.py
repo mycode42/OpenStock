@@ -96,7 +96,7 @@ def refresh_fred_regime_series(
     getter = request_get or requests.get
     response = getter(
         FRED_CSV_URL, params={"id": ",".join(FRED_SERIES)},
-        headers={"User-Agent": "swarm-trader-regime/1.0"}, timeout=12,
+        headers={"User-Agent": "algo-trader-regime/1.0"}, timeout=12,
     )
     response.raise_for_status()
     parsed = parse_fred_csv(response.text, today=current.date())

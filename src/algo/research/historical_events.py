@@ -162,7 +162,7 @@ def _respect_sec_rate_limit() -> None:
 def _get(url: str, *, sec: bool = False, timeout: int = 30) -> requests.Response:
     if sec:
         _respect_sec_rate_limit()
-    headers = SEC_HEADERS if sec else {"User-Agent": "SwarmTraderAlgoResearch/1.6"}
+    headers = SEC_HEADERS if sec else {"User-Agent": "AlgoTraderResearch/1.6"}
     response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response

@@ -78,7 +78,7 @@ class ScanDependencies(TypedDict):
 
 
 def scan(
-    mode: str = "swing",
+    mode: str = "algo",
     *,
     universe_result: dict | None = None,
     excluded_symbols: set[str] | None = None,

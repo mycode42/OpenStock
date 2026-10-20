@@ -1,4 +1,4 @@
-"""Configured Swing, Day, and fixed Algo universes."""
+"""The fixed Algo portfolio universe and its broker eligibility metadata."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
 ET = ZoneInfo("America/New_York")
 
 
-def configured_universe(mode: str) -> dict:
-    """Return the complete fixed ticker list and category map for a mode."""
-    if mode not in {"swing", "day", "algo"}:
-        raise ValueError("Configured universes are available for swing, day, and algo modes")
+def configured_universe(mode: str = "algo") -> dict:
+    """Return the configured Algo ticker list and category map."""
+    if mode != "algo":
+        raise ValueError("Only the algo account route is supported")
     mode_config = get_mode_config(mode)
     categories: dict[str, str] = {}
     tickers: list[str] = []
@@ -31,11 +31,10 @@ def configured_universe(mode: str) -> dict:
                 tickers.append(ticker)
 
     result = {"tickers": tickers, "categories": categories}
-    if mode == "algo":
-        result["sector_by_symbol"] = {
-            ticker: ALGO_FACTOR_SECTOR_BY_SYMBOL[ticker]
-            for ticker in tickers if ticker in ALGO_FACTOR_SECTOR_BY_SYMBOL
-        }
+    result["sector_by_symbol"] = {
+        ticker: ALGO_FACTOR_SECTOR_BY_SYMBOL[ticker]
+        for ticker in tickers if ticker in ALGO_FACTOR_SECTOR_BY_SYMBOL
+    }
     return result
 
 

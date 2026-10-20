@@ -250,7 +250,7 @@ def _available_strategies(
 
 
 def rank_strategies(
-    spy_daily_bars: list[dict], mode: str = "swing", *,
+    spy_daily_bars: list[dict], mode: str = "algo", *,
     event_enabled: bool = False, event_disable_in_volatile: bool = True,
     intraday_trend_enabled: bool = False, intraday_momentum_enabled: bool = False,
     feature_set: str = "legacy", engine: str = "legacy",

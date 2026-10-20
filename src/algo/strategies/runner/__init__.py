@@ -1,8 +1,7 @@
 """Internal strategy scanner used by the continuous Algo portfolio.
 
-The live scanner receives Algo ownership and lifecycle state from
-``src.algo.daemon``. Swing and Day analysis remains in Swarm Trader's agent
-workflows and does not use this module.
+The live scanner receives ownership and lifecycle state from
+``src.algo.daemon``. All account requests use the dedicated Algo route.
 """
 
 from __future__ import annotations
@@ -116,7 +115,7 @@ def execute_trades(trades: list[dict], *, mode: str, dry_run: bool = False) -> d
 
 
 def scan(
-    mode: str = "swing",
+    mode: str = "algo",
     *,
     universe_result: dict | None = None,
     excluded_symbols: set[str] | None = None,
@@ -153,8 +152,7 @@ def scan(
 def main() -> int:
     print(
         "The Algo scanner requires coordinator-owned lifecycle state. "
-        "Run the service with `python -m src.algo.daemon`; "
-        "Swing and Day workflows use their Swarm Trader agents.",
+        "Run the service with `python -m src.algo.daemon`.",
         file=sys.stderr,
     )
     raise SystemExit(2)

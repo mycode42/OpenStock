@@ -15,7 +15,7 @@ from src.algo.strategies.multi_factor.ranking import FactorRanker
 from src.algo.strategies.swing_common import clean_daily_bars, held_sessions
 
 
-LOG = logging.getLogger("swarm_trader.multi_factor")
+LOG = logging.getLogger("algo_trader.multi_factor")
 
 
 @dataclass(frozen=True)

@@ -31,7 +31,7 @@ from src.algo.strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMa
 from src.algo.strategies.universe import configured_universe, load_algo_universe
 
 
-LOG = logging.getLogger("swarm_trader.algo")
+LOG = logging.getLogger("algo_trader.algo")
 STOP = False
 
 
@@ -170,7 +170,7 @@ def _status(path: Path) -> None:
         state_error = str(exc)
     try:
         active = subprocess.run(
-            ["systemctl", "is-active", "--quiet", "swarm-trader-algo.service"],
+            ["systemctl", "is-active", "--quiet", "algo-trader.service"],
             check=False,
             timeout=5,
         ).returncode == 0
@@ -179,7 +179,7 @@ def _status(path: Path) -> None:
     portfolio = raw.get("strategy_portfolio") or {}
     universe = portfolio.get("universe") or {}
     print(json.dumps({
-        "service": "swarm-trader-algo.service",
+        "service": "algo-trader.service",
         "service_active": active,
         "runtime_mode": portfolio.get("runtime_mode", "algo"),
         "market_state": raw.get("market_state", "UNKNOWN"),
@@ -378,7 +378,7 @@ def run_loop(
     coordinator_token = secrets.token_urlsafe(32)
     coordinator_pid = os.getpid()
     store.activate_coordinator(coordinator_token, coordinator_pid)
-    os.environ["SWARM_ALGO_COORDINATOR_TOKEN"] = coordinator_token
+    os.environ["ALGO_COORDINATOR_TOKEN"] = coordinator_token
     cycle = 0
     last_scan_monotonic: float | None = None
     last_universe_attempt_monotonic: float | None = None
@@ -578,7 +578,7 @@ def run_loop(
                 time.sleep(max(1, int(ALGO_SERVICE_CONFIG["poll_seconds"])))
     finally:
         store.clear_coordinator(coordinator_token, coordinator_pid)
-        os.environ.pop("SWARM_ALGO_COORDINATOR_TOKEN", None)
+        os.environ.pop("ALGO_COORDINATOR_TOKEN", None)
 
 
 def _sleep_before_next_session(now: datetime, calendar: list[dict]) -> None:

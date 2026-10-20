@@ -1,7 +1,7 @@
 import pytest
 
 import risk_manager
-from src.config import ALGO_MODE_CONFIG, MODES, STRATEGY_CONFIG, get_mode_config
+from src.config import ALGO_MODE_CONFIG, STRATEGY_CONFIG, get_mode_config
 from src.algo.strategies import mean_reversion, momentum, trend_following
 from src.algo.strategies.regime import rank_strategies
 from src.algo.strategies.signals import Signal
@@ -62,7 +62,7 @@ def _bars(closes, volumes=None):
     ]
 
 
-def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
+def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 18
     assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 10
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.07
@@ -86,12 +86,8 @@ def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["mean_reversion"] <= 0.012
     assert STRATEGY_CONFIG["enable_intraday_trend"] is False
     assert STRATEGY_CONFIG["enable_intraday_momentum"] is False
-    assert MODES["swing"]["risk"]["max_open_positions"] == 12
-    assert MODES["swing"]["risk"]["max_trades_per_day"] == 4
-    assert MODES["day"]["risk"]["max_open_positions"] == 8
-    assert MODES["day"]["risk"]["max_trades_per_day"] == 20
     assert STRATEGY_CONFIG["extended_hours_max_spread_pct"] == 0.02
-    with pytest.raises(ValueError, match="Unknown mode"):
+    with pytest.raises(ValueError, match="Only the algo account route"):
         get_mode_config("unknown")
 
 

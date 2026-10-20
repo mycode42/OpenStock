@@ -32,7 +32,7 @@ LOG = logging.getLogger("algo_event_calendar")
 ET = ZoneInfo("America/New_York")
 NASDAQ_EARNINGS_URL = "https://api.nasdaq.com/api/calendar/earnings"
 NASDAQ_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; SwarmTraderEventCalendar/1.0)",
+    "User-Agent": "Mozilla/5.0 (compatible; AlgoTraderEventCalendar/1.0)",
     "Accept": "application/json, text/plain, */*",
     "Origin": "https://www.nasdaq.com",
     "Referer": "https://www.nasdaq.com/",

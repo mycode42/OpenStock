@@ -1,4 +1,4 @@
-"""Run the Swarm analyst workflow and publish Algo event recommendations."""
+"""Run a read-only analyst pass and publish Algo Event Driven recommendations."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from uuid import uuid4
 from src.algo.strategies.event_driven.ai import DEFAULT_AI_SIGNAL_FILE, write_ai_event_snapshot
 from src.algo.strategies.universe import configured_universe
 from src.alpaca_integration import convert_to_portfolio, get_alpaca_account, get_alpaca_positions
-from src.main import run_hedge_fund
+from src.analyst_graph import run_analyst_graph
 
 
 ANALYSTS = [
@@ -28,6 +28,24 @@ ANALYSTS = [
     "growth_analyst",
 ]
 DEFAULT_TTL_MINUTES = 90
+
+
+def _resolve_openclaw_model(fallback: str = "qwen3.5:397b-cloud") -> str:
+    """Resolve the configured OpenClaw model for this scheduled analysis."""
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        agents = config.get("agents", {})
+        for agent in agents.get("list", []):
+            if agent.get("id") == "drox":
+                model = agent["model"]["primary"]
+                return model.split("/", 1)[-1] if "/" in model else model
+        model = agents.get("defaults", {}).get("model", {}).get("primary", "")
+        if model:
+            return model.split("/", 1)[-1] if "/" in model else model
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return fallback
 
 
 def _json_fallback(value: object):
@@ -67,7 +85,7 @@ def _json_safe(value: object):
 
 def _decision_payload(tickers: list[str], raw_decisions: object) -> dict[str, dict]:
     if not isinstance(raw_decisions, dict):
-        raise ValueError("Swarm analysts returned no decision object")
+        raise ValueError("Analyst graph returned no decision object")
     normalized: dict[str, dict] = {}
     for ticker in tickers:
         decision = raw_decisions.get(ticker, raw_decisions.get(ticker.upper(), {}))
@@ -114,12 +132,11 @@ def run_analysis(
     start_date = end_date - timedelta(days=90)
     model_name = os.getenv("LLM_MODEL")
     if not model_name:
-        from run_hedge_fund import _resolve_openclaw_model
         model_name = _resolve_openclaw_model()
     model_provider = os.getenv("LLM_PROVIDER", "Ollama")
 
     with redirect_stdout(io.StringIO()):
-        result = run_hedge_fund(
+        result = run_analyst_graph(
             tickers=universe,
             start_date=start_date.isoformat(),
             end_date=end_date.isoformat(),
@@ -131,7 +148,7 @@ def run_analysis(
         )
 
     if not isinstance(result, dict):
-        raise ValueError("Swarm analyst workflow returned an invalid result")
+        raise ValueError("Analyst graph returned an invalid result")
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=ttl_minutes)
     decisions = _decision_payload(universe, result.get("decisions"))

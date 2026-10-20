@@ -1,4 +1,4 @@
-First inspect the runner with `openclaw automations get a66b8ffd-8154-482b-82a8-2480661c0fac`, then read `/opt/swarm-trader/data/research/algo-auto/latest.json`. This is a read-only report. Do not edit settings, restart services, place or modify orders, or present a research candidate as live.
+First inspect the runner with `openclaw automations list --all`, then read `/opt/algo-trader/data/research/algo-auto/latest.json`. This is a read-only report. Do not edit settings, restart services, place or modify orders, or present a research candidate as live.
 
 If the runner is still running, do not summarize an older report. If the latest report is missing, invalid, stale for today's America/New_York date, or has status `error`, say so clearly.
 
