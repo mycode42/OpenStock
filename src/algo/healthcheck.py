@@ -297,6 +297,7 @@ def _bracket_stop_gaps(
         )
         replacement_oco_covers_position = (
             not bracket_stop_covers_position
+            and regular_session
             and position_qty is not None
             and verified_recovery_oco(nested_orders, state, position_qty)
         )

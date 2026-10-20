@@ -1,6 +1,6 @@
 """Conservative, coordinator-only repair of a missing Algo bracket stop.
 
-Only the regular-session daemon calls this module. It persists a stable OCO
+The routine can run in every active Alpaca session. It persists a stable OCO
 client ID before using the canonical executor, and broker orders remain the
 only evidence that a replacement actually protects the whole holding.
 """
@@ -14,9 +14,6 @@ from typing import Callable
 
 from src.algo.incidents import record_incident, resolve_incident
 from src.algo.protection import recovery_oco_order
-from src.market_data import regular_feed
-
-
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
 RETRY_SECONDS = 90
 MAX_DECISIONS = 3
@@ -124,9 +121,10 @@ def _lookup_matches(order: dict, symbol: str, recovery: dict) -> bool:
 
 
 def _fresh_inside_quote(
-    broker, symbol: str, stop: Decimal, target: Decimal, now: datetime, *, is_short: bool = False,
+    broker, symbol: str, stop: Decimal, target: Decimal, now: datetime, *,
+    feed: str, is_short: bool = False,
 ) -> Decimal | None:
-    quote = broker.latest_quotes([symbol], feed=regular_feed()).get(symbol)
+    quote = broker.latest_quotes([symbol], feed=feed).get(symbol)
     if not isinstance(quote, dict):
         return None
     age = _age_seconds(now, quote.get("timestamp"))
@@ -165,18 +163,23 @@ def recover_broker_protection(
     verified = set(startup.get("verified_positions") or [])
     if not gaps or not verified:
         return {"status": "not_needed", "submitted": [], "verified": [], "waiting": [], "errors": []}
+    session_name = getattr(window, "name", None)
+    extended_hours = session_name != "regular"
     if (
-        getattr(window, "name", None) != "regular"
-        or bool(getattr(window, "extended_hours", True))
-        or not window.regular_open <= now.astimezone(window.regular_open.tzinfo) < window.regular_close
+        session_name not in {"regular", "premarket", "after_hours", "overnight"}
+        or bool(getattr(window, "extended_hours", extended_hours)) != extended_hours
     ):
-        return {"status": "outside_regular_hours", "submitted": [], "verified": [], "waiting": [], "errors": []}
+        return {"status": "outside_trading_session", "submitted": [], "verified": [], "waiting": [], "errors": []}
+    local_now = now.astimezone(window.regular_open.tzinfo)
+    if session_name == "regular" and not window.regular_open <= local_now < window.regular_close:
+        return {"status": "outside_trading_session", "submitted": [], "verified": [], "waiting": [], "errors": []}
     checked_age = _age_seconds(now, startup.get("checked_at"))
     if checked_age is None or not -5 <= checked_age <= 600:
         return {"status": "stale_reconciliation", "submitted": [], "verified": [], "waiting": [], "errors": []}
-    clock = broker.clock()
-    if not isinstance(clock, dict) or clock.get("is_open") is not True:
-        return {"status": "broker_market_closed", "submitted": [], "verified": [], "waiting": [], "errors": []}
+    if session_name == "regular":
+        clock = broker.clock()
+        if not isinstance(clock, dict) or clock.get("is_open") is not True:
+            return {"status": "broker_market_closed", "submitted": [], "verified": [], "waiting": [], "errors": []}
 
     positions = broker.positions()
     if not isinstance(positions, list):
@@ -276,8 +279,11 @@ def recover_broker_protection(
         # remove a duplicate parent from the open view before evaluating it.
         if oco_nested:
             nested_orders = [row for row in nested_orders if row is oco_nested or str(row.get("id") or "") != str(oco_id)]
-        if recovery_oco_order(nested_orders, state, qty):
+        if not extended_hours and recovery_oco_order(nested_orders, state, qty):
             incident_resolved = resolve_incident(portfolio, kind="oco_repair", ticker=symbol)
+            incident_resolved = resolve_incident(
+                portfolio, kind="exit_submission", ticker=symbol,
+            ) or incident_resolved
             if recovery.get("status") != "verified":
                 recovery["status"] = "verified"
                 recovery["verified_at"] = now.isoformat()
@@ -328,7 +334,10 @@ def recover_broker_protection(
                 "status": "prepared", "prepared_at": now.isoformat(),
             }
 
-        quote_reference = _fresh_inside_quote(broker, symbol, stop, target, now, is_short=is_short)
+        quote_reference = _fresh_inside_quote(
+            broker, symbol, stop, target, now,
+            feed=window.quote_feed, is_short=is_short,
+        )
         if quote_reference is None:
             report["waiting"].append(f"{symbol}: no fresh quote strictly inside persisted stop and target")
             continue
@@ -344,6 +353,7 @@ def recover_broker_protection(
             "order_type": "oco", "stop_price": float(stop),
             "take_profit": float(target), "entry_price": float(quote_reference),
             "strategy": owner, "client_order_id": client_id,
+            "extended_hours": extended_hours,
             "reasoning": "restore broker stop and take-profit coverage for an owned Algo holding",
         }
         try:
@@ -400,11 +410,16 @@ def recover_broker_protection(
                     if fresh_lookup and _lookup_matches(fresh_lookup, symbol, recovery):
                         fresh_order_id = str(fresh_lookup.get("id") or "")
                 fresh_oco = _exact_nested(broker, str(fresh_order_id), symbol) if fresh_order_id else None
-                if fresh_qty is not None and fresh_oco and recovery_oco_order([fresh_oco], state, fresh_qty):
+                if (
+                    not extended_hours
+                    and fresh_qty is not None and fresh_oco
+                    and recovery_oco_order([fresh_oco], state, fresh_qty)
+                ):
                     recovery["order_id"] = str(fresh_order_id)
                     recovery["status"] = "verified"
                     recovery["verified_at"] = now.isoformat()
                     resolve_incident(portfolio, kind="oco_repair", ticker=symbol)
+                    resolve_incident(portfolio, kind="exit_submission", ticker=symbol)
                     report["errors"] = [
                         error for error in report["errors"]
                         if not error.startswith(f"{symbol}:")
@@ -412,7 +427,12 @@ def recover_broker_protection(
                     save()
                     report["verified"].append(symbol)
                 else:
-                    report["waiting"].append(f"{symbol}: OCO submitted; stop child not yet broker-verified")
+                    reason = (
+                        "OCO submitted; broker stop child cannot be verified until regular hours"
+                        if extended_hours else
+                        "OCO submitted; stop child not yet broker-verified"
+                    )
+                    report["waiting"].append(f"{symbol}: {reason}")
             else:
                 report["errors"].append(f"{symbol}: duplicate broker position rows after OCO submission")
         except Exception as exc:

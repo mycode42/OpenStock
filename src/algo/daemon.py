@@ -129,6 +129,7 @@ def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, wi
             exact_entry_orders=orders.exact_entry_orders,
             exact_incident_orders=orders.exact_incident_orders,
             require_broker_stops=window.name == "regular",
+            regular_session=window.name == "regular",
         )
         if not report["unprotected_positions"]:
             portfolio["protection_recovery_status"] = {
@@ -427,11 +428,11 @@ def run_loop(
                     )
 
                 # Restore broker-hosted protection before the strategy scan
-                # can consider new entries or software exits. A stale OCO
-                # parent is not protection until its stop child is verified.
+                # can consider new entries or software exits in every active
+                # session. Extended-session OCOs remain unverified until the
+                # broker stop child is eligible and can be confirmed in RTH.
                 if (
                     not dry_run
-                    and window.name == "regular"
                     and (portfolio.get("startup_reconciliation") or {}).get("unprotected_positions")
                     and (last_recovery_monotonic is None or time.monotonic() - last_recovery_monotonic >= 60)
                 ):

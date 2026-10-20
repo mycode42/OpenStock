@@ -7,7 +7,6 @@ from decimal import Decimal, InvalidOperation
 
 from src.algo.protection import ACTIVE_ORDER_STATUSES, recovery_oco_order
 from src.algo.reconciliation import OPEN_ORDER_STATUSES
-from src.market_data import regular_feed
 
 
 PENDING_REPLACE_STATUSES = frozenset({
@@ -85,8 +84,11 @@ def _bracket_stop(parent: dict, state: dict, qty: Decimal) -> tuple[dict | None,
     return stops[0], None
 
 
-def _quote_is_inside(broker, symbol: str, qty: Decimal, stop: Decimal, target: Decimal, now: datetime) -> bool:
-    quotes = broker.latest_quotes([symbol], feed=regular_feed())
+def _quote_is_inside(
+    broker, symbol: str, qty: Decimal, stop: Decimal, target: Decimal,
+    now: datetime, *, feed: str,
+) -> bool:
+    quotes = broker.latest_quotes([symbol], feed=feed)
     quote = quotes.get(symbol) if isinstance(quotes, dict) else None
     if not isinstance(quote, dict):
         return False
@@ -166,7 +168,15 @@ def sync_broker_stops(
     """
     now = now or datetime.now(timezone.utc)
     report = {"status": "not_needed", "checked_at": now.isoformat(), "updated": [], "verified": [], "waiting": [], "errors": []}
-    if getattr(window, "name", None) != "regular":
+    session_name = getattr(window, "name", None)
+    extended_hours = session_name != "regular"
+    if (
+        session_name not in {"regular", "premarket", "after_hours", "overnight"}
+        or bool(getattr(window, "extended_hours", extended_hours)) != extended_hours
+    ):
+        return report
+    local_now = now.astimezone(window.regular_open.tzinfo)
+    if session_name == "regular" and not window.regular_open <= local_now < window.regular_close:
         return report
 
     owners = portfolio.get("position_owners") or {}
@@ -308,10 +318,13 @@ def sync_broker_stops(
             if unexpected:
                 report["waiting"].append(f"{symbol}: another open broker order prevents stop replacement")
                 continue
-            if not _quote_is_inside(broker, symbol, signed_qty, desired, target, now):
+            if not _quote_is_inside(
+                broker, symbol, signed_qty, desired, target, now,
+                feed=window.quote_feed,
+            ):
                 report["waiting"].append(f"{symbol}: no fresh quote strictly inside the saved stop and target")
                 continue
-            if not clock_checked:
+            if not clock_checked and session_name == "regular":
                 clock = broker.clock()
                 clock_checked = True
                 if not isinstance(clock, dict) or clock.get("is_open") is not True:
