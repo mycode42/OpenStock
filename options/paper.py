@@ -41,9 +41,8 @@ from options.symbols import parse_occ_symbol
 from portfolio.config import ALGO_SERVICE_CONFIG
 from runtime.paths import DATA_DIR, ROOT
 from strategies.event_driven.ai import AIEventSignalBook
-from strategies.event_driven.calendar import EventCalendar
-from strategies.event_driven.models import ScheduledEvent
 from strategies.options.base import OptionsStrategyContext
+from strategies.options.base import regime_risk_multiplier
 from strategies.options.event_driven import EventDrivenOptionsStrategy
 from strategies.options.vrp import VolatilityRiskPremiumStrategy
 
@@ -84,57 +83,10 @@ def _state_regime() -> tuple[str, str]:
         return "unknown", "unknown"
 
 
-def _load_event_calendar(
-    path: Path = DATA_DIR / "event_calendar.csv",
-    *,
-    as_of: datetime | None = None,
-) -> tuple[EventCalendar, dict]:
-    try:
-        calendar = EventCalendar.from_csv(path)
-        freshness = calendar.freshness(as_of or datetime.now(timezone.utc))
-        return calendar, freshness
-    except (OSError, ValueError) as exc:
-        return EventCalendar(), {"fresh": False, "reason": f"calendar unavailable: {type(exc).__name__}"}
-
-
-def _load_historical_events(
-    *,
-    as_of: datetime,
-    lookback_days: int = 730,
-    archive_dir: Path = DATA_DIR / "event_calendar_snapshots",
-) -> tuple[tuple[ScheduledEvent, ...], dict]:
-    """Reconstruct recent past events from point-in-time calendar archives."""
-    if as_of.tzinfo is None or as_of.utcoffset() is None or lookback_days < 1:
-        raise ValueError("historical event lookup requires aware as_of and positive lookback")
-    latest_by_id: dict[str, ScheduledEvent] = {}
-    files = sorted(archive_dir.glob("*.csv")) if archive_dir.is_dir() else []
-    invalid_archives = 0
-    cutoff = as_of - timedelta(days=lookback_days)
-    for path in files:
-        try:
-            archive = EventCalendar.from_csv(path)
-        except (OSError, ValueError):
-            invalid_archives += 1
-            continue
-        for event in archive.events:
-            if event.known_at > as_of or event.scheduled_at >= as_of or event.scheduled_at < cutoff:
-                continue
-            previous = latest_by_id.get(event.event_id)
-            if previous is None or event.known_at >= previous.known_at:
-                latest_by_id[event.event_id] = event
-    events = tuple(sorted(latest_by_id.values(), key=lambda event: (event.scheduled_at, event.event_id)))
-    return events, {
-        "archive_files": len(files),
-        "invalid_archives": invalid_archives,
-        "historical_events": len(events),
-        "lookback_days": lookback_days,
-    }
-
-
-def _load_ai_recommendations(tickers: set[str]) -> tuple[dict, dict]:
+def _load_ai_recommendations(tickers: set[str] | None = None) -> tuple[dict, dict]:
     book = AIEventSignalBook()
     results = {}
-    for ticker in tickers:
+    for ticker in (tickers if tickers is not None else set(book.universe)):
         recommendation = book.recommendation(ticker, universe=set(book.universe))
         if recommendation is not None:
             results[ticker] = recommendation
@@ -366,15 +318,6 @@ def _order_payload(signal, contracts: int, limit_price: float, client_order_id: 
     }
 
 
-def _event_symbols(events: tuple[ScheduledEvent, ...], now: datetime, maximum_days: int) -> set[str]:
-    result = set()
-    for event in events:
-        days = (event.scheduled_at.astimezone(timezone.utc) - now).total_seconds() / 86400
-        if 0 <= days <= maximum_days and event.known_at <= now:
-            result.add(event.ticker.upper())
-    return result
-
-
 def _daily_order_count(orders: list[dict], now: datetime) -> int:
     count = 0
     for order in orders:
@@ -463,26 +406,14 @@ def run_paper_cycle(
             "filled_avg_price": order.get("filled_avg_price"),
             "legs": order.get("legs") or order.get("symbol"),
         })
-    calendar, calendar_status = _load_event_calendar(as_of=now)
-    history_lookback_days = int(config["event_driven"].get("realized_lookback_days", 730))
-    historical_events, historical_event_status = _load_historical_events(
-        as_of=now, lookback_days=history_lookback_days,
-    )
-    events_by_id = {event.event_id: event for event in historical_events}
-    events_by_id.update({event.event_id: event for event in calendar.events})
-    strategy_events = tuple(sorted(
-        events_by_id.values(), key=lambda event: (event.scheduled_at, event.event_id),
-    ))
     regime, volatility_state = _state_regime()
     candidates: list[tuple[object, OptionChain, list[tuple]]] = []
     diagnostics = {
-        "calendar": calendar_status,
         "regime": regime,
         "volatility_state": volatility_state,
         "options_trading_level": option_level,
         "options_approved_level": approved_level,
         "combined_daily_pnl_pct": combined_daily_pnl_pct,
-        "historical_event_archives": historical_event_status,
     }
     diagnostics["options_entries_today"] = entries_today
 
@@ -501,39 +432,68 @@ def run_paper_cycle(
             "regime_risk_multipliers": config.get("regime_risk_multipliers", {}),
         }
         signal = VolatilityRiskPremiumStrategy(strategy_config).generate(
-            OptionsStrategyContext(vrp_chain, closes, regime, volatility_state, calendar.events, as_of=now),
+            OptionsStrategyContext(vrp_chain, closes, regime, volatility_state, as_of=now),
         )
         if signal:
             structure = replace(signal.structure, metadata={**signal.structure.metadata, "underlying_spot": vrp_chain.spot})
             candidates.append((replace(signal, structure=structure), vrp_chain, closes))
         diagnostics["vrp"] = {"chain_contracts": len(vrp_chain.contracts), "signal": signal is not None, "feed": feed}
 
-    event_symbols = _event_symbols(calendar.events, now, int(config["event_driven"].get("max_days_before_event", 5))) if calendar_status.get("fresh") else set()
-    recommendations, ai_status = _load_ai_recommendations(event_symbols)
-    diagnostics["event_calendar_ai"] = ai_status
-    if config["event_driven"].get("enabled", True) and calendar_status.get("fresh"):
-        for symbol in sorted(event_symbols):
-            event_config = {
-                **config["event_driven"],
-                "regime_risk_multipliers": config.get("regime_risk_multipliers", {}),
-            }
-            chain = provider.get_chain(
-                symbol, as_of=now,
-                min_dte=max(0, int(event_config.get("min_dte", 3))),
-                max_dte=int(event_config.get("max_dte", 35)),
-            )
-            sessions = max(30, int(int(event_config.get("realized_lookback_days", 730)) * 252 / 365) + 5)
-            closes = provider.underlying_closes(symbol, as_of=now, sessions=sessions)
-            signal = EventDrivenOptionsStrategy(event_config).generate(
-                OptionsStrategyContext(
-                    chain, closes, regime, volatility_state, strategy_events,
-                    event_recommendations=recommendations, as_of=now,
-                ),
-            )
-            if signal:
-                structure = replace(signal.structure, metadata={**signal.structure.metadata, "underlying_spot": chain.spot})
-                candidates.append((replace(signal, structure=structure), chain, closes))
-        diagnostics["event_symbols"] = sorted(event_symbols)
+    recommendations, ai_status = _load_ai_recommendations()
+    event_config = {
+        **config["event_driven"],
+        "regime_risk_multipliers": config.get("regime_risk_multipliers", {}),
+    }
+    min_confidence = float(event_config.get("min_llm_confidence", 0.60))
+    eligible_recommendations = [
+        recommendation
+        for recommendation in recommendations.values()
+        if recommendation.action in {"buy", "sell"}
+        and recommendation.confidence / 100.0 >= min_confidence
+    ]
+    eligible_recommendations.sort(key=lambda item: (-item.confidence, item.ticker))
+    max_symbols = max(0, int(event_config.get("max_symbols_per_cycle", 3)))
+    selected_recommendations = eligible_recommendations[:max_symbols]
+    diagnostics["event_driven"] = {
+        "signal_source": "event_driven_llm_briefing",
+        "ai_signal_book": ai_status,
+        "eligible_recommendations": len(eligible_recommendations),
+        "selected_symbols": [item.ticker for item in selected_recommendations],
+        "max_symbols_per_cycle": max_symbols,
+    }
+    event_regime_weight = regime_risk_multiplier(event_config, regime)
+    diagnostics["event_driven"]["regime_risk_multiplier"] = event_regime_weight
+    if config["event_driven"].get("enabled", True) and event_regime_weight > 0:
+        strategy = EventDrivenOptionsStrategy(event_config)
+        event_errors = []
+        for recommendation in selected_recommendations:
+            symbol = recommendation.ticker
+            try:
+                chain = provider.get_chain(
+                    symbol,
+                    as_of=now,
+                    min_dte=int(event_config.get("min_dte", 3)),
+                    max_dte=int(event_config.get("max_dte", 35)),
+                )
+                signal = strategy.generate(
+                    OptionsStrategyContext(
+                        chain,
+                        (),
+                        regime,
+                        volatility_state,
+                        event_recommendations={symbol: recommendation},
+                        as_of=now,
+                    ),
+                )
+                if signal:
+                    structure = replace(signal.structure, metadata={**signal.structure.metadata, "underlying_spot": chain.spot})
+                    candidates.append((replace(signal, structure=structure), chain, []))
+            except Exception as exc:
+                event_errors.append({"underlying": symbol, "error": type(exc).__name__})
+                LOG.warning("Options event sleeve could not build %s from LLM briefing: %s", symbol, type(exc).__name__)
+        diagnostics["event_driven"]["chain_errors"] = event_errors
+    elif event_regime_weight <= 0:
+        diagnostics["event_driven"]["entries_disabled_for_regime"] = True
 
     # A flat options account may be used immediately; existing unrecognized
     # holdings prevent new entries until the risk adapter can price them.
@@ -601,6 +561,30 @@ def run_paper_cycle(
             decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "another options sleeve already proposed this underlying"})
             continue
         seen_underlyings.add(signal.underlying)
+        identity = (
+            f"{account_id}:{now.astimezone(_US_EQUITY_TZ).date()}:{signal.strategy}:"
+            f"{signal.structure.structure_id}:{signal.event_id or ''}"
+        )
+        client_order_id = "opt-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
+        prior_order = next(
+            (order for order in all_orders if str(order.get("client_order_id") or "") == client_order_id),
+            None,
+        )
+        prior_intent = journal.latest_matching("orders", "client_order_id", client_order_id)
+        journal_blocks_retry = prior_intent is not None and (
+            not submit or prior_intent.get("status") != "dry_run"
+        )
+        if prior_order is not None or journal_blocks_retry:
+            result = {
+                "signal": signal.to_dict(),
+                "approved": False,
+                "reason": "this signal already has an order intent for the current options session",
+                "client_order_id": client_order_id,
+                "existing_order": prior_order,
+            }
+            decisions.append(result)
+            journal.append("decisions", result)
+            continue
         if any(
             str(position.get("symbol") or "").upper() in {leg.contract.symbol for leg in signal.structure.legs}
             for position in option_positions_all
@@ -638,8 +622,6 @@ def run_paper_cycle(
             "projected_risk": decision.projected_risk,
         }
         if decision.approved:
-            identity = f"{account_id}:{now.date()}:{signal.strategy}:{signal.structure.structure_id}:{signal.event_id or ''}"
-            client_order_id = "opt-" + hashlib.sha256(identity.encode()).hexdigest()[:32]
             payload = _order_payload(signal, decision.contracts, decision.order_limit_price, client_order_id)
             result["order"] = payload
             result["estimated_costs"] = cost_model.estimate(signal.structure, decision.contracts)
@@ -684,6 +666,33 @@ def run_paper_cycle(
             entries_today += 1
         decisions.append(result)
         journal.append("decisions", result)
+
+    # Keep a per-account record of every successful scan, including cycles
+    # where no sleeve generated a signal. This lets status reports distinguish
+    # an idle strategy from an options runner that never executed.
+    journal.append("decisions", {
+        "kind": "cycle_summary",
+        "status": "signals_evaluated" if decisions else "no_signal",
+        "candidate_count": len(candidates),
+        "decision_count": len(decisions),
+        "approved_count": sum(bool(row.get("approved")) for row in decisions),
+        "submitted_count": sum(bool((row.get("broker_order") or {}).get("id")) for row in decisions),
+        "dry_run": not submit,
+        "regime": regime,
+        "volatility_state": volatility_state,
+        "diagnostics": diagnostics,
+    })
+    journal.append("orders", {
+        "kind": "cycle_summary",
+        "status": "cycle_no_order" if not any(row.get("order") for row in decisions) else "cycle_order_intent_recorded",
+        "candidate_count": len(candidates),
+        "decision_count": len(decisions),
+        "approved_count": sum(bool(row.get("approved")) for row in decisions),
+        "submitted_count": sum(bool((row.get("broker_order") or {}).get("id")) for row in decisions),
+        "dry_run": not submit,
+        "regime": regime,
+        "volatility_state": volatility_state,
+    })
 
     # Record account and option marks every run. This summary is option-account
     # only in the shared snapshot; equity risk is added when the coordinator reads it.

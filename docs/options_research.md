@@ -87,13 +87,14 @@ close proxy and the report marks that weaker data mode. To supply a separate
 historical close series, a JSON object may include `underlying_history`, keyed
 by symbol, with `[date, close]` rows.
 
-For event strategies, each row should include the point-in-time calendar
-records available on that date, including `event_id`, `event_type`, `ticker`,
-`scheduled_at`, `known_at`, `reaction_start_at`, and `reaction_end_at`. The
-event archive must contain prior matching events for historical move
-estimation. Event recommendations and equity signals can be arrays or maps by
-ticker; include `known_at` so future signals are excluded. Values are consumed
-as frozen inputs and are not recomputed by the research runner.
+For `event_driven`, include the frozen output from the existing event-driven
+LLM briefing in `event_recommendations`, keyed by ticker or as an array. Each
+signal should include `action`, `confidence`, `known_at`, `run_id`, and
+`reason`. The options search only varies the expression layer (confidence
+threshold and target DTE); it never reruns or searches the LLM analyst. The
+separate scheduled-event calendar is not required for this sleeve. Equity
+signals can also be supplied as frozen inputs; include `known_at` so future
+signals are excluded.
 
 Regime and volatility labels should come from the same point-in-time detector
 used by the equity strategies. Labels must be present on each snapshot; the

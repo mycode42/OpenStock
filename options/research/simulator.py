@@ -475,8 +475,7 @@ def simulate_options_strategy(
                 dte_max = int(strategy_section.get("max_dte", 730))
                 closes = dataset.provider.underlying_closes(
                     observation.underlying, as_of=observation.as_of,
-                    sessions=max(3, int(strategy_section.get("realized_lookback_sessions", 0)) + 1,
-                                 int(int(strategy_section.get("realized_lookback_days", 0)) * 252 / 365) + 5),
+                    sessions=max(3, int(strategy_section.get("realized_lookback_sessions", 0)) + 1),
                 )
                 context = OptionsStrategyContext(
                     chain=chain,

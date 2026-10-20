@@ -16,8 +16,9 @@ remain under the Algo coordinator; options orders use the dedicated
 | `options/assignment.py` | Basic American early-exercise/assignment heuristic for replay |
 | `broker/options.py` | Options-only Alpaca adapter; all order URLs are pinned to paper trading |
 | `options/paper.py` | Independent paper scan, order intent, reconciliation, and per-account journal |
+| `options/daemon.py` | Market-hours scans using the same account lock and paper risk path |
 | `strategies/options/vrp.py` | Rule-based SPY IV-versus-realized-volatility iron condor |
-| `strategies/options/event_driven.py` | Scheduled event move comparison and AI-directed defined-risk debit structures |
+| `strategies/options/event_driven.py` | Event-driven LLM briefing signals expressed as defined-risk debit spreads |
 | `strategies/options/directional_overlay.py` | Frozen equity signal expressed as a defined-risk debit vertical |
 | `options/research/` | Separate options search, purged walk-forward validation, costs, assignment, and reports |
 
@@ -43,6 +44,9 @@ poetry run python -m options.paper
 
 # Submit only approved orders to Alpaca's paper endpoint
 poetry run python -m options.paper --submit
+
+# Run a market-hours loop; omit --submit for a dry-run daemon
+poetry run python -m options.daemon --submit
 ```
 
 The packaged defaults are in `options/config.default.json`. Copy that file to
@@ -57,6 +61,9 @@ The runner rejects stale or one-sided option quotes. Alpaca documents OPRA as
 the consolidated feed and indicative data as a delayed, modified derivative
 ([market-data details](https://docs.alpaca.markets/us/docs/historical-option-data),
 [option snapshots](https://docs.alpaca.markets/us/reference/optionchain)).
+The systemd unit scans every 15 minutes during regular US hours, starts 10
+minutes after the open, and stops opening new trades 15 minutes before close.
+It submits orders only to the separate Alpaca paper endpoint.
 
 The dedicated options research runner is separate from equity autoresearch:
 
@@ -77,11 +84,11 @@ read model is `data/options/risk_snapshot.json`.
 - VRP uses SPY options with 25–45 DTE by default. It compares ATM IV against
   annualized realized volatility, requires an approved regime, then selects a
   1:1 defined-risk iron condor from short-delta and wing-delta bands.
-- Event options require a fresh scheduled-event calendar and at least three
-  matching historical event moves reconstructed from point-in-time calendar
-  archives. It buys an ATM straddle when the historical event move clears the
-  near-term IV-implied move; otherwise a fresh directional event-driven AI
-  signal can produce a debit vertical.
+- Event options consume the fresh point-in-time briefing produced by the
+  existing event-driven LLM strategy. A `buy` recommendation becomes a call
+  debit spread and a `sell` recommendation becomes a put debit spread. The
+  options expression does not require or generate the legacy scheduled-event
+  calendar, and it does not invoke or optimize the LLM core.
 - Both sleeves produce one contract before risk sizing. Sizing then uses the
   options account equity, maximum loss, estimated costs, current positions,
   combined stock/options delta, Greek limits, stress scenarios, assignment

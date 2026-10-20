@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import math
+import multiprocessing as mp
 from pathlib import Path
 import statistics
 
@@ -331,7 +332,11 @@ def run_adaptive_walk_forward(args) -> dict:
             index, result = _run_adaptive_fold(job)
             results_by_index[index] = result
     else:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        # This executor can be created inside a strategy worker. Spawn clean
+        # interpreters so fold workers do not inherit the outer pool's queues.
+        with ProcessPoolExecutor(
+            max_workers=workers, mp_context=mp.get_context("spawn"),
+        ) as pool:
             futures = {pool.submit(_run_adaptive_fold, job): job[0] for job in fold_jobs}
             for future in as_completed(futures):
                 index, result = future.result()

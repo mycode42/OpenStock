@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 import hashlib
 import json
 import logging
+import multiprocessing as mp
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -223,6 +224,7 @@ def run_adaptive_verifications(
             )
             with ProcessPoolExecutor(
                 max_workers=len(batch), initializer=_quiet_research_worker_logging,
+                mp_context=mp.get_context("spawn"),
             ) as executor:
                 futures = {
                     executor.submit(_run_adaptive_verification_job, (*job, per_strategy_workers)): job[0]

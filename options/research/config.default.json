@@ -82,9 +82,8 @@
         "wing_delta_max": [0.05, 0.07]
       },
       "event_driven": {
-        "min_move_edge_pct": [0.10, 0.15, 0.25],
-        "min_historical_events": [3, 5],
-        "max_days_before_event": [3, 5]
+        "min_llm_confidence": [0.60, 0.75],
+        "target_dte": [14, 21, 28]
       },
       "directional_overlay": {
         "long_delta": [0.40, 0.50],
@@ -104,7 +103,7 @@
   },
   "strategy_defaults": {
     "vrp": {"min_dte": 25, "max_dte": 45, "realized_lookback_sessions": 20, "short_delta_max": 0.20},
-    "event_driven": {"min_dte": 3, "max_dte": 35, "realized_lookback_days": 730},
+    "event_driven": {"min_dte": 3, "max_dte": 35, "target_dte": 21},
     "directional_overlay": {"min_dte": 25, "max_dte": 60, "target_dte": 40, "short_delta": 0.25}
   }
 }

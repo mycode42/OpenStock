@@ -125,13 +125,15 @@ def _signals(raw: Any, *, as_of: datetime) -> dict[str, object]:
         known = item.get("known_at", item.get("created_at"))
         if known and _timestamp(known, field="signal.known_at") > as_of:
             continue
-        # Deliberately retain only the frozen direction and confidence needed
-        # by the options expression; no LLM or equity model is run here.
+        # Preserve only point-in-time briefing fields used by the options
+        # expression; no LLM or equity model is run during research.
         output[str(ticker).upper()] = SimpleNamespace(
             action=item.get("action", item.get("side", "")),
             confidence=item.get("confidence", item.get("strength", 0.0)),
             strategy=item.get("strategy"),
-            signal_id=item.get("signal_id", item.get("event_id")),
+            run_id=item.get("run_id", item.get("signal_id", item.get("event_id"))),
+            reason=item.get("reason", item.get("reasoning", "")),
+            generated_at=item.get("generated_at", known),
         )
     return output
 

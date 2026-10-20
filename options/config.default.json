@@ -49,15 +49,13 @@
   },
   "event_driven": {
     "enabled": true,
-    "min_days_before_event": 0,
-    "max_days_before_event": 5,
-    "min_historical_events": 3,
-    "min_move_edge_pct": 0.15,
     "min_llm_confidence": 0.60,
     "min_dte": 3,
     "max_dte": 35,
+    "target_dte": 21,
+    "max_symbols_per_cycle": 3,
     "max_spread_pct": 0.20,
-    "realized_lookback_days": 730
+    "min_open_interest": 100
   },
   "directional_overlay": {
     "enabled": false,

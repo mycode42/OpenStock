@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 
 from options.research.dataset import ResearchObservation
 
@@ -22,7 +21,9 @@ def longest_strategy_lookback_sessions(strategy: str, section: dict, config: dic
     if strategy == "vrp":
         return int(section.get("realized_lookback_sessions", 20))
     if strategy == "event_driven":
-        return int(math.ceil(int(section.get("realized_lookback_days", 730)) * 252 / 365))
+        # The frozen LLM recommendation is a point-in-time dataset input; the
+        # options expression does not inspect a rolling calendar history.
+        return 0
     return int(config.get("walk_forward", {}).get("directional_input_lookback_sessions", 252))
 
 

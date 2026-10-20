@@ -70,6 +70,29 @@ class OptionsJournal:
             return None
         return None
 
+    def latest_matching(self, name: str, field: str, value: str) -> dict | None:
+        """Return the newest row matching a field."""
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions"}:
+            raise ValueError("unsupported options journal stream")
+        path = self.directory / f"{name}.jsonl"
+        match = None
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+                try:
+                    for line in stream:
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if str(row.get(field)) == str(value):
+                            match = row
+                finally:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            return None
+        return match
+
     def contains(self, name: str, field: str, value: str) -> bool:
         if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions"}:
             raise ValueError("unsupported options journal stream")
