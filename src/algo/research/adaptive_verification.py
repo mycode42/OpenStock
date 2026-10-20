@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 import statistics
 
-from src.algo.backtest import DAILY_WARMUP_DAYS, MIN_REGIME_DAILY_BARS, multi_factor_warmup_days
+from src.algo.backtest import MIN_REGIME_DAILY_BARS, strategy_warmup_days
 from src.algo.market_store import SQLiteBarStore
 from src.algo.cpu import available_cpu_count
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
@@ -18,29 +18,44 @@ from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
 from src.market_data import data_tier
 
 from .adaptive_common import _prepare_args, _write_report
+from .artifact_cache import stable_hash
 from .adaptive_search import _daily_returns, _distance, _fitness, _fit_window_ladder, _flatten, _load_window_data, _metrics, _profile_for, _run_replay, _trading_sessions
-from .settings import FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES, STRATEGY_FLAVORS
+from .robustness import (
+    bootstrap_daily_equity, choose_plateau_candidate, summarize_fold_consistency,
+    walk_forward_efficiency,
+)
+from .settings import (
+    FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
+    ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS, ROBUSTNESS_BOOTSTRAP_ITERATIONS,
+    STRATEGY_FLAVORS,
+)
 
 def walk_forward_windows(
     trading_dates: list[date], *, train_days: int, test_days: int, step_days: int,
+    purge_sessions: int = 0,
 ) -> list[dict[str, str | int]]:
-    """Build non-overlapping chronological windows for rolling verification."""
-    if min(train_days, test_days, step_days) < 1:
+    """Build rolling train/test windows separated by a forward-outcome purge."""
+    if min(train_days, test_days, step_days) < 1 or purge_sessions < 0:
         raise ValueError("train_days, test_days, and step_days must be positive")
     if step_days < test_days:
         raise ValueError("step_days must be at least test_days so verification folds do not overlap")
     dates = sorted(set(trading_dates))
     windows = []
-    test_index = train_days
+    test_index = train_days + purge_sessions
     while test_index < len(dates):
-        train = dates[max(0, test_index - train_days):test_index]
+        train_end_index = test_index - purge_sessions
+        train = dates[max(0, train_end_index - train_days):train_end_index]
         test = dates[test_index:test_index + test_days]
         if not train or not test:
             break
+        purged = dates[train_end_index:test_index]
         windows.append({
             "train_start": train[0].isoformat(), "train_end": train[-1].isoformat(),
             "test_start": test[0].isoformat(), "test_end": test[-1].isoformat(),
-            "train_session_count": len(train), "test_session_count": len(test),
+            "train_session_count": len(train), "purge_session_count": len(purged),
+            "purge_start": purged[0].isoformat() if purged else None,
+            "purge_end": purged[-1].isoformat() if purged else None,
+            "test_session_count": len(test),
         })
         test_index += step_days
     return windows
@@ -67,7 +82,24 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         preaggregated_daily_bars=preaggregated_daily_bars,
     )
     discovery = fitted["search"]
-    selected = fitted["selected_candidate"]
+    plateau_candidate, plateau = choose_plateau_candidate(
+        discovery.get("leaderboard") or [], args.search_space_data,
+    )
+    selected = (
+        plateau_candidate
+        if fitted.get("adaptive_improvement") and plateau_candidate.get("eligible")
+        else fitted["selected_candidate"]
+    )
+    baseline = next(
+        (row for row in discovery.get("candidates", []) if row.get("name") == "baseline"),
+        None,
+    )
+    adaptive_improvement = bool(
+        plateau.get("supported") and baseline is not None
+        and selected.get("name") != "baseline"
+        and selected.get("eligible")
+        and float(selected.get("fitness") or 0.0) > float(baseline.get("fitness") or 0.0)
+    )
     selected_parameters = selected["parameters"]
     capital_before = float(args.capital)
     test_report = _run_replay(
@@ -79,6 +111,33 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
     train_metrics = selected["metrics"]
     oos_metrics = _metrics(test_report, capital=capital_before)
     oos_fitness, oos_components = _fitness(oos_metrics, args.fitness_weights_data)
+    execution_sensitivity = {}
+    multipliers = list(getattr(args, "cost_sensitivity_multipliers", []) or [])
+    delay_multiplier = max(multipliers, default=1.5)
+    scenarios = [(multiplier, 0) for multiplier in multipliers]
+    if multipliers:
+        scenarios.append((delay_multiplier, 1))
+    for multiplier, delay_bars in scenarios:
+        stress_args = deepcopy(args)
+        stress_args.slippage_bps = float(args.slippage_bps) * multiplier
+        stress_args.spread_bps = float(args.spread_bps) * multiplier
+        stress_args.commission_per_share = float(args.commission_per_share) * multiplier
+        stress_args.short_borrow_annual_pct = float(args.short_borrow_annual_pct) * multiplier
+        stress_args.unknown_borrow_penalty_bps = float(args.unknown_borrow_penalty_bps) * multiplier
+        stress_args.execution_delay_bars = delay_bars
+        replay = _run_replay(
+            strategy=args.strategy, parameters=selected_parameters,
+            symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
+            start=test_start, end=test_end, args=stress_args,
+            capital=capital_before, preaggregated_daily_bars=preaggregated_daily_bars,
+        )
+        key = f"cost_{multiplier:g}x" + (f"_delay_{delay_bars}_bars" if delay_bars else "")
+        execution_sensitivity[key] = {
+            "cost_multiplier": multiplier,
+            "execution_delay_bars": delay_bars,
+            "metrics": _metrics(replay, capital=capital_before),
+        }
+        del replay
     min_universe_sensitivity = None
     if args.strategy == "multi_factor":
         min_universe_sensitivity = {}
@@ -104,7 +163,8 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         "fold": index + 1, **window,
         "selected_candidate": selected["name"],
         "selection_status": fitted["selection_status"],
-        "adaptive_improvement": fitted["adaptive_improvement"],
+        "adaptive_improvement": adaptive_improvement,
+        "training_parameter_plateau": plateau,
         "fit_window_days": fitted["fit_window_days"],
         "fit_window_start": fitted["fit_window_start"],
         "fit_window_end": fitted["fit_window_end"],
@@ -113,10 +173,14 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         "train_controls": _profile_for(args.strategy, selected_parameters)["controls"],
         "train_fitness": selected["fitness"], "train_metrics": train_metrics,
         "oos_fitness": round(oos_fitness, 8),
+        "walk_forward_efficiency": walk_forward_efficiency(
+            float(selected.get("fitness") or 0.0), oos_fitness,
+        ),
         "oos_fitness_components": {key: round(value, 8) for key, value in oos_components.items()},
         "oos_metrics": oos_metrics,
         "oos_trade_pnls": [float(trade.get("pnl", 0) or 0) for trade in test_report.get("closed_trades", [])],
         "fitness_decay": round(float(selected["fitness"]) - oos_fitness, 8),
+        "execution_sensitivity": execution_sensitivity,
         "min_universe_sensitivity": min_universe_sensitivity,
         "top_training_candidates": [
             {key: row[key] for key in ("name", "parameters", "fitness", "metrics", "eligible")}
@@ -221,10 +285,7 @@ def run_adaptive_walk_forward(args) -> dict:
     if not args.start or not args.end:
         raise ValueError("adaptive-walk-forward requires --start and --end")
     requested_start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
-    warmup_days = max(
-        DAILY_WARMUP_DAYS,
-        multi_factor_warmup_days() if args.strategy == "multi_factor" else 0,
-    )
+    warmup_days = strategy_warmup_days(args.strategy)
     all_sessions = _trading_sessions(
         args.db, end, start=requested_start - timedelta(days=warmup_days),
         adjustment=args.adjustment,
@@ -249,11 +310,16 @@ def run_adaptive_walk_forward(args) -> dict:
         or args.workers < 1 or args.minimum_folds < 1
     ):
         raise ValueError("train/test/step days, workers, and minimum folds must be positive")
+    if getattr(args, "purge_sessions", 0) < 0:
+        raise ValueError("purge-sessions must be a non-negative session count")
+    if not 0 <= float(getattr(args, "minimum_positive_fold_fraction", 0.60)) <= 1:
+        raise ValueError("minimum-positive-fold-fraction must be in [0, 1]")
     if len(sessions) < args.train_days + args.test_days:
         raise ValueError("2024-onward range does not contain enough sessions for a train and test window")
     windows = walk_forward_windows(
         sessions, train_days=args.train_days,
         test_days=args.test_days, step_days=args.step_days,
+        purge_sessions=int(getattr(args, "purge_sessions", 0)),
     )
     if len(windows) < args.minimum_folds:
         raise ValueError(f"need at least {args.minimum_folds} walk-forward folds; found {len(windows)}")
@@ -283,6 +349,16 @@ def run_adaptive_walk_forward(args) -> dict:
             ) > 0,
         }
     curve, oos = _stitch(folds, args.capital)
+    fold_consistency = summarize_fold_consistency(
+        folds,
+        minimum_positive_fraction=float(getattr(args, "minimum_positive_fold_fraction", 0.60)),
+    )
+    bootstrap = bootstrap_daily_equity(
+        curve,
+        iterations=int(getattr(args, "bootstrap_iterations", ROBUSTNESS_BOOTSTRAP_ITERATIONS)),
+        block_size=ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS,
+        seed=args.seed,
+    )
     min_universe_sensitivity = None
     if args.strategy == "multi_factor":
         min_universe_sensitivity = {
@@ -321,19 +397,50 @@ def run_adaptive_walk_forward(args) -> dict:
             }
     decay_values = [float(row["fitness_decay"]) for row in folds]
     average_decay = statistics.mean(decay_values) if decay_values else 0.0
+    wfe_values = [
+        float(row["walk_forward_efficiency"])
+        for row in folds if row.get("walk_forward_efficiency") is not None
+    ]
+    wfe_positive_count = sum(value > 0 for value in wfe_values)
+    wfe_positive_fraction = wfe_positive_count / len(folds) if folds else 0.0
+    wfe_summary = {
+        "defined_fold_count": len(wfe_values),
+        "positive_fold_count": wfe_positive_count,
+        "positive_fold_fraction_of_all_folds": round(wfe_positive_fraction, 6),
+        "mean": round(statistics.mean(wfe_values), 6) if wfe_values else None,
+        "median": round(statistics.median(wfe_values), 6) if wfe_values else None,
+        "minimum_positive_fraction": float(getattr(args, "minimum_positive_fold_fraction", 0.60)),
+        "consistency_gate_met": bool(
+            folds and wfe_positive_fraction >= float(
+                getattr(args, "minimum_positive_fold_fraction", 0.60)
+            )
+        ),
+    }
     stability = _parameter_stability(folds, set(args.search_space_data))
     sharpe_pass = oos["daily_sharpe_annualized"] is not None and oos["daily_sharpe_annualized"] >= args.minimum_oos_sharpe
     decay_pass = average_decay <= args.maximum_average_decay
     fold_pass = len(folds) >= args.minimum_folds
     improvement_folds = sum(bool(row.get("adaptive_improvement")) for row in folds)
     improvement_pass = improvement_folds > 0
-    walk_forward_pass = bool(sharpe_pass and decay_pass and fold_pass and improvement_pass)
+    plateau_pass = all(
+        not row.get("adaptive_improvement")
+        or (row.get("training_parameter_plateau") or {}).get("supported")
+        for row in folds
+    )
+    walk_forward_pass = bool(
+        sharpe_pass and decay_pass and fold_pass and improvement_pass
+        and fold_consistency["consistency_gate_met"] and wfe_summary["consistency_gate_met"]
+        and plateau_pass
+    )
     overall_pass = walk_forward_pass
     detail = {
         "schema": "swarm_algo_adaptive_walk_forward_detail_v1",
         "stage": "short_window_walk_forward_verification",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "adaptive_policy_version": getattr(args, "adaptive_policy_version", None),
+        "factor_weight_timeline_sha256": stable_hash(
+            getattr(args, "factor_weight_timeline", None) or []
+        ),
         "research_only": True, "live_configuration_changed": False,
         "trade_or_order_actions": 0, "strategy": args.strategy,
         "strategy_flavor": STRATEGY_FLAVORS.get(args.strategy),
@@ -351,6 +458,11 @@ def run_adaptive_walk_forward(args) -> dict:
         "window_config": {"train_days": args.train_days, "test_days": args.test_days,
                           "train_window_options": window_options,
                           "step_days": args.step_days,
+                          "minimum_folds": args.minimum_folds,
+                          "purge_sessions": int(getattr(args, "purge_sessions", 0)),
+                          "minimum_positive_fold_fraction": float(getattr(args, "minimum_positive_fold_fraction", 0.60)),
+                          "cost_sensitivity_multipliers": list(getattr(args, "cost_sensitivity_multipliers", []) or []),
+                          "bootstrap_iterations": int(getattr(args, "bootstrap_iterations", ROBUSTNESS_BOOTSTRAP_ITERATIONS)),
                           "rolling_training_range": {
                               "start": windows[0]["train_start"],
                               "first_oos_start": windows[0]["test_start"],
@@ -359,11 +471,21 @@ def run_adaptive_walk_forward(args) -> dict:
         "worker_count": workers,
         "folds": folds,
         "stitched_oos_daily_equity": curve,
+        "robustness": {
+            "fold_consistency": fold_consistency,
+            "walk_forward_efficiency": wfe_summary,
+            "block_bootstrap": bootstrap,
+            "block_bootstrap_method": f"{ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS}-session moving-block resampling of stitched OOS daily returns",
+            "cost_sensitivity_scenarios": list(getattr(args, "cost_sensitivity_multipliers", []) or []),
+            "latency_scenario": "highest configured cost multiplier plus one additional 5-minute bar before fill",
+        },
         "min_universe_sensitivity": min_universe_sensitivity,
         "limitations": [
             "The search uses bounded discrete signal parameters; execution and risk settings are held fixed.",
             "Each fold begins with the stitched equity from the prior OOS segment; training searches use fixed starting capital.",
             "The rolling evaluation begins in 2024 and uses the current fixed universe; this is not a profitability guarantee or live promotion.",
+            "Each rolling fit is separated from its OOS test by a 252-session embargo, matching the longest searched momentum lookback.",
+            "The final untouched holdout is managed separately from rolling verification and is not consumed by this report.",
         ],
     }
     summary = {
@@ -375,18 +497,31 @@ def run_adaptive_walk_forward(args) -> dict:
         "min_universe_sensitivity": min_universe_sensitivity,
         "median_fitness_decay": round(statistics.median(decay_values), 8) if decay_values else 0.0,
         "parameter_stability": stability,
+        "fold_consistency": fold_consistency,
+        "walk_forward_efficiency": wfe_summary,
+        "block_bootstrap": bootstrap,
+        "plateau_supported_folds": sum(
+            bool((row.get("training_parameter_plateau") or {}).get("supported"))
+            for row in folds
+        ),
         "checks": {
             "minimum_fold_count_met": fold_pass,
             "adaptive_improvement_observed": improvement_pass,
             "adaptive_improvement_folds": improvement_folds,
             "stitched_oos_sharpe_threshold_met": sharpe_pass,
             "average_decay_threshold_met": decay_pass,
+            "positive_fold_consistency_met": fold_consistency["consistency_gate_met"],
+            "walk_forward_efficiency_consistency_met": wfe_summary["consistency_gate_met"],
+            "parameter_plateau_gate_met": plateau_pass,
             "walk_forward_pass": walk_forward_pass,
             "overall_pass": overall_pass,
         },
         "thresholds": {"minimum_oos_sharpe": args.minimum_oos_sharpe,
                        "maximum_average_decay": args.maximum_average_decay,
-                       "minimum_folds": args.minimum_folds},
+                       "minimum_folds": args.minimum_folds,
+                       "minimum_positive_fold_fraction": float(getattr(args, "minimum_positive_fold_fraction", 0.60)),
+                       "minimum_positive_wfe_fraction": float(getattr(args, "minimum_positive_fold_fraction", 0.60)),
+                       "purge_sessions": int(getattr(args, "purge_sessions", 0))},
     }
     report = _write_report(args.output_dir, args.strategy, "walk-forward", detail, summary=summary)
     return report

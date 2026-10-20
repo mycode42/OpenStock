@@ -3,6 +3,7 @@ import math
 
 from src.algo.research import auto_research
 from src.algo.research.factor_research import _feature_panel, train_factor_model
+from src.algo.research.settings import INITIAL_HISTORY_DATE
 
 
 def _sessions(start: date, count: int) -> list[date]:
@@ -88,7 +89,7 @@ def test_auto_research_backfills_symbols_missing_from_the_market_store(monkeypat
 
     assert report["missing_selected_history"] == [missing_symbol]
     assert calls[0][0] == [missing_symbol]
-    assert calls[0][1]["start"] == "2023-04-16T00:00:00Z"
+    assert calls[0][1]["start"] == f"{INITIAL_HISTORY_DATE.isoformat()}T00:00:00Z"
 
 
 def test_factor_features_are_as_of_and_forward_labels_are_purged():

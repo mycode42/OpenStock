@@ -19,7 +19,7 @@ class AlgoEntryLimits:
 
 
 ALGO_ENTRY_LIMITS = AlgoEntryLimits()
-ALGO_MIN_CASH_PCT = 0.15
+ALGO_MIN_CASH_PCT = 0.10
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,10 @@ ALGO_SIGNAL_DATA_CONFIG = {
     "max_spy_daily_age_days": 5,
 }
 
+# Keep enough completed sessions to support rolling percentiles and monthly
+# HMM/GMM fits on roughly three years of prior observations.
+ALGO_REGIME_WARMUP_CALENDAR_DAYS = 1400
+
 # Algo has its own fixed universe while signal and portfolio behavior are
 # validated. Swing and Day retain their separately configured fixed lists.
 ALGO_PORTFOLIO_UNIVERSE = {
@@ -70,19 +74,19 @@ ALGO_PORTFOLIO_UNIVERSE = {
         "label": "Mega-liquid Tech / Growth",
         "tickers": ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD"],
         "max_sector_pct": 0.40,
-        "max_per_stock_pct": 0.05,
+        "max_per_stock_pct": 0.07,
     },
     "diversifiers": {
         "label": "High-quality Non-Tech / Diversifiers",
         "tickers": ["JPM", "V", "UNH", "JNJ", "PG", "KO"],
         "max_sector_pct": 0.30,
-        "max_per_stock_pct": 0.05,
+        "max_per_stock_pct": 0.07,
     },
     "hedge": {
         "label": "Broad Market & Hedge ETFs",
         "tickers": ["SPY", "QQQ", "GLD", "TLT"],
         "max_sector_pct": 0.20,
-        "max_per_stock_pct": 0.05,
+        "max_per_stock_pct": 0.07,
     },
     "tactical": {
         "label": "Optional Tactical Satellite",
@@ -91,11 +95,23 @@ ALGO_PORTFOLIO_UNIVERSE = {
         "max_per_stock_pct": 0.02,
     },
 }
+ALGO_FACTOR_SECTOR_BY_SYMBOL = {
+    "NVDA": "information_technology", "AVGO": "information_technology",
+    "TSM": "information_technology", "MSFT": "information_technology",
+    "AAPL": "information_technology", "AMD": "information_technology",
+    "PLTR": "information_technology", "CRM": "information_technology",
+    "PANW": "information_technology", "GOOGL": "communication_services",
+    "META": "communication_services", "AMZN": "consumer_discretionary",
+    "JPM": "financials", "V": "financials", "UNH": "health_care",
+    "JNJ": "health_care", "PG": "consumer_staples", "KO": "consumer_staples",
+}
 ALGO_MODE_CONFIG = {
     "label": "Autonomous Algo Portfolio",
     "universe": ALGO_PORTFOLIO_UNIVERSE,
     "risk": {
-        "max_position_pct": 0.05,
+        "max_position_pct": 0.07,
+        # Algo-specific sizing override; Swing/Day keep their shared 5% cap.
+        "max_strategy_position_pct": 0.07,
         "max_sector_pct": 0.40,
         # Conservative fallback plus explicit horizon-specific protection.
         "stop_loss_pct": 0.05,
@@ -209,10 +225,10 @@ ALGO_MODE_CONFIG = {
     },
 }
 
-# Portfolio-level coordinator is deliberately stricter than risk_manager.
-# Risk-manager limits remain the final approval layer after coordinator sizing.
+# The coordinator pre-sizes against the regime's gross budget; risk_manager
+# remains the final check on configured name, sector, cash, and trade limits.
 ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
-    "max_name_pct": 0.08,
+    "max_name_pct": 0.10,
     # Shared equity-based exposure ceiling; preserves the configured cash floor.
     "max_gross_pct": 1.0 - ALGO_MIN_CASH_PCT,
     "max_net_long_pct": 1.0 - ALGO_MIN_CASH_PCT,
@@ -225,12 +241,39 @@ ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
     "allow_opposite_netting": False,
     "allow_intraday_overnight": False,
     "regime_throttle_enabled": True,
-    "sector_caps": {
-        "core_tech": 0.30,
-        "diversifiers": 0.25,
-        "hedge": 0.25,
-        "tactical": 0.15,
+    "regime_gross_caps": {
+        "trending_up:calm": 0.90,
+        "trending_up:elevated": 0.78,
+        "trending_up:extreme": 0.45,
+        "trending_down:calm": 0.82,
+        "trending_down:elevated": 0.70,
+        "trending_down:extreme": 0.40,
+        "range_bound:calm": 0.82,
+        "range_bound:elevated": 0.65,
+        "range_bound:extreme": 0.40,
+        "volatile:extreme": 0.40,
+        "ambiguous:calm": 0.55,
+        "ambiguous:elevated": 0.40,
+        "ambiguous:extreme": 0.30,
+        "unknown:unknown": 0.50,
     },
+    "sector_caps": {
+        "core_tech": 0.40,
+        "diversifiers": 0.30,
+        "hedge": 0.20,
+        "tactical": 0.04,
+    },
+}
+
+ALGO_REGIME_CONFIG = {
+    # The supervised feature rule controls entries. HMM/GMM remain side-by-side
+    # diagnostics until forward replay establishes stable incremental value.
+    "engine": "rule",
+    "feature_set": "marketwide",
+    "strategy_policy": "high_vol_mean_reversion",
+    "include_models": True,
+    "min_model_confidence": 0.50,
+    "model_training_window": 756,
 }
 
 ALGO_SERVICE_CONFIG = {

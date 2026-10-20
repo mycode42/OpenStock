@@ -13,9 +13,11 @@ from time import perf_counter
 from types import SimpleNamespace
 from uuid import uuid4
 
-from src.config import get_algo_runtime_settings
+from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings
 from src.algo.cpu import available_cpu_count
+from src.algo.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
 from src.algo.market_store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
+from src.algo.strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
 from src.algo.strategies.registry import refresh_active_parameter_profile
 from src.market_data import data_tier, regular_feed
 
@@ -38,12 +40,12 @@ from .settings import (
     ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
-    RESEARCH_START, RESEARCH_WARMUP_DAYS,
+    REGIME_CONTEXT_WARMUP_DAYS, RESEARCH_START, RESEARCH_WARMUP_DAYS,
     ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, LIVE_RESEARCH_STRATEGIES,
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v13-regime-forward-validation-2024"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v17-pit-ridge-replay-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -80,12 +82,14 @@ def run_daily_research(args) -> dict:
     store = SQLiteBarStore(database)
     refresh_started = perf_counter()
     refresh_report = None
+    context_symbols = sorted(NON_EQUITY_CONTEXT_SYMBOLS - {"SPY"})
+    refresh_symbols = list(dict.fromkeys([*symbols, *context_symbols]))
     if not args.no_refresh:
         now_et = datetime.now(ET)
         refresh_to = now_et.date() if now_et.weekday() < 5 and now_et.time() >= time(16, 10) else now_et.date() - timedelta(days=1)
         logger.info("Refreshing SIP bars for %d symbols through %s", len(symbols), refresh_to)
         refresh_report = _refresh_incremental(
-            store, selected_symbols=symbols, end_date=refresh_to,
+            store, selected_symbols=refresh_symbols, end_date=refresh_to,
         )
     refresh_seconds = round(perf_counter() - refresh_started, 3)
     if refresh_report is not None:
@@ -97,6 +101,11 @@ def run_daily_research(args) -> dict:
 
     history_start, latest_end, missing = _latest_dates(store, symbols)
     covered_symbols = [symbol for symbol in symbols if symbol not in missing]
+    if len(covered_symbols) < MIN_COVERED_UNIVERSE:
+        raise ValueError(
+            f"Only {len(covered_symbols)} selected equities have common SIP history; "
+            f"at least {MIN_COVERED_UNIVERSE} are required"
+        )
     logger.info(
         "Market data ready: %d/%d symbols, common sessions %s through %s",
         len(covered_symbols), len(symbols), history_start, latest_end,
@@ -108,15 +117,79 @@ def run_daily_research(args) -> dict:
             f"is {latest_age_days} calendar days old"
         )
 
-    # Anchor each run to the latest fully available common session so the
-    # adaptive fit and portfolio replay keep pace with current market data.
-    cohort_end = latest_end
+    from .final_holdout import (
+        advance_final_holdout, holdout_is_quarantining, initialize_final_holdout,
+        read_final_holdout_state,
+    )
+
+    holdout_state_at_start = read_final_holdout_state(output_dir)
+    holdout_quarantine = holdout_is_quarantining(output_dir)
+    holdout_report = advance_final_holdout(
+        database=database, latest_end=latest_end, output_dir=output_dir,
+    )
+    # While the frozen holdout is accruing, all research stages stay anchored
+    # at its pre-holdout cutoff. The holdout evaluator is the only consumer of
+    # post-cutoff bars until it records its one-time result.
+    if holdout_quarantine:
+        cohort_end = date.fromisoformat(holdout_state_at_start["frozen_data_end"])
+        if cohort_end > latest_end:
+            raise ValueError("final holdout cutoff is newer than available common market data")
+    else:
+        cohort_end = latest_end
     warmup_start = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
     logger.info("Computing research data fingerprint for the configured universe")
-    data_version = research_data_version(
+    market_data_version = research_data_version(
         database, start=warmup_start, end=cohort_end,
-        symbols=covered_symbols, feed=FEED, adjustment=ADJUSTMENT,
+        symbols=[*covered_symbols, *context_symbols], feed=FEED, adjustment=ADJUSTMENT,
     )
+    from src.algo.regime_macro import load_fred_regime_series
+
+    macro_series, macro_diagnostics = load_fred_regime_series(
+        store, refresh=not args.no_refresh,
+    )
+    macro_series = {
+        name: [
+            row for row in rows
+            if str(row.get("date", ""))[:10] <= cohort_end.isoformat()
+        ]
+        for name, rows in macro_series.items()
+    }
+    regime_data_version = research_data_version(
+        database,
+        start=RESEARCH_START - timedelta(days=ALGO_REGIME_WARMUP_CALENDAR_DAYS),
+        end=cohort_end, symbols=[], feed=FEED, adjustment=ADJUSTMENT,
+    )
+    from src.algo.strategies.multi_factor.fundamentals import load_point_in_time_fundamentals
+
+    try:
+        equity_symbols = [symbol for symbol in covered_symbols if symbol in ALGO_FACTOR_SECTOR_BY_SYMBOL]
+        fundamentals_by_symbol, fundamentals_diagnostics = load_point_in_time_fundamentals(
+            equity_symbols, as_of=cohort_end,
+        )
+    except Exception as exc:
+        fundamentals_by_symbol = {}
+        fundamentals_diagnostics = {
+            "status": "unavailable", "source": "sec_edgar_companyfacts",
+            "symbols_requested": len(covered_symbols), "symbols_with_point_in_time_facts": 0,
+            "failure_types": {"feed": type(exc).__name__},
+            "availability_policy": "SEC filed date plus one calendar day; same-day filings excluded conservatively",
+        }
+    fundamentals_data_version = fundamentals_diagnostics.get("data_version")
+    fundamental_field_coverage = fundamentals_diagnostics.get("factor_symbol_coverage") or {}
+    observed_factor_coverage = [
+        int(value) for value in fundamental_field_coverage.values()
+        if isinstance(value, int) and value >= 12
+    ]
+    factor_model_min_universe = min(
+        MIN_COVERED_UNIVERSE,
+        min(observed_factor_coverage) if observed_factor_coverage else MIN_COVERED_UNIVERSE,
+    )
+    data_version = stable_hash({
+        "market_data_version": market_data_version,
+        "regime_data_version": regime_data_version,
+        "regime_macro_data_version": stable_hash(macro_series),
+        "fundamentals_data_version": fundamentals_data_version,
+    })
     live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "multi_factor", "event_driven"])
     context = {
         "pipeline_version": AUTO_RESEARCH_PIPELINE_VERSION,
@@ -127,6 +200,13 @@ def run_daily_research(args) -> dict:
         "stored_coverage_start": history_start.isoformat(),
         "data_end": cohort_end.isoformat(),
         "data_version": data_version,
+        "market_data_version": market_data_version,
+        "regime_data_version": regime_data_version,
+        "regime_macro_data_version": stable_hash(macro_series),
+        "regime_macro_status": macro_diagnostics.get("status"),
+        "fundamentals_data_version": fundamentals_data_version,
+        "fundamentals_feed_status": fundamentals_diagnostics.get("status", "unavailable"),
+        "factor_model_min_universe": factor_model_min_universe,
         "strategy_research_range": {
             "start": RESEARCH_START.isoformat(), "end": cohort_end.isoformat(),
             "indicator_warmup_start": warmup_start.isoformat(),
@@ -156,6 +236,8 @@ def run_daily_research(args) -> dict:
         "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled,
         "event_driven_enabled": runtime_settings.algo_event_driven_enabled,
         "factor_only": bool(args.factor_only),
+        "final_holdout_quarantine": holdout_quarantine,
+        "final_holdout_status": holdout_report.get("status"),
     }
     fingerprint = stable_hash(context)
     if args.force:
@@ -177,6 +259,42 @@ def run_daily_research(args) -> dict:
     root = Path(args.output_dir) / "layers"
     cohort_dir = root / "runs" / run_id
     report_path = cohort_dir / "report.json"
+    cohort_dir.mkdir(parents=True, exist_ok=True)
+    factor_started = perf_counter()
+    factor_path = cohort_dir / "factor_model.json"
+    factor_cached, _ = read_json(factor_path)
+    from .factor_research import COST_MODEL_VERSION, LOGIC_VERSION, train_factor_model
+
+    factor_fingerprint = stable_hash({
+        "cohort_fingerprint": fingerprint,
+        "factor_logic_version": LOGIC_VERSION,
+        "factor_cost_model_version": COST_MODEL_VERSION,
+        "sector_map": ALGO_FACTOR_SECTOR_BY_SYMBOL,
+        "fundamentals_data_version": fundamentals_data_version,
+    })
+    if not args.force and factor_cached and factor_cached.get("fingerprint") == factor_fingerprint:
+        factor_report = factor_cached["report"]
+        factor_model_timing = {"seconds": 0.0, "reused": True}
+        logger.info("Multi Factor diagnostics: reusing cached result")
+    else:
+        logger.info("Multi Factor diagnostics: fitting purged Ridge timeline before replay discovery")
+        history = _load_daily_history(
+            store, covered_symbols, start=warmup_start.isoformat(), end=cohort_end.isoformat(),
+        )
+        factor_report = train_factor_model(
+            history, min_universe=factor_model_min_universe,
+            sector_by_symbol=ALGO_FACTOR_SECTOR_BY_SYMBOL,
+            fundamentals_by_symbol=fundamentals_by_symbol,
+            fundamentals_diagnostics=fundamentals_diagnostics,
+            fundamentals_data_version=fundamentals_data_version,
+            data_version=data_version,
+        )
+        _atomic_json(factor_path, {"fingerprint": factor_fingerprint, "report": factor_report})
+        factor_model_timing = {
+            "seconds": round(perf_counter() - factor_started, 3), "reused": False,
+        }
+        logger.info("Multi Factor diagnostics finished in %.1fs", factor_model_timing["seconds"])
+
     adaptive_root = Path(args.output_dir) / "adaptive"
     adaptive_discovery_started = perf_counter()
     logger.info(
@@ -185,8 +303,9 @@ def run_daily_research(args) -> dict:
     )
     adaptive_discovery = (
         run_adaptive_discoveries(
-            database=database, symbols=covered_symbols, latest_end=latest_end, data_version=data_version,
+            database=database, symbols=covered_symbols, latest_end=cohort_end, data_version=data_version,
             output_dir=adaptive_root, workers=args.workers,
+            factor_weight_timeline=factor_report.get("weight_timeline") or [],
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
@@ -207,6 +326,7 @@ def run_daily_research(args) -> dict:
             start=RESEARCH_START, end=cohort_end,
             data_version=data_version,
             output_dir=adaptive_root, workers=args.workers, force=args.force,
+            factor_weight_timeline=factor_report.get("weight_timeline") or [],
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
@@ -221,6 +341,21 @@ def run_daily_research(args) -> dict:
         "Rolling verification finished: %s in %.1fs",
         adaptive_verification.get("status"), adaptive_verification_seconds,
     )
+    from .drift_monitor import update_research_drift_monitor
+
+    completed_holdout = holdout_report.get("result") or {}
+    holdout_end = (completed_holdout.get("holdout_range") or {}).get("end")
+    ignore_through_date = holdout_end if completed_holdout.get("status") == "completed_once" else None
+    drift_report = update_research_drift_monitor(
+        adaptive_verification, output_dir=output_dir,
+        ignore_through_date=ignore_through_date,
+    )
+    promotion_pause_reasons = []
+    if drift_report.get("promotion_pause"):
+        promotion_pause_reasons.append("drift")
+    if holdout_quarantine:
+        promotion_pause_reasons.append("final_holdout_quarantine")
+    promotion_allowed = not promotion_pause_reasons
     multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("multi_factor", {})
     adaptive_coordinator_root = adaptive_root / "verification-coordinator"
     verification_statuses = adaptive_verification.get("strategies") or {}
@@ -244,8 +379,21 @@ def run_daily_research(args) -> dict:
                 discovery=adaptive_discovery, verification=adaptive_verification,
                 store=store, database=database, symbols=covered_symbols,
                 end=cohort_end, data_version=data_version,
+                allow_stage=not holdout_quarantine,
+                allow_promotion=promotion_allowed,
+                promotion_pause_reasons=promotion_pause_reasons,
+                holdout_exclude_through_date=ignore_through_date,
                 invocation_id=invocation_id, ledger_path=ledger_path,
+                factor_weight_timeline=factor_report.get("weight_timeline") or [],
             )
+            if adaptive_portfolio_ready:
+                refresh_active_parameter_profile()
+                holdout_report = initialize_final_holdout(
+                    verification=adaptive_verification, database=database,
+                    symbols=covered_symbols, frozen_data_end=cohort_end,
+                    factor_weight_timeline=factor_report.get("weight_timeline") or [],
+                    output_dir=output_dir,
+                )
             cached = {
                 **cached,
                 "invocation_id": invocation_id,
@@ -255,6 +403,16 @@ def run_daily_research(args) -> dict:
                     else cached.get("status", "completed")
                 ),
                 "forward_validation": forward_validation,
+                "drift_monitor": drift_report,
+                "final_holdout": holdout_report,
+                "regime_inputs": {
+                    "macro_status": macro_diagnostics.get("status"),
+                    "macro_data_version": stable_hash(macro_series),
+                    "market_data_version": regime_data_version,
+                    "context_symbols": context_symbols,
+                    "context_warmup_days": REGIME_CONTEXT_WARMUP_DAYS,
+                    "spy_regime_warmup_days": ALGO_REGIME_WARMUP_CALENDAR_DAYS,
+                },
                 "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
                 "stage_timings": {
                     **(cached.get("stage_timings") or {}),
@@ -290,7 +448,7 @@ def run_daily_research(args) -> dict:
             cached.setdefault("recommendation", {}).update({
                 "adaptive_parameter_promotion_requires_human_confirmation": False,
                 "forward_validation": (
-                    "Promotion is automatic after the historical gates and the minimum sample of positive forward simulated results versus the current profile."
+                    "Promotion follows the historical and forward simulation gates; a detected drift warning or the final holdout quarantine pauses it."
                 ),
             })
             cached["orchestration"] = {
@@ -315,8 +473,8 @@ def run_daily_research(args) -> dict:
             )
             return cached
 
-    cohort_dir.mkdir(parents=True, exist_ok=True)
     timings: dict[str, object] = {
+        "factor_model": factor_model_timing,
         "data_refresh_seconds": refresh_seconds,
         "adaptive_discovery": {
             "seconds": adaptive_discovery_seconds, "status": adaptive_discovery.get("status"),
@@ -325,30 +483,6 @@ def run_daily_research(args) -> dict:
             "seconds": adaptive_verification_seconds, "status": adaptive_verification.get("status"),
         },
     }
-    factor_started = perf_counter()
-    factor_path = cohort_dir / "factor_model.json"
-    factor_cached, _ = read_json(factor_path)
-    if not args.force and factor_cached and factor_cached.get("fingerprint") == fingerprint:
-        factor_report = factor_cached["report"]
-        timings["factor_model"] = {"seconds": 0.0, "reused": True}
-        logger.info("Multi Factor diagnostics: reusing cached result")
-    else:
-        logger.info("Multi Factor diagnostics: fitting model")
-        history = _load_daily_history(
-            store, covered_symbols, start=warmup_start.isoformat(), end=cohort_end.isoformat(),
-        )
-        from .factor_research import train_factor_model
-
-        factor_report = train_factor_model(history, min_universe=MIN_COVERED_UNIVERSE)
-        _atomic_json(factor_path, {"fingerprint": fingerprint, "report": factor_report})
-        timings["factor_model"] = {
-            "seconds": round(perf_counter() - factor_started, 3), "reused": False,
-        }
-        logger.info(
-            "Multi Factor diagnostics finished in %.1fs",
-            timings["factor_model"]["seconds"],
-        )
-
     if args.factor_only:
         validation_started = perf_counter()
         from .forward_validation import run_forward_validation_cycle
@@ -357,7 +491,11 @@ def run_daily_research(args) -> dict:
             discovery=adaptive_discovery, verification=adaptive_verification,
             store=store, database=database, symbols=covered_symbols,
             end=cohort_end, data_version=data_version, allow_stage=False,
+            allow_promotion=promotion_allowed,
+            promotion_pause_reasons=promotion_pause_reasons,
+            holdout_exclude_through_date=ignore_through_date,
             invocation_id=invocation_id, ledger_path=ledger_path,
+            factor_weight_timeline=factor_report.get("weight_timeline") or [],
         )
         timings["forward_validation"] = {
             "seconds": round(perf_counter() - validation_started, 3),
@@ -377,6 +515,16 @@ def run_daily_research(args) -> dict:
             "trade_or_order_actions": 0, "factor_model": factor_report,
             "factor_only": True,
             "forward_validation": forward_validation,
+            "drift_monitor": drift_report,
+            "final_holdout": holdout_report,
+            "regime_inputs": {
+                "macro_status": macro_diagnostics.get("status"),
+                "macro_data_version": stable_hash(macro_series),
+                "market_data_version": regime_data_version,
+                "context_symbols": context_symbols,
+                "context_warmup_days": REGIME_CONTEXT_WARMUP_DAYS,
+                "spy_regime_warmup_days": ALGO_REGIME_WARMUP_CALENDAR_DAYS,
+            },
             "data": _data_summary(
                 history_start, latest_end, cohort_end, latest_age_days,
                 covered_symbols, symbols, missing, universe_meta, refresh_report,
@@ -423,6 +571,7 @@ def run_daily_research(args) -> dict:
                 artifact_dir=str(adaptive_coordinator_root),
                 event_calendar=None,
                 multi_factor_overlay=runtime_settings.algo_multi_factor_enabled,
+                factor_weight_timeline=factor_report.get("weight_timeline") or [],
                 workers=max(1, args.workers), output_dir=str(portfolio_path),
             )
             portfolio_report = run_coordinated_portfolio(portfolio_args)
@@ -456,8 +605,21 @@ def run_daily_research(args) -> dict:
         discovery=adaptive_discovery, verification=adaptive_verification,
         store=store, database=database, symbols=covered_symbols,
         end=cohort_end, data_version=data_version,
+        allow_stage=not holdout_quarantine,
+        allow_promotion=promotion_allowed,
+        promotion_pause_reasons=promotion_pause_reasons,
+        holdout_exclude_through_date=ignore_through_date,
         invocation_id=invocation_id, ledger_path=ledger_path,
+        factor_weight_timeline=factor_report.get("weight_timeline") or [],
     )
+    if adaptive_portfolio_ready:
+        refresh_active_parameter_profile()
+        holdout_report = initialize_final_holdout(
+            verification=adaptive_verification, database=database,
+            symbols=covered_symbols, frozen_data_end=cohort_end,
+            factor_weight_timeline=factor_report.get("weight_timeline") or [],
+            output_dir=output_dir,
+        )
     timings["forward_validation"] = {
         "seconds": round(perf_counter() - validation_started, 3),
         "status": forward_validation.get("status"),
@@ -495,6 +657,16 @@ def run_daily_research(args) -> dict:
         },
         "multi_factor_discovery": multi_factor_discovery,
         "forward_validation": forward_validation,
+        "drift_monitor": drift_report,
+        "final_holdout": holdout_report,
+        "regime_inputs": {
+            "macro_status": macro_diagnostics.get("status"),
+            "macro_data_version": stable_hash(macro_series),
+            "market_data_version": regime_data_version,
+            "context_symbols": context_symbols,
+            "context_warmup_days": REGIME_CONTEXT_WARMUP_DAYS,
+            "spy_regime_warmup_days": ALGO_REGIME_WARMUP_CALENDAR_DAYS,
+        },
         "portfolio_coordinator_replay": portfolio_report,
         "portfolio_summary": (portfolio_report or {}).get("fold_summary"),
         "recommendation": {
@@ -510,7 +682,7 @@ def run_daily_research(args) -> dict:
             ),
             "adaptive_parameter_promotion_requires_human_confirmation": False,
             "forward_validation": (
-                "Promotion is automatic after the historical gates and the minimum sample of positive forward simulated results versus the current profile."
+                "Promotion follows the historical and forward simulation gates; a detected drift warning or the final holdout quarantine pauses it."
             ),
         },
         "orchestration": {**context, "cache_hit": False},
@@ -521,6 +693,8 @@ def run_daily_research(args) -> dict:
             "The portfolio replay includes only strategies active in live config and available historical overlays.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
             "Forward trial replays use only sessions after candidate staging and modeled execution costs; results are not a performance forecast.",
+            "While a prospective final holdout is collecting, research and forward-trial data are capped at the frozen cutoff; the holdout replay runs once after at least 252 sessions spanning three rule-based regimes.",
+            "The forward drift monitor stays at the frozen cutoff during holdout collection and starts a new prospective reference after the holdout end date.",
             *([] if adaptive_portfolio_ready else [
                 "Adaptive verification did not produce coordinator artifacts for every active strategy; the portfolio replay was skipped.",
             ]),

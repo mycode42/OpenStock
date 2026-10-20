@@ -8,12 +8,15 @@ from zoneinfo import ZoneInfo
 from src.config import get_mode_config
 from src.algo.strategies.multi_factor.config import MultiFactorConfig
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS
+from src.algo.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
 
 ET = ZoneInfo("America/New_York")
 
 BAR_MINUTES = 5
 
 DAILY_WARMUP_DAYS = 180
+MOMENTUM_WARMUP_DAYS = 390
+REGIME_WARMUP_DAYS = ALGO_REGIME_WARMUP_CALENDAR_DAYS
 
 MIN_REGIME_DAILY_BARS = 22
 
@@ -32,6 +35,17 @@ def multi_factor_warmup_days(profile: dict | None = None) -> int:
     settings = (profile or {}).get("multi_factor") if isinstance(profile, dict) else None
     config = MultiFactorConfig.from_dict(settings)
     return max(FACTOR_WARMUP_DAYS, config.warmup_calendar_days())
+
+
+def strategy_warmup_days(strategy: str, profile: dict | None = None) -> int:
+    """Calendar history needed before replaying strategy signals."""
+    if strategy in {"momentum", "swing_momentum"}:
+        # Research searches longer-horizon variants even when the live profile
+        # is still using its short-horizon baseline.
+        return MOMENTUM_WARMUP_DAYS
+    if strategy == "multi_factor":
+        return max(DAILY_WARMUP_DAYS, multi_factor_warmup_days(profile))
+    return DAILY_WARMUP_DAYS
 
 def validate_strategy_filter(strategies: list[str] | None) -> list[str] | None:
     if strategies is None:

@@ -11,7 +11,16 @@ from .config import validate_research_controls, validate_strategy_filter
 from .models import Position
 from .execution import ReplayExecutionMixin
 try:
-    from ._signals_cy import ReplaySignalsMixin
+    from ._signals_cy import ReplaySignalsMixin as _CompiledSignalsMixin
+    from .signals import ReplaySignalsMixin as _PythonSignalsMixin
+
+    class ReplaySignalsMixin(_CompiledSignalsMixin):
+        """Keep compiled signal evaluation while overriding changed routing."""
+
+        _multi_factor_rebalance = _PythonSignalsMixin._multi_factor_rebalance
+        _multi_factor_ic = _PythonSignalsMixin._multi_factor_ic
+        _regime = _PythonSignalsMixin._regime
+        _queue_signal = _PythonSignalsMixin._queue_signal
 except ImportError:
     from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin
@@ -25,12 +34,13 @@ from src.algo.strategies.multi_factor.signals import SignalGenerator
 from src.algo.strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig,
 )
-from src.algo.strategies.regime import rank_strategies
+from src.algo.strategies.regime import _cached_feature_history, rank_strategies
+from src.algo.config import ALGO_REGIME_CONFIG
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
 from src.algo.strategies.rule_pipeline import evaluate_rule_signal
 from src.algo.strategies.satellite_overlay import SatelliteOverlayConfig
 from src.algo.strategies.swing_common import CachedDailyBarHistory
-from src.config import get_algo_runtime_settings, get_mode_config
+from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings, get_mode_config
 from risk_manager import _get_universe_maps, validate_trade
 
 
@@ -64,6 +74,12 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         research_runtime_overrides: dict[str, bool] | None = None,
         preaggregated_daily_bars: dict[str, list[dict]] | None = None,
         precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
+        include_extended_hours: bool = False,
+        regime_context_bars: dict[str, list[dict]] | None = None,
+        regime_macro_series: dict | None = None,
+        regime_config: dict | None = None,
+        execution_delay_bars: int = 0,
+        factor_weight_timeline: list[dict] | None = None,
         _signal_evaluator=None,
         _trade_validator=None,
         _regime_ranker=None,
@@ -88,7 +104,19 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
         self.intraday_bars = intraday_bars
         self.precomputed_timeline = precomputed_timeline
+        self.factor_weight_timeline = list(factor_weight_timeline or [])
+        self.include_extended_hours = bool(include_extended_hours)
+        if (
+            isinstance(execution_delay_bars, bool)
+            or not isinstance(execution_delay_bars, int)
+            or execution_delay_bars < 0
+            or execution_delay_bars > 12
+        ):
+            raise ValueError("execution_delay_bars must be an integer from 0 to 12")
+        self.execution_delay_bars = execution_delay_bars
         self.spy_daily_bars = spy_daily_bars
+        self.regime_config = {**ALGO_REGIME_CONFIG, **(regime_config or {})}
+        self.regime_macro_series = regime_macro_series or {}
         self.start = date.fromisoformat(start)
         self.end = date.fromisoformat(end)
         if self.end < self.start:
@@ -158,11 +186,24 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             self.parameters_for_regime("multi_factor", "unknown")
         ))
         self.multi_factor_config_key = self.multi_factor_generator.config.to_dict()
+        self.multi_factor_fundamentals_cache: dict[str, tuple[dict, dict]] = {}
         all_daily_bars = (
             preaggregated_daily_bars
             if preaggregated_daily_bars is not None
             else aggregate_intraday_bars(intraday_bars)
         )
+        self.regime_context_bars = dict(all_daily_bars)
+        self.regime_context_bars.update(regime_context_bars or {})
+        self.regime_context_bars.setdefault("SPY", spy_daily_bars)
+        self.regime_feature_history = (
+            _cached_feature_history(
+                spy_daily_bars, self.regime_context_bars, self.regime_macro_series,
+            )
+            if self.regime_config.get("engine", "legacy") != "legacy"
+            or self.regime_config.get("include_models", False)
+            else []
+        )
+        self.regime_history: list[dict] = []
         self.previous_closes_by_day: dict[tuple[str, date], float] = {}
         for symbol, rows in all_daily_bars.items():
             for index, row in enumerate(rows):
@@ -232,6 +273,10 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             self.tactical_tickers,
             _,
         ) = _get_universe_maps("algo")
+        self.sector_by_symbol = {
+            symbol: ALGO_FACTOR_SECTOR_BY_SYMBOL[symbol]
+            for symbol in self.symbols if symbol in ALGO_FACTOR_SECTOR_BY_SYMBOL
+        }
 
     def parameters_for_regime(self, strategy: str, regime: str) -> dict:
         """Return the current strategy profile with an optional regime override."""

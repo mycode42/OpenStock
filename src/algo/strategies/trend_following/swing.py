@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import math
 
+from src.algo.strategies.indicators import average_true_range
 from src.algo.strategies.swing_common import (
     CachedDailyBarHistory, SwingSignal, clean_daily_bars, held_sessions,
     position_entry_price,
@@ -15,6 +16,7 @@ from src.algo.strategies.swing_common import (
 class SwingTrendConfig:
     enabled: bool = True
     average_type: str = "sma"
+    stop_mode: str = "fixed_pct"
     fast_period: int = 20
     slow_period: int = 50
     slope_lookback_days: int = 5
@@ -23,6 +25,10 @@ class SwingTrendConfig:
     minimum_hold_sessions: int = 3
     maximum_holding_sessions: int = 15
     hard_stop_pct: float = 0.08
+    atr_period: int = 14
+    atr_stop_multiple: float = 2.5
+    atr_min_stop_pct: float = 0.04
+    atr_max_stop_pct: float = 0.15
     trailing_stop_pct: float = 0.07
     trailing_activation_pct: float = 0.05
     cooldown_days: int = 5
@@ -49,14 +55,17 @@ class SwingTrendConfig:
     def validate(self) -> None:
         if not isinstance(self.enabled, bool):
             raise ValueError("trend_following enabled must be a boolean")
-        if self.average_type not in {"sma", "ema"}:
-            raise ValueError("trend_following average_type must be sma or ema")
+        if self.average_type not in {"sma", "ema", "kama"}:
+            raise ValueError("trend_following average_type must be sma, ema, or kama")
+        if self.stop_mode not in {"fixed_pct", "atr"}:
+            raise ValueError("trend_following stop_mode must be fixed_pct or atr")
         if self.direction_mode not in {"both", "long_only", "short_only"}:
             raise ValueError("trend_following direction_mode must be both, long_only, or short_only")
         if self.fast_period >= self.slow_period:
             raise ValueError("trend_following fast_period must be less than slow_period")
         for name, low, high in (
             ("fast_period", 5, 40), ("slow_period", 30, 100),
+            ("atr_period", 7, 28),
             ("slope_lookback_days", 3, 15), ("minimum_hold_sessions", 2, 5),
             ("maximum_holding_sessions", 10, 20), ("cooldown_days", 3, 10),
             ("max_positions", 3, 7), ("max_entries_per_day", 1, 2),
@@ -66,8 +75,12 @@ class SwingTrendConfig:
                 raise ValueError(f"trend_following {name} must be an integer between {low} and {high}")
         if self.maximum_holding_sessions <= self.minimum_hold_sessions:
             raise ValueError("trend_following periods and holding limits are inconsistent")
+        if self.atr_min_stop_pct >= self.atr_max_stop_pct:
+            raise ValueError("trend_following atr_min_stop_pct must be below atr_max_stop_pct")
         for name, low, high in (
             ("minimum_slope_pct", 0.0, 0.03), ("hard_stop_pct", 0.04, 0.15),
+            ("atr_stop_multiple", 1.0, 5.0), ("atr_min_stop_pct", 0.03, 0.10),
+            ("atr_max_stop_pct", 0.08, 0.25),
             ("trailing_stop_pct", 0.03, 0.15), ("trailing_activation_pct", 0.01, 0.12),
             ("max_position_pct", 0.01, 0.05), ("risk_multiplier", 0.1, 1.0),
         ):
@@ -81,6 +94,22 @@ def _average(values: list[float], period: int, average_type: str) -> float | Non
         return None
     if average_type == "sma":
         return sum(values[-period:]) / period
+    if average_type == "kama":
+        if len(values) < period + 1:
+            return None
+        fast_smoothing = 2.0 / (2 + 1)
+        slow_smoothing = 2.0 / (30 + 1)
+        result = sum(values[:period]) / period
+        for index in range(period, len(values)):
+            change = abs(values[index] - values[index - period])
+            volatility = sum(
+                abs(values[offset] - values[offset - 1])
+                for offset in range(index - period + 1, index + 1)
+            )
+            efficiency = change / volatility if volatility > 0 else 0.0
+            smoothing = (efficiency * (fast_smoothing - slow_smoothing) + slow_smoothing) ** 2
+            result += smoothing * (values[index] - result)
+        return result
     alpha = 2 / (period + 1)
     result = sum(values[:period]) / period
     for value in values[period:]:
@@ -109,6 +138,17 @@ def _signal_uncached(
     bearish = fast < slow and slope <= -config.minimum_slope_pct
     current = values[-1]
     ticker = ticker.upper()
+    stop_pct = config.hard_stop_pct
+    if config.stop_mode == "atr":
+        atr = average_true_range([row[1] for row in rows], config.atr_period)
+        if atr is None or current <= 0:
+            return None
+        if config.atr_min_stop_pct >= config.atr_max_stop_pct:
+            raise ValueError("trend_following ATR stop bounds are inconsistent")
+        stop_pct = min(
+            config.atr_max_stop_pct,
+            max(config.atr_min_stop_pct, atr * config.atr_stop_multiple / current),
+        )
 
     if position_qty:
         entry = position_entry_price(entry_price)
@@ -116,7 +156,7 @@ def _signal_uncached(
         if entry is None or held is None:
             return None
         is_short = position_qty < 0
-        hard_stop = entry * (1 + config.hard_stop_pct) if is_short else entry * (1 - config.hard_stop_pct)
+        hard_stop = entry * (1 + stop_pct) if is_short else entry * (1 - stop_pct)
         action = "cover" if is_short else "sell"
         if (current >= hard_stop if is_short else current <= hard_stop):
             reason = f"daily trend hard stop; held {held} sessions"
@@ -138,8 +178,9 @@ def _signal_uncached(
                 reason = f"maximum {config.maximum_holding_sessions}-session trend hold reached"
             else:
                 return None
-        return SwingSignal(ticker, action, "trend_following", reason, stop_pct=config.hard_stop_pct,
-                           target_weight=config.max_position_pct, risk_multiplier=config.risk_multiplier)
+        return SwingSignal(ticker, action, "trend_following", reason, stop_pct=stop_pct,
+                           target_weight=config.max_position_pct, risk_multiplier=config.risk_multiplier,
+                           stop_model_override=config.stop_mode == "atr")
 
     if config.direction_mode == "long_only":
         bearish = False
@@ -149,15 +190,17 @@ def _signal_uncached(
         return SwingSignal(
             ticker, "buy", "trend_following",
             f"daily {config.average_type.upper()} {config.fast_period}/{config.slow_period} bullish; slow-average slope {slope:+.2%}",
-            stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
+            stop_pct=stop_pct, target_weight=config.max_position_pct,
             risk_multiplier=config.risk_multiplier,
+            stop_model_override=config.stop_mode == "atr",
         )
     if bearish:
         return SwingSignal(
             ticker, "short", "trend_following",
             f"daily {config.average_type.upper()} {config.fast_period}/{config.slow_period} bearish; slow-average slope {slope:+.2%}",
-            stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
+            stop_pct=stop_pct, target_weight=config.max_position_pct,
             risk_multiplier=config.risk_multiplier,
+            stop_model_override=config.stop_mode == "atr",
         )
     return None
 

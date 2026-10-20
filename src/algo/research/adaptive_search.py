@@ -11,26 +11,38 @@ import math
 from pathlib import Path
 import random
 import statistics
+import hashlib
 from concurrent.futures import ProcessPoolExecutor
 from zoneinfo import ZoneInfo
 
-from src.algo.backtest import DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days
+from src.algo.backtest import AlgoPortfolioBacktest, strategy_warmup_days
+from src.algo.backtest.config import REGIME_WARMUP_DAYS
 from src.algo.market_store import SQLiteBarStore
 from src.algo.cpu import available_cpu_count
 from src.algo.backtest.execution import build_replay_timeline
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
+from src.algo.strategies.multi_factor.config import REGIME_FACTOR_WEIGHT_PROFILES
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, PARAMETER_KEYS, validate_parameter_profile
 from src.algo.strategies.universe import configured_universe
-from .candidate_archive import candidate_id
+from .candidate_archive import candidate_id, logic_version, model_family
 from .replay_logging import quiet_coordinator_rejections
 from .settings import (
     ADJUSTMENT, CORE_RESEARCH_CONTROLS, FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
-    RESEARCH_START, RESEARCH_WARMUP_DAYS,
+    RESEARCH_START, RESEARCH_WARMUP_DAYS, SIP_EXTENDED_LOCAL_FEED,
+    REGIME_CONTEXT_WARMUP_DAYS,
 )
 
 ET = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 _CANDIDATE_REPLAY_CONTEXT: dict | None = None
+MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS = {
+    name: 0.1 for name in (
+        "momentum_1m", "momentum_3m", "momentum_6m", "low_volatility",
+        "price_volume_momentum", "value_earnings_yield", "value_book_to_price",
+        "value_fcf_yield", "quality_profitability", "quality_balance_sheet",
+    )
+}
+MULTI_FACTOR_MIN_NET_IC_IMPROVEMENT = 0.005
 
 DEFAULT_FITNESS_WEIGHTS = {
     "sharpe": 0.25,
@@ -52,31 +64,52 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
         "entry_window_minutes": [30, 60, 90],
         "window": [15, 20, 30], "band_width": [1.8, 2.0, 2.4],
         "entry_rsi": [25, 30, 35], "exit_rsi": [55, 58, 62],
+        "regime_filter": ["none", "er", "adx", "combined"],
+        "threshold_mode": ["fixed", "volatility_regime_adjusted"],
+        "efficiency_ratio_max": [0.25, 0.35, 0.45], "adx_max": [16.0, 20.0, 24.0],
     },
     "trend_following": {
-        "average_type": ["sma", "ema"], "fast_period": [10, 15, 20, 25, 30],
+        "average_type": ["sma", "ema", "kama"], "stop_mode": ["fixed_pct", "atr"],
+        "atr_stop_multiple": [2.0, 2.5, 3.0], "fast_period": [10, 15, 20, 25, 30],
         "slow_period": [40, 50, 60, 70, 80], "minimum_slope_pct": [0.0, 0.001, 0.0025, 0.005],
     },
     "momentum": {
-        "lookbacks": [[5, 10, 20], [5, 10, 20, 40], [10, 20, 40], [10, 20, 60]],
+        "momentum_mode": ["cross_sectional", "time_series"],
+        "lookbacks": [
+            [5, 10, 20], [10, 20, 40], [10, 20, 60],
+            [21, 63, 126, 252], [5, 21, 63, 126, 252],
+        ],
         "top_n": [2, 3, 4], "minimum_score_spread": [0.02, 0.04, 0.06, 0.08],
+        "minimum_time_series_return": [0.0, 0.02, 0.04],
     },
     "swing_mean_reversion": {
         "lookback_days": [10, 15, 20, 25], "stretch_pct": [0.05, 0.07, 0.08, 0.10, 0.12],
         "minimum_stretch_days": [2, 3, 4], "use_rsi_confirmation": [True, False],
         "long_rsi_max": [25, 30, 35], "short_rsi_min": [65, 70, 75],
+        "regime_filter": ["none", "er", "adx", "combined"],
+        "entry_distance_mode": ["fixed_pct", "standardized"],
+        "lookback_mode": ["fixed", "volatility_adaptive"],
+        "stretch_zscore": [1.25, 1.75, 2.25],
     },
     "multi_factor": {
         "rebalance_frequency": ["daily", "weekly"], "top_n": [1, 2, 3, 4],
         "min_universe": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
         "minimum_score": [0.0, 0.05, 0.1, 0.2],
         "direction_mode": ["long_only", "regime_dependent", "long_short"],
+        "factor_neutralization": ["none", "sector"],
+        "portfolio_weight_method": ["equal", "shrinkage_min_variance"],
+        "regime_factor_weights": [{}, REGIME_FACTOR_WEIGHT_PROFILES],
         "factor_weights": [
             {"momentum_1m": 0.30, "momentum_3m": 0.30, "momentum_6m": 0.20, "low_volatility": 0.20},
             {"momentum_1m": 0.20, "momentum_3m": 0.30, "momentum_6m": 0.30, "low_volatility": 0.20},
             {"momentum_1m": 0.10, "momentum_3m": 0.25, "momentum_6m": 0.45, "low_volatility": 0.20},
             {"momentum_1m": 0.0, "momentum_3m": 0.0, "momentum_6m": 1.0},
             {"momentum_1m": 0.0, "momentum_3m": 0.50, "momentum_6m": 0.30, "low_volatility": 0.20},
+            {"momentum_1m": 0.22, "momentum_3m": 0.27, "momentum_6m": 0.21, "low_volatility": 0.12, "price_volume_momentum": 0.18},
+            {"price_volume_momentum": 1.0},
+            {"low_volatility": 1.0},
+            {"value_earnings_yield": 0.5, "value_book_to_price": 0.25, "value_fcf_yield": 0.25},
+            {"quality_profitability": 0.5, "quality_balance_sheet": 0.5},
         ],
     },
 }
@@ -95,11 +128,22 @@ def _metrics(report: dict, *, capital: float) -> dict:
             "excess_return_vs_buy_hold_pct_points", "open_position_count",
         )
     }
+    trades = report.get("closed_trades") or []
+    traded_notional = 0.0
+    for trade in trades:
+        try:
+            traded_notional += abs(float(trade.get("qty") or 0.0) * float(trade.get("entry_price") or 0.0))
+        except (TypeError, ValueError):
+            continue
+    raw["turnover_pct_of_initial_capital"] = round(100.0 * traded_notional / capital, 4) if capital > 0 else None
     raw["sortino_annualized"] = round(sortino, 4) if sortino is not None else None
     return raw
 
 
-def _metrics_by_regime(report: dict, *, capital: float, weights: dict[str, float], min_trades: int) -> dict:
+def _metrics_by_regime(
+    report: dict, *, capital: float, weights: dict[str, float], min_trades: int,
+    multi_factor_diagnostics: dict | None = None,
+) -> dict:
     """Score daily replay returns and closed trades in their point-in-time regime."""
     rows = report.get("daily_equity") or []
     trades_by_regime: dict[str, list[dict]] = {regime: [] for regime in ADAPTIVE_REGIMES}
@@ -122,6 +166,12 @@ def _metrics_by_regime(report: dict, *, capital: float, weights: dict[str, float
             previous = equity
 
     result = {}
+    factor_ic_by_regime = (multi_factor_diagnostics or {}).get(
+        "net_of_costs_ic_forward_21_sessions_by_regime", {},
+    )
+    factor_return_by_regime = (multi_factor_diagnostics or {}).get(
+        "after_cost_target_portfolio_forward_21_session_return_by_regime", {},
+    )
     for regime in ADAPTIVE_REGIMES:
         values = returns_by_regime[regime]
         equity = float(capital)
@@ -137,6 +187,11 @@ def _metrics_by_regime(report: dict, *, capital: float, weights: dict[str, float
         metrics.update({
             "closed_trade_count": len(trades),
             "entry_count": len(trades),
+            "net_realized_pnl_after_costs": round(sum(pnls), 2),
+            "turnover_pct_of_initial_capital": round(
+                100.0 * sum(abs(float(row.get("qty") or 0.0) * float(row.get("entry_price") or 0.0)) for row in trades) / capital,
+                4,
+            ) if capital > 0 else None,
             "win_rate_pct": round(100.0 * sum(value > 0 for value in pnls) / len(pnls), 4) if pnls else None,
             "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else (None if not gross_profit else float("inf")),
             "regime_session_count": len(values),
@@ -144,15 +199,48 @@ def _metrics_by_regime(report: dict, *, capital: float, weights: dict[str, float
         fitness, components = _fitness(metrics, weights)
         count_ok = len(trades) >= min_trades and len(values) >= 15
         positive = float(metrics.get("net_return_pct") or 0.0) > 0
+        factor_evidence = None
+        if multi_factor_diagnostics is not None:
+            ic = factor_ic_by_regime.get(regime) or {}
+            economic = factor_return_by_regime.get(regime) or {}
+            ic_mean = float(ic.get("mean") or 0.0)
+            ic_positive_pct = float(ic.get("positive_sample_pct") or 0.0)
+            ic_count = int(ic.get("sample_count") or 0)
+            economic_mean = float(economic.get("mean") or 0.0)
+            factor_evidence = bool(
+                ic_count >= 20 and ic_mean > 0 and ic_positive_pct >= 55.0
+                and economic_mean > 0
+            )
+            metrics["multi_factor_oos"] = {
+                "net_of_costs_ic_mean": round(ic_mean, 6),
+                "net_of_costs_ic_positive_sample_pct": round(ic_positive_pct, 2),
+                "net_of_costs_ic_observation_count": ic_count,
+                "after_cost_target_portfolio_return_mean": round(economic_mean, 6),
+                "minimum_factor_evidence_met": factor_evidence,
+            }
         result[regime] = {
             "metrics": metrics,
             "fitness": round(fitness, 8),
             "fitness_components": {key: round(value, 8) for key, value in components.items()},
-            "eligible": bool(count_ok and positive),
+            "eligible": bool(count_ok and positive and factor_evidence is not False),
             "minimum_sample_met": bool(count_ok),
             "positive_after_costs": bool(positive),
+            "minimum_factor_evidence_met": factor_evidence,
         }
     return result
+
+
+def _cost_model_version(args) -> str:
+    descriptor = {
+        "version": "algo-replay-cost-v1",
+        "slippage_bps_each_side": float(args.slippage_bps),
+        "spread_bps_full": float(args.spread_bps),
+        "commission_per_share_each_side": float(args.commission_per_share),
+        "short_borrow_annual_pct": float(args.short_borrow_annual_pct),
+        "unknown_borrow_penalty_bps": float(args.unknown_borrow_penalty_bps),
+    }
+    encoded = json.dumps(descriptor, sort_keys=True, separators=(",", ":"))
+    return f"{descriptor['version']}:{hashlib.sha256(encoded.encode()).hexdigest()[:12]}"
 
 def _daily_returns(curve: list[dict], initial_equity: float) -> list[float]:
     returns = []
@@ -234,6 +322,126 @@ def _make_parameters(strategy: str, values: dict) -> dict:
     parameters.update(deepcopy(values))
     return validate_parameter_profile({strategy: parameters})[strategy]
 
+
+def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str, dict]]:
+    """Build a small, ordered cohort with one-feature and planned combined variants."""
+    if strategy == "mean_reversion":
+        return [
+            ("opening_dip_er_gate", {"signal_model": "opening_dip", "regime_filter": "er"}),
+            ("opening_dip_adx_gate", {"signal_model": "opening_dip", "regime_filter": "adx"}),
+            ("opening_dip_combined_gate", {"signal_model": "opening_dip", "regime_filter": "combined"}),
+            ("bollinger_baseline", {"signal_model": "bollinger"}),
+            ("er_gate", {"signal_model": "bollinger", "regime_filter": "er"}),
+            ("adx_gate", {"signal_model": "bollinger", "regime_filter": "adx"}),
+            ("combined_gate", {"signal_model": "bollinger", "regime_filter": "combined"}),
+            ("volatility_threshold", {
+                "signal_model": "bollinger", "threshold_mode": "volatility_regime_adjusted",
+            }),
+            ("combined_regime_volatility", {
+                "signal_model": "bollinger", "regime_filter": "combined",
+                "threshold_mode": "volatility_regime_adjusted",
+            }),
+        ]
+    if strategy == "swing_mean_reversion":
+        return [
+            ("er_gate", {"regime_filter": "er"}),
+            ("adx_gate", {"regime_filter": "adx"}),
+            ("combined_gate", {"regime_filter": "combined"}),
+            ("standardized_distance", {"entry_distance_mode": "standardized"}),
+            ("adaptive_lookback", {"lookback_mode": "volatility_adaptive"}),
+            ("combined_volatility", {
+                "entry_distance_mode": "standardized", "lookback_mode": "volatility_adaptive",
+            }),
+            ("combined_regime_volatility", {
+                "regime_filter": "combined", "entry_distance_mode": "standardized",
+                "lookback_mode": "volatility_adaptive",
+            }),
+        ]
+    if strategy in {"trend_following", "swing_trend_following"}:
+        return [
+            ("kama_average", {"average_type": "kama"}),
+            ("atr_stop", {"stop_mode": "atr"}),
+            ("kama_atr", {"average_type": "kama", "stop_mode": "atr"}),
+        ]
+    if strategy in {"momentum", "swing_momentum"}:
+        return [
+            ("cross_sectional_21_session", {
+                "momentum_mode": "cross_sectional", "lookbacks": [21],
+            }),
+            ("cross_sectional_63_session", {
+                "momentum_mode": "cross_sectional", "lookbacks": [63],
+            }),
+            ("cross_sectional_126_session", {
+                "momentum_mode": "cross_sectional", "lookbacks": [126],
+            }),
+            ("cross_sectional_252_session", {
+                "momentum_mode": "cross_sectional", "lookbacks": [252],
+            }),
+            ("cross_sectional_long_horizons", {
+                "momentum_mode": "cross_sectional", "lookbacks": [21, 63, 126, 252],
+            }),
+            ("time_series_long_horizons", {
+                "momentum_mode": "time_series", "lookbacks": [21, 63, 126, 252],
+            }),
+        ]
+    if strategy == "multi_factor":
+        return [
+            ("all_factors_equal_weights", {
+                "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
+                "factor_neutralization": "none",
+                "regime_factor_weights": {},
+                "min_universe": 15,
+            }),
+            ("ridge_factor_set_equal_weights", {
+                "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
+                "factor_neutralization": "sector",
+                "regime_factor_weights": {},
+                "min_universe": 15,
+            }),
+            ("ridge_walk_forward_weights", {
+                "factor_weight_mode": "ridge_walk_forward",
+                "regime_factor_weights": {},
+                "factor_neutralization": "sector",
+                "min_universe": 15,
+            }),
+            ("momentum_only", {"factor_weights": {
+                "momentum_1m": 0.33, "momentum_3m": 0.34, "momentum_6m": 0.33,
+            }, "regime_factor_weights": {}}),
+            ("low_volatility_only", {"factor_weights": {"low_volatility": 1.0}, "regime_factor_weights": {}}),
+            ("price_volume_only", {"factor_weights": {"price_volume_momentum": 1.0}, "regime_factor_weights": {}}),
+            ("value_only", {"factor_weights": {
+                "value_earnings_yield": 0.5, "value_book_to_price": 0.25,
+                "value_fcf_yield": 0.25,
+            }, "regime_factor_weights": {}, "min_universe": 15}),
+            ("quality_only", {"factor_weights": {
+                "quality_profitability": 0.5, "quality_balance_sheet": 0.5,
+            }, "regime_factor_weights": {}, "min_universe": 15}),
+            ("earnings_yield_only", {"factor_weights": {"value_earnings_yield": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
+            ("book_to_price_only", {"factor_weights": {"value_book_to_price": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
+            ("free_cash_flow_yield_only", {"factor_weights": {"value_fcf_yield": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
+            ("profitability_only", {"factor_weights": {"quality_profitability": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
+            ("balance_sheet_quality_only", {"factor_weights": {"quality_balance_sheet": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
+            ("sector_neutralized_equal_weights", {
+                "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
+                "factor_neutralization": "sector", "regime_factor_weights": {},
+                "min_universe": 15,
+            }),
+            ("regime_timing", {
+                "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
+                "factor_neutralization": "sector",
+                "regime_factor_weights": REGIME_FACTOR_WEIGHT_PROFILES,
+                "min_universe": 15,
+            }),
+            ("shrinkage_min_variance", {"portfolio_weight_method": "shrinkage_min_variance"}),
+            ("combined_shrinkage_min_variance", {
+                "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
+                "factor_neutralization": "sector", "regime_factor_weights": {},
+                "min_universe": 15,
+                "portfolio_weight_method": "shrinkage_min_variance",
+            }),
+        ]
+    return []
+
 def _random_values(space: dict[str, list], rng: random.Random) -> dict:
     return {key: deepcopy(rng.choice(values)) for key, values in space.items()}
 
@@ -303,9 +511,34 @@ def _candidate_parameters(
     def previously_evaluated(parameters: dict) -> bool:
         return candidate_id(strategy, parameters) in excluded
 
-    output = [{"name": "baseline", "parameters": validate_parameter_profile({strategy: baseline})[strategy]}]
+    baseline = validate_parameter_profile({strategy: baseline})[strategy]
+    output = [{
+        "name": "baseline", "parameters": baseline,
+        "model_family": model_family(strategy, baseline),
+        "logic_version": logic_version(strategy),
+    }]
     seen = {json.dumps(baseline, sort_keys=True, separators=(",", ":"))}
     rng = random.Random(seed)
+    baseline_id = candidate_id(strategy, baseline)
+    for name, changes in _planned_ablation_variants(strategy, baseline):
+        if len(output) >= count:
+            break
+        variation = deepcopy(baseline)
+        variation.update(deepcopy(changes))
+        try:
+            parameters = _make_parameters(strategy, variation)
+        except ValueError:
+            continue
+        key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+        if key in seen or previously_evaluated(parameters):
+            continue
+        seen.add(key)
+        output.append({
+            "name": f"ablation:{name}", "parameters": parameters,
+            "model_family": model_family(strategy, parameters),
+            "logic_version": logic_version(strategy),
+            "parent_candidate_id": baseline_id,
+        })
     if strategy == "multi_factor" and len(output) < count:
         for min_universe in space.get("min_universe", []):
             variation = deepcopy(baseline)
@@ -339,7 +572,11 @@ def _candidate_parameters(
             key = json.dumps(parent, sort_keys=True, separators=(",", ":"))
             if key not in seen and not previously_evaluated(parent):
                 seen.add(key)
-                output.append({"name": f"archive_{index + 1:02d}", "parameters": parent})
+                output.append({
+                    "name": f"archive_{index + 1:02d}", "parameters": parent,
+                    "model_family": model_family(strategy, parent),
+                    "logic_version": logic_version(strategy),
+                })
         # Spend a stable fraction of the budget on neighboring variants from
         # several archived elites; reserve the rest for independent exploration.
         derivative_limit = min(count, max(len(output), count * 2 // 3))
@@ -363,6 +600,9 @@ def _candidate_parameters(
                     output.append({
                         "name": f"archive_{parent_index + 1:02d}_variant_{len(output):03d}",
                         "parameters": parameters,
+                        "model_family": model_family(strategy, parameters),
+                        "logic_version": logic_version(strategy),
+                        "parent_candidate_id": candidate_id(strategy, parent),
                     })
                 if len(output) >= derivative_limit:
                     break
@@ -434,17 +674,60 @@ def _load_window_data(
     strategy: str,
 ) -> tuple[dict[str, list[dict]], list[dict]]:
     store = SQLiteBarStore(db)
-    warmup = max(DAILY_WARMUP_DAYS, multi_factor_warmup_days() if strategy == "multi_factor" else 0)
+    warmup = max(strategy_warmup_days(strategy), REGIME_CONTEXT_WARMUP_DAYS)
     warm_start = (start - timedelta(days=warmup)).isoformat()
+    context_symbols = list(dict.fromkeys([*symbols, "QQQ", "GLD", "TLT", "HYG", "LQD"]))
     bars = store.bars(
-        symbols, feed=FEED, timeframe="5Min", start=warm_start,
+        context_symbols, feed=FEED, timeframe="5Min", start=warm_start,
         end=end.isoformat(), adjustment=adjustment,
     )
     spy = store.bars(
-        ["SPY"], feed=FEED, timeframe="1Day", start=warm_start,
+        ["SPY"], feed=FEED, timeframe="1Day",
+        start=(start - timedelta(days=REGIME_WARMUP_DAYS)).isoformat(),
         end=end.isoformat(), adjustment=adjustment,
     ).get("SPY", [])
     return bars, spy
+
+
+def _load_forward_window_data(
+    *, db: str, symbols: list[str], start: date, end: date, adjustment: str,
+    strategy: str,
+) -> tuple[dict[str, list[dict]], list[dict], dict[str, list[dict]]]:
+    """Load regular bars plus any stored SIP extended and BOATS session bars."""
+    regular_bars, spy = _load_window_data(
+        db=db, symbols=symbols, start=start, end=end,
+        adjustment=adjustment, strategy=strategy,
+    )
+    store = SQLiteBarStore(db)
+    warmup = max(strategy_warmup_days(strategy), REGIME_CONTEXT_WARMUP_DAYS)
+    warm_start = (start - timedelta(days=warmup + 1)).isoformat()
+    session_end = (end + timedelta(days=1)).isoformat()
+    context_symbols = [symbol for symbol in regular_bars if symbol not in symbols]
+    merged = {
+        symbol: list(regular_bars.get(symbol, []))
+        for symbol in dict.fromkeys([*symbols, *context_symbols])
+    }
+    for rows in merged.values():
+        for bar in rows:
+            bar["_source_feed"] = FEED
+    for feed in (SIP_EXTENDED_LOCAL_FEED, "boats"):
+        extra = store.bars(
+            symbols, feed=feed, timeframe="5Min", start=warm_start,
+            end=session_end, adjustment=adjustment,
+        )
+        for symbol, rows in extra.items():
+            for bar in rows:
+                bar["_source_feed"] = feed
+            merged.setdefault(symbol, []).extend(rows)
+    for symbol, rows in merged.items():
+        by_timestamp = {}
+        # Regular SIP records win if an upstream feed has overlapping timestamps.
+        for bar in regular_bars.get(symbol, []):
+            by_timestamp[str(bar["t"])] = bar
+        for bar in rows:
+            by_timestamp.setdefault(str(bar["t"]), bar)
+        merged[symbol] = sorted(by_timestamp.values(), key=lambda bar: str(bar["t"]))
+    return merged, spy, regular_bars
 
 def _profile_for(strategy: str, parameters: dict) -> dict:
     controls = deepcopy(CORE_RESEARCH_CONTROLS)
@@ -464,6 +747,7 @@ def _run_replay(
     force_close_at_end: bool = True,
     preaggregated_daily_bars: dict[str, list[dict]] | None = None,
     precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
+    include_extended_hours: bool = False,
 ) -> dict:
     profile = _profile_for(strategy, parameters)
     replay = AlgoPortfolioBacktest(
@@ -474,12 +758,17 @@ def _run_replay(
         commission_per_share=args.commission_per_share,
         short_borrow_annual_pct=args.short_borrow_annual_pct / 100,
         unknown_borrow_penalty_bps=args.unknown_borrow_penalty_bps,
+        execution_delay_bars=int(getattr(args, "execution_delay_bars", 0)),
         borrow_availability=args.borrow_availability_data,
+        regime_macro_series=getattr(args, "regime_macro_series", None),
+        regime_config=getattr(args, "regime_config", None),
         profile=profile["parameters"], strategies=profile["strategies"],
         research_controls=profile["controls"], force_close_at_end=force_close_at_end,
         regime_profiles=regime_profiles,
         preaggregated_daily_bars=preaggregated_daily_bars,
         precomputed_timeline=precomputed_timeline,
+        include_extended_hours=include_extended_hours,
+        factor_weight_timeline=getattr(args, "factor_weight_timeline", None),
     )
     with quiet_coordinator_rejections():
         return replay.run()
@@ -507,19 +796,61 @@ def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
     )
     metrics = _metrics(report, capital=context["args"].capital)
     fitness, components = _fitness(metrics, context["weights"])
+    factor_evidence = None
+    factor_net_ic = None
+    factor_net_return = None
+    if context["strategy"] == "multi_factor":
+        diagnostics = report.get("multi_factor_diagnostics") or {}
+        net_ic = diagnostics.get("net_of_costs_ic_forward_21_sessions") or {}
+        net_return = diagnostics.get("after_cost_target_portfolio_forward_21_session_return") or {}
+        factor_net_ic = float(net_ic.get("mean") or 0.0)
+        factor_net_return = float(net_return.get("mean") or 0.0)
+        ic_count = int(net_ic.get("sample_count") or 0)
+        positive_ic_pct = float(net_ic.get("positive_sample_pct") or 0.0)
+        ic_component = math.tanh(factor_net_ic / 0.05)
+        stability_component = max(-1.0, min(1.0, (positive_ic_pct - 50.0) / 50.0))
+        economic_component = math.tanh(factor_net_return / 0.02)
+        factor_fitness = 0.40 * ic_component + 0.25 * stability_component + 0.35 * economic_component
+        fitness = 0.5 * fitness + 0.5 * factor_fitness
+        components.update({
+            "net_factor_ic": ic_component,
+            "factor_ic_stability": stability_component,
+            "after_cost_factor_return": economic_component,
+        })
+        factor_evidence = bool(
+            ic_count >= 20 and factor_net_ic > 0
+            and positive_ic_pct >= 55.0 and factor_net_return > 0
+        )
+        metrics["multi_factor_oos"] = {
+            "net_of_costs_ic_mean": round(factor_net_ic, 6),
+            "net_of_costs_ic_positive_sample_pct": round(positive_ic_pct, 2),
+            "net_of_costs_ic_observation_count": ic_count,
+            "ic_horizon_sessions": diagnostics.get("ic_horizon_sessions"),
+            "ic_labels_overlap": diagnostics.get("ic_labels_overlap"),
+            "after_cost_target_portfolio_return_mean": round(factor_net_return, 6),
+            "minimum_factor_evidence_met": factor_evidence,
+        }
     regime_metrics = _metrics_by_regime(
         report, capital=context["args"].capital,
         weights=context["weights"], min_trades=context["min_trades"],
+        multi_factor_diagnostics=(report.get("multi_factor_diagnostics") if context["strategy"] == "multi_factor" else None),
     )
     enough_trades = int(metrics.get("closed_trade_count") or 0) >= context["min_trades"]
     positive_after_costs = float(metrics.get("net_return_pct") or 0) > 0
+    if context["strategy"] == "multi_factor":
+        positive_after_costs = positive_after_costs and bool(factor_net_return and factor_net_return > 0)
     del report
     return {
         "name": candidate["name"], "parameters": candidate["parameters"],
+        "model_family": candidate.get("model_family") or model_family(context["strategy"], candidate["parameters"]),
+        "logic_version": candidate.get("logic_version") or logic_version(context["strategy"]),
+        "parent_candidate_id": candidate.get("parent_candidate_id"),
+        "cost_model_version": _cost_model_version(context["args"]),
         "metrics": metrics, "fitness": round(fitness, 8), "_fitness_raw": fitness,
         "fitness_components": {key: round(value, 8) for key, value in components.items()},
         "regime_metrics": regime_metrics,
-        "eligible": enough_trades and positive_after_costs,
+        "eligible": enough_trades and positive_after_costs and (factor_evidence is not False),
+        "minimum_factor_evidence_met": factor_evidence,
         "minimum_trade_count_met": enough_trades,
         "positive_after_costs": positive_after_costs,
     }
@@ -528,6 +859,59 @@ def _evaluate_candidate_in_worker(candidate: dict) -> dict:
     if _CANDIDATE_REPLAY_CONTEXT is None:
         raise RuntimeError("candidate replay worker was not initialized")
     return _evaluate_search_candidate(candidate, _CANDIDATE_REPLAY_CONTEXT)
+
+
+def _apply_multi_factor_ic_improvement_gate(candidates: list[dict], strategy: str) -> None:
+    """Require changed factor signals to beat baseline net IC by a margin."""
+    if strategy != "multi_factor":
+        return
+    baseline = next((row for row in candidates if row.get("name") == "baseline"), None)
+    baseline_oos = ((baseline or {}).get("metrics") or {}).get("multi_factor_oos") or {}
+    baseline_ic = float(baseline_oos.get("net_of_costs_ic_mean") or 0.0)
+    baseline_regimes = (baseline or {}).get("regime_metrics") or {}
+    score_parameters = (
+        "factor_weights", "factor_neutralization", "regime_factor_weights", "factor_weight_mode",
+        "momentum_lookbacks", "volatility_lookback", "reversal_lookback",
+        "liquidity_lookback", "minimum_price", "minimum_average_dollar_volume",
+        "minimum_history_sessions", "maximum_bar_age_days", "winsor_quantile",
+        "min_universe",
+    )
+    baseline_parameters = (baseline or {}).get("parameters") or {}
+    for row in candidates:
+        if row.get("name") == "baseline":
+            row["net_ic_improvement_vs_baseline"] = None
+            continue
+        metrics = row.setdefault("metrics", {})
+        oos = metrics.get("multi_factor_oos") or {}
+        candidate_ic = float(oos.get("net_of_costs_ic_mean") or 0.0)
+        delta = candidate_ic - baseline_ic
+        candidate_parameters = row.get("parameters") or {}
+        improvement_required = any(
+            candidate_parameters.get(name) != baseline_parameters.get(name)
+            for name in score_parameters
+        )
+        improved = not improvement_required or delta >= MULTI_FACTOR_MIN_NET_IC_IMPROVEMENT
+        oos["net_ic_improvement_vs_baseline"] = round(delta, 6)
+        oos["minimum_net_ic_improvement"] = MULTI_FACTOR_MIN_NET_IC_IMPROVEMENT
+        oos["ic_improvement_gate_required"] = improvement_required
+        oos["ic_improvement_gate_met"] = improved
+        metrics["multi_factor_oos"] = oos
+        row["net_ic_improvement_vs_baseline"] = round(delta, 6)
+        row["eligible"] = bool(row.get("eligible") and improved)
+        for regime, result in (row.get("regime_metrics") or {}).items():
+            result_oos = ((result.get("metrics") or {}).get("multi_factor_oos") or {})
+            baseline_regime_oos = (
+                ((baseline_regimes.get(regime) or {}).get("metrics") or {}).get("multi_factor_oos") or {}
+            )
+            regime_delta = float(result_oos.get("net_of_costs_ic_mean") or 0.0)
+            regime_delta -= float(baseline_regime_oos.get("net_of_costs_ic_mean") or 0.0)
+            regime_improvement_required = improvement_required
+            regime_improved = not regime_improvement_required or regime_delta >= MULTI_FACTOR_MIN_NET_IC_IMPROVEMENT
+            result["net_ic_improvement_vs_baseline"] = round(regime_delta, 6)
+            result["minimum_net_ic_improvement"] = MULTI_FACTOR_MIN_NET_IC_IMPROVEMENT
+            result["ic_improvement_gate_required"] = regime_improvement_required
+            result["ic_improvement_gate_met"] = regime_improved
+            result["eligible"] = bool(result.get("eligible") and regime_improved)
 
 def _run_search_with_bars(
     *, strategy: str, method: str, count: int, seed: int,
@@ -629,6 +1013,7 @@ def _run_search_with_bars(
     finally:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
+    _apply_multi_factor_ic_improvement_gate(evaluated, strategy)
     eligible_rows = [row for row in evaluated if row["eligible"]]
     sample_eligible = [row for row in evaluated if row["minimum_trade_count_met"]]
     pool = eligible_rows or sample_eligible or evaluated

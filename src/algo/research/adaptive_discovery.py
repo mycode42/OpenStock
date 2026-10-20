@@ -13,7 +13,8 @@ from src.market_data import data_tier
 
 from .files import _atomic_json
 from .candidate_archive import (
-    archive_discoveries, candidate_id, evaluated_candidate_ids, parent_candidates,
+    archive_discoveries, candidate_id, evaluated_candidate_ids, logic_version,
+    model_family, parent_candidates,
 )
 from .adaptive_common import _prepare_args, _read_json_file, _write_report
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
@@ -211,7 +212,7 @@ def run_window_ladder_discovery(
         None,
     )
     baseline_regimes = (baseline or {}).get("regime_metrics") or {}
-    regime_best: dict[str, dict] = {}
+    regime_best: dict[tuple[str, str], dict] = {}
     for candidate in detail.get("candidates") or []:
         if candidate.get("name") == "baseline":
             continue
@@ -220,30 +221,53 @@ def run_window_ladder_discovery(
             continue
         for regime, result in (candidate.get("regime_metrics") or {}).items():
             base_result = baseline_regimes.get(regime) or {}
-            if not isinstance(result, dict) or not result.get("eligible"):
+            if not isinstance(result, dict):
+                continue
+            candidate_name = str(candidate.get("name") or "candidate")
+            planned_ablation = candidate_name.startswith("ablation:") or ":ablation:" in candidate_name
+            if not planned_ablation and not result.get("eligible"):
                 continue
             fitness = float(result.get("fitness") or 0.0)
             baseline_fitness = float(base_result.get("fitness") or 0.0)
             baseline_sample_met = bool(base_result.get("minimum_sample_met"))
-            if baseline_sample_met and fitness <= baseline_fitness + 1e-9:
-                continue
-            current = regime_best.get(regime)
-            if current is None or fitness > current["fitness"]:
-                regime_best[regime] = {
-                    "regime": regime,
-                    "candidate_id": candidate_id(args.strategy, parameters, regime),
-                    "parameters": parameters,
-                    "fitness": fitness,
-                    "metrics": result.get("metrics"),
-                    "source_candidate_id": candidate_id(args.strategy, parameters),
-                    "baseline_fitness": baseline_fitness,
-                    "improved_over_baseline": True,
-                }
+            family = model_family(args.strategy, parameters)
+            key = (regime, family)
+            profile = {
+                "regime": regime,
+                "candidate_id": candidate_id(args.strategy, parameters, regime),
+                "parameters": parameters,
+                "model_family": family,
+                "logic_version": logic_version(args.strategy),
+                "candidate_name": candidate_name,
+                "parent_candidate_id": candidate.get("parent_candidate_id"),
+                "cost_model_version": candidate.get("cost_model_version"),
+                "fitness": fitness,
+                "metrics": result.get("metrics"),
+                "source_candidate_id": candidate_id(args.strategy, parameters),
+                "baseline_fitness": baseline_fitness,
+                "improved_over_baseline": bool(
+                    baseline_sample_met and fitness > baseline_fitness + 1e-9
+                ),
+                "planned_ablation": planned_ablation,
+                "historical_sample_met": bool(result.get("minimum_sample_met")),
+                "historical_eligible": bool(result.get("eligible")),
+                "historical_positive_after_costs": bool(result.get("positive_after_costs")),
+            }
+            current = regime_best.get(key)
+            if (
+                current is None
+                or (profile["planned_ablation"] and not current.get("planned_ablation"))
+                or (
+                    profile["planned_ablation"] == current.get("planned_ablation")
+                    and fitness > float(current.get("fitness") or -1e9)
+                )
+            ):
+                regime_best[key] = profile
     regime_profiles = [regime_best[key] for key in sorted(regime_best)]
     detail["adaptive_regime_search"] = {
         "regimes": [row["regime"] for row in regime_profiles],
         "profiles": regime_profiles,
-        "selection_basis": "current discovery window, sample-qualified positive-after-costs regime results that improve on the same-window baseline; future-only simulated validation remains required before live promotion",
+        "selection_basis": "planned ablations and sample-qualified positive-after-costs search candidates grouped by model family; planned variants may proceed to prospective trials without historical improvement; future-only validation still requires positive after-cost results that beat the paired current baseline",
         "archive_candidates_added": archived,
     }
     detail["adaptive_improvement"] = bool(successful)

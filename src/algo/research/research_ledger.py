@@ -13,7 +13,7 @@ from pathlib import Path
 import sqlite3
 from uuid import uuid4
 
-from .candidate_archive import candidate_id
+from .candidate_archive import candidate_id, logic_version, model_family
 
 
 LEDGER_SCHEMA_VERSION = 1
@@ -192,10 +192,19 @@ class ResearchLedger:
                 parameters = row.get("parameters")
                 if not isinstance(parameters, dict):
                     continue
-                cid = candidate_id(strategy, parameters)
+                family = row.get("model_family") or model_family(strategy, parameters)
+                version = row.get("logic_version") or logic_version(strategy)
+                parent_id = row.get("parent_candidate_id")
+                cid = candidate_id(strategy, parameters, family=family, version=version)
                 self._record_candidate(
                     cid, strategy=strategy, regime=None, parameters=parameters,
-                    metadata={"first_seen_source": "discovery"},
+                    source_candidate_id=parent_id,
+                    metadata={
+                        "first_seen_source": "discovery", "model_family": family,
+                        "logic_version": version, "parent_candidate_id": parent_id,
+                        "data_version": data_version or detail.get("data_version") or (detail.get("data") or {}).get("data_version"),
+                        "cost_model_version": row.get("cost_model_version"),
+                    },
                 )
                 metrics = row.get("metrics") or {}
                 baseline_metrics = baseline.get("metrics") or {}
@@ -215,6 +224,9 @@ class ResearchLedger:
                     passed=None,
                     gates={
                         "name": row.get("name"),
+                        "model_family": family, "logic_version": version,
+                        "parent_candidate_id": parent_id,
+                        "cost_model_version": row.get("cost_model_version"),
                         "regime_metrics": row.get("regime_metrics") or {},
                         "selection_status": detail.get("selection_status"),
                     },
@@ -227,11 +239,19 @@ class ResearchLedger:
                 regime = profile.get("regime")
                 if not isinstance(parameters, dict) or not regime:
                     continue
-                cid = candidate_id(strategy, parameters, regime)
+                family = profile.get("model_family") or model_family(strategy, parameters)
+                version = profile.get("logic_version") or logic_version(strategy)
+                parent_id = profile.get("parent_candidate_id") or profile.get("source_candidate_id")
+                cid = candidate_id(strategy, parameters, regime, family=family, version=version)
                 self._record_candidate(
                     cid, strategy=strategy, regime=regime, parameters=parameters,
-                    source_candidate_id=profile.get("source_candidate_id"),
-                    metadata={"first_seen_source": "regime_discovery"},
+                    source_candidate_id=parent_id,
+                    metadata={
+                        "first_seen_source": "regime_discovery", "model_family": family,
+                        "logic_version": version, "parent_candidate_id": parent_id,
+                        "data_version": data_version,
+                        "cost_model_version": profile.get("cost_model_version"),
+                    },
                 )
                 self._record_evaluation(
                     invocation_id=invocation_id, candidate_id_value=cid,
@@ -242,8 +262,16 @@ class ResearchLedger:
                     sequence=status.get("archive_sequence"), seed=status.get("search_seed"),
                     fitness=profile.get("fitness"), baseline_fitness=profile.get("baseline_fitness"),
                     metrics=profile.get("metrics") or {}, baseline_metrics={},
-                    eligible=True, passed=bool(profile.get("improved_over_baseline")),
-                    gates={"regime": regime, "improved_over_baseline": profile.get("improved_over_baseline")},
+                    eligible=bool(profile.get("historical_eligible")),
+                    passed=bool(profile.get("improved_over_baseline")),
+                    gates={
+                        "regime": regime, "improved_over_baseline": profile.get("improved_over_baseline"),
+                        "historical_sample_met": profile.get("historical_sample_met"),
+                        "historical_positive_after_costs": profile.get("historical_positive_after_costs"),
+                        "model_family": family, "logic_version": version,
+                        "parent_candidate_id": parent_id,
+                        "cost_model_version": profile.get("cost_model_version"),
+                    },
                     artifact_path=artifact,
                 )
 
@@ -279,10 +307,16 @@ class ResearchLedger:
                 parameters = fold.get("train_parameters")
                 if not isinstance(parameters, dict):
                     continue
-                cid = candidate_id(strategy, parameters)
+                family = model_family(strategy, parameters)
+                version = logic_version(strategy)
+                cid = candidate_id(strategy, parameters, family=family, version=version)
                 self._record_candidate(
                     cid, strategy=strategy, regime=None, parameters=parameters,
-                    metadata={"first_seen_source": "rolling_verification"},
+                    metadata={
+                        "first_seen_source": "rolling_verification",
+                        "model_family": family, "logic_version": version,
+                        "data_version": data_version or (detail.get("data") or {}).get("data_version"),
+                    },
                 )
                 source_evaluation = None
                 if reused:
@@ -309,7 +343,11 @@ class ResearchLedger:
                     },
                     baseline_metrics={}, eligible=None,
                     passed=(summary.get("checks") or {}).get("overall_pass"),
-                    gates={"summary_checks": summary.get("checks"), "thresholds": summary.get("thresholds")},
+                    gates={
+                        "summary_checks": summary.get("checks"),
+                        "thresholds": summary.get("thresholds"),
+                        "model_family": family, "logic_version": version,
+                    },
                     artifact_path=artifact, reused=reused,
                     source_evaluation_id=source_evaluation,
                 )
@@ -401,8 +439,18 @@ class ResearchLedger:
                     continue
                 self._record_candidate(
                     trial.get("candidate_id"), strategy=strategy, regime=regime,
-                    parameters=params, source_candidate_id=trial.get("source_candidate_id"),
-                    metadata={"discovery_artifact": trial.get("discovery_artifact")},
+                    parameters=params,
+                    source_candidate_id=trial.get("parent_candidate_id") or trial.get("source_candidate_id"),
+                    metadata={
+                        "discovery_artifact": trial.get("discovery_artifact"),
+                        "model_family": trial.get("model_family") or model_family(strategy, params),
+                        "logic_version": trial.get("logic_version") or logic_version(strategy),
+                        "parent_candidate_id": trial.get("parent_candidate_id") or trial.get("source_candidate_id"),
+                        "data_version": data_version,
+                        "cost_model_version": trial.get("cost_model_version"),
+                        "forward_cost_model_version": trial.get("forward_cost_model_version"),
+                        "cohort_id": trial.get("cohort_id"),
+                    },
                     connection=connection,
                 )
                 connection.execute(
@@ -416,7 +464,8 @@ class ResearchLedger:
                         baseline_profile_sha256=excluded.baseline_profile_sha256,
                         reason=excluded.reason, metadata_json=excluded.metadata_json""",
                     (
-                        trial_id, trial["candidate_id"], trial.get("source_candidate_id"),
+                        trial_id, trial["candidate_id"],
+                        trial.get("parent_candidate_id") or trial.get("source_candidate_id"),
                         trial.get("origin_invocation_id"), strategy, regime,
                         trial.get("status", "validating"), trial.get("staged_on"),
                         trial.get("staged_at"), trial.get("finished_at"),
@@ -478,6 +527,17 @@ class ResearchLedger:
                 )
             return
         stamp = _now()
+        prior = connection.execute(
+            "SELECT metadata_json FROM research_candidate WHERE candidate_id=?",
+            (candidate_id_value,),
+        ).fetchone()
+        prior_metadata = {}
+        if prior:
+            try:
+                prior_metadata = json.loads(prior[0] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                prior_metadata = {}
+        merged_metadata = {**prior_metadata, **(metadata or {})}
         connection.execute(
             """INSERT INTO research_candidate
                (candidate_id, strategy, regime, parameters_json, source_candidate_id,
@@ -488,7 +548,7 @@ class ResearchLedger:
                 source_candidate_id=COALESCE(excluded.source_candidate_id, research_candidate.source_candidate_id),
                 metadata_json=excluded.metadata_json""",
             (candidate_id_value, strategy, regime, _json(parameters), source_candidate_id,
-             stamp, stamp, _json(metadata or {})),
+             stamp, stamp, _json(merged_metadata)),
         )
 
     def _record_evaluation(

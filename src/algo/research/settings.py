@@ -27,8 +27,11 @@ ADJUSTMENT = "split"
 MIN_COVERED_UNIVERSE = 20
 
 RESEARCH_START = date(2024, 1, 1)
-RESEARCH_WARMUP_DAYS = 260
+# 252-session momentum plus regime cross-market features need a little over
+# 252 calendar sessions to cover holidays and incomplete symbols.
+RESEARCH_WARMUP_DAYS = 450
 INITIAL_HISTORY_DATE = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
+REGIME_CONTEXT_WARMUP_DAYS = 450
 
 # Keep the scheduled research catalog derived from workflow metadata.
 INTRADAY_STRATEGIES = strategy_ids_for_research_workflow("nightly_intraday")
@@ -67,8 +70,23 @@ ADAPTIVE_DISCOVERY_ITERATIONS = 5
 ADAPTIVE_VERIFICATION_CANDIDATES = 8
 ADAPTIVE_VERIFICATION_TEST_DAYS = 63
 ADAPTIVE_VERIFICATION_STEP_DAYS = 63
+# The search includes 252-session momentum features. Keep at least that many
+# sessions between each fit endpoint and its OOS score to reduce overlap.
+ADAPTIVE_PURGE_SESSIONS = 252
+MINIMUM_POSITIVE_OOS_FOLD_FRACTION = 0.60
+ADAPTIVE_MINIMUM_FOLDS = 5
+ROBUSTNESS_COST_MULTIPLIERS = (1.5, 2.0)
+ROBUSTNESS_BOOTSTRAP_ITERATIONS = 1000
+ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS = 5
+FINAL_HOLDOUT_MIN_SESSIONS = 252
+FINAL_HOLDOUT_MIN_REGIMES = 3
+
+# Session-specific bars need to cover the complete lifetime of a forward trial
+# when the feed is first enabled, then refresh incrementally.
+FORWARD_TRIAL_MAX_DAYS = 180
+SIP_EXTENDED_LOCAL_FEED = "sip_extended"
 
 # The configured Algo universe has 22 symbols. Test thresholds around the
 # current 20-name requirement without changing the data-coverage floor above.
-MULTI_FACTOR_MIN_UNIVERSE_VALUES = (16, 18, 20, 22)
+MULTI_FACTOR_MIN_UNIVERSE_VALUES = (15, 16, 18, 20, 22)
 

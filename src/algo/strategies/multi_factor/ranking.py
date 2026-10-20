@@ -70,7 +70,12 @@ class FactorRanker:
         self.config = config or MultiFactorConfig()
         self.combiner = Combiner(self.config)
 
-    def rank(self, factor_values: dict[str, dict[str, float]]) -> list[dict]:
+    def rank(
+        self,
+        factor_values: dict[str, dict[str, float]],
+        *,
+        groups_by_symbol: dict[str, str] | None = None,
+    ) -> list[dict]:
         active = [name for name, weight in self.config.factor_weights.items() if weight > 0]
         usable = [
             name for name in active
@@ -85,9 +90,38 @@ class FactorRanker:
                 values[factor] for values in factor_values.values()
                 if factor in values and math.isfinite(values[factor])
             ]
+            values_by_symbol = {
+                symbol: values[factor]
+                for symbol, values in factor_values.items()
+                if factor in values and math.isfinite(values[factor])
+            }
+            group_members: dict[str, list[str]] = {}
+            if self.config.factor_neutralization == "sector" and groups_by_symbol:
+                for symbol in values_by_symbol:
+                    group = groups_by_symbol.get(symbol)
+                    if group:
+                        group_members.setdefault(str(group), []).append(symbol)
+                group_members = {
+                    group: members for group, members in group_members.items()
+                    if len(members) >= 2
+                }
+            # Residualize group means while retaining within-group differences.
+            # Names without a valid group remain in the cross-section unchanged.
+            if group_members:
+                global_mean = mean(sample)
+                adjusted = dict(values_by_symbol)
+                for members in group_members.values():
+                    group_mean = mean(values_by_symbol[symbol] for symbol in members)
+                    for symbol in members:
+                        adjusted[symbol] = values_by_symbol[symbol] - group_mean + global_mean
+                sample = list(adjusted.values())
+                values_by_symbol = adjusted
             low = _quantile(sample, self.config.winsor_quantile)
             high = _quantile(sample, 1 - self.config.winsor_quantile)
-            clipped = {symbol: min(high, max(low, values[factor])) for symbol, values in factor_values.items() if factor in values}
+            clipped = {
+                symbol: min(high, max(low, value))
+                for symbol, value in values_by_symbol.items()
+            }
             center = mean(clipped.values())
             deviation = pstdev(clipped.values())
             for symbol, value in clipped.items():

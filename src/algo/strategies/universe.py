@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from src.accounts import get_account_for_mode
-from src.config import get_mode_config
+from src.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
 
 
 ET = ZoneInfo("America/New_York")
@@ -30,7 +30,13 @@ def configured_universe(mode: str) -> dict:
             if ticker not in tickers:
                 tickers.append(ticker)
 
-    return {"tickers": tickers, "categories": categories}
+    result = {"tickers": tickers, "categories": categories}
+    if mode == "algo":
+        result["sector_by_symbol"] = {
+            ticker: ALGO_FACTOR_SECTOR_BY_SYMBOL[ticker]
+            for ticker in tickers if ticker in ALGO_FACTOR_SECTOR_BY_SYMBOL
+        }
+    return result
 
 
 def _fetch_active_assets(mode: str) -> dict[str, dict]:

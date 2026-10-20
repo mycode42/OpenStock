@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import math
 
 from .config import BAR_MINUTES, ET, STRATEGY_NAMES
 from .models import Position
+from .market_sessions import market_session, trading_date
 from src.algo.strategies.catalog import INTRADAY_STRATEGIES
 
 try:
@@ -39,7 +40,11 @@ class ReplayExecutionMixin:
             return self.precomputed_timeline
         return build_replay_timeline(
             self.symbols, self.intraday_bars, self.start, self.end,
+            include_extended_hours=self.include_extended_hours,
         )
+
+    def _trading_date(self, timestamp: datetime) -> date:
+        return trading_date(timestamp, include_extended_hours=self.include_extended_hours)
 
     def _equity(self) -> float:
         marked = self.cash + sum(
@@ -60,7 +65,7 @@ class ReplayExecutionMixin:
         return raw_price * (1 + cost if action in {"buy", "cover"} else 1 - cost)
 
     def _borrow_status(self, ticker: str, timestamp: datetime) -> bool | None:
-        day = timestamp.astimezone(ET).date().isoformat()
+        day = self._trading_date(timestamp).isoformat()
         status = self.borrow_availability.get((ticker.upper(), day))
         self.borrow_coverage["known_easy" if status is True else "known_not_easy" if status is False else "unknown"] += 1
         return status
@@ -281,7 +286,12 @@ class ReplayExecutionMixin:
             bar = bars.get(ticker)
             if bar is None:
                 continue
-            order = self.pending_entries.pop(ticker)
+            order = self.pending_entries[ticker]
+            delayed_bars = int(order.get("delay_bars_remaining", 0))
+            if delayed_bars > 0:
+                order["delay_bars_remaining"] = delayed_bars - 1
+                continue
+            self.pending_entries.pop(ticker)
             action = order.get("action", "buy")
             borrow_status = self._borrow_status(ticker, timestamp) if action == "short" else True
             if action == "short" and borrow_status is False:
@@ -320,6 +330,10 @@ class ReplayExecutionMixin:
             signal_at = datetime.fromisoformat(order["signal_at"])
             if timestamp < signal_at:
                 continue
+            delayed_bars = int(order.get("delay_bars_remaining", 0))
+            if delayed_bars > 0:
+                order["delay_bars_remaining"] = delayed_bars - 1
+                continue
             self.pending_exits.pop(ticker)
             if ticker in self.positions:
                 is_short = self.positions[ticker].qty < 0
@@ -349,14 +363,16 @@ class ReplayExecutionMixin:
             "reason": signal["reason"],
             "action": action,
             "signal_at": (timestamp + timedelta(minutes=BAR_MINUTES)).isoformat(),
+            "delay_bars_remaining": int(getattr(self, "execution_delay_bars", 0)),
         }
 
 
 def build_replay_timeline(
     symbols: list[str], intraday_bars: dict[str, list[dict]], start: date, end: date,
+    *, include_extended_hours: bool = False,
 ) -> dict[datetime, dict[str, dict]]:
     """Build an event map for replays that share the same bars and date range."""
-    if _build_timeline_cy is not None:
+    if _build_timeline_cy is not None and not include_extended_hours:
         return _build_timeline_cy(
             symbols, intraday_bars, start, end, ET, BAR_MINUTES,
         )
@@ -364,11 +380,11 @@ def build_replay_timeline(
     for ticker in symbols:
         for bar in intraday_bars.get(ticker, []):
             timestamp = ReplayExecutionMixin._timestamp(bar)
-            local = timestamp.astimezone(ET)
-            if not start <= local.date() <= end or not ReplayExecutionMixin._is_complete(bar):
+            session_day = trading_date(timestamp, include_extended_hours=include_extended_hours)
+            if not start <= session_day <= end or not ReplayExecutionMixin._is_complete(bar):
                 continue
-            local_time = local.time().replace(tzinfo=None)
-            if not time(9, 30) <= local_time < time(16, 0):
+            session = market_session(timestamp) if include_extended_hours else "regular"
+            if session is None or (not include_extended_hours and session != "regular"):
                 continue
             values = [float(bar[key]) for key in ("o", "h", "l", "c")]
             if not all(math.isfinite(value) and value > 0 for value in values):

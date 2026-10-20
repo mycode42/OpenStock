@@ -7,7 +7,7 @@ from functools import lru_cache
 from zoneinfo import ZoneInfo
 
 from src.algo.strategies.catalog import STRATEGY_CATALOG
-from src.algo.strategies.indicators import closes, moving_average
+from src.algo.strategies.indicators import adx, closes, efficiency_ratio, moving_average
 from src.algo.strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from src.algo.strategies.signals import Signal
 from src.config import get_algo_runtime_settings
@@ -26,8 +26,12 @@ RULE_PARAMETERS = {
     "intraday_trend": {"enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "allow_long", "allow_short"},
     "intraday_momentum": {"enabled", "lookback", "minimum_return", "minimum_volume_ratio", "minimum_short_return",
                            "minimum_short_volume_ratio", "max_extension_pct", "allow_long", "allow_short"},
-    "mean_reversion": {"window", "band_width", "entry_rsi", "exit_rsi", "short_entry_rsi",
-                       "short_exit_rsi", "allow_long", "allow_short"},
+    "mean_reversion": {
+        "window", "band_width", "entry_rsi", "exit_rsi", "short_entry_rsi",
+        "short_exit_rsi", "allow_long", "allow_short", "regime_filter",
+        "efficiency_ratio_period", "efficiency_ratio_max", "adx_period", "adx_max",
+        "threshold_mode", "volatility_lookback", "high_volatility_ratio",
+    },
     "swing_mean_reversion": set(SwingMeanReversionConfig.__dataclass_fields__),
 }
 
@@ -248,6 +252,17 @@ def evaluate_rule_signal(
         return None
 
     if name == "mean_reversion" and params.get("signal_model", "bollinger") == "opening_dip":
+        if not position_qty:
+            regime_filter = params.get("regime_filter", "none")
+            values = closes(bars)
+            if regime_filter in {"er", "combined"}:
+                er = efficiency_ratio(values, int(params.get("efficiency_ratio_period", 20)))
+                if er is None or er > float(params.get("efficiency_ratio_max", 0.35)):
+                    return None
+            if regime_filter in {"adx", "combined"}:
+                trend_strength = adx(bars, int(params.get("adx_period", 14)))
+                if trend_strength is None or trend_strength > float(params.get("adx_max", 20.0)):
+                    return None
         return _opening_dip(ticker, bars, params, position_qty=position_qty)
 
     if name == "intraday_trend":

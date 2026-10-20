@@ -23,13 +23,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.config import STRATEGY_CONFIG, get_algo_runtime_settings, get_mode_config
-from src.algo.config import ALGO_RUNTIME_CONFIG, ALGO_RUNTIME_SETTINGS, ALGO_SIGNAL_DATA_CONFIG
+from src.algo.config import (
+    ALGO_REGIME_CONFIG, ALGO_REGIME_WARMUP_CALENDAR_DAYS,
+    ALGO_RUNTIME_CONFIG, ALGO_RUNTIME_SETTINGS, ALGO_SIGNAL_DATA_CONFIG,
+)
 from . import data as _runner_data
 from . import factors as _runner_factors
 from . import sizing as _runner_sizing
 from . import scan as _runner_scan
 from .event_context import load_event_context
 from src.algo.strategies.regime import rank_strategies
+from src.algo.regime_macro import load_fred_regime_series
 from src.algo.strategies.multi_factor import MultiFactorConfig, MultiFactorSignal, SignalGenerator
 from src.algo.strategies.regime_advisor import apply_regime_advisory
 from src.market_data import feeds_for_session, historical_delay_seconds, regular_feed

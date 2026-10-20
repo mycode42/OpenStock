@@ -14,9 +14,11 @@ from src.algo.strategies.swing_common import SwingSignal, clean_daily_bars, held
 class SwingMomentumConfig:
     enabled: bool = True
     direction_mode: str = "both"
+    momentum_mode: str = "cross_sectional"
     lookbacks: tuple[int, ...] = (5, 10, 20)
     top_n: int = 3
     minimum_score_spread: float = 0.04
+    minimum_time_series_return: float = 0.02
     minimum_average_dollar_volume: float = 10_000_000
     minimum_universe: int = 7
     minimum_hold_sessions: int = 3
@@ -54,10 +56,12 @@ class SwingMomentumConfig:
             raise ValueError("momentum enabled must be a boolean")
         if self.direction_mode not in {"both", "long_only", "short_only"}:
             raise ValueError("momentum direction_mode must be both, long_only, or short_only")
+        if self.momentum_mode not in {"cross_sectional", "time_series"}:
+            raise ValueError("momentum momentum_mode must be cross_sectional or time_series")
         if not self.lookbacks or len(set(self.lookbacks)) != len(self.lookbacks):
             raise ValueError("momentum lookbacks must be unique daily periods")
-        if any(isinstance(value, bool) or not isinstance(value, int) or not 3 <= value <= 60 for value in self.lookbacks):
-            raise ValueError("momentum lookbacks must be integers between 3 and 60 sessions")
+        if any(isinstance(value, bool) or not isinstance(value, int) or not 3 <= value <= 252 for value in self.lookbacks):
+            raise ValueError("momentum lookbacks must be integers between 3 and 252 sessions")
         for name, low, high in (
             ("top_n", 1, 5), ("minimum_hold_sessions", 2, 5),
             ("minimum_universe", 5, 30),
@@ -71,6 +75,7 @@ class SwingMomentumConfig:
             raise ValueError("momentum maximum holding period must exceed its minimum")
         for name, low, high in (
             ("minimum_score_spread", 0.01, 0.50),
+            ("minimum_time_series_return", 0.0, 0.50),
             ("minimum_average_dollar_volume", 1_000_000, 1_000_000_000),
             ("hard_stop_pct", 0.04, 0.15), ("trailing_stop_pct", 0.03, 0.15),
             ("trailing_activation_pct", 0.01, 0.12), ("max_position_pct", 0.01, 0.05),
@@ -132,11 +137,25 @@ def generate_signals(
     ranked = sorted(scores.items(), key=lambda item: (item[1], item[0]))
     spread = ranked[-1][1] - ranked[0][1] if len(ranked) >= 2 else 0.0
     minimum_universe = max(config.minimum_universe, 2 * config.top_n + 1)
-    spread_ok = len(ranked) >= minimum_universe and spread >= config.minimum_score_spread
     allow_long = config.direction_mode in {"both", "long_only"}
     allow_short = config.direction_mode in {"both", "short_only"}
-    selected_longs = {ticker for ticker, _ in ranked[-config.top_n:]} if spread_ok and allow_long else set()
-    selected_shorts = {ticker for ticker, _ in ranked[:config.top_n]} if spread_ok and allow_short else set()
+    if config.momentum_mode == "cross_sectional":
+        spread_ok = len(ranked) >= minimum_universe and spread >= config.minimum_score_spread
+        selected_longs = {ticker for ticker, _ in ranked[-config.top_n:]} if spread_ok and allow_long else set()
+        selected_shorts = {ticker for ticker, _ in ranked[:config.top_n]} if spread_ok and allow_short else set()
+    else:
+        positive = sorted(
+            ((ticker, score) for ticker, score in ranked if score > 0 and score >= config.minimum_time_series_return),
+            key=lambda item: (-item[1], item[0]),
+        )
+        negative = sorted(
+            ((ticker, score) for ticker, score in ranked if score < 0 and score <= -config.minimum_time_series_return),
+            key=lambda item: (item[1], item[0]),
+        )
+        universe_ready = len(ranked) >= minimum_universe
+        selected_longs = {ticker for ticker, _ in positive[:config.top_n]} if universe_ready and allow_long else set()
+        selected_shorts = {ticker for ticker, _ in negative[:config.top_n]} if universe_ready and allow_short else set()
+        spread_ok = bool(universe_ready and (selected_longs or selected_shorts))
 
     signals: dict[str, SwingSignal] = {}
     held_positions = {str(key).upper(): value for key, value in (held_positions or {}).items()}
@@ -185,7 +204,7 @@ def generate_signals(
             rank = sorted(scores, key=lambda name: (-scores[name], name)).index(ticker) + 1
             signals[ticker] = SwingSignal(
                 ticker, "buy", "momentum",
-                f"daily cross-sectional momentum long rank {rank}/{len(scores)}; blended return {scores[ticker]:+.1%}; top-bottom spread {spread:.1%}",
+                f"daily {config.momentum_mode.replace('_', ' ')} momentum long rank {rank}/{len(scores)}; blended return {scores[ticker]:+.1%}; top-bottom spread {spread:.1%}",
                 stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
                 risk_multiplier=config.risk_multiplier,
             )
@@ -195,7 +214,7 @@ def generate_signals(
             rank = sorted(scores, key=lambda name: (scores[name], name)).index(ticker) + 1
             signals[ticker] = SwingSignal(
                 ticker, "short", "momentum",
-                f"daily cross-sectional momentum short rank {rank}/{len(scores)}; blended return {scores[ticker]:+.1%}; top-bottom spread {spread:.1%}",
+                f"daily {config.momentum_mode.replace('_', ' ')} momentum short rank {rank}/{len(scores)}; blended return {scores[ticker]:+.1%}; top-bottom spread {spread:.1%}",
                 stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
                 risk_multiplier=config.risk_multiplier,
             )
@@ -205,6 +224,8 @@ def generate_signals(
         "score_spread": spread, "minimum_score_spread": config.minimum_score_spread,
         "spread_passed": spread_ok, "longs": sorted(selected_longs),
         "shorts": sorted(selected_shorts), "regime": regime,
+        "momentum_mode": config.momentum_mode,
+        "lookbacks": list(config.lookbacks),
         "average_dollar_volume": dollar_volume,
     }
     return signals, diagnostics

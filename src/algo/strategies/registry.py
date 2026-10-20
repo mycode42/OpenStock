@@ -49,6 +49,20 @@ ALGO_DEFAULT_PARAMETERS = {
     "swing_momentum": SwingMomentumConfig().to_dict(),
     "mean_reversion": {
         "signal_model": "opening_dip",
+        "window": 20,
+        "band_width": 2.0,
+        "entry_rsi": 32.0,
+        "exit_rsi": 58.0,
+        "short_entry_rsi": 68.0,
+        "short_exit_rsi": 42.0,
+        "regime_filter": "none",
+        "efficiency_ratio_period": 20,
+        "efficiency_ratio_max": 0.35,
+        "adx_period": 14,
+        "adx_max": 20.0,
+        "threshold_mode": "fixed",
+        "volatility_lookback": 20,
+        "high_volatility_ratio": 1.25,
         "minimum_dip_pct": 0.014,
         "minimum_bounce_pct": 0.002,
         "minimum_volume_ratio": 1.3,
@@ -88,6 +102,9 @@ PARAMETER_KEYS = {
         "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes",
         "minimum_bounce_pct", "higher_low_bars", "short_entry_rsi", "short_exit_rsi",
         "minimum_rip_pct", "minimum_fade_pct", "lower_high_bars", "allow_long", "allow_short",
+        "regime_filter", "efficiency_ratio_period", "efficiency_ratio_max",
+        "adx_period", "adx_max", "threshold_mode", "volatility_lookback",
+        "high_volatility_ratio",
     },
     "multi_factor": set(MULTI_FACTOR_DEFAULT_CONFIG.to_dict()),
     "event_driven": set(EVENT_DEFAULT_CONFIG),
@@ -191,6 +208,17 @@ def validate_parameter_profile(profile: dict) -> dict:
     for key in ("allow_long", "allow_short"):
         if key in normalized.get("mean_reversion", {}) and not isinstance(normalized["mean_reversion"][key], bool):
             raise ValueError(f"mean_reversion {key} must be a boolean")
+    mean_reversion_values = normalized.get("mean_reversion", {})
+    if mean_reversion_values.get("regime_filter", "none") not in {"none", "er", "adx", "combined"}:
+        raise ValueError("mean_reversion regime_filter must be none, er, adx, or combined")
+    if mean_reversion_values.get("threshold_mode", "fixed") not in {"fixed", "volatility_regime_adjusted"}:
+        raise ValueError("mean_reversion threshold_mode must be fixed or volatility_regime_adjusted")
+    number("mean_reversion", "efficiency_ratio_period", 20, 5, 100, integer=True)
+    number("mean_reversion", "efficiency_ratio_max", 0.35, 0.05, 0.8)
+    number("mean_reversion", "adx_period", 14, 5, 50, integer=True)
+    number("mean_reversion", "adx_max", 20, 5, 50)
+    number("mean_reversion", "volatility_lookback", 20, 5, 100, integer=True)
+    number("mean_reversion", "high_volatility_ratio", 1.25, 1.0, 3.0)
     return normalized
 
 
@@ -249,6 +277,18 @@ def evaluate(
     if mode == "algo" and name == "momentum":
         # Momentum is cross-sectional and must be ranked once per universe.
         return None
+    if mode == "algo" and name == "mean_reversion":
+        values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
+        signal_keys = {
+            "window", "band_width", "entry_rsi", "exit_rsi", "short_entry_rsi",
+            "short_exit_rsi", "allow_long", "allow_short", "regime_filter",
+            "efficiency_ratio_period", "efficiency_ratio_max", "adx_period", "adx_max",
+            "threshold_mode", "volatility_lookback", "high_volatility_ratio",
+        }
+        return mean_reversion.intraday.signal(
+            ticker, bars, position_qty=position_qty,
+            **{key: value for key, value in values.items() if key in signal_keys},
+        )
     if mode == "algo" and name in {"trend_following", "swing_mean_reversion"}:
         module = ALGO_RULE_MODULES[name]
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}

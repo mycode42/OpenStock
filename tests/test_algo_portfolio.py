@@ -65,12 +65,13 @@ def _bars(closes, volumes=None):
 def test_algo_risk_profile_increases_throughput_without_changing_swing_or_day():
     assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 18
     assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 10
-    assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.05
+    assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.07
+    assert ALGO_MODE_CONFIG["risk"]["max_strategy_position_pct"] == 0.07
     assert ALGO_MODE_CONFIG["risk"]["allow_short_positions"] is True
     assert ALGO_MODE_CONFIG["risk"]["max_short_positions"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_short_exposure_pct"] == 0.20
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
-    assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.15
+    assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.10
     assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 6
     assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]

@@ -13,7 +13,7 @@ import math
 from statistics import mean
 from typing import Any
 
-from src.algo.strategies.indicators import rsi
+from src.algo.strategies.indicators import adx, efficiency_ratio, population_std, rsi
 from src.algo.strategies.signals import Signal
 from src.algo.strategies.swing_common import SwingSignal, clean_daily_bars, entry_session, position_entry_price
 
@@ -23,7 +23,16 @@ class SwingMeanReversionConfig:
     enabled: bool = True
     direction_mode: str = "both"
     lookback_days: int = 15
+    lookback_mode: str = "fixed"
     stretch_pct: float = 0.06
+    entry_distance_mode: str = "fixed_pct"
+    stretch_zscore: float = 1.75
+    volatility_lookback_days: int = 20
+    regime_filter: str = "none"
+    efficiency_ratio_period: int = 20
+    efficiency_ratio_max: float = 0.35
+    adx_period: int = 14
+    adx_max: float = 20.0
     minimum_stretch_days: int = 2
     mean_target_fraction: float = 0.80
     use_rsi_confirmation: bool = True
@@ -62,8 +71,16 @@ class SwingMeanReversionConfig:
             raise ValueError("swing_mean_reversion enable flags must be booleans")
         if self.direction_mode not in {"both", "long_only", "short_only"}:
             raise ValueError("swing_mean_reversion direction_mode must be both, long_only, or short_only")
+        if self.lookback_mode not in {"fixed", "volatility_adaptive"}:
+            raise ValueError("swing_mean_reversion lookback_mode must be fixed or volatility_adaptive")
+        if self.entry_distance_mode not in {"fixed_pct", "standardized"}:
+            raise ValueError("swing_mean_reversion entry_distance_mode must be fixed_pct or standardized")
+        if self.regime_filter not in {"none", "er", "adx", "combined"}:
+            raise ValueError("swing_mean_reversion regime_filter must be none, er, adx, or combined")
         integer_bounds = {
             "lookback_days": (10, 30), "minimum_stretch_days": (2, 5),
+            "volatility_lookback_days": (10, 40), "efficiency_ratio_period": (10, 40),
+            "adx_period": (7, 28),
             "slope_lookback_days": (3, 15), "minimum_hold_sessions": (1, 3),
             "maximum_holding_sessions": (5, 15), "cooldown_days": (3, 10),
             "max_positions": (3, 7), "max_entries_per_day": (1, 2),
@@ -76,6 +93,8 @@ class SwingMeanReversionConfig:
             raise ValueError("maximum_holding_sessions must exceed minimum_hold_sessions")
         number_bounds = {
             "stretch_pct": (0.02, 0.20), "mean_target_fraction": (0.25, 1.0),
+            "stretch_zscore": (0.75, 3.5), "efficiency_ratio_max": (0.10, 0.60),
+            "adx_max": (10, 35),
             "long_rsi_max": (10, 50), "short_rsi_min": (50, 90),
             "max_reference_slope_pct": (0.005, 0.10), "hard_stop_pct": (0.03, 0.15),
             "trailing_stop_pct": (0.03, 0.15), "trailing_activation_pct": (0.01, 0.10),
@@ -105,6 +124,37 @@ def _make_signal(
     )
 
 
+def _effective_lookback(values: list[float], end: int, config: SwingMeanReversionConfig) -> int:
+    if config.lookback_mode != "volatility_adaptive":
+        return config.lookback_days
+    prefix = values[:end + 1]
+    returns = [prefix[index] / prefix[index - 1] - 1 for index in range(1, len(prefix))]
+    recent = population_std(returns[-config.volatility_lookback_days:])
+    long_window = max(config.lookback_days * 3, config.volatility_lookback_days * 2)
+    baseline = population_std(returns[-long_window:])
+    if recent is None or baseline is None or baseline <= 0:
+        return config.lookback_days
+    ratio = recent / baseline
+    if ratio <= 1.0:
+        return config.lookback_days
+    return max(10, min(config.lookback_days, int(round(config.lookback_days / ratio))))
+
+
+def _entry_distance(
+    values: list[float], end: int, lookback: int, config: SwingMeanReversionConfig,
+) -> float | None:
+    reference = sum(values[end - lookback + 1:end + 1]) / lookback
+    if reference <= 0:
+        return None
+    stretch = values[end] / reference - 1
+    if config.entry_distance_mode == "fixed_pct":
+        return stretch
+    deviation = population_std(values[end - lookback + 1:end + 1])
+    if deviation is None or deviation <= 0:
+        return None
+    return (values[end] - reference) / deviation
+
+
 def signal(
     ticker: str,
     bars: list[dict],
@@ -121,17 +171,23 @@ def signal(
         return None
     rows = clean_daily_bars(bars)
     values = [row[2] for row in rows]
-    required = config.lookback_days + config.slope_lookback_days
+    required = max(
+        config.lookback_days + config.slope_lookback_days,
+        config.volatility_lookback_days + config.lookback_days + 1
+        if config.lookback_mode == "volatility_adaptive" else 0,
+    )
     if len(rows) < required:
         return None
 
     current = values[-1]
-    reference = mean(values[-config.lookback_days:])
-    prior_reference = mean(values[-required:-config.slope_lookback_days])
+    lookback = _effective_lookback(values, len(values) - 1, config)
+    reference = mean(values[-lookback:])
+    prior_reference = mean(values[-(lookback + config.slope_lookback_days):-config.slope_lookback_days])
     if reference <= 0 or prior_reference <= 0:
         return None
     reference_slope = reference / prior_reference - 1
     stretch = current / reference - 1
+    current_distance = _entry_distance(values, len(values) - 1, lookback, config)
 
     if position_qty:
         entry = position_entry_price(entry_price)
@@ -208,15 +264,29 @@ def signal(
     else:
         relative_strength = None
 
+    if config.regime_filter in {"er", "combined"}:
+        er = efficiency_ratio(values, config.efficiency_ratio_period)
+        if er is None or er > config.efficiency_ratio_max:
+            return None
+    if config.regime_filter in {"adx", "combined"}:
+        trend_strength = adx([row[1] for row in rows], config.adx_period)
+        if trend_strength is None or trend_strength > config.adx_max:
+            return None
+
     start_index = len(rows) - config.minimum_stretch_days
     recent_stretches = []
     for index in range(start_index, len(rows)):
-        historical_closes = values[max(0, index - config.lookback_days + 1):index + 1]
-        if len(historical_closes) < config.lookback_days:
+        local_lookback = _effective_lookback(values, index, config)
+        historical_closes = values[max(0, index - local_lookback + 1):index + 1]
+        if len(historical_closes) < local_lookback:
             return None
-        recent_stretches.append(values[index] / mean(historical_closes) - 1)
-    long_persistent = all(value <= -config.stretch_pct for value in recent_stretches)
-    short_persistent = all(value >= config.stretch_pct for value in recent_stretches)
+        distance = _entry_distance(values, index, local_lookback, config)
+        if distance is None:
+            return None
+        recent_stretches.append(distance)
+    threshold = config.stretch_pct if config.entry_distance_mode == "fixed_pct" else config.stretch_zscore
+    long_persistent = all(value <= -threshold for value in recent_stretches)
+    short_persistent = all(value >= threshold for value in recent_stretches)
     previous = values[-2]
     reversal_up = current > previous
     reversal_down = current < previous
@@ -225,18 +295,28 @@ def signal(
 
     if allow_long and long_persistent and reversal_up and long_rsi_ok:
         target = current + (reference - current) * config.mean_target_fraction
+        distance_label = (
+            f"{current_distance:+.2f} standard deviations from the mean"
+            if config.entry_distance_mode == "standardized" and current_distance is not None
+            else f"{stretch:.1%} below the mean"
+        )
         return _make_signal(
             ticker, "buy",
-            f"daily stretch {stretch:.1%} below {config.lookback_days}-session mean; "
+            f"daily stretch {distance_label}; "
             f"persisted {config.minimum_stretch_days} sessions, reversal confirmed, "
             f"reference slope {reference_slope:+.1%}",
             config=config, take_profit=target,
         )
     if allow_short and short_persistent and reversal_down and short_rsi_ok:
         target = current - (current - reference) * config.mean_target_fraction
+        distance_label = (
+            f"{current_distance:+.2f} standard deviations from the mean"
+            if config.entry_distance_mode == "standardized" and current_distance is not None
+            else f"{stretch:.1%} above the mean"
+        )
         return _make_signal(
             ticker, "short",
-            f"daily stretch {stretch:.1%} above {config.lookback_days}-session mean; "
+            f"daily stretch {distance_label}; "
             f"persisted {config.minimum_stretch_days} sessions, reversal confirmed, "
             f"reference slope {reference_slope:+.1%}",
             config=config, take_profit=target,

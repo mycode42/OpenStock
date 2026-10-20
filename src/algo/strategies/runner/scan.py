@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from threading import RLock
 from typing import Any, TypedDict
+
+
+_DAILY_BAR_CACHE_LOCK = RLock()
+_DAILY_BAR_CACHE: dict[tuple, dict[str, list[dict]]] = {}
 
 
 class ScanDependencies(TypedDict):
     """Facade-provided collaborators used by the scan orchestration."""
 
     ALGO_DEFAULT_PARAMETERS: Any
+    ALGO_REGIME_CONFIG: Any
+    ALGO_REGIME_WARMUP_CALENDAR_DAYS: Any
     ALGO_RULE_MODULES: Any
     ALGO_SIGNAL_DATA_CONFIG: Any
     ACTIVE_PHASES: Any
@@ -59,6 +66,7 @@ class ScanDependencies(TypedDict):
     historical_delay_seconds: Any
     load_algo_universe: Any
     load_event_context: Any
+    load_fred_regime_series: Any
     os: Any
     rank_strategies: Any
     regular_feed: Any
@@ -89,6 +97,8 @@ def scan(
     """Run one complete scan using the compatibility facade dependencies."""
     # Binding the facade namespace here keeps legacy monkeypatches and adapters effective.
     ALGO_DEFAULT_PARAMETERS = _dependencies["ALGO_DEFAULT_PARAMETERS"]
+    ALGO_REGIME_CONFIG = _dependencies["ALGO_REGIME_CONFIG"]
+    ALGO_REGIME_WARMUP_CALENDAR_DAYS = _dependencies["ALGO_REGIME_WARMUP_CALENDAR_DAYS"]
     ALGO_RUNTIME_SETTINGS = _dependencies["get_algo_runtime_settings"]()
     ALGO_RULE_MODULES = _dependencies["ALGO_RULE_MODULES"]
     ALGO_SIGNAL_DATA_CONFIG = _dependencies["ALGO_SIGNAL_DATA_CONFIG"]
@@ -139,6 +149,7 @@ def scan(
     historical_delay_seconds = _dependencies["historical_delay_seconds"]
     load_algo_universe = _dependencies["load_algo_universe"]
     load_event_context = _dependencies["load_event_context"]
+    load_fred_regime_series = _dependencies["load_fred_regime_series"]
     os = _dependencies["os"]
     rank_strategies = _dependencies["rank_strategies"]
     regular_feed = _dependencies["regular_feed"]
@@ -237,28 +248,58 @@ def scan(
     # event signals; ordinary strategies still use their configured symbols.
     if mode == "algo" and event_strategy_enabled and "SPY" not in strategy_symbols:
         strategy_symbols.append("SPY")
-    symbols_for_bars = list(dict.fromkeys(strategy_symbols + ["SPY"]))
+    regime_context_symbols = (
+        configured_universe("algo")["tickers"] + ["HYG", "LQD"]
+        if mode == "algo" else []
+    )
+    symbols_for_bars = list(dict.fromkeys(strategy_symbols + ["SPY"] + regime_context_symbols))
 
     now_utc = datetime.now(timezone.utc)
     factor_config_values = dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor") or {})
     factor_config_values.update(multi_factor_parameters)
     factor_config = MultiFactorConfig.from_dict(factor_config_values)
-    daily_history_days = factor_config.warmup_calendar_days() if mode == "algo" else 220
+    daily_history_days = max(
+        factor_config.warmup_calendar_days(), ALGO_REGIME_WARMUP_CALENDAR_DAYS,
+    ) if mode == "algo" else 220
     daily_start = (now_utc - timedelta(days=daily_history_days)).date().isoformat()
     daily_feed = regular_feed() if mode == "algo" else data_feed
     historical_status = "ok"
     historical_bar_end: str | None = None
     try:
-        daily_bars = _fetch_bars(
-            symbols_for_bars,
-            mode=mode,
-            timeframe="1Day",
-            start=daily_start,
-            end=now_utc.isoformat(),
-            limit=10000,
-            feed=daily_feed,
-            adjustment="split" if mode == "algo" else None,
+        local_snapshot_time = now_utc.astimezone(ET)
+        snapshot_phase = "postclose" if (
+            local_snapshot_time.hour > 16
+            or (local_snapshot_time.hour == 16 and local_snapshot_time.minute >= 15)
+        ) else "intraday"
+        cache_key = (
+            today, daily_start, daily_feed, tuple(symbols_for_bars), snapshot_phase,
+            _fetch_bars,
         )
+        if mode == "algo":
+            with _DAILY_BAR_CACHE_LOCK:
+                cached = _DAILY_BAR_CACHE.get(cache_key)
+                if cached is None:
+                    cached = _fetch_bars(
+                        symbols_for_bars, mode=mode, timeframe="1Day",
+                        start=daily_start, end=now_utc.isoformat(), limit=10000,
+                        feed=daily_feed, adjustment="split",
+                    )
+                    _DAILY_BAR_CACHE.clear()
+                    _DAILY_BAR_CACHE[cache_key] = {
+                        ticker: list(rows) for ticker, rows in cached.items()
+                    }
+                daily_bars = {ticker: list(rows) for ticker, rows in cached.items()}
+        else:
+            daily_bars = _fetch_bars(
+                symbols_for_bars,
+                mode=mode,
+                timeframe="1Day",
+                start=daily_start,
+                end=now_utc.isoformat(),
+                limit=10000,
+                feed=daily_feed,
+                adjustment=None,
+            )
         daily_bars = {ticker: _completed_daily(bars, today) for ticker, bars in daily_bars.items()}
     except Exception as exc:
         if mode != "algo":
@@ -375,6 +416,14 @@ def scan(
     event_calendar_diagnostics = event_context.diagnostics
     event_calendar_status = event_context.calendar_status
     scan_errors.extend(event_context.errors)
+    regime_macro_series = {}
+    regime_macro_diagnostics = {"status": "not_loaded"}
+    if mode == "algo":
+        try:
+            regime_macro_series, regime_macro_diagnostics = load_fred_regime_series(refresh=True)
+        except Exception as exc:
+            regime_macro_diagnostics = {"status": "unavailable", "error": type(exc).__name__}
+            scan_errors.append(f"regime macro data: {type(exc).__name__}: {exc}")
     try:
         if mode == "algo":
             regime = rank_strategies(
@@ -382,7 +431,16 @@ def scan(
                 event_disable_in_volatile=event_config.disable_in_volatile,
                 intraday_trend_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_trend,
                 intraday_momentum_enabled=ALGO_RUNTIME_SETTINGS.enable_intraday_momentum,
+                feature_set=ALGO_REGIME_CONFIG["feature_set"],
+                engine=ALGO_REGIME_CONFIG["engine"],
+                strategy_policy=ALGO_REGIME_CONFIG["strategy_policy"],
+                context_bars=daily_bars,
+                macro_series=regime_macro_series,
+                include_models=ALGO_REGIME_CONFIG["include_models"],
+                model_training_window=ALGO_REGIME_CONFIG["model_training_window"],
+                model_min_confidence=ALGO_REGIME_CONFIG["min_model_confidence"],
             )
+            regime["macro_data"] = regime_macro_diagnostics
         else:
             regime = rank_strategies(daily_bars.get("SPY", []), mode=mode)
     except Exception as exc:
@@ -520,6 +578,13 @@ def scan(
                 intraday_bars=bars_by_symbol,
                 positions=positions,
                 parameters=multi_factor_parameters,
+                groups_by_symbol=universe.get("sector_by_symbol"),
+                tradable_symbols=(
+                    set(overnight_tradable_tickers if overnight_tradable_tickers is not None else universe.get("overnight_tradable_tickers", []))
+                    if session_name == "overnight"
+                    and (universe.get("overnight_metadata_status") == "ok" or overnight_tradable_tickers is not None)
+                    else None
+                ),
             )
         except Exception as exc:
             scan_errors.append(f"multi-factor rebalance: {type(exc).__name__}: {exc}")
@@ -983,6 +1048,7 @@ def scan(
         if mode == "algo" and action in {"buy", "short"}:
             sizing_signal, throttle_note = throttle_signal(
                 item, str(regime.get("regime", "unknown")), coordinator_config,
+                risk_multiplier=float(regime.get("strategy_risk_multipliers", {}).get(item["strategy"], 1.0)),
             )
             if throttle_note:
                 LOG.info("%s for %s", throttle_note, item["ticker"])
@@ -996,6 +1062,7 @@ def scan(
                 decision = coordinator_book.review(
                     trade, session=session_name or "regular", timestamp=now,
                     regime=str(regime.get("regime", "unknown")),
+                    volatility_state=str(regime.get("volatility_state", "unknown")),
                     session_open=regular_open, session_close=regular_close,
                 )
                 if not decision.approved or decision.proposal is None:

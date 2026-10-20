@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 import time
 from types import SimpleNamespace
 from uuid import uuid4
@@ -20,18 +21,34 @@ from src.algo.strategies.registry import (
     refresh_active_parameter_profile, validate_parameter_profile,
 )
 
-from .adaptive_search import _load_window_data, _run_replay, _trading_sessions
+from .adaptive_search import _load_forward_window_data, _run_replay, _trading_sessions
 from .candidate_archive import candidate_id
-from .settings import ADJUSTMENT, FEED, RESEARCH_WARMUP_DAYS
+from .settings import (
+    ADJUSTMENT, FEED, RESEARCH_WARMUP_DAYS, FORWARD_TRIAL_MAX_DAYS,
+    SIP_EXTENDED_LOCAL_FEED,
+)
+from src.algo.backtest.market_sessions import trading_date
 
 
 ET = ZoneInfo("America/New_York")
 CAPITAL = 100_000.0
-MAX_TRIAL_DAYS = 180
+MAX_TRIAL_DAYS = FORWARD_TRIAL_MAX_DAYS
 MIN_CLOSED_TRADES = 30
 MIN_EXIT_SESSIONS = 20
 MIN_REGIME_ENTRY_SESSIONS = 15
-SIMULATION_POLICY = "algo-forward-simulation-v2-marked-equity"
+MAX_ACTIVE_COHORT_PER_STRATEGY_REGIME = 9
+SIMULATION_POLICY = "algo-forward-simulation-v4-ablation-cohorts"
+FORWARD_COST_MODEL = {
+    "version": "algo-replay-cost-v1",
+    "slippage_bps_each_side": 5.0,
+    "spread_bps_full": 3.0,
+    "commission_per_share_each_side": 0.005,
+    "short_borrow_annual_pct": 3.0,
+    "unknown_borrow_penalty_bps": 25.0,
+}
+FORWARD_COST_MODEL_VERSION = (
+    f"{FORWARD_COST_MODEL['version']}:{hashlib.sha256(json.dumps(FORWARD_COST_MODEL, sort_keys=True, separators=(',', ':')).encode()).hexdigest()[:12]}"
+)
 
 
 @contextmanager
@@ -68,7 +85,32 @@ def _time(value: object) -> datetime | None:
 
 def _session(value: object) -> str | None:
     parsed = _time(value)
-    return parsed.date().isoformat() if parsed else None
+    return trading_date(parsed, include_extended_hours=True).isoformat() if parsed else None
+
+
+def _forward_session_data_version(database: str, base_version: str, symbols: list[str], end: date) -> str:
+    """Include the auxiliary feeds that can affect active 180-day trials."""
+    lower = (end - timedelta(days=MAX_TRIAL_DAYS + 2)).isoformat()
+    upper = (end + timedelta(days=2)).isoformat()
+    feeds = (SIP_EXTENDED_LOCAL_FEED, "boats")
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            """SELECT feed, symbol, COUNT(*), MIN(timestamp), MAX(timestamp), MAX(ingested_at)
+               FROM market_bar
+               WHERE feed IN (?, ?) AND adjustment=? AND timeframe='5Min'
+                 AND symbol IN (%s) AND timestamp>=? AND timestamp<?
+               GROUP BY feed, symbol ORDER BY feed, symbol"""
+            % ",".join("?" for _ in symbols),
+            (
+                *feeds, ADJUSTMENT, *(symbol.upper() for symbol in symbols),
+                lower, upper,
+            ),
+        ).fetchall()
+    payload = json.dumps(
+        {"regular_data_version": base_version, "session_data": rows},
+        sort_keys=True, separators=(",", ":"), default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _current_regime(store, end: date) -> str | None:
@@ -112,8 +154,9 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
             detail = _read_json(Path(artifact))
         except ValueError:
             continue
+        strategy_candidates = []
         for item in (detail.get("adaptive_regime_search") or {}).get("profiles") or []:
-            if item.get("regime") != regime or not item.get("improved_over_baseline"):
+            if item.get("regime") != regime:
                 continue
             params = item.get("parameters")
             if not isinstance(params, dict):
@@ -125,9 +168,15 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
             output.append({
                 "candidate_id": candidate_id(strategy, parameters, regime),
                 "source_candidate_id": item.get("source_candidate_id"),
+                "parent_candidate_id": item.get("parent_candidate_id"),
                 "strategy": strategy,
                 "regime": regime,
                 "parameters": parameters,
+                "model_family": item.get("model_family"),
+                "logic_version": item.get("logic_version"),
+                "candidate_name": item.get("candidate_name"),
+                "planned_ablation": bool(item.get("planned_ablation")),
+                "cost_model_version": item.get("cost_model_version"),
                 "discovery_fitness": item.get("fitness"),
                 "discovery_metrics": item.get("metrics"),
                 "baseline_discovery_fitness": item.get("baseline_fitness"),
@@ -142,36 +191,54 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
                 },
                 "screening": {
                     "improved_over_training_baseline": bool(item.get("improved_over_baseline")),
+                    "historical_sample_met": bool(item.get("historical_sample_met")),
+                    "historical_positive_after_costs": bool(item.get("historical_positive_after_costs")),
                     "regime": regime,
                 },
                 "discovery_artifact": str(Path(artifact).resolve()),
             })
+            strategy_candidates.append(output[-1])
+        # Stage the complete planned ablation set first. Further candidates can
+        # fill unused slots only after a later discovery cycle.
+        strategy_candidates.sort(key=lambda row: (
+            not row.get("planned_ablation"),
+            str(row.get("candidate_name") or ""),
+            -float(row.get("discovery_fitness") or 0.0),
+            row["candidate_id"],
+        ))
+        strategy_candidates[:] = strategy_candidates[:MAX_ACTIVE_COHORT_PER_STRATEGY_REGIME]
+        output = [row for row in output if row.get("strategy") != strategy]
+        output.extend(strategy_candidates)
     return output
 
 
 def _simulate(
     *, strategy: str, regime: str, parameters: dict, start: date, end: date,
     database: str, symbols: list[str], candidate: bool,
+    factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
     from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
 
-    bars, spy = _load_window_data(
+    bars, spy, regular_bars = _load_forward_window_data(
         db=database, symbols=symbols, start=start, end=end,
         adjustment=ADJUSTMENT, strategy=strategy,
     )
-    daily = aggregate_intraday_bars(bars)
+    # Daily swing signals retain the regular-session close history. The extra
+    # sessions participate in execution, stop checks, and intraday signals.
+    daily = aggregate_intraday_bars(regular_bars)
     current_regimes = deepcopy(REGIME_PARAMETER_PROFILES.get(strategy) or {})
     if candidate:
         current_regimes[regime] = parameters
     args = SimpleNamespace(
         adjustment=ADJUSTMENT,
         capital=CAPITAL,
-        slippage_bps=5.0,
-        spread_bps=3.0,
-        commission_per_share=0.005,
-        short_borrow_annual_pct=3.0,
-        unknown_borrow_penalty_bps=25.0,
+        slippage_bps=FORWARD_COST_MODEL["slippage_bps_each_side"],
+        spread_bps=FORWARD_COST_MODEL["spread_bps_full"],
+        commission_per_share=FORWARD_COST_MODEL["commission_per_share_each_side"],
+        short_borrow_annual_pct=FORWARD_COST_MODEL["short_borrow_annual_pct"],
+        unknown_borrow_penalty_bps=FORWARD_COST_MODEL["unknown_borrow_penalty_bps"],
         borrow_availability_data={},
+        factor_weight_timeline=factor_weight_timeline or [],
     )
     return _run_replay(
         strategy=strategy,
@@ -180,6 +247,7 @@ def _simulate(
         args=args, regime_profiles={strategy: current_regimes},
         force_close_at_end=False,
         preaggregated_daily_bars=daily,
+        include_extended_hours=True,
     )
 
 
@@ -193,6 +261,10 @@ def _target_metrics(report: dict, strategy: str, regime: str) -> dict:
     exit_sessions.discard(None)
     entry_sessions.discard(None)
     net_pnl = round(sum(float(row.get("pnl") or 0.0) for row in trades), 2)
+    traded_notional = sum(
+        abs(float(row.get("qty") or 0.0) * float(row.get("entry_price") or 0.0))
+        for row in trades
+    )
     final_equity = report.get("final_equity")
     marked_pnl = (
         round(float(final_equity) - CAPITAL, 2)
@@ -203,6 +275,7 @@ def _target_metrics(report: dict, strategy: str, regime: str) -> dict:
         "distinct_exit_sessions": len(exit_sessions),
         "target_regime_entry_sessions": len(entry_sessions),
         "net_realized_pnl_after_simulated_costs": net_pnl,
+        "turnover_pct_of_initial_capital": round(100.0 * traded_notional / CAPITAL, 4),
         "marked_pnl_after_estimated_exit_costs": marked_pnl,
         "entry_sessions": sorted(entry_sessions),
         "exit_sessions": sorted(exit_sessions),
@@ -210,6 +283,7 @@ def _target_metrics(report: dict, strategy: str, regime: str) -> dict:
         "overall_max_drawdown_pct": report.get("max_drawdown_pct"),
         "overall_open_position_count": report.get("open_position_count"),
         "overall_closed_trade_count": report.get("closed_trade_count"),
+        "closed_trades_by_entry_regime": report.get("closed_trades_by_entry_regime", {}),
     }
 
 
@@ -232,6 +306,12 @@ def _promote(trial: dict, metrics: dict, promoted: dict) -> dict:
         "candidate_id": trial["candidate_id"],
         "strategy": strategy,
         "regime": regime,
+        "model_family": trial.get("model_family"),
+        "logic_version": trial.get("logic_version"),
+        "parent_candidate_id": trial.get("parent_candidate_id") or trial.get("source_candidate_id"),
+        "cohort_id": trial.get("cohort_id"),
+        "discovery_cost_model_version": trial.get("cost_model_version"),
+        "forward_cost_model_version": trial.get("forward_cost_model_version") or (trial.get("latest_simulation") or {}).get("cost_model_version"),
         "parameters": trial["parameters"],
         "promoted_at": datetime.now(timezone.utc).isoformat(),
         "forward_metrics": metrics,
@@ -251,11 +331,17 @@ def _promote(trial: dict, metrics: dict, promoted: dict) -> dict:
 def run_forward_validation_cycle(
     *, discovery: dict, verification: dict, store, database: str,
     symbols: list[str], end: date, data_version: str, allow_stage: bool = True,
+    allow_promotion: bool = True, promotion_pause_reasons: list[str] | None = None,
+    holdout_exclude_through_date: str | None = None,
     invocation_id: str | None = None, ledger_path: str | Path | None = None,
+    factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
     """Replay staged profiles only over sessions after their discovery date."""
     started = time.monotonic()
     now = datetime.now(timezone.utc)
+    pause_reasons = list(promotion_pause_reasons or [])
+    if not allow_promotion and not pause_reasons:
+        pause_reasons.append("drift")
     with _locked(FORWARD_VALIDATION_PATH):
         try:
             state = _read_json(FORWARD_VALIDATION_PATH, {
@@ -271,6 +357,9 @@ def run_forward_validation_cycle(
             for trial in [*active.values(), *history]:
                 if isinstance(trial, dict):
                     trial.setdefault("trial_id", uuid4().hex)
+            data_version = _forward_session_data_version(
+                database, data_version, symbols, end,
+            )
             regime = _current_regime(store, end)
         except Exception as exc:
             return {
@@ -286,14 +375,20 @@ def run_forward_validation_cycle(
         staging_errors = []
         observed_trial_ids = set()
         for key, trial in list(active.items()):
-            if not isinstance(trial, dict) or trial.get("status") != "validating":
+            if not isinstance(trial, dict) or trial.get("status") not in {"validating", "cohort_ready"}:
                 continue
+            trial["forward_cost_model_version"] = FORWARD_COST_MODEL_VERSION
             try:
                 staged = date.fromisoformat(trial["staged_on"])
-                age_days = (end - staged).days
+                holdout_end = (
+                    date.fromisoformat(holdout_exclude_through_date)
+                    if holdout_exclude_through_date else None
+                )
+                trial_origin = max(staged, holdout_end) if holdout_end else staged
+                age_days = (end - trial_origin).days
             except (KeyError, TypeError, ValueError):
                 continue
-            if age_days > MAX_TRIAL_DAYS:
+            if age_days > MAX_TRIAL_DAYS and trial.get("status") == "validating":
                 trial.update({
                     "status": "expired", "finished_at": now.isoformat(),
                     "reason": "Forward simulation exceeded its maximum duration",
@@ -302,15 +397,25 @@ def run_forward_validation_cycle(
                 active.pop(key, None)
                 expired.append(trial["candidate_id"])
                 continue
+            if age_days > MAX_TRIAL_DAYS and trial.get("status") == "cohort_ready":
+                observed_trial_ids.add(trial["trial_id"])
+                continue
 
-            start = staged + timedelta(days=1)
+            start = trial_origin + timedelta(days=1)
+            if holdout_end and staged <= holdout_end:
+                trial["holdout_exclusion_end"] = holdout_end.isoformat()
             sessions = _trading_sessions(
                 database, end, start=start, adjustment=ADJUSTMENT,
             )
             if not sessions:
                 trial["latest_simulation"] = {
-                    "status": "waiting_for_future_sessions",
+                    "status": (
+                        "waiting_for_post_holdout_sessions"
+                        if holdout_end and end <= holdout_end
+                        else "waiting_for_future_sessions"
+                    ),
                     "data_end": end.isoformat(), "data_version": data_version,
+                    "excluded_through_date": holdout_end.isoformat() if holdout_end else None,
                 }
                 observed_trial_ids.add(trial["trial_id"])
                 continue
@@ -335,11 +440,13 @@ def run_forward_validation_cycle(
                         strategy=trial["strategy"], regime=trial["regime"],
                         parameters=trial["parameters"], start=simulation_start, end=end,
                         database=database, symbols=symbols, candidate=False,
+                        factor_weight_timeline=factor_weight_timeline,
                     )
                     candidate_report = _simulate(
                         strategy=trial["strategy"], regime=trial["regime"],
                         parameters=trial["parameters"], start=simulation_start, end=end,
                         database=database, symbols=symbols, candidate=True,
+                        factor_weight_timeline=factor_weight_timeline,
                     )
                     baseline_metrics = _target_metrics(
                         baseline_report, trial["strategy"], trial["regime"],
@@ -351,10 +458,15 @@ def run_forward_validation_cycle(
                         "status": "completed", "simulation_policy": SIMULATION_POLICY,
                         "data_end": end.isoformat(),
                         "data_version": data_version,
+                        "cost_model_version": FORWARD_COST_MODEL_VERSION,
                         "baseline_profile_sha256": baseline_profile_sha256,
                         "simulation_start": simulation_start.isoformat(),
                         "candidate_metrics": candidate_metrics,
                         "baseline_metrics": baseline_metrics,
+                        "market_session_coverage": {
+                            "candidate": candidate_report.get("session_source_bar_counts", {}),
+                            "baseline": baseline_report.get("session_source_bar_counts", {}),
+                        },
                         "reused": False,
                     }
                 except Exception as exc:
@@ -362,6 +474,7 @@ def run_forward_validation_cycle(
                         "status": "error", "simulation_policy": SIMULATION_POLICY,
                         "data_end": end.isoformat(),
                         "data_version": data_version,
+                        "cost_model_version": FORWARD_COST_MODEL_VERSION,
                         "baseline_profile_sha256": baseline_profile_sha256,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
@@ -381,6 +494,8 @@ def run_forward_validation_cycle(
             )
             trial["latest_simulation"]["minimum_sample_met"] = sample_met
             if not sample_met:
+                if trial.get("cohort_id"):
+                    trial["status"] = "validating"
                 continue
             candidate_pnl = float(candidate_metrics["net_realized_pnl_after_simulated_costs"])
             baseline_pnl = float(baseline_metrics["net_realized_pnl_after_simulated_costs"])
@@ -401,12 +516,23 @@ def run_forward_validation_cycle(
             trial["forward_validation_pass"] = bool(
                 candidate_pnl > 0 and forward_improvement and marked_equity_improvement
             )
-            if trial["forward_validation_pass"]:
+            if trial.get("cohort_id"):
+                trial["status"] = "cohort_ready"
+                trial["finished_at"] = now.isoformat()
+                continue
+            if trial["forward_validation_pass"] and allow_promotion:
                 promoted_rows.append(_promote(
                     trial, trial["latest_simulation"], promoted,
                 ))
                 trial["status"] = "promoted"
                 history.append(trial)
+            elif trial["forward_validation_pass"]:
+                trial["status"] = "cohort_ready"
+                trial["promotion_paused"] = True
+                trial["reason"] = (
+                    "Promotion paused by " + ", ".join(pause_reasons)
+                )
+                continue
             else:
                 trial["status"] = "rejected"
                 trial["reason"] = (
@@ -418,6 +544,59 @@ def run_forward_validation_cycle(
                 rejected.append(trial["candidate_id"])
             active.pop(key, None)
 
+        # Candidates staged together share the same live baseline and future
+        # window. Select at most one promotion after every member has either
+        # completed its sample or expired, so iteration order cannot decide the
+        # regime profile.
+        cohorts: dict[str, list[tuple[str, dict]]] = {}
+        for key, trial in active.items():
+            if isinstance(trial, dict) and trial.get("cohort_id"):
+                cohorts.setdefault(str(trial["cohort_id"]), []).append((key, trial))
+        for cohort_id, members in (cohorts.items() if allow_promotion else []):
+            expected = max(int(trial.get("cohort_size") or len(members)) for _, trial in members)
+            terminal_members = [
+                trial for trial in history
+                if isinstance(trial, dict) and trial.get("cohort_id") == cohort_id
+            ]
+            if len(members) + len(terminal_members) < expected:
+                continue
+            if any(trial.get("status") == "validating" for _, trial in members):
+                continue
+            ready = [trial for _, trial in members if trial.get("status") == "cohort_ready"]
+            qualified = [trial for trial in ready if trial.get("forward_validation_pass")]
+            winner = max(
+                qualified,
+                key=lambda trial: (
+                    float((trial.get("latest_simulation") or {}).get("candidate_metrics", {}).get("net_realized_pnl_after_simulated_costs") or 0.0),
+                    float((trial.get("latest_simulation") or {}).get("candidate_metrics", {}).get("marked_pnl_after_estimated_exit_costs") or 0.0),
+                    float(trial.get("discovery_fitness") or 0.0),
+                    str(trial.get("candidate_id") or ""),
+                ),
+                default=None,
+            )
+            if winner is not None:
+                promoted_rows.append(_promote(
+                    winner, winner["latest_simulation"], promoted,
+                ))
+            for key, trial in sorted(members, key=lambda pair: str(pair[1].get("candidate_id") or "")):
+                if trial.get("status") != "cohort_ready":
+                    continue
+                if trial is winner:
+                    trial["status"] = "promoted"
+                elif trial.get("forward_validation_pass"):
+                    trial["status"] = "qualified_not_selected"
+                    trial["reason"] = "Another candidate in the completed ablation cohort had stronger forward results"
+                else:
+                    trial["status"] = "rejected"
+                    trial["reason"] = (
+                        "Forward candidate did not produce positive realized P&L, outperform the "
+                        "paired current profile, and finish with higher positive marked equity "
+                        "after estimated exit costs"
+                    )
+                    rejected.append(trial["candidate_id"])
+                history.append(trial)
+                active.pop(key, None)
+
         staged_ids = []
         if allow_stage and regime:
             try:
@@ -425,35 +604,59 @@ def run_forward_validation_cycle(
             except Exception as exc:
                 candidates = []
                 staging_errors.append(f"{type(exc).__name__}: {exc}")
-            active_strategies = {
-                trial.get("strategy") for trial in active.values()
-                if isinstance(trial, dict) and trial.get("status") == "validating"
+            active_pairs = {
+                (trial.get("strategy"), trial.get("regime"))
+                for trial in active.values()
+                if isinstance(trial, dict) and trial.get("status") in {"validating", "cohort_ready"}
+            }
+            active_candidate_ids = {
+                trial.get("candidate_id") for trial in active.values()
+                if isinstance(trial, dict)
             }
             live_ids = promoted.get("regime_profile_ids") or {}
+            by_strategy: dict[str, list[dict]] = {}
             for candidate in candidates:
-                strategy = candidate["strategy"]
-                key = f"{strategy}:{regime}"
-                if strategy in active_strategies:
+                by_strategy.setdefault(candidate["strategy"], []).append(candidate)
+            for strategy, rows in by_strategy.items():
+                if (strategy, regime) in active_pairs:
                     continue
-                if (live_ids.get(strategy) or {}).get(regime) == candidate["candidate_id"]:
+                already_terminal = {
+                    row.get("candidate_id") for row in history
+                    if isinstance(row, dict)
+                    and row.get("status") in {"rejected", "expired", "promoted", "qualified_not_selected"}
+                }
+                cohort = [
+                    candidate for candidate in rows
+                    if candidate.get("candidate_id") not in active_candidate_ids
+                    and candidate.get("candidate_id") not in already_terminal
+                    and (live_ids.get(strategy) or {}).get(regime) != candidate.get("candidate_id")
+                ][:MAX_ACTIVE_COHORT_PER_STRATEGY_REGIME]
+                if not cohort:
                     continue
-                if any(
-                    row.get("candidate_id") == candidate["candidate_id"]
-                    and row.get("status") in {"rejected", "expired"}
-                    for row in history if isinstance(row, dict)
-                ):
-                    continue
-                candidate.update({
-                    "trial_id": uuid4().hex,
-                    "origin_invocation_id": invocation_id,
-                    "source_candidate_id": candidate.get("source_candidate_id"),
-                    "baseline_profile_sha256": _baseline_profile_fingerprint(strategy),
-                    "status": "validating", "staged_on": end.isoformat(),
-                    "staged_at": now.isoformat(), "latest_simulation": None,
-                })
-                active[key] = candidate
-                active_strategies.add(strategy)
-                staged_ids.append(candidate["candidate_id"])
+                cohort_candidate_ids = sorted(candidate["candidate_id"] for candidate in cohort)
+                cohort_payload = json.dumps(
+                    {"strategy": strategy, "regime": regime, "staged_on": end.isoformat(),
+                     "candidate_ids": cohort_candidate_ids},
+                    sort_keys=True, separators=(",", ":"),
+                )
+                cohort_id = hashlib.sha256(cohort_payload.encode()).hexdigest()[:20]
+                for candidate in cohort:
+                    candidate.update({
+                        "trial_id": uuid4().hex,
+                        "origin_invocation_id": invocation_id,
+                        "source_candidate_id": candidate.get("source_candidate_id"),
+                        "baseline_profile_sha256": _baseline_profile_fingerprint(strategy),
+                        "cohort_id": cohort_id,
+                        "cohort_size": len(cohort),
+                        "cohort_candidate_ids": cohort_candidate_ids,
+                        "forward_cost_model_version": FORWARD_COST_MODEL_VERSION,
+                        "status": "validating", "staged_on": end.isoformat(),
+                        "staged_at": now.isoformat(), "latest_simulation": None,
+                    })
+                    key = f"{strategy}:{regime}:{candidate['candidate_id']}"
+                    active[key] = candidate
+                    active_candidate_ids.add(candidate["candidate_id"])
+                    staged_ids.append(candidate["candidate_id"])
 
         if promoted_rows:
             write_json_atomic(PROMOTED_PROFILE_PATH, promoted)
@@ -467,13 +670,17 @@ def run_forward_validation_cycle(
                 "target_regime_entry_sessions": MIN_REGIME_ENTRY_SESSIONS,
             },
             "maximum_trial_days": MAX_TRIAL_DAYS,
+            "promotion_paused_by_drift": "drift" in pause_reasons,
+            "promotion_paused_by_final_holdout": "final_holdout_quarantine" in pause_reasons,
+            "candidate_staging_paused_by_final_holdout": (
+                not allow_stage and "final_holdout_quarantine" in pause_reasons
+            ),
+            "promotion_pause_reasons": pause_reasons,
+            "holdout_exclude_through_date": holdout_exclude_through_date,
             "simulation_policy": SIMULATION_POLICY,
             "cost_model": {
-                "slippage_bps_each_side": 5.0,
-                "spread_bps_full": 3.0,
-                "commission_per_share_each_side": 0.005,
-                "short_borrow_annual_pct": 3.0,
-                "unknown_borrow_penalty_bps": 25.0,
+                **FORWARD_COST_MODEL,
+                "cost_model_version": FORWARD_COST_MODEL_VERSION,
             },
             "last_cycle": {
                 "data_end": end.isoformat(), "data_version": data_version,
@@ -514,6 +721,13 @@ def run_forward_validation_cycle(
             "target_regime_entry_sessions": MIN_REGIME_ENTRY_SESSIONS,
         },
         "live_configuration_changed": bool(promoted_rows),
+        "promotion_paused_by_drift": "drift" in pause_reasons,
+        "promotion_paused_by_final_holdout": "final_holdout_quarantine" in pause_reasons,
+        "candidate_staging_paused_by_final_holdout": (
+            not allow_stage and "final_holdout_quarantine" in pause_reasons
+        ),
+        "promotion_pause_reasons": pause_reasons,
+        "holdout_exclude_through_date": holdout_exclude_through_date,
         "duration_seconds": round(time.monotonic() - started, 3),
     }
 

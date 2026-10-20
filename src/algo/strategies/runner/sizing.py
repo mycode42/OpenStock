@@ -71,18 +71,21 @@ def _make_trade(
 
     strategy = str(signal.get("strategy", ""))
     configured_stop = mode_risk.get("stop_loss_pct_by_strategy", {}).get(strategy)
-    stop_pct = float(configured_stop or signal.get("stop_pct") or mode_risk["stop_loss_pct"])
+    if signal.get("stop_model_override"):
+        stop_pct = float(signal.get("stop_pct") or 0.0)
+    else:
+        stop_pct = float(configured_stop or signal.get("stop_pct") or mode_risk["stop_loss_pct"])
     if equity <= 0 or price <= 0 or stop_pct <= 0:
         return None
     try:
         risk_multiplier = float(signal.get("risk_multiplier", 1.0))
     except (TypeError, ValueError):
         return None
-    if not math.isfinite(risk_multiplier) or not 0.1 <= risk_multiplier <= 1.5:
+    if not math.isfinite(risk_multiplier) or not 0.01 <= risk_multiplier <= 1.5:
         return None
     risk_dollars = equity * float(STRATEGY_CONFIG["risk_per_trade_pct"]) * risk_multiplier
     max_position_pct = min(
-        float(STRATEGY_CONFIG["max_strategy_position_pct"]),
+        float(mode_risk.get("max_strategy_position_pct", STRATEGY_CONFIG["max_strategy_position_pct"])),
         float(mode_risk["max_position_pct"]),
     )
     ticker_limit = _ticker_max_position_pct(signal["ticker"], mode_universe)

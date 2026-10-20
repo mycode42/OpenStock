@@ -11,8 +11,10 @@ import sys
 
 from src.algo.backtest import (
     DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days,
-    read_borrow_availability,
+    read_borrow_availability, strategy_warmup_days,
 )
+from src.algo.backtest.config import REGIME_WARMUP_DAYS
+from src.algo.config import ALGO_REGIME_CONFIG
 from src.algo.market_store import SQLiteBarStore
 from src.algo.cpu import available_cpu_count
 from src.algo.strategies.catalog import STRATEGY_CATALOG
@@ -21,7 +23,15 @@ from src.config import get_algo_runtime_settings
 
 from .live_manifest import live_configuration_manifest
 from .replay_logging import quiet_coordinator_rejections
-from .settings import LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT
+from .robustness import (
+    bootstrap_daily_equity, bootstrap_trade_sequence,
+    simulate_ewma_allocation_shadow,
+)
+from .settings import (
+    LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT,
+    ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS, ROBUSTNESS_BOOTSTRAP_ITERATIONS,
+    ROBUSTNESS_COST_MULTIPLIERS, REGIME_CONTEXT_WARMUP_DAYS,
+)
 
 
 ADAPTIVE_COORDINATOR_SCHEMA = "swarm_algo_adaptive_coordinator_v1"
@@ -149,30 +159,138 @@ def run_coordinated_portfolio(args) -> dict:
         raise ValueError(f"Borrow-availability source recorded by artifacts does not exist: {borrow_path}")
 
     worker_count = min(max(1, args.workers), len(fold_profiles), available_cpu_count())
+    factor_weight_timeline = list(getattr(args, "factor_weight_timeline", []) or [])
     jobs = [
         (
             item, symbols, db, event_path, enabled_strategies,
             bool(args.multi_factor_overlay), cost_model, borrow_path, runtime_overrides,
+            0, True, factor_weight_timeline,
         )
         for item in fold_profiles
     ]
-    results_by_index = {}
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        futures = [executor.submit(_run_coordinated_fold, job) for job in jobs]
-        for completed, future in enumerate(as_completed(futures), start=1):
-            index, replay = future.result()
-            results_by_index[index] = replay
-            print(
-                f"Completed coordinator portfolio fold {completed}/{len(futures)} "
-                f"({replay['start']}..{replay['end']})",
-                file=sys.stderr, flush=True,
-            )
-    results = [results_by_index[index] for index in range(len(fold_profiles))]
+    results = _execute_fold_jobs(jobs, worker_count=worker_count, label="baseline")
     fold_returns = [item["net_return_pct"] for item in results]
     compound_return = 1.0
     for value in fold_returns:
         compound_return *= 1.0 + value / 100.0
     compound_return = (compound_return - 1.0) * 100.0
+    initial_capital = float(getattr(args, "capital", 100_000.0))
+    stitched_curve = []
+    stitched_strategy_pnl = []
+    stitched_trade_pnls = []
+    stitched_equity = initial_capital
+    previous_date = None
+    for item in results:
+        scale = stitched_equity / initial_capital
+        regime_by_day = {
+            str(row.get("date")): str(row.get("regime") or "unknown")
+            for row in item.get("daily_equity", [])
+        }
+        for row in item.get("daily_equity", []):
+            day = row.get("date")
+            if previous_date is not None and day <= previous_date:
+                continue
+            value = float(row.get("equity", 0) or 0) * scale
+            if value > 0:
+                stitched_curve.append({"date": day, "equity": round(value, 2)})
+                previous_date = day
+        for row in item.get("daily_strategy_pnl", []):
+            stitched_strategy_pnl.append({
+                "date": row.get("date"),
+                "regime": regime_by_day.get(str(row.get("date")), "unknown"),
+                "pnl_by_strategy": {
+                    strategy: round(float(value or 0.0) * scale, 4)
+                    for strategy, value in (row.get("pnl_by_strategy") or {}).items()
+                    if strategy in enabled_strategies
+                },
+            })
+        stitched_trade_pnls.extend(
+            float(value or 0.0) * scale
+            for value in item.get("closed_trade_pnls", [])
+        )
+        stitched_equity *= 1.0 + float(item.get("net_return_pct") or 0.0) / 100.0
+    monte_carlo = bootstrap_daily_equity(
+        stitched_curve,
+        iterations=int(getattr(args, "bootstrap_iterations", ROBUSTNESS_BOOTSTRAP_ITERATIONS)),
+        block_size=int(getattr(args, "bootstrap_block_sessions", ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS)),
+        seed=int(getattr(args, "seed", 41)),
+    )
+    trade_monte_carlo = bootstrap_trade_sequence(
+        stitched_trade_pnls, initial_capital=initial_capital,
+        iterations=int(getattr(args, "bootstrap_iterations", ROBUSTNESS_BOOTSTRAP_ITERATIONS)),
+        block_size=int(getattr(args, "bootstrap_trade_block_size", ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS)),
+        seed=int(getattr(args, "seed", 41)) + 1,
+    )
+    coordinator_shadow = simulate_ewma_allocation_shadow(
+        stitched_strategy_pnl,
+        initial_capital=initial_capital,
+    )
+    sensitivity_scenarios = {}
+    for multiplier in ROBUSTNESS_COST_MULTIPLIERS:
+        scenario_cost = dict(cost_model)
+        scenario_cost["slippage_bps_each_side"] = float(
+            cost_model.get("slippage_bps_each_side", 5)
+        ) * multiplier
+        scenario_cost["spread_bps"] = float(cost_model.get("spread_bps", 3)) * multiplier
+        scenario_cost["commission_per_share_each_side"] = float(
+            cost_model.get("commission_per_share_each_side", 0.005)
+        ) * multiplier
+        scenario_cost["short_borrow_annual_pct"] = float(
+            cost_model.get("short_borrow_annual_pct", 3)
+        ) * multiplier
+        scenario_cost["unknown_borrow_adverse_fill_penalty_bps"] = float(
+            cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25)
+        ) * multiplier
+        scenario_name = f"cost_{multiplier:g}x"
+        scenario_jobs = [
+            (
+                item, symbols, db, event_path, enabled_strategies,
+                bool(args.multi_factor_overlay), scenario_cost, borrow_path,
+                runtime_overrides, 0, False, factor_weight_timeline,
+            )
+            for item in fold_profiles
+        ]
+        sensitivity_scenarios[scenario_name] = {
+            **_summarize_cost_sensitivity(
+                _execute_fold_jobs(scenario_jobs, worker_count=worker_count, label=scenario_name),
+            ),
+            "cost_multiplier": multiplier,
+            "execution_delay_bars": 0,
+            "cost_model": scenario_cost,
+        }
+
+    latency_multiplier = max(ROBUSTNESS_COST_MULTIPLIERS, default=1.5)
+    latency_cost = dict(cost_model)
+    latency_cost["slippage_bps_each_side"] = float(
+        cost_model.get("slippage_bps_each_side", 5)
+    ) * latency_multiplier
+    latency_cost["spread_bps"] = float(cost_model.get("spread_bps", 3)) * latency_multiplier
+    latency_cost["commission_per_share_each_side"] = float(
+        cost_model.get("commission_per_share_each_side", 0.005)
+    ) * latency_multiplier
+    latency_cost["short_borrow_annual_pct"] = float(
+        cost_model.get("short_borrow_annual_pct", 3)
+    ) * latency_multiplier
+    latency_cost["unknown_borrow_adverse_fill_penalty_bps"] = float(
+        cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25)
+    ) * latency_multiplier
+    latency_name = f"cost_{latency_multiplier:g}x_delay_1_bar"
+    latency_jobs = [
+        (
+            item, symbols, db, event_path, enabled_strategies,
+            bool(args.multi_factor_overlay), latency_cost, borrow_path,
+            runtime_overrides, 1, False, factor_weight_timeline,
+        )
+        for item in fold_profiles
+    ]
+    sensitivity_scenarios[latency_name] = {
+        **_summarize_cost_sensitivity(
+            _execute_fold_jobs(latency_jobs, worker_count=worker_count, label=latency_name),
+        ),
+        "cost_multiplier": latency_multiplier,
+        "execution_delay_bars": 1,
+        "cost_model": latency_cost,
+    }
 
     return {
         "schema": "swarm_algo_coordinated_portfolio_v1",
@@ -216,6 +334,12 @@ def run_coordinated_portfolio(args) -> dict:
         "core_strategies": {"multi_factor_enabled": bool(args.multi_factor_overlay)},
         "live_configuration": live_configuration_manifest(enabled_strategies),
         "research_runtime_overrides": runtime_overrides,
+        "factor_weight_timeline": {
+            "observation_count": len(factor_weight_timeline),
+            "sha256": hashlib.sha256(json.dumps(
+                factor_weight_timeline, sort_keys=True, separators=(",", ":"),
+            ).encode()).hexdigest(),
+        },
         "worker_count": worker_count,
         "fold_summary": {
             "count": len(results),
@@ -227,10 +351,21 @@ def run_coordinated_portfolio(args) -> dict:
                 sum(item["max_drawdown_pct"] for item in results) / len(results), 4,
             ),
         },
+        "robustness": {
+            "portfolio_daily_block_bootstrap": monte_carlo,
+            "closed_trade_sequence_bootstrap": trade_monte_carlo,
+            "coordinator_weight_shadow": coordinator_shadow,
+            "cost_model_sensitivity": {
+                "base_model": cost_model,
+                "scenarios": sensitivity_scenarios,
+                "sensitivity_policy": "slippage, spread, per-share commission, short-borrow rate, and unknown-borrow penalty are scaled together",
+            },
+        },
         "folds": results,
         "limitations": [
-            "Each fold starts with fresh capital and no positions or risk state carry over between folds.",
+            "Each baseline fold starts with fresh capital and no positions or risk state carry over between folds; the shadow weight state carries across the stitched dates.",
             "The universe is fixed to the symbol list shared by the adaptive verification artifacts.",
+            "The coordinator allocation shadow scales each strategy's after-cost daily sleeve P&L linearly; it does not replay changed fills, capital competition, or shared-capacity interactions.",
             "A strategy's promotion gate is reported but does not suppress research-only "
             "portfolio simulation.",
             "The final artifact does not alter live settings or authorize deployment.",
@@ -245,15 +380,23 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
     (
         item, symbols, db, event_path, strategies, factor_enabled, cost_model,
         borrow_path, runtime_overrides,
-    ) = job
+    ) = job[:9]
+    execution_delay_bars = job[9] if len(job) > 9 else 0
+    include_curves = job[10] if len(job) > 10 else True
+    factor_weight_timeline = job[11] if len(job) > 11 else []
     fold = item["window"]
     start = date.fromisoformat(fold["test_start"])
     end = date.fromisoformat(fold["test_end"])
-    warmup_days = max(DAILY_WARMUP_DAYS, multi_factor_warmup_days(item["profile"]) if factor_enabled else 0)
+    warmup_days = max(
+        REGIME_CONTEXT_WARMUP_DAYS, DAILY_WARMUP_DAYS,
+        *(strategy_warmup_days(strategy, item["profile"]) for strategy in strategies),
+        multi_factor_warmup_days(item["profile"]) if factor_enabled else 0,
+    )
     bars_start = (start - timedelta(days=warmup_days)).isoformat()
     store = SQLiteBarStore(db)
+    context_symbols = list(dict.fromkeys([*symbols, "SPY", "QQQ", "GLD", "TLT", "HYG", "LQD"]))
     intraday = store.bars(
-        symbols, feed=FEED, timeframe="5Min", start=bars_start,
+        context_symbols, feed=FEED, timeframe="5Min", start=bars_start,
         end=end.isoformat(), adjustment=ADJUSTMENT,
     )
     available = [symbol for symbol in symbols if intraday.get(symbol)]
@@ -262,9 +405,12 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
     missing = [symbol for symbol in symbols if symbol not in available]
     spy_daily = store.bars(
         ["SPY"], feed=FEED, timeframe="1Day",
-        start=(start - timedelta(days=DAILY_WARMUP_DAYS)).isoformat(),
+        start=(start - timedelta(days=REGIME_WARMUP_DAYS)).isoformat(),
         end=end.isoformat(), adjustment=ADJUSTMENT,
     ).get("SPY", [])
+    from src.algo.regime_macro import load_fred_regime_series
+
+    macro_series, macro_diagnostics = load_fred_regime_series(store, refresh=False)
     calendar = EventCalendar.from_csv(event_path) if event_path else None
     replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
@@ -276,6 +422,13 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         short_borrow_annual_pct=cost_model.get("short_borrow_annual_pct", 3) / 100,
         unknown_borrow_penalty_bps=cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25),
         borrow_availability=read_borrow_availability(borrow_path),
+        execution_delay_bars=execution_delay_bars,
+        regime_macro_series=macro_series,
+        regime_config={
+            **ALGO_REGIME_CONFIG,
+            "macro_data_status": macro_diagnostics.get("status"),
+        },
+        factor_weight_timeline=factor_weight_timeline,
         profile=item["profile"], strategies=strategies,
         research_controls=item["controls"], event_calendar=calendar,
         research_runtime_overrides=runtime_overrides,
@@ -290,8 +443,19 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         "entry_count_by_strategy", "signal_event_count_by_strategy",
         "satellite_confirmation_candidates", "satellite_confirmed_entries",
         "portfolio_coordinator", "strategy_correlation_report",
+        "daily_equity", "daily_strategy_pnl",
+        "closed_trades",
     )
     summary = {key: report.get(key) for key in keys}
+    summary["closed_trade_pnls"] = [
+        float(trade.get("pnl") or 0.0) for trade in report.get("closed_trades", [])
+    ]
+    summary.pop("closed_trades", None)
+    summary["execution_delay_bars"] = execution_delay_bars
+    if not include_curves:
+        summary.pop("daily_equity", None)
+        summary.pop("daily_strategy_pnl", None)
+        summary.pop("closed_trade_pnls", None)
     summary.update({
         "fold": item["window"],
         "selected_profiles": item["selected_profiles"],
@@ -306,6 +470,46 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         ).hexdigest(),
     })
     return item["index"], summary
+
+
+def _execute_fold_jobs(jobs: list[tuple], *, worker_count: int, label: str) -> list[dict]:
+    results_by_index = {}
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+        futures = [executor.submit(_run_coordinated_fold, job) for job in jobs]
+        for completed, future in enumerate(as_completed(futures), start=1):
+            index, replay = future.result()
+            results_by_index[index] = replay
+            print(
+                f"Completed coordinator {label} fold {completed}/{len(futures)} "
+                f"({replay['start']}..{replay['end']})",
+                file=sys.stderr, flush=True,
+            )
+    return [results_by_index[index] for index in range(len(jobs))]
+
+
+def _summarize_cost_sensitivity(folds: list[dict]) -> dict:
+    returns = [float(row.get("net_return_pct") or 0.0) for row in folds]
+    drawdowns = [float(row.get("max_drawdown_pct") or 0.0) for row in folds]
+    compounded = 1.0
+    for value in returns:
+        compounded *= 1.0 + value / 100.0
+    return {
+        "fold_count": len(folds),
+        "mean_oos_return_pct": round(sum(returns) / len(returns), 4) if returns else None,
+        "compounded_oos_return_pct": round((compounded - 1.0) * 100.0, 4),
+        "worst_oos_return_pct": round(min(returns), 4) if returns else None,
+        "mean_max_drawdown_pct": round(sum(drawdowns) / len(drawdowns), 4) if drawdowns else None,
+        "worst_max_drawdown_pct": round(max(drawdowns), 4) if drawdowns else None,
+        "folds": [
+            {
+                "fold": row.get("fold"), "net_return_pct": row.get("net_return_pct"),
+                "max_drawdown_pct": row.get("max_drawdown_pct"),
+                "closed_trade_count": row.get("closed_trade_count"),
+                "execution_delay_bars": row.get("execution_delay_bars", 0),
+            }
+            for row in folds
+        ],
+    }
 
 
 def _read_artifact(path: Path, strategy: str) -> dict:

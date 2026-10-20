@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from bisect import bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import statistics
 
 from .config import BAR_MINUTES, ET
+from .market_sessions import market_session
 from src.algo.strategies.multi_factor.config import MultiFactorConfig
 from src.algo.strategies.multi_factor.signals import SignalGenerator
 from src.algo.strategies.catalog import (
@@ -35,6 +36,44 @@ class ReplaySignalsMixin:
         key = self.multi_factor_generator.rebalance_key(session)
         if key == self.last_multi_factor_rebalance_key:
             return {}, None
+        as_of = session - timedelta(days=1)
+        learned_factor_weights = None
+        factor_model_diagnostics = None
+        if self.multi_factor_generator.config.factor_weight_mode == "ridge_walk_forward":
+            from src.algo.strategies.multi_factor.learned_weights import resolve_walk_forward_weights
+
+            learned_factor_weights, factor_model_diagnostics = resolve_walk_forward_weights(
+                getattr(self, "factor_weight_timeline", None), as_of=as_of,
+            )
+        from src.algo.strategies.multi_factor.fundamentals import (
+            load_point_in_time_fundamentals, requested_fundamental_factors,
+        )
+
+        fundamentals_by_symbol = None
+        fundamentals_diagnostics = {"status": "not_requested", "source": None}
+        if requested_fundamental_factors(
+            self.multi_factor_generator.config, regime_name, learned_factor_weights,
+        ):
+            cache_key = as_of.isoformat()
+            cached_fundamentals = self.multi_factor_fundamentals_cache.get(cache_key)
+            if cached_fundamentals is not None:
+                fundamentals_by_symbol, fundamentals_diagnostics = cached_fundamentals
+            else:
+                try:
+                    fundamentals_by_symbol, fundamentals_diagnostics = load_point_in_time_fundamentals(
+                        [symbol for symbol in self.symbols if symbol in getattr(self, "sector_by_symbol", {})]
+                        or self.symbols,
+                        as_of=as_of,
+                    )
+                except Exception as exc:
+                    fundamentals_by_symbol = {}
+                    fundamentals_diagnostics = {
+                        "status": "unavailable", "source": "sec_edgar_companyfacts",
+                        "failure_types": {"feed": type(exc).__name__},
+                    }
+                self.multi_factor_fundamentals_cache[cache_key] = (
+                    fundamentals_by_symbol, fundamentals_diagnostics,
+                )
         held = {
             ticker: {
                 "qty": position.qty, "entry_at": position.entry_at,
@@ -46,10 +85,15 @@ class ReplaySignalsMixin:
         signals, diagnostics = self.multi_factor_generator.generate(
             self.daily_stock_bars,
             symbols=self.symbols,
-            as_of=session - timedelta(days=1),
+            as_of=as_of,
             session=session,
             regime=str(self._current_regime.get("regime", "unknown")),
+            fundamentals_by_symbol=fundamentals_by_symbol,
+            fundamentals_feed_diagnostics=fundamentals_diagnostics,
             held_positions=held,
+            groups_by_symbol=getattr(self, "sector_by_symbol", None),
+            learned_factor_weights=learned_factor_weights,
+            factor_model_diagnostics=factor_model_diagnostics,
         )
         if not diagnostics["minimum_universe_met"]:
             return {}, diagnostics
@@ -69,6 +113,14 @@ class ReplaySignalsMixin:
             for factor, value in item.factor_zscores.items():
                 factor_scores[factor][item.ticker] = value
         targets = {item.ticker for item in signals if item.action in {"buy", "short", "hold"}}
+        target_directions = {
+            item.ticker: item.direction for item in signals
+            if item.target_weight > 0 and item.direction in {"long", "short"}
+        }
+        target_weights = {
+            item.ticker: item.target_weight for item in signals
+            if item.target_weight > 0 and item.direction in {"long", "short"}
+        }
         previous_targets = self.multi_factor_snapshots[-1]["targets"] if self.multi_factor_snapshots else set()
         diagnostics["turnover"] = turnover(previous_targets, targets)
         self.multi_factor_snapshots.append({
@@ -76,6 +128,9 @@ class ReplaySignalsMixin:
             "scores": scores,
             "factor_scores": dict(factor_scores),
             "targets": targets,
+            "target_directions": target_directions,
+            "target_weights": target_weights,
+            "regime": diagnostics.get("regime", "unknown"),
         })
         self.multi_factor_rebalance_diagnostics.append(diagnostics)
         for item in signals:
@@ -90,9 +145,17 @@ class ReplaySignalsMixin:
 
     def _multi_factor_ic(self) -> dict:
         ic_values = []
+        net_ic_values = []
         factor_ic_values: dict[str, list[float]] = defaultdict(list)
+        factor_net_ic_values: dict[str, list[float]] = defaultdict(list)
+        ic_by_regime: dict[str, list[float]] = defaultdict(list)
+        net_ic_by_regime: dict[str, list[float]] = defaultdict(list)
+        net_portfolio_returns = []
+        net_portfolio_returns_by_regime: dict[str, list[float]] = defaultdict(list)
         for snapshot in self.multi_factor_snapshots:
             returns = {}
+            net_returns = {}
+            start_prices = {}
             for symbol in snapshot["scores"]:
                 rows = self.daily_stock_series.get(symbol)
                 if rows is None:
@@ -104,30 +167,122 @@ class ReplaySignalsMixin:
                     end_close = closes[future_index + 20]
                     if start_close > 0:
                         returns[symbol] = end_close / start_close - 1
+                        start_prices[symbol] = start_close
+                        round_trip_cost = 2 * (self.spread_bps / 2 + self.slippage_bps) / 10_000
+                        round_trip_cost += 2 * self.commission_per_share / start_close
+                        net_returns[symbol] = returns[symbol] - round_trip_cost
             value = information_coefficient(snapshot["scores"], returns)
             if value is not None:
                 ic_values.append(value)
+                ic_by_regime[str(snapshot.get("regime", "unknown"))].append(value)
+            net_value = information_coefficient(snapshot["scores"], net_returns)
+            if net_value is not None:
+                net_ic_values.append(net_value)
+                net_ic_by_regime[str(snapshot.get("regime", "unknown"))].append(net_value)
             for factor, scores in snapshot["factor_scores"].items():
                 value = information_coefficient(scores, returns)
                 if value is not None:
                     factor_ic_values[factor].append(value)
+                value = information_coefficient(scores, net_returns)
+                if value is not None:
+                    factor_net_ic_values[factor].append(value)
+            side_returns = []
+            for symbol, direction in snapshot.get("target_directions", {}).items():
+                if symbol not in returns or symbol not in start_prices:
+                    continue
+                sign = 1 if direction == "long" else -1
+                start_price = start_prices[symbol]
+                round_trip_cost = 2 * (self.spread_bps / 2 + self.slippage_bps) / 10_000
+                round_trip_cost += 2 * self.commission_per_share / start_price
+                borrow_cost = (
+                    self.short_borrow_annual_pct * 21 / 252
+                    if direction == "short" else 0.0
+                )
+                weight = float(snapshot.get("target_weights", {}).get(symbol, 0.0))
+                if weight > 0:
+                    side_returns.append((weight, sign * returns[symbol] - round_trip_cost - borrow_cost))
+            if side_returns:
+                total_weight = sum(weight for weight, _ in side_returns)
+                portfolio_return = sum(weight * value for weight, value in side_returns) / total_weight
+                net_portfolio_returns.append(portfolio_return)
+                net_portfolio_returns_by_regime[str(snapshot.get("regime", "unknown"))].append(portfolio_return)
+
+        def summary(values: list[float]) -> dict:
+            return {
+                "sample_count": len(values),
+                "mean": round(statistics.mean(values), 6) if values else None,
+                "median": round(statistics.median(values), 6) if values else None,
+                "standard_deviation": round(statistics.pstdev(values), 6) if values else None,
+                "positive_sample_pct": round(100 * sum(value > 0 for value in values) / len(values), 2) if values else None,
+            }
+
+        realized_trades = [
+            trade for trade in self.closed_trades
+            if trade.get("strategy") == "multi_factor"
+        ]
+        factor_model_rows = [
+            row.get("factor_model") or {}
+            for row in self.multi_factor_rebalance_diagnostics
+            if (row.get("factor_model") or {}).get("status") == "loaded"
+        ]
+        latest_weight_diagnostics = {}
+        latest_active_factor_weights = {}
+        if self.multi_factor_rebalance_diagnostics:
+            latest_diagnostics = self.multi_factor_rebalance_diagnostics[-1]
+            latest_weight_diagnostics = dict(latest_diagnostics.get("factor_model") or {})
+            latest_active_factor_weights = dict(latest_diagnostics.get("active_factor_weights") or {})
+        by_factor = {
+            factor: {
+                "gross": summary(factor_ic_values[factor]),
+                "net_of_costs": summary(factor_net_ic_values[factor]),
+            }
+            for factor in sorted(set(factor_ic_values) | set(factor_net_ic_values))
+        }
         return {
             "rebalance_count": len(self.multi_factor_snapshots),
+            "factor_weight_mode": self.multi_factor_generator.config.factor_weight_mode,
+            "factor_weight_source_counts": dict(Counter(
+                str(row.get("factor_weight_source", "unknown"))
+                for row in self.multi_factor_rebalance_diagnostics
+            )),
+            "learned_weight_snapshot_count": len(factor_model_rows),
+            "latest_factor_model": latest_weight_diagnostics,
+            "latest_active_factor_weights": latest_active_factor_weights,
             "average_turnover": round(statistics.mean(
                 [row["turnover"] for row in self.multi_factor_rebalance_diagnostics]
             ), 4) if self.multi_factor_rebalance_diagnostics else None,
-            "mean_spearman_ic_forward_21_sessions": round(statistics.mean(ic_values), 4) if ic_values else None,
-            "ic_observation_count": len(ic_values),
-            "mean_spearman_ic_forward_21_sessions_by_factor": {
-                factor: round(statistics.mean(values), 4)
-                for factor, values in sorted(factor_ic_values.items())
+            "gross_ic_forward_21_sessions": summary(ic_values),
+            "net_of_costs_ic_forward_21_sessions": summary(net_ic_values),
+            "gross_ic_forward_21_sessions_by_regime": {
+                regime: summary(values) for regime, values in sorted(ic_by_regime.items())
             },
-            "ic_observation_count_by_factor": {
-                factor: len(values) for factor, values in sorted(factor_ic_values.items())
+            "net_of_costs_ic_forward_21_sessions_by_regime": {
+                regime: summary(values) for regime, values in sorted(net_ic_by_regime.items())
+            },
+            "factor_ic_forward_21_sessions": by_factor,
+            "after_cost_target_portfolio_forward_21_session_return": summary(net_portfolio_returns),
+            "after_cost_target_portfolio_forward_21_session_return_by_regime": {
+                regime: summary(values) for regime, values in sorted(net_portfolio_returns_by_regime.items())
+            },
+            "realized_strategy_economics": {
+                "closed_trade_count": len(realized_trades),
+                "net_pnl": round(sum(float(trade.get("pnl", 0.0)) for trade in realized_trades), 2),
+                "win_rate_pct": round(100 * sum(float(trade.get("pnl", 0.0)) > 0 for trade in realized_trades) / len(realized_trades), 2)
+                if realized_trades else None,
+                "costs_included": True,
             },
             "ic_horizon_sessions": 21,
             "ic_labels_overlap": True,
-            "value_factor_enabled": self.multi_factor_generator.config.factor_weights.get("value_earnings_yield", 0) > 0,
+            "target_return_cost_model": {
+                "spread_bps_round_trip_reference": self.spread_bps,
+                "slippage_bps_each_side": self.slippage_bps,
+                "commission_per_share_each_side": self.commission_per_share,
+                "short_borrow_annual_pct": self.short_borrow_annual_pct,
+            },
+            "value_factor_enabled": latest_active_factor_weights.get(
+                "value_earnings_yield",
+                self.multi_factor_generator.config.factor_weights.get("value_earnings_yield", 0),
+            ) > 0,
         }
 
     def _regime(self, trading_day: date) -> dict:
@@ -140,7 +295,12 @@ class ReplaySignalsMixin:
             except (KeyError, TypeError, ValueError):
                 continue
         completed.sort(key=self._timestamp)
-        return self._regime_ranker(
+        config = self.regime_config
+        feature_rows = [
+            row for row in self.regime_feature_history
+            if row["date"] < trading_day.isoformat()
+        ]
+        result = self._regime_ranker(
             completed,
             mode="algo",
             event_enabled=self.event_satellite_enabled,
@@ -151,7 +311,25 @@ class ReplaySignalsMixin:
             intraday_momentum_enabled=bool(self.research_runtime_overrides.get(
                 "intraday_momentum", self.runtime_settings.enable_intraday_momentum,
             )),
+            feature_set=config["feature_set"],
+            engine=config["engine"],
+            strategy_policy=config["strategy_policy"],
+            context_bars=self.regime_context_bars,
+            macro_series=self.regime_macro_series,
+            include_models=bool(config.get("include_models", False)),
+            model_training_window=int(config.get("model_training_window", 756)),
+            model_min_confidence=float(config.get("min_model_confidence", 0.50)),
+            precomputed_features=feature_rows,
         )
+        result["regime_macro_data_status"] = str(config.get("macro_data_status", "provided"))
+        self.regime_history.append({
+            "date": trading_day.isoformat(),
+            "regime": result.get("regime", "unknown"),
+            "volatility_state": result.get("volatility_state", "unknown"),
+            "features": result.get("regime_features", {}),
+            "models": result.get("regime_shadow", {}),
+        })
+        return result
 
     def _previous_close(self, ticker: str, trading_day: date) -> float | None:
         return self.previous_closes_by_day.get((ticker.upper(), trading_day))
@@ -217,7 +395,7 @@ class ReplaySignalsMixin:
                 else:
                     daily_strategy = bool(strategy_spec and strategy_spec.bar_interval == "1Day")
                     signal_bars = (
-                        self._completed_daily_history(ticker, timestamp.astimezone(ET).date())
+                        self._completed_daily_history(ticker, self._trading_date(timestamp))
                         if daily_strategy else history
                     )
                     signal_kwargs = {
@@ -290,7 +468,7 @@ class ReplaySignalsMixin:
                 signal_as_of = timestamp + timedelta(minutes=BAR_MINUTES)
                 event_signal = self.event_signal_generator.generate(
                     ticker,
-                    self._completed_daily_history(ticker, timestamp.astimezone(ET).date()),
+                    self._completed_daily_history(ticker, self._trading_date(timestamp)),
                     as_of=signal_as_of,
                     universe=set(self.symbols),
                     regime=str(self._current_regime.get("regime", "unknown")),
@@ -403,7 +581,14 @@ class ReplaySignalsMixin:
         current_equity = self._equity()
         signal, throttle_note = throttle_signal(
             signal, str(regime.get("regime", "unknown")), self.coordinator.config,
+            risk_multiplier=float(regime.get("strategy_risk_multipliers", {}).get(strategy, 1.0)),
         )
+        if getattr(self, "research_strategy_weights", None):
+            allocation_weight = float(self.research_strategy_weights.get(strategy, 1.0))
+            signal = {
+                **signal,
+                "risk_multiplier": float(signal.get("risk_multiplier", 1.0)) * allocation_weight,
+            }
         if throttle_note:
             self.rejections[f"coordinator_regime_throttle:{strategy}"] += 1
         sized = _make_trade(signal, close, current_equity, {}, self.risk)
@@ -429,9 +614,19 @@ class ReplaySignalsMixin:
             intraday_entries_today=intraday_entries,
             swing_entries_today=swing_entries,
         )
+        session_name = market_session(timestamp) if self.include_extended_hours else "regular"
+        session_close = None
+        if self.include_extended_hours:
+            session_name = session_name or "closed"
+            session_close = datetime.combine(
+                self._trading_date(timestamp), time(20, 0), tzinfo=ET,
+            )
         decision = coordinator_book.review(
-            sized, session="regular", timestamp=timestamp,
+            sized, session=session_name, timestamp=timestamp,
             regime=str(regime.get("regime", "unknown")),
+            volatility_state=str(regime.get("volatility_state", "unknown")),
+            session_close=session_close,
+            allow_extended_hours=self.include_extended_hours,
         )
         if not decision.approved or decision.proposal is None:
             self.rejections[f"portfolio_coordinator:{decision.reason}"] += 1
@@ -454,6 +649,7 @@ class ReplaySignalsMixin:
             "trailing_stop_pct": sized.get("trailing_stop_pct"),
             "trailing_activation_pct": sized.get("trailing_activation_pct"),
             "signal_at": signal_at,
+            "delay_bars_remaining": int(getattr(self, "execution_delay_bars", 0)),
             "satellite_confirmations": list(signal.get("satellite_confirmations", [])),
         }
         for satellite in signal.get("satellite_confirmations", []):

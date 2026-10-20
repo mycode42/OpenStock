@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+import json
 
 import pytest
 
@@ -14,6 +15,9 @@ from src.algo.strategies.multi_factor import (
     SignalGenerator,
 )
 from src.algo.strategies.multi_factor.features import FactorCalculator
+from src.algo.strategies.multi_factor.learned_weights import (
+    load_live_factor_weights, resolve_walk_forward_weights,
+)
 from src.algo.strategies.registry import validate_parameter_profile
 from src.algo.strategies.regime import rank_strategies
 from src.algo.strategies.runner import (
@@ -23,7 +27,7 @@ from src.algo.strategies.runner import (
 
 def _daily_closes(symbol: str, *, count: int = 140, end: date = date(2026, 10, 2), growth: float = 0.001):
     bars = []
-    day = end - timedelta(days=count * 2)
+    day = end - timedelta(days=count * 7 // 5 + 5)
     close = 100.0
     while len(bars) < count:
         if day.weekday() < 5:
@@ -97,6 +101,84 @@ def test_signal_generator_emits_targets_and_sells_held_names_outside_ranked_univ
     assert by_symbol["OLD"].action == "sell"
     assert by_symbol["CCC"].action == "short"
     assert by_symbol["CCC"].direction == "short"
+
+
+def test_ridge_walk_forward_weights_drive_replay_and_fail_closed_without_snapshot():
+    config = MultiFactorConfig(
+        factor_weight_mode="ridge_walk_forward",
+        top_n=1,
+        min_universe=3,
+        momentum_lookbacks={"momentum_1m": 5},
+        volatility_lookback=10,
+        factor_weights={"momentum_1m": 1},
+    )
+    bars = {
+        "AAA": _daily_closes("AAA", growth=0.01),
+        "BBB": _daily_closes("BBB", growth=0.002),
+        "CCC": _daily_closes("CCC", growth=-0.002),
+    }
+    generator = SignalGenerator(config)
+    signals, diagnostics = generator.generate(
+        bars, symbols=list(bars), as_of=date(2026, 10, 1),
+        session=date(2026, 10, 2),
+        learned_factor_weights={"momentum_1m": 1.0},
+        factor_model_diagnostics={"status": "loaded", "effective_date": "2026-09-30"},
+    )
+    assert diagnostics["factor_weight_source"] == "ridge_walk_forward"
+    assert diagnostics["active_factor_weights"] == {"momentum_1m": 1.0}
+    assert next(signal for signal in signals if signal.ticker == "AAA").action == "buy"
+
+    no_model_signals, no_model_diagnostics = generator.generate(
+        bars, symbols=list(bars), as_of=date(2026, 10, 1), session=date(2026, 10, 2),
+    )
+    assert no_model_signals == []
+    assert no_model_diagnostics["factor_weight_source"] == "unavailable"
+
+
+def test_ridge_weight_timeline_does_not_use_future_or_unpurged_snapshots():
+    timeline = [
+        {
+            "effective_date": "2026-01-10", "training_label_cutoff": "2026-01-09",
+            "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+            "weights": {"momentum_1m": 0.8, "low_volatility": 0.2},
+        },
+        {
+            "effective_date": "2026-02-10", "training_label_cutoff": "2026-02-11",
+            "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+            "weights": {"momentum_1m": 0.1, "low_volatility": 0.9},
+        },
+        {
+            "effective_date": "2026-03-10", "training_label_cutoff": "2026-03-01",
+            "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+            "weights": {"momentum_1m": 0.2, "low_volatility": 0.8},
+        },
+    ]
+    weights, diagnostics = resolve_walk_forward_weights(timeline, as_of=date(2026, 2, 20))
+
+    assert weights == {"momentum_1m": 0.8, "low_volatility": 0.2}
+    assert diagnostics["effective_date"] == "2026-01-10"
+
+
+def test_live_ridge_weights_require_current_logic_and_purged_fit(tmp_path):
+    report_path = tmp_path / "latest.json"
+    report_path.write_text(json.dumps({"factor_model": {
+        "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+        "session_end": "2026-10-19",
+        "current_training_label_cutoff": "2026-09-22",
+        "current_candidate_weights": {"momentum_3m": 0.25, "momentum_6m": 0.75},
+    }}))
+
+    weights, diagnostics = load_live_factor_weights(
+        as_of=date(2026, 10, 20), report_path=report_path,
+    )
+
+    assert weights == {"momentum_3m": 0.25, "momentum_6m": 0.75}
+    assert diagnostics["status"] == "loaded"
+    future_weights, future_diagnostics = load_live_factor_weights(
+        as_of=date(2026, 10, 18), report_path=report_path,
+    )
+    assert future_weights is None
+    assert future_diagnostics["status"] == "unavailable"
 
 
 def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
@@ -189,7 +271,8 @@ def test_generated_trade_proposal_still_passes_through_risk_manager(action):
 
     assert result.approved, result.reason
     assert trade["qty"] * trade["entry_price"] <= 100_000 * min(
-        STRATEGY_CONFIG["max_strategy_position_pct"], risk["max_position_pct"],
+        risk.get("max_strategy_position_pct", STRATEGY_CONFIG["max_strategy_position_pct"]),
+        risk["max_position_pct"],
     )
 
 

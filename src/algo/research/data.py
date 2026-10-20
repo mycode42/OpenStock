@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 import json
 from pathlib import Path
 
+import requests
+
 from .settings import (
     ADJUSTMENT, FEED, INITIAL_HISTORY_DATE, MIN_COVERED_UNIVERSE,
-    RESEARCH_START, RESEARCH_WARMUP_DAYS,
+    RESEARCH_START, RESEARCH_WARMUP_DAYS, FORWARD_TRIAL_MAX_DAYS,
+    SIP_EXTENDED_LOCAL_FEED, ET,
 )
 from .files import _atomic_json
 from src.algo.backtest import _regular_session_bars
@@ -18,6 +21,7 @@ from src.algo.strategies.event_driven import EventCalendar
 from src.algo.strategies.multi_factor.features import aggregate_intraday_bars
 from src.algo.strategies.universe import configured_universe
 from src.market_data import data_tier, regular_feed
+from src.algo.backtest.market_sessions import extended_session_bars
 
 
 def _parse_date(value: str) -> date:
@@ -40,6 +44,84 @@ def _bar_coverage(store: SQLiteBarStore) -> dict[str, dict]:
         if row["feed"] == FEED and row["adjustment"] == ADJUSTMENT and row["timeframe"] == "5Min"
     }
 
+
+def _refresh_forward_session_feed(
+    store: SQLiteBarStore,
+    *,
+    selected_symbols: list[str],
+    end_date: date,
+    remote_feed: str,
+    local_feed: str,
+    session: str,
+    fetch_bars_fn,
+) -> dict:
+    """Backfill one forward-only session feed, then refresh its latest date."""
+    floor = end_date - timedelta(days=FORWARD_TRIAL_MAX_DAYS)
+    coverage = {
+        row["symbol"]: row for row in store.coverage()
+        if row["feed"] == local_feed and row["adjustment"] == ADJUSTMENT
+        and row["timeframe"] == "5Min"
+    }
+    groups: dict[date, list[str]] = defaultdict(list)
+    for symbol in selected_symbols:
+        row = coverage.get(symbol)
+        # Re-fetch the last stored date so a nightly run fills in the rest of
+        # today's extended session and overwrites any partial historical bar.
+        start_date = max(floor, _parse_date(row["last"])) if row else floor
+        if start_date <= end_date:
+            groups[start_date].append(symbol)
+
+    rows_written = 0
+    request_count = 0
+    request_end_date = end_date + timedelta(days=1)
+    request_end = datetime.combine(
+        request_end_date, time.min, tzinfo=ET,
+    ).astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    discarded_non_session_bars = 0
+    for start_date, symbols in sorted(groups.items()):
+        request_start = f"{start_date.isoformat()}T00:00:00Z"
+        try:
+            bars = fetch_bars_fn(
+                symbols, timeframe="5Min", start=request_start, end=request_end,
+                feed=remote_feed, adjustment=ADJUSTMENT, mode="algo",
+            )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if remote_feed == "boats" and status in {400, 403}:
+                return {
+                    "status": "unavailable", "feed": remote_feed,
+                    "local_feed": local_feed, "rows_written": rows_written,
+                    "request_batches": request_count,
+                    "error": f"Alpaca returned HTTP {status} for the BOATS feed",
+                    "symbols_with_existing_data": len(coverage),
+                }
+            raise
+        filtered, outside, invalid = extended_session_bars(bars, session=session)
+        discarded_non_session_bars += outside
+        rows_written += store.write_bars(
+            filtered, feed=local_feed, timeframe="5Min", adjustment=ADJUSTMENT,
+            data_tier="algo_trader_plus", requested_start=request_start,
+            requested_end=request_end,
+        )
+        request_count += 1
+        if invalid:
+            raise ValueError(
+                f"{invalid} invalid {remote_feed} bars were returned for forward replay"
+            )
+    updated_coverage = {
+        row["symbol"] for row in store.coverage()
+        if row["feed"] == local_feed and row["adjustment"] == ADJUSTMENT
+        and row["timeframe"] == "5Min"
+    }
+    return {
+        "status": "available" if updated_coverage else "no_bars",
+        "feed": remote_feed, "local_feed": local_feed,
+        "rows_written": rows_written, "request_batches": request_count,
+        "symbols_with_data": len(updated_coverage),
+        "discarded_non_session_bars": discarded_non_session_bars,
+        "history_floor": floor.isoformat(),
+    }
+
 def _refresh_incremental(
     store: SQLiteBarStore,
     *,
@@ -49,7 +131,7 @@ def _refresh_incremental(
     regular_feed_fn=None,
     fetch_bars_fn=None,
 ) -> dict:
-    """Fetch missing recent Plus SIP bars and the SPY daily session index."""
+    """Fetch regular SIP history plus recent extended/overnight trial bars."""
     data_tier_fn = data_tier_fn or data_tier
     regular_feed_fn = regular_feed_fn or regular_feed
     fetch_bars_fn = fetch_bars_fn or fetch_alpaca_bars
@@ -58,12 +140,6 @@ def _refresh_incremental(
     coverage = _bar_coverage(store)
     known = [symbol for symbol in selected_symbols if symbol in coverage]
     missing_history = sorted(set(selected_symbols) - set(known))
-    if len(known) < MIN_COVERED_UNIVERSE:
-        raise ValueError(
-            f"Only {len(known)} selected tickers have stored split-adjusted SIP history; "
-            f"at least {MIN_COVERED_UNIVERSE} are required"
-        )
-
     groups: dict[date, list[str]] = defaultdict(list)
     for symbol in selected_symbols:
         last_date = _parse_date(coverage[symbol]["last"]) if symbol in coverage else INITIAL_HISTORY_DATE - timedelta(days=1)
@@ -87,13 +163,42 @@ def _refresh_incremental(
         )
         requests_made += 1
 
+    refreshed_coverage = _bar_coverage(store)
+    covered_symbols = [symbol for symbol in selected_symbols if symbol in refreshed_coverage]
+    if len(covered_symbols) < MIN_COVERED_UNIVERSE:
+        raise ValueError(
+            f"Only {len(covered_symbols)} selected research symbols have stored split-adjusted SIP history "
+            f"after refresh; at least {MIN_COVERED_UNIVERSE} are required"
+        )
+
+    from src.algo.strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
+
+    forward_trial_symbols = [
+        symbol for symbol in selected_symbols
+        if symbol not in NON_EQUITY_CONTEXT_SYMBOLS
+    ]
+    sip_extended = _refresh_forward_session_feed(
+        store, selected_symbols=forward_trial_symbols, end_date=end_date,
+        remote_feed=FEED, local_feed=SIP_EXTENDED_LOCAL_FEED,
+        session="extended", fetch_bars_fn=fetch_bars_fn,
+    )
+    boats = _refresh_forward_session_feed(
+        store, selected_symbols=forward_trial_symbols, end_date=end_date,
+        remote_feed="boats", local_feed="boats", session="overnight",
+        fetch_bars_fn=fetch_bars_fn,
+    )
+
     spy_daily = next((row for row in store.coverage() if (
         row["feed"] == FEED and row["adjustment"] == ADJUSTMENT
         and row["timeframe"] == "1Day" and row["symbol"] == "SPY"
     )), None)
     daily_rows_written = 0
     if spy_daily is None:
-        daily_start = (RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)).isoformat()
+        from src.algo.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
+
+        daily_start = (
+            RESEARCH_START - timedelta(days=ALGO_REGIME_WARMUP_CALENDAR_DAYS)
+        ).isoformat()
     else:
         last_daily = _parse_date(spy_daily["last"])
         daily_start = (last_daily + timedelta(days=1)).isoformat()
@@ -115,6 +220,10 @@ def _refresh_incremental(
         "missing_selected_history": missing_history,
         "request_batches": requests_made,
         "intraday_rows_written": rows_written,
+        "forward_session_data": {
+            "extended_hours": sip_extended,
+            "overnight": boats,
+        },
         "spy_daily_rows_written": daily_rows_written,
     }
 

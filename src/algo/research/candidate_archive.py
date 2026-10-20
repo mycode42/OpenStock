@@ -17,6 +17,16 @@ ARCHIVE_SCHEMA = "swarm_algo_candidate_archive_v1"
 MAX_CANDIDATES_PER_STRATEGY = 64
 MAX_DATA_VERSIONS_PER_STRATEGY = 32
 
+STRATEGY_LOGIC_VERSIONS = {
+    "mean_reversion": "intraday-mr-2",
+    "swing_mean_reversion": "swing-mr-2",
+    "trend_following": "swing-trend-2",
+    "swing_trend_following": "swing-trend-2",
+    "momentum": "swing-momentum-2",
+    "swing_momentum": "swing-momentum-2",
+    "multi_factor": "multi-factor-rank-4-ridge-walk-forward",
+}
+
 
 def _archive_path(root: str | Path) -> Path:
     path = Path(root)
@@ -54,9 +64,58 @@ def _read(path: Path) -> dict:
     return value
 
 
-def candidate_id(strategy: str, parameters: dict, regime: str | None = None) -> str:
+def model_family(strategy: str, parameters: dict) -> str:
+    """Stable family label used to group controlled research variants."""
+    values = parameters if isinstance(parameters, dict) else {}
+    if strategy == "mean_reversion":
+        return ":".join((
+            "intraday_mean_reversion", str(values.get("signal_model", "bollinger")),
+            str(values.get("regime_filter", "none")), str(values.get("threshold_mode", "fixed")),
+        ))
+    if strategy == "swing_mean_reversion":
+        return ":".join((
+            "swing_mean_reversion", str(values.get("regime_filter", "none")),
+            str(values.get("entry_distance_mode", "fixed_pct")),
+            str(values.get("lookback_mode", "fixed")),
+        ))
+    if strategy in {"trend_following", "swing_trend_following"}:
+        return f"swing_trend_following:{values.get('average_type', 'sma')}:{values.get('stop_mode', 'fixed_pct')}"
+    if strategy in {"momentum", "swing_momentum"}:
+        lookbacks = values.get("lookbacks") or (5, 10, 20)
+        horizons = "-".join(str(value) for value in lookbacks)
+        return f"swing_momentum:{values.get('momentum_mode', 'cross_sectional')}:{horizons}"
+    if strategy == "multi_factor":
+        weight_mode = str(values.get("factor_weight_mode", "static"))
+        active_factors = "+".join(sorted(
+            name for name, weight in (values.get("factor_weights") or {}).items()
+            if isinstance(weight, (int, float)) and weight > 0
+        )) or "none"
+        if weight_mode == "ridge_walk_forward":
+            active_factors = "research_model_factors"
+        timing = "regime_timed" if values.get("regime_factor_weights") else "static"
+        return ":".join((
+            "multi_factor", weight_mode, "linear_composite", active_factors,
+            str(values.get("factor_neutralization", "none")), timing,
+            str(values.get("portfolio_weight_method", "equal")),
+        ))
+    return strategy
+
+
+def logic_version(strategy: str) -> str:
+    return STRATEGY_LOGIC_VERSIONS.get(strategy, "1")
+
+
+def candidate_id(
+    strategy: str, parameters: dict, regime: str | None = None, *,
+    family: str | None = None, version: str | None = None,
+) -> str:
     payload = json.dumps(
-        {"strategy": strategy, "regime": regime, "parameters": parameters},
+        {
+            "strategy": strategy, "regime": regime,
+            "model_family": family or model_family(strategy, parameters),
+            "logic_version": version or logic_version(strategy),
+            "parameters": parameters,
+        },
         sort_keys=True, separators=(",", ":"), default=str,
     )
     return hashlib.sha256(payload.encode()).hexdigest()[:20]
@@ -170,6 +229,11 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                     "eligible": bool(item.get("eligible")),
                     "regime_metrics": item.get("regime_metrics") or {},
                     "search_iteration": item.get("search_iteration"),
+                    "model_family": item.get("model_family") or model_family(strategy, parameters),
+                    "logic_version": item.get("logic_version") or logic_version(strategy),
+                    "parent_candidate_id": item.get("parent_candidate_id"),
+                    "data_version": data_version,
+                    "cost_model_version": item.get("cost_model_version"),
                 })
                 existing["discovery_observations"] = int(existing.get("discovery_observations", 0)) + 1
                 rows[key] = existing

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from .config import (
     BAR_MINUTES, DAILY_WARMUP_DAYS, ET, FACTOR_WARMUP_DAYS, MIN_REGIME_DAILY_BARS,
-    RESEARCH_CONTROL_KEYS, STRATEGY_NAMES, multi_factor_warmup_days,
+    MOMENTUM_WARMUP_DAYS, RESEARCH_CONTROL_KEYS, STRATEGY_NAMES,
+    multi_factor_warmup_days, strategy_warmup_days,
     validate_research_controls, validate_strategy_filter,
 )
 from .shared import (
@@ -34,6 +35,9 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
         research_runtime_overrides=None,
         preaggregated_daily_bars=None,
         precomputed_timeline=None,
+        include_extended_hours=False,
+        regime_context_bars=None, regime_macro_series=None, regime_config=None,
+        execution_delay_bars=0, factor_weight_timeline=None,
     ):
         super().__init__(
             symbols=symbols, intraday_bars=intraday_bars, spy_daily_bars=spy_daily_bars,
@@ -50,6 +54,12 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
             research_runtime_overrides=research_runtime_overrides,
             preaggregated_daily_bars=preaggregated_daily_bars,
             precomputed_timeline=precomputed_timeline,
+            include_extended_hours=include_extended_hours,
+            regime_context_bars=regime_context_bars,
+            regime_macro_series=regime_macro_series,
+            regime_config=regime_config,
+            execution_delay_bars=execution_delay_bars,
+            factor_weight_timeline=factor_weight_timeline,
             _signal_evaluator=lambda *args, **kwargs: evaluate_rule_signal(*args, **kwargs),
             _trade_validator=lambda **kwargs: validate_trade(**kwargs),
             _regime_ranker=lambda *args, **kwargs: rank_strategies(*args, **kwargs),

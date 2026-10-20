@@ -36,6 +36,7 @@ class PortfolioCoordinatorConfig:
     allow_opposite_netting: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_opposite_netting"]
     allow_intraday_overnight: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_intraday_overnight"]
     regime_throttle_enabled: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_throttle_enabled"]
+    regime_gross_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_gross_caps"]))
     sector_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["sector_caps"]))
     intraday_strategy_ids: tuple[str, ...] = tuple(INTRADAY_STRATEGIES)
     swing_strategy_ids: tuple[str, ...] = tuple(SWING_STRATEGIES)
@@ -83,6 +84,13 @@ class PortfolioCoordinatorConfig:
             for value in self.sector_caps.values()
         ):
             raise ValueError("sector caps must be finite fractions in (0, 1]")
+        if any(
+            not isinstance(key, str) or not key
+            or isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not 0 < value <= self.max_gross_pct
+            for key, value in self.regime_gross_caps.items()
+        ):
+            raise ValueError("regime gross caps must be named finite fractions within the portfolio ceiling")
         strategy_sets = (
             self.intraday_strategy_ids, self.swing_strategy_ids,
             self.swing_core_strategy_ids, self.swing_trend_strategy_ids,
@@ -143,13 +151,14 @@ def choose_priority(proposals: list[dict]) -> tuple[dict, list[dict]]:
 
 def throttle_signal(
     signal: dict, regime: str, config: PortfolioCoordinatorConfig, *,
-    swing_trend_strategy_ids=None,
+    swing_trend_strategy_ids=None, risk_multiplier: float = 1.0,
 ) -> tuple[dict, str | None]:
-    """Apply the two requested half-size regime throttles without changing signals."""
+    """Combine the legacy throttle and regime risk budget on entry sizing."""
     if not config.regime_throttle_enabled:
         return signal, None
     strategy = str(signal.get("strategy", ""))
     strong_trend = regime in {"trending_up", "trending_down"}
+    reason = None
     if strategy == "swing_mean_reversion" and strong_trend:
         reason = f"regime throttle: cyclical mean reversion halved in {regime}"
     elif strategy in (
@@ -157,11 +166,18 @@ def throttle_signal(
         if swing_trend_strategy_ids is None else swing_trend_strategy_ids
     ) and regime == "range_bound":
         reason = "regime throttle: swing trend halved in range_bound"
-    else:
+    if risk_multiplier == 1.0 and reason is None:
         return signal, None
+    if not math.isfinite(float(risk_multiplier)) or not 0 < float(risk_multiplier) <= 1.5:
+        raise ValueError("regime risk multiplier must be in (0, 1.5]")
     adjusted = dict(signal)
-    adjusted["risk_multiplier"] = float(adjusted.get("risk_multiplier", 1.0)) * 0.5
-    return adjusted, reason
+    legacy_scale = 0.5 if reason is not None else 1.0
+    adjusted["risk_multiplier"] = (
+        float(adjusted.get("risk_multiplier", 1.0)) * legacy_scale * float(risk_multiplier)
+    )
+    return adjusted, reason or (
+        f"regime risk budget scaled to {risk_multiplier:.2f}" if risk_multiplier < 1 else None
+    )
 
 
 class CoordinatorBook:
@@ -232,8 +248,10 @@ class CoordinatorBook:
         session: str | None,
         timestamp: datetime,
         regime: str = "unknown",
+        volatility_state: str = "unknown",
         session_open: datetime | None = None,
         session_close: datetime | None = None,
+        allow_extended_hours: bool = False,
     ) -> CoordinationDecision:
         """Approve or reduce an already-sized entry. Exits pass through unchanged."""
         action = str(proposal.get("action", "")).lower()
@@ -256,10 +274,17 @@ class CoordinatorBook:
 
         local = timestamp.astimezone(ET) if timestamp.tzinfo else timestamp.replace(tzinfo=ET)
         session_name = session or "regular"
-        if session_name == "overnight" and not get_algo_runtime_settings().overnight_entries_enabled:
+        if (
+            session_name == "overnight"
+            and not get_algo_runtime_settings().overnight_entries_enabled
+            and not allow_extended_hours
+        ):
             return self._reject(proposal, "overnight entries are disabled by configuration")
         is_intraday = strategy in self.config.intraday_strategy_ids
-        if is_intraday and session_name != "regular" and not self.config.allow_intraday_overnight:
+        if (
+            is_intraday and session_name != "regular"
+            and not self.config.allow_intraday_overnight and not allow_extended_hours
+        ):
             return self._reject(proposal, "intraday strategies are regular-session only")
         if is_intraday:
             close_at = session_close or local.replace(hour=16, minute=0, second=0, microsecond=0)
@@ -278,6 +303,11 @@ class CoordinatorBook:
 
         entry_notional = qty * price
         direction = 1 if action == "buy" else -1
+        regime_cap_key = f"{regime}:{volatility_state}"
+        effective_gross_pct = float(self.config.regime_gross_caps.get(
+            regime_cap_key,
+            self.config.regime_gross_caps.get(regime, self.config.max_gross_pct),
+        ))
         current = self.name_signed.get(ticker, 0.0)
         opposing_existing = bool(current and current * direction < 0)
         if opposing_existing and not self.config.allow_opposite_netting:
@@ -301,8 +331,8 @@ class CoordinatorBook:
         group = self._group(ticker)
         limits = [
             self.equity * self.config.max_name_pct - current_name_same_direction + offset,
-            self.equity * self.config.max_gross_pct - gross + offset,
-            self.equity * self.config.max_net_long_pct - max(0.0, sum(self.name_signed.values())) if direction > 0 else math.inf,
+            self.equity * effective_gross_pct - gross + offset,
+            self.equity * min(self.config.max_net_long_pct, effective_gross_pct) - max(0.0, sum(self.name_signed.values())) if direction > 0 else math.inf,
             self.equity * self.config.max_net_short_pct + min(0.0, sum(self.name_signed.values())) if direction < 0 else math.inf,
             self.equity * self.config.sector_caps.get(group, 0.25) - self.group_gross.get(group, 0.0) + offset,
         ]
@@ -313,6 +343,8 @@ class CoordinatorBook:
 
         approved = dict(proposal)
         approved["qty"] = allowed_qty
+        approved["coordinator_regime_gross_cap_pct"] = effective_gross_pct
+        approved["coordinator_regime_volatility_state"] = volatility_state
         if allowed_qty < qty:
             LOG.info("Portfolio coordinator reduced %s %s %s quantity %d -> %d",
                      strategy, action, ticker, qty, allowed_qty)

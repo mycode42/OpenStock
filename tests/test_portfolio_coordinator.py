@@ -50,7 +50,7 @@ def test_blocks_second_strategy_on_an_already_owned_name():
     assert result.reason == "another strategy already owns this ticker"
 
 
-def test_same_strategy_add_is_shrunk_to_the_eight_percent_name_cap():
+def test_same_strategy_add_is_shrunk_to_the_ten_percent_name_cap():
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(
         equity=100_000,
@@ -63,7 +63,7 @@ def test_same_strategy_add_is_shrunk_to_the_eight_percent_name_cap():
         regime="trending_up",
     )
     assert result.approved
-    assert result.proposal["qty"] == 10
+    assert result.proposal["qty"] == 30
     assert result.reduced_from_qty == 100
 
 
@@ -161,6 +161,12 @@ def test_swing_opening_delay_and_regime_throttle():
     )
     assert adjusted["risk_multiplier"] == 0.4
     assert "halved" in note
+    sized, note = throttle_signal(
+        {**_proposal(strategy="mean_reversion"), "risk_multiplier": 0.8},
+        "volatile", coordinator.config, risk_multiplier=0.25,
+    )
+    assert sized["risk_multiplier"] == 0.2
+    assert "risk budget" in note
 
 
 

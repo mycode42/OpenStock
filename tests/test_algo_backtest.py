@@ -123,6 +123,10 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
         symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
         data_adjustment="raw", initial_capital=100_000, slippage_bps=5,
+        regime_config={
+            "engine": "legacy", "feature_set": "legacy",
+            "strategy_policy": "legacy", "include_models": False,
+        },
     )
     replay._regime_ranker = lambda *args, **kwargs: {
         "regime": "range_bound", "active": ["mean_reversion"], "satellites": [],
@@ -177,6 +181,10 @@ def test_portfolio_replay_models_short_entry_cover_and_entry_relative_return(mon
         symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
         data_adjustment="raw", initial_capital=100_000, slippage_bps=5,
+        regime_config={
+            "engine": "legacy", "feature_set": "legacy",
+            "strategy_policy": "legacy", "include_models": False,
+        },
     )
 
     report = replay.run()

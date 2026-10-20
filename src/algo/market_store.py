@@ -75,6 +75,16 @@ class SQLiteBarStore:
                     rows_written INTEGER NOT NULL,
                     fetched_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS macro_observation (
+                    provider TEXT NOT NULL,
+                    series_id TEXT NOT NULL,
+                    observation_date TEXT NOT NULL,
+                    value REAL NOT NULL,
+                    fetched_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, series_id, observation_date)
+                );
+                CREATE INDEX IF NOT EXISTS macro_observation_lookup
+                    ON macro_observation (provider, series_id, observation_date);
             """)
             columns = {row[1] for row in connection.execute("PRAGMA table_info(market_bar)")}
             if "ingested_at" not in columns:
@@ -193,6 +203,61 @@ class SQLiteBarStore:
              "symbol": symbol, "rows": count, "first": first, "last": last}
             for feed, adjustment, timeframe, symbol, count, first, last in rows
         ]
+
+    def write_macro_observations(self, observations: dict[str, dict[str, float]], *, provider: str) -> int:
+        """Upsert dated macro observations without rewriting market-bar history."""
+        now = datetime.now(timezone.utc).isoformat()
+        rows = []
+        for raw_series, values in observations.items():
+            series = str(raw_series).strip().upper()
+            if not series:
+                raise ValueError("Macro observation series ID cannot be empty")
+            for raw_day, raw_value in values.items():
+                day = datetime.fromisoformat(str(raw_day)[:10]).date().isoformat()
+                value = _finite_number(raw_value, f"{series} value")
+                rows.append((provider, series, day, value, now))
+        with closing(self._connect()) as connection, connection:
+            connection.executemany("""
+                INSERT INTO macro_observation (provider, series_id, observation_date, value, fetched_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(provider, series_id, observation_date) DO UPDATE SET
+                    value=excluded.value, fetched_at=excluded.fetched_at
+            """, rows)
+        return len(rows)
+
+    def macro_series(
+        self, series_ids: list[str] | None = None, *, provider: str = "fred",
+        start: str | None = None, end: str | None = None,
+    ) -> dict[str, list[dict]]:
+        """Read cached macro data in date order for point-in-time joins."""
+        clauses = ["provider=?"]
+        values: list[object] = [provider]
+        if series_ids:
+            clauses.append("series_id IN (%s)" % ",".join("?" for _ in series_ids))
+            values.extend(str(series).upper() for series in series_ids)
+        if start:
+            clauses.append("observation_date>=?")
+            values.append(str(start)[:10])
+        if end:
+            clauses.append("observation_date<=?")
+            values.append(str(end)[:10])
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT series_id, observation_date, value FROM macro_observation WHERE "
+                + " AND ".join(clauses) + " ORDER BY series_id, observation_date",
+                values,
+            ).fetchall()
+        output: dict[str, list[dict]] = {}
+        for series, day, value in rows:
+            output.setdefault(series, []).append({"date": day, "value": value})
+        return output
+
+    def latest_macro_fetch(self, *, provider: str = "fred") -> str | None:
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT MAX(fetched_at) FROM macro_observation WHERE provider=?", (provider,),
+            ).fetchone()
+        return row[0] if row and row[0] else None
 
 
 def fetch_alpaca_bars(

@@ -12,22 +12,25 @@ from types import SimpleNamespace
 
 from src.algo.cpu import available_cpu_count
 
-from .artifact_cache import read_json
+from .artifact_cache import read_json, stable_hash
 from .files import _atomic_json
 from .live_manifest import live_configuration_manifest
 from .candidate_archive import record_verification, reserve_search_seed
 from .settings import (
+    ADAPTIVE_MINIMUM_FOLDS, ADAPTIVE_PURGE_SESSIONS,
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
     ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, ADJUSTMENT, CORE_RESEARCH_CONTROLS, ET, FEED,
+    MINIMUM_POSITIVE_OOS_FOLD_FRACTION, ROBUSTNESS_BOOTSTRAP_ITERATIONS,
+    ROBUSTNESS_COST_MULTIPLIERS,
     MULTI_FACTOR_MIN_UNIVERSE_VALUES,
     MAX_ADAPTIVE_FOLD_WORKERS_PER_STRATEGY, RESEARCHABLE_STRATEGIES,
     STRATEGY_FLAVORS,
 )
 
-ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v10-novelty-first-search-2026"
-ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v8-regime-archive-2024"
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v15-ridge-weight-replay-2026"
+ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v12-ridge-weight-replay-2026"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
     "spread_bps": 3.0,
@@ -57,7 +60,7 @@ def _adaptive_window_options(strategy: str) -> list[int]:
 
 def run_adaptive_discoveries(
     *, database: str, symbols: list[str], latest_end: date, data_version: str, output_dir: Path,
-    workers: int,
+    workers: int, factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
     """Run a new seeded search for every strategy on each research invocation."""
     statuses = {}
@@ -70,7 +73,7 @@ def run_adaptive_discoveries(
         seed, sequence = reserve_search_seed(archive_dir, strategy, ADAPTIVE_PIPELINE_VERSION)
         jobs.append((
             strategy, database, symbols, latest_end, data_version,
-            output_dir, options, archive_dir, seed, sequence,
+            output_dir, options, archive_dir, seed, sequence, factor_weight_timeline or [],
         ))
 
     if jobs:
@@ -106,7 +109,7 @@ def run_adaptive_discoveries(
 
 def _run_adaptive_discovery_job(payload: tuple) -> dict:
     (strategy, database, symbols, latest_end, data_version, output_dir, options,
-     archive_dir, seed, sequence, candidate_workers) = payload
+     archive_dir, seed, sequence, factor_weight_timeline, candidate_workers) = payload
     from .adaptive import run_window_ladder_discovery
 
     discovery_args = SimpleNamespace(
@@ -122,6 +125,7 @@ def _run_adaptive_discovery_job(payload: tuple) -> dict:
         borrow_availability=None, start=None, end=latest_end.isoformat(),
         window_days=options[len(options) // 2], output_dir=str(output_dir),
         candidate_workers=candidate_workers,
+        factor_weight_timeline=factor_weight_timeline,
     )
     report = run_window_ladder_discovery(
         discovery_args, options, pipeline_version=ADAPTIVE_PIPELINE_VERSION,
@@ -170,8 +174,11 @@ def _discovery_status(detail: dict, path: Path, status: str) -> dict:
 def run_adaptive_verifications(
     *, database: str, symbols: list[str], start: date, end: date,
     data_version: str, output_dir: Path, workers: int, force: bool,
+    factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
     """Verify the short-window fitting policy on recent chronological folds."""
+    factor_weight_timeline = list(factor_weight_timeline or [])
+    factor_weight_timeline_sha256 = stable_hash(factor_weight_timeline)
     statuses = {}
     jobs = []
     total = len(RESEARCHABLE_STRATEGIES)
@@ -184,6 +191,7 @@ def run_adaptive_verifications(
         if not force and _adaptive_verification_is_reusable(
             prior, strategy=strategy, database=database, symbols=symbols,
             start=start, end=end, options=options, data_version=data_version,
+            factor_weight_timeline_sha256=factor_weight_timeline_sha256,
         ) and cached_summary:
             statuses[strategy] = {
                 "status": "reused", "strategy": strategy,
@@ -196,7 +204,7 @@ def run_adaptive_verifications(
         else:
             jobs.append((
                 strategy, database, symbols, start, end, data_version,
-                output_dir, options,
+                output_dir, options, factor_weight_timeline,
             ))
 
     if jobs:
@@ -380,6 +388,7 @@ def _write_adaptive_coordinator_artifact(detail: dict, summary: dict, output_dir
 def _adaptive_verification_is_reusable(
     detail: dict | None, *, strategy: str, database: str, symbols: list[str],
     start: date, end: date, options: list[int], data_version: str,
+    factor_weight_timeline_sha256: str,
 ) -> bool:
     if not detail:
         return False
@@ -394,12 +403,18 @@ def _adaptive_verification_is_reusable(
         and data.get("symbols") == symbols
         and data.get("database") == str(Path(database).resolve())
         and data.get("data_version") == data_version
+        and detail.get("factor_weight_timeline_sha256") == factor_weight_timeline_sha256
         and data.get("feed") == FEED
         and data.get("adjustment") == ADJUSTMENT
         and config.get("train_days") == max(max(values) for values in ADAPTIVE_WINDOW_DAYS.values())
         and config.get("train_window_options") == options
         and config.get("test_days") == ADAPTIVE_VERIFICATION_TEST_DAYS
         and config.get("step_days") == ADAPTIVE_VERIFICATION_STEP_DAYS
+        and config.get("minimum_folds") == ADAPTIVE_MINIMUM_FOLDS
+        and config.get("purge_sessions") == ADAPTIVE_PURGE_SESSIONS
+        and config.get("minimum_positive_fold_fraction") == MINIMUM_POSITIVE_OOS_FOLD_FRACTION
+        and config.get("cost_sensitivity_multipliers") == list(ROBUSTNESS_COST_MULTIPLIERS)
+        and config.get("bootstrap_iterations") == ROBUSTNESS_BOOTSTRAP_ITERATIONS
         and search.get("method") == "bayes"
         and search.get("candidates_per_fold") == ADAPTIVE_VERIFICATION_CANDIDATES
         and all(
@@ -415,7 +430,10 @@ def _adaptive_verification_is_reusable(
 
 
 def _run_adaptive_verification_job(payload: tuple) -> dict:
-    strategy, database, symbols, start, end, data_version, output_dir, options, fold_workers = payload
+    (
+        strategy, database, symbols, start, end, data_version, output_dir,
+        options, factor_weight_timeline, fold_workers,
+    ) = payload
     from .adaptive import run_adaptive_walk_forward
 
     walk_args = SimpleNamespace(
@@ -431,10 +449,15 @@ def _run_adaptive_verification_job(payload: tuple) -> dict:
         train_window_options=options,
         test_days=ADAPTIVE_VERIFICATION_TEST_DAYS,
         step_days=ADAPTIVE_VERIFICATION_STEP_DAYS,
-        workers=fold_workers, minimum_folds=3, minimum_oos_sharpe=0.0,
+        workers=fold_workers, minimum_folds=ADAPTIVE_MINIMUM_FOLDS, minimum_oos_sharpe=0.0,
         maximum_average_decay=0.35, output_dir=str(output_dir),
+        purge_sessions=ADAPTIVE_PURGE_SESSIONS,
+        minimum_positive_fold_fraction=MINIMUM_POSITIVE_OOS_FOLD_FRACTION,
+        cost_sensitivity_multipliers=list(ROBUSTNESS_COST_MULTIPLIERS),
+        bootstrap_iterations=ROBUSTNESS_BOOTSTRAP_ITERATIONS,
         adaptive_policy_version=ADAPTIVE_VERIFICATION_VERSION,
         data_version=data_version,
+        factor_weight_timeline=factor_weight_timeline,
     )
     report = run_adaptive_walk_forward(walk_args)
     detail, _ = read_json(report["latest_detail_artifact"])

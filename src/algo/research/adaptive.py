@@ -26,7 +26,11 @@ from .adaptive_search import (
 from .adaptive_discovery import run_discovery as _run_discovery
 from .adaptive_discovery import run_window_ladder_discovery as _run_window_ladder_discovery
 from .adaptive_verification import (_parameter_stability, _run_adaptive_fold, _stitch, run_adaptive_walk_forward, walk_forward_windows)
-from .settings import ADJUSTMENT, DEFAULT_OUTPUT_DIR
+from .settings import (
+    ADJUSTMENT, ADAPTIVE_MINIMUM_FOLDS, ADAPTIVE_PURGE_SESSIONS, DEFAULT_OUTPUT_DIR,
+    MINIMUM_POSITIVE_OOS_FOLD_FRACTION, ROBUSTNESS_BOOTSTRAP_ITERATIONS,
+    ROBUSTNESS_COST_MULTIPLIERS,
+)
 
 
 def _fit_window_ladder(*args, **kwargs):
@@ -76,9 +80,21 @@ def add_cli_commands(commands) -> None:
     verification.add_argument("--step-days", type=int, default=20,
                               help="advance between folds; must be at least test-days")
     verification.add_argument("--workers", type=int, default=min(8, available_cpu_count()))
-    verification.add_argument("--minimum-folds", type=int, default=3)
+    verification.add_argument("--minimum-folds", type=int, default=ADAPTIVE_MINIMUM_FOLDS)
     verification.add_argument("--minimum-oos-sharpe", type=float, default=0.0)
     verification.add_argument("--maximum-average-decay", type=float, default=0.35)
+    verification.add_argument("--purge-sessions", type=int, default=ADAPTIVE_PURGE_SESSIONS)
+    verification.add_argument(
+        "--minimum-positive-fold-fraction", type=float,
+        default=MINIMUM_POSITIVE_OOS_FOLD_FRACTION,
+    )
+    verification.add_argument(
+        "--cost-sensitivity-multipliers", type=float, nargs="+",
+        default=list(ROBUSTNESS_COST_MULTIPLIERS),
+    )
+    verification.add_argument(
+        "--bootstrap-iterations", type=int, default=ROBUSTNESS_BOOTSTRAP_ITERATIONS,
+    )
     verification.set_defaults(handler=run_adaptive_walk_forward)
 
 

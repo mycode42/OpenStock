@@ -11,11 +11,14 @@ from pathlib import Path
 
 import requests
 
-from .config import DAILY_WARMUP_DAYS, ET
+from .config import REGIME_WARMUP_DAYS, ET
 from .config import multi_factor_warmup_days, validate_research_controls, validate_strategy_filter
 from src.algo.market_store import SQLiteBarStore, fetch_alpaca_bars
 from src.algo.strategies.event_driven import EventCalendar
 from src.algo.strategies.registry import validate_parameter_profile
+from src.algo.config import ALGO_PORTFOLIO_UNIVERSE
+from src.algo.config import ALGO_REGIME_CONFIG
+from src.algo.regime_macro import load_fred_regime_series
 from src.market_data import data_tier, regular_feed
 
 
@@ -118,11 +121,17 @@ def fetch_dataset(args) -> dict:
     needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "event_driven" in selected_strategies
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     warmup_days = multi_factor_warmup_days(_read_profile(getattr(args, "profile", None))) if needs_factor_warmup else 0
-    data_start = start - timedelta(days=warmup_days) if needs_factor_warmup else start
+    context_symbols = list(dict.fromkeys(
+        [ticker for bucket in ALGO_PORTFOLIO_UNIVERSE.values() for ticker in bucket["tickers"]]
+        + ["HYG", "LQD"]
+    ))
+    all_symbols = list(dict.fromkeys(symbols + context_symbols))
+    regime_warmup_days = max(REGIME_WARMUP_DAYS, warmup_days)
+    data_start = start - timedelta(days=regime_warmup_days)
     request_start = f"{data_start.isoformat()}T00:00:00Z"
     request_end = f"{end.isoformat()}T23:59:59Z"
     intraday = fetch_alpaca_bars(
-        symbols, timeframe="5Min", start=request_start, end=request_end,
+        all_symbols, timeframe="5Min", start=request_start, end=request_end,
         feed=feed, adjustment=adjustment,
     )
     intraday, outside_session_bars, invalid_ohlc_bars = _regular_session_bars(intraday)
@@ -130,7 +139,7 @@ def fetch_dataset(args) -> dict:
         intraday, feed=feed, timeframe="5Min", adjustment=adjustment,
         data_tier=tier, requested_start=request_start, requested_end=request_end,
     )
-    daily_start = start - timedelta(days=DAILY_WARMUP_DAYS)
+    daily_start = start - timedelta(days=REGIME_WARMUP_DAYS)
     daily_from = f"{daily_start.isoformat()}T00:00:00Z"
     daily = fetch_alpaca_bars(
         ["SPY"], timeframe="1Day", start=daily_from, end=request_end,
@@ -144,6 +153,8 @@ def fetch_dataset(args) -> dict:
         "database": str(Path(args.db).resolve()), "data_tier": tier, "feed": feed,
         "adjustment": adjustment, "intraday_rows": intraday_rows,
         "intraday_warmup_days": warmup_days,
+        "regime_context_warmup_days": regime_warmup_days,
+        "regime_context_symbols": context_symbols,
         "discarded_outside_session_bars": outside_session_bars,
         "discarded_invalid_ohlc_bars": invalid_ohlc_bars,
         "spy_daily_rows": daily_rows, "symbols": symbols,
@@ -161,12 +172,18 @@ def run_backtest(args) -> dict:
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     profile = _read_profile(args.profile)
     warmup_days = multi_factor_warmup_days(profile) if needs_factor_warmup else 0
-    data_start = (date.fromisoformat(args.start) - timedelta(days=warmup_days)).isoformat() if needs_factor_warmup else args.start
+    context_symbols = list(dict.fromkeys(
+        [ticker for bucket in ALGO_PORTFOLIO_UNIVERSE.values() for ticker in bucket["tickers"]]
+        + ["HYG", "LQD"]
+    ))
+    all_symbols = list(dict.fromkeys(symbols + context_symbols))
+    regime_warmup_days = max(REGIME_WARMUP_DAYS, warmup_days)
+    data_start = (date.fromisoformat(args.start) - timedelta(days=regime_warmup_days)).isoformat()
     intraday = store.bars(
-        symbols, feed=feed, timeframe="5Min", start=data_start,
+        all_symbols, feed=feed, timeframe="5Min", start=data_start,
         end=args.end, adjustment=adjustment,
     )
-    daily_start = (date.fromisoformat(args.start) - timedelta(days=DAILY_WARMUP_DAYS)).isoformat()
+    daily_start = (date.fromisoformat(args.start) - timedelta(days=REGIME_WARMUP_DAYS)).isoformat()
     daily = store.bars(
         ["SPY"], feed=feed, timeframe="1Day", start=daily_start,
         end=args.end, adjustment=adjustment,
@@ -174,6 +191,7 @@ def run_backtest(args) -> dict:
     missing = [ticker for ticker in symbols if not intraday.get(ticker)]
     if missing:
         raise ValueError(f"No stored 5-minute {feed} bars for: {', '.join(missing)}")
+    macro_series, macro_diagnostics = load_fred_regime_series(store, refresh=True)
     replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=daily,
         start=args.start, end=args.end, feed=feed,
@@ -187,11 +205,16 @@ def run_backtest(args) -> dict:
         strategies=selected_strategies,
         research_controls=_read_research_controls(args),
         event_calendar=(EventCalendar.from_csv(args.event_calendar) if getattr(args, "event_calendar", None) else None),
+        regime_macro_series=macro_series,
+        regime_config={**ALGO_REGIME_CONFIG, "macro_data_status": macro_diagnostics.get("status")},
     )
     report = replay.run()
     report["data_tier_at_run"] = data_tier()
     report["database"] = str(Path(args.db).resolve())
     report["multi_factor_warmup_days"] = warmup_days
+    report["regime_context_warmup_days"] = regime_warmup_days
+    report["regime_context_symbols"] = context_symbols
+    report["regime_macro_data"] = macro_diagnostics
     if args.output:
         output = Path(args.output)
         output.parent.mkdir(parents=True, exist_ok=True)

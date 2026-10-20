@@ -6,11 +6,72 @@ from collections import defaultdict
 from datetime import datetime
 import math
 import statistics
+from zoneinfo import ZoneInfo
 
 from .config import STRATEGY_NAMES
 
 
 class ReplayReportingMixin:
+    def _regime_report(self) -> dict:
+        history = list(getattr(self, "regime_history", []))
+        if not history:
+            return {"config": dict(getattr(self, "regime_config", {})), "status": "not_recorded"}
+        counts: dict[str, int] = defaultdict(int)
+        volatility_counts: dict[str, int] = defaultdict(int)
+        for row in history:
+            counts[str(row.get("regime", "unknown"))] += 1
+            volatility_counts[str(row.get("volatility_state", "unknown"))] += 1
+        transitions = sum(
+            history[index]["regime"] != history[index - 1]["regime"]
+            for index in range(1, len(history))
+        )
+        regime_for_day = {str(row["date"]): str(row.get("regime", "unknown")) for row in history}
+        trades_by_regime: dict[str, dict] = defaultdict(lambda: {"trade_count": 0, "net_pnl": 0.0})
+        for trade in self.closed_trades:
+            try:
+                entered = datetime.fromisoformat(str(trade["entry_at"]).replace("Z", "+00:00"))
+                day = entered.astimezone(ZoneInfo("America/New_York")).date().isoformat()
+            except (KeyError, TypeError, ValueError):
+                continue
+            regime = regime_for_day.get(day, "unknown")
+            trades_by_regime[regime]["trade_count"] += 1
+            trades_by_regime[regime]["net_pnl"] += float(trade.get("pnl", 0.0))
+        model_diagnostics = {}
+        for engine in ("hmm", "gmm"):
+            observations = [
+                row.get("models", {}).get(engine, {}) for row in history
+                if isinstance(row.get("models"), dict)
+            ]
+            if not observations:
+                continue
+            valid = [row for row in observations if row.get("status") == "ok"]
+            model_diagnostics[engine] = {
+                "status_counts": dict(sorted(
+                    (status, sum(row.get("status") == status for row in observations))
+                    for status in {row.get("status", "unknown") for row in observations}
+                )),
+                "successful_fits": len(valid),
+                "converged_fit_fraction": round(
+                    sum(bool(row.get("converged")) for row in valid) / len(valid), 4,
+                ) if valid else None,
+                "mean_posterior_confidence": round(
+                    sum(float(row.get("confidence", 0.0)) for row in valid) / len(valid), 4,
+                ) if valid else None,
+            }
+        return {
+            "config": dict(self.regime_config),
+            "daily_observations": len(history),
+            "regime_day_counts": dict(sorted(counts.items())),
+            "volatility_state_day_counts": dict(sorted(volatility_counts.items())),
+            "regime_transitions": transitions,
+            "transitions_per_100_sessions": round(100 * transitions / max(1, len(history) - 1), 3),
+            "closed_trades_by_entry_regime": {
+                regime: {"trade_count": values["trade_count"], "net_pnl": round(values["net_pnl"], 2)}
+                for regime, values in sorted(trades_by_regime.items())
+            },
+            "model_diagnostics": model_diagnostics,
+        }
+
     def _buy_hold_report(self, events: dict[datetime, dict[str, dict]]) -> dict:
         """Equal-weight buy-and-hold benchmark using the same symbols and fill costs."""
         first: dict[str, dict] = {}

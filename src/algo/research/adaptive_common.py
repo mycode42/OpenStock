@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from src.algo.backtest import read_borrow_availability
-from src.algo.market_store import DEFAULT_DB
+from src.algo.market_store import DEFAULT_DB, SQLiteBarStore
+from src.algo.config import ALGO_REGIME_CONFIG
+from src.algo.regime_macro import load_fred_regime_series
 from src.market_data import data_tier, regular_feed
 
 from .files import _atomic_json
@@ -23,6 +25,16 @@ def _prepare_args(args) -> None:
     args.symbols_resolved = _symbols(args.symbols)
     args.db = str(args.db or DEFAULT_DB)
     args.adjustment = args.adjustment or ADJUSTMENT
+    args.regime_macro_series, args.regime_macro_diagnostics = load_fred_regime_series(
+        SQLiteBarStore(args.db), refresh=False,
+    )
+    if getattr(args, "end", None):
+        cutoff = date.fromisoformat(str(args.end)[:10]).isoformat()
+        args.regime_macro_series = {
+            name: [row for row in rows if str(row.get("date", ""))[:10] <= cutoff]
+            for name, rows in args.regime_macro_series.items()
+        }
+    args.regime_config = dict(ALGO_REGIME_CONFIG)
     args.fitness_weights_data = _normalize_weights(args.fitness_weights)
     args.search_space_data = _search_space(args.strategy, args.search_space)
     args.borrow_availability_data = read_borrow_availability(args.borrow_availability)
@@ -44,6 +56,23 @@ def _prepare_args(args) -> None:
     for name in ("minimum_oos_sharpe", "maximum_average_decay"):
         if hasattr(args, name) and not math.isfinite(getattr(args, name)):
             raise ValueError(f"{name.replace('_', '-')} must be finite")
+    if hasattr(args, "purge_sessions") and (
+        isinstance(args.purge_sessions, bool) or args.purge_sessions < 0
+    ):
+        raise ValueError("purge-sessions must be a non-negative session count")
+    if hasattr(args, "minimum_positive_fold_fraction") and not (
+        math.isfinite(args.minimum_positive_fold_fraction)
+        and 0 <= args.minimum_positive_fold_fraction <= 1
+    ):
+        raise ValueError("minimum-positive-fold-fraction must be in [0, 1]")
+    if hasattr(args, "cost_sensitivity_multipliers") and any(
+        not math.isfinite(value) or value < 1 for value in args.cost_sensitivity_multipliers
+    ):
+        raise ValueError("cost-sensitivity multipliers must be finite and at least 1")
+    if hasattr(args, "bootstrap_iterations") and (
+        isinstance(args.bootstrap_iterations, bool) or args.bootstrap_iterations < 0
+    ):
+        raise ValueError("bootstrap-iterations must be a non-negative integer")
     for name in ("capital", "slippage_bps", "spread_bps", "commission_per_share", "short_borrow_annual_pct", "unknown_borrow_penalty_bps"):
         value = getattr(args, name)
         if isinstance(value, bool) or not math.isfinite(value) or value < 0:

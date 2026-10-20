@@ -27,16 +27,19 @@ class SwingSignal(Signal):
         strategy_group: str | None = "swing", target_weight: float | None = None,
         event_id: str | None = None, *, risk_multiplier: float = 0.75,
         take_profit_price: float | None = None,
+        stop_model_override: bool = False,
     ) -> None:
         super().__init__(ticker, action, strategy, reason, strength, stop_pct,
                          strategy_group, target_weight, event_id)
         object.__setattr__(self, "risk_multiplier", risk_multiplier)
         object.__setattr__(self, "take_profit_price", take_profit_price)
+        object.__setattr__(self, "stop_model_override", stop_model_override)
 
     def to_dict(self) -> dict:
         result = super().to_dict()
         result["risk_multiplier"] = self.risk_multiplier
         result["take_profit_price"] = self.take_profit_price
+        result["stop_model_override"] = self.stop_model_override
         return result
 
 

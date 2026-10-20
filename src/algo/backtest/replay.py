@@ -11,6 +11,7 @@ import math
 import statistics
 
 from .config import BAR_MINUTES, ET, MIN_REGIME_DAILY_BARS, STRATEGY_NAMES
+from .market_sessions import market_session
 from src.algo.strategies.catalog import INTRADAY_STRATEGIES
 from src.algo.strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from src.algo.strategies.portfolio_coordinator import strategy_priority
@@ -36,7 +37,7 @@ class ReplayLoopMixin:
             self._timestamp(bar).astimezone(ET).date()
             for bar in self.spy_daily_bars
         }
-        first_day = min(timestamp.astimezone(ET).date() for timestamp in events)
+        first_day = min(self._trading_date(timestamp) for timestamp in events)
         if sum(day < first_day for day in daily_dates) < MIN_REGIME_DAILY_BARS:
             raise ValueError(
                 f"At least {MIN_REGIME_DAILY_BARS} completed SPY daily bars before the replay are required"
@@ -47,9 +48,19 @@ class ReplayLoopMixin:
         factor_signals_date: date | None = None
         swing_momentum_signals_for_day: dict[str, object] = {}
         event_times = list(events)
+        session_bar_counts: dict[str, int] = {}
+        session_source_bar_counts: dict[str, dict[str, int]] = {}
+        for timestamp, bars in events.items():
+            session = market_session(timestamp) if self.include_extended_hours else "regular"
+            if session is not None:
+                session_bar_counts[session] = session_bar_counts.get(session, 0) + len(bars)
+                sources = session_source_bar_counts.setdefault(session, {})
+                for bar in bars.values():
+                    source = str(bar.get("_source_feed") or self.feed)
+                    sources[source] = sources.get(source, 0) + 1
         for index, timestamp in enumerate(event_times):
             bars = events[timestamp]
-            trading_day = timestamp.astimezone(ET).date()
+            trading_day = self._trading_date(timestamp)
             if last_day != trading_day:
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
@@ -152,7 +163,7 @@ class ReplayLoopMixin:
 
             is_session_end = (
                 index + 1 == len(event_times)
-                or event_times[index + 1].astimezone(ET).date() != trading_day
+                or self._trading_date(event_times[index + 1]) != trading_day
             )
             if is_session_end:
                 self._record_holdings(trading_day)
@@ -241,6 +252,7 @@ class ReplayLoopMixin:
             "parameters": self.profile,
             "strategy_filter": self.strategy_filter,
             "research_controls": self.research_controls,
+            "include_extended_hours": self.include_extended_hours,
             "transaction_costs": {
                 "spread_bps": self.spread_bps,
                 "slippage_bps_each_side": self.slippage_bps,
@@ -257,6 +269,7 @@ class ReplayLoopMixin:
                 "max_daily_entries": self.coordinator.config.max_daily_entries,
                 "max_intraday_entries": self.coordinator.config.max_intraday_entries,
             },
+            "regime_config": self.regime_config,
         }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         open_positions = []
         for ticker, position in sorted(self.positions.items()):
@@ -291,7 +304,10 @@ class ReplayLoopMixin:
             "simulator": "swarm_algo_portfolio_research_v3",
             "feed": self.feed,
             "data_adjustment": self.data_adjustment,
-            "session": "regular",
+            "session": "extended_and_overnight" if self.include_extended_hours else "regular",
+            "session_bar_counts": session_bar_counts,
+            "session_source_bar_counts": session_source_bar_counts,
+            "session_cost_assumption": "regular_session_costs_applied_to_all_sessions",
             "research_runtime_overrides": dict(self.research_runtime_overrides),
             "start": self.start.isoformat(),
             "end": self.end.isoformat(),
@@ -349,6 +365,7 @@ class ReplayLoopMixin:
                 "allow_opposite_netting": self.coordinator.config.allow_opposite_netting,
                 "allow_intraday_overnight": self.coordinator.config.allow_intraday_overnight,
             },
+            "regime_diagnostics": self._regime_report(),
             "event_strategy_diagnostics": {
                 **event_diagnostics,
                 "enabled": self.event_satellite_enabled,
@@ -427,6 +444,7 @@ class ReplayLoopMixin:
             "assumptions": [
                 "Fixed user-supplied universe; no point-in-time membership or delisted-symbol reconstruction.",
                 "Completed 5-minute bars only; signals fill at the next available bar open.",
+                f"Research execution delay: {self.execution_delay_bars} additional available bars before queued fills.",
                 "Market entries and stop-market exits pay configured adverse slippage; limit targets fill at target or a favorable opening gap.",
                 "If stop and target both trade within one bar, the stop is assumed to execute first.",
                 "Regular-session only. Overnight and pre/post-market replay requires BOATS bars and a separate session fill model.",
