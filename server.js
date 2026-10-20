@@ -285,6 +285,8 @@ require('./server/routes/journal')({ app, serializeTrade, normaliseTrade, number
 
 require('./server/routes/dashboard')({ app, dashboardData, captureEquitySnapshot, serializeConfiguredStock, quoteServiceFor, now });
 
+require('./server/routes/algo-trader')({ app });
+
 require('./server/routes/trade-republic')({ app, resolveVerifiedInstrument, serializeConfiguredStock, brokerError, serializeTrade });
 
 // Health check

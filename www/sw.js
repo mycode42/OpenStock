@@ -12,6 +12,7 @@ const REQUIRED_ASSETS = [
   './modules/dashboard.js',
   './modules/config.js',
   './modules/journal.js',
+  './modules/algo-trader.js',
   './modules/dashboard-utils.js',
   './site.webmanifest',
   './favicon-16.png',
