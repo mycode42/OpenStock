@@ -2,8 +2,11 @@
 
 from dataclasses import asdict, dataclass
 from copy import deepcopy
+import json
 import math
+from pathlib import Path
 
+from runtime.paths import DATA_DIR
 from strategies.catalog import strategy_ids_for_group
 
 
@@ -57,6 +60,7 @@ class AlgoRuntimeSettings:
 ALGO_RUNTIME_SETTINGS = AlgoRuntimeSettings()
 # Compatibility projection for callers that still consume runtime mappings.
 ALGO_RUNTIME_CONFIG = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
+ALGO_DASHBOARD_OVERRIDES_PATH = DATA_DIR / "dashboard-runtime-overrides.json"
 ALGO_SIGNAL_DATA_CONFIG = {
     "signal_bar_max_age_minutes": 20,
     "delayed_signal_bar_max_age_minutes": 20,
@@ -310,13 +314,30 @@ STRATEGY_CONFIG = {
 
 
 def get_algo_runtime_settings() -> AlgoRuntimeSettings:
-    """Return validated effective settings, including runtime overrides."""
+    """Return validated effective settings, including dashboard overrides."""
     values = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
     for config in (ALGO_RUNTIME_CONFIG, STRATEGY_CONFIG):
         values.update({
             key: config[key] for key, default in _ALGO_RUNTIME_DEFAULTS.items()
             if key in config and config[key] != default
         })
+    if ALGO_DASHBOARD_OVERRIDES_PATH.exists():
+        try:
+            overrides = json.loads(ALGO_DASHBOARD_OVERRIDES_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("Algo dashboard runtime overrides are unreadable") from exc
+        if not isinstance(overrides, dict):
+            raise ValueError("Algo dashboard runtime overrides must be an object")
+        allowed = set(_ALGO_RUNTIME_DEFAULTS)
+        if set(overrides) - allowed:
+            raise ValueError("Algo dashboard runtime overrides contain unsupported settings")
+        values.update(overrides)
+        settings = AlgoRuntimeSettings(**values)
+        if not 0.001 <= settings.intraday_satellite_position_pct <= 0.04:
+            raise ValueError("intraday_satellite_position_pct must be between 0.001 and 0.04")
+        if not 0.05 <= settings.intraday_satellite_risk_multiplier <= 1.0:
+            raise ValueError("intraday_satellite_risk_multiplier must be between 0.05 and 1.0")
+        return settings
     return AlgoRuntimeSettings(**values)
 
 
