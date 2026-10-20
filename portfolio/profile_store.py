@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 
-from runtime.paths import DATA_DIR, ROOT
+from runtime.paths import DATA_DIR
+from runtime.atomic import atomic_write_json
 RESEARCH_ROOT = DATA_DIR / "research" / "algo-auto"
 PROMOTED_PROFILE_PATH = RESEARCH_ROOT / "promoted-profile.json"
 FORWARD_VALIDATION_PATH = RESEARCH_ROOT / "forward-validation.json"
@@ -67,19 +67,4 @@ def effective_profile_metadata() -> dict:
 
 def write_json_atomic(path: Path, payload: dict) -> None:
     """Atomically replace a JSON artifact after flushing it to disk."""
-    import tempfile
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as handle:
-            json.dump(payload, handle, indent=2, sort_keys=True, default=str)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_name, path)
-    finally:
-        try:
-            os.unlink(temp_name)
-        except FileNotFoundError:
-            pass
+    atomic_write_json(path, payload, default=str)

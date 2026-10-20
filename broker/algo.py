@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from market.data import regular_feed
+from market.quotes import QuoteParseError, parse_quote
 
 
 PAPER_BASE = "https://paper-api.alpaca.markets/v2"
@@ -110,19 +111,10 @@ class AlgoAlpaca:
         for symbol in symbols:
             quote = raw.get(symbol) or {}
             try:
-                bid = float(quote.get("bp", 0) or 0)
-                ask = float(quote.get("ap", 0) or 0)
-                timestamp = datetime.fromisoformat(quote["t"].replace("Z", "+00:00"))
-            except (KeyError, TypeError, ValueError):
+                parsed = parse_quote(quote)
+            except QuoteParseError:
                 continue
-            if bid <= 0 or ask < bid:
-                continue
-            output[symbol] = {
-                "price": (bid + ask) / 2,
-                "bid": bid,
-                "ask": ask,
-                "timestamp": timestamp,
-            }
+            output[symbol] = parsed
         return output
 
     def positions(self) -> list[dict]:

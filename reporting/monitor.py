@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -12,6 +11,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 
+from runtime.atomic import atomic_write_json
 from runtime.paths import DATA_DIR, ROOT
 from runtime.systemd import service_is_active
 load_dotenv(ROOT / ".env", override=True)
@@ -368,9 +368,7 @@ def build_report() -> dict:
         "order_statuses": current_statuses,
     }
     SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = SNAPSHOT_PATH.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(next_snapshot, indent=2, sort_keys=True))
-    os.replace(temporary, SNAPSHOT_PATH)
+    atomic_write_json(SNAPSHOT_PATH, next_snapshot, indent=2, sort_keys=True)
     return report
 
 

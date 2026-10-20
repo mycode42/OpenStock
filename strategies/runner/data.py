@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import math
 
 import requests
 
 from broker.accounts import get_account_for_mode
 from market.data import regular_feed
+from market.quotes import QuoteParseError, parse_quote
 
 DATA_BASE = "https://data.alpaca.markets/v2"
 TRADE_BASE = "https://paper-api.alpaca.markets/v2"
@@ -110,30 +110,14 @@ def fetch_latest_quotes(
                     diagnostics[ticker] = {"status": "invalid_quote"}
                 continue
             try:
-                timestamp = datetime.fromisoformat(str(quote["t"]).replace("Z", "+00:00"))
-            except (KeyError, TypeError, ValueError):
-                if diagnostics is not None:
-                    diagnostics[ticker] = {"status": "invalid_timestamp"}
-                continue
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=timezone.utc)
-            try:
-                bid = float(quote.get("bp", 0) or 0)
-                ask = float(quote.get("ap", 0) or 0)
-            except (TypeError, ValueError):
+                parsed = parse_quote(quote)
+            except QuoteParseError as exc:
                 if diagnostics is not None:
                     diagnostics[ticker] = {
-                        "status": "invalid_bid_ask",
-                        "quote_timestamp": timestamp.isoformat(),
+                        "status": exc.reason,
                     }
                 continue
-            if not all(math.isfinite(value) for value in (bid, ask)) or bid <= 0 or ask < bid:
-                if diagnostics is not None:
-                    diagnostics[ticker] = {
-                        "status": "invalid_bid_ask",
-                        "quote_timestamp": timestamp.isoformat(),
-                    }
-                continue
+            timestamp = parsed["timestamp"]
             if diagnostics is not None:
                 diagnostics[ticker] = {
                     "status": "usable",
@@ -142,9 +126,9 @@ def fetch_latest_quotes(
             previous = output.get(ticker)
             if previous is None or timestamp > previous["timestamp"]:
                 output[ticker] = {
-                    "price": (bid + ask) / 2,
-                    "bid": bid,
-                    "ask": ask,
+                    "price": parsed["price"],
+                    "bid": parsed["bid"],
+                    "ask": parsed["ask"],
                     "timestamp": timestamp,
                 }
     return output

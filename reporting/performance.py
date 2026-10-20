@@ -5,11 +5,9 @@ import argparse
 import json
 import logging
 import math
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -17,11 +15,11 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 import requests
-import yfinance as yf
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 from market.calendar import get_market_schedule
 from reporting.fills import FillHistoryError, get_account_fill_report
 from reporting.journal import dedupe_journal_entries
+from runtime.atomic import atomic_write_json
 
 logging.basicConfig(
     level=logging.INFO,
@@ -83,6 +81,8 @@ def get_portfolio(mode: str = "algo") -> dict:
 def get_benchmark_return(symbol: str, period_days: int = 1) -> float | None:
     """Get benchmark return for the last period_days using yfinance."""
     try:
+        import yfinance as yf
+
         ticker = yf.Ticker(symbol)
         # Request enough history for the window
         lookback = max(period_days + 5, 10)
@@ -448,6 +448,8 @@ def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | 
     qqq_daily = None
 
     try:
+        import yfinance as yf
+
         spy_ticker = yf.Ticker("SPY")
         spy_hist = spy_ticker.history(period="2d", interval="1d")
         if not spy_hist.empty:
@@ -458,6 +460,8 @@ def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | 
         log.warning(f"SPY fetch failed: {e}")
 
     try:
+        import yfinance as yf
+
         qqq_ticker = yf.Ticker("QQQ")
         qqq_hist = qqq_ticker.history(period="2d", interval="1d")
         if not qqq_hist.empty:
@@ -486,17 +490,7 @@ def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | 
         "qqq_daily_pct": round(qqq_daily * 100, 4) if qqq_daily is not None else None,
     }
 
-    temp_path = None
-    try:
-        with NamedTemporaryFile("w", dir=snapshot_dir, prefix=f".{today}.", suffix=".tmp", delete=False) as f:
-            temp_path = Path(f.name)
-            json.dump(snapshot, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, snap_file)
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
+    atomic_write_json(snap_file, snapshot, indent=2, sort_keys=True)
 
     spy_label = f"${spy_price:.2f}" if spy_price is not None else "N/A"
     qqq_label = f"${qqq_price:.2f}" if qqq_price is not None else "N/A"

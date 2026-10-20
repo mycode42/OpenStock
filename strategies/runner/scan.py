@@ -24,14 +24,12 @@ from portfolio.config import (
     get_algo_runtime_settings,
     get_mode_config,
 )
-from strategies.catalog import STRATEGY_CATALOG
 from strategies.event_driven import EventCalendar, EventSignalGenerator, EventStrategyConfig
 from .event_context import load_event_context
 from strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES,
     PortfolioCoordinator,
     PortfolioCoordinatorConfig,
-    choose_priority,
     strategy_priority,
     throttle_signal,
 )
@@ -39,14 +37,10 @@ from strategies.regime import rank_strategies
 from strategies.regime_advisor import apply_regime_advisory
 from strategies.registry import (
     ALGO_DEFAULT_PARAMETERS,
-    ALGO_RULE_MODULES,
-    RULE_MODULES,
-    evaluate as evaluate_strategy,
     parameters_for_regime,
     profile_id_for_regime,
     refresh_active_parameter_profile,
 )
-from strategies.rule_pipeline import evaluate_rule_signal
 from strategies.runner.data import (
     _completed_daily,
     _completed_intraday,
@@ -60,17 +54,19 @@ from strategies.runner.factors import (
     _multi_factor_rebalance_signals,
     multi_factor_parameters_for_session as _multi_factor_parameters_for_session,
 )
+from strategies.runner.signal_generation import (
+    SignalGenerationContext,
+    generate_strategy_signals,
+)
 from strategies.runner.sizing import (
     _is_protective_sell_order,
     _make_trade,
     _positive_price_level,
-    _update_trailing_stop,
 )
 from strategies.satellite_overlay import (
     CORE_STRATEGIES,
     SATELLITE_STRATEGIES,
     SatelliteOverlayConfig,
-    apply_satellite_confirmations,
 )
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
 from strategies.universe import configured_universe, load_algo_universe
@@ -539,277 +535,44 @@ def scan(
         if mode == "algo" and satellite_config.multi_factor_enabled
         else {}
     )
-    generated = []
-    satellite_confirmation_counts = {"multi_factor": 0, "event_driven": 0}
-
-    for ticker in strategy_symbols:
-        position = positions.get(ticker, {})
-        position_qty = float(position.get("qty", 0) or 0)
-        symbol_bars = bars_by_symbol.get(ticker, [])
-        options = []
-        owner = owner_map.get(ticker)
-        force_intraday_flatten = (
-            mode == "algo"
-            and owner in INTRADAY_STRATEGIES
-            and position_qty != 0
-            and not coordinator_config.allow_intraday_overnight
-            and (
-                session_name not in {None, "regular"}
-                or now >= (
-                    regular_close or now.replace(hour=16, minute=0, second=0, microsecond=0)
-                ) - timedelta(minutes=coordinator_config.intraday_close_cutoff_minutes)
-            )
+    quote_check_time = datetime.now(timezone.utc)
+    generated, satellite_confirmation_counts = generate_strategy_signals(
+        SignalGenerationContext(
+            mode=mode,
+            strategy_symbols=strategy_symbols,
+            positions=positions,
+            bars_by_symbol=bars_by_symbol,
+            owner_map=owner_map,
+            track_owners=track_owners,
+            coordinator_config=coordinator_config,
+            now=now,
+            regular_close=regular_close,
+            session_name=session_name,
+            regime=regime,
+            factor_confirmation_signals=factor_confirmation_signals,
+            satellite_config=satellite_config,
+            allowed_satellites=allowed_satellites,
+            event_generator=event_generator,
+            event_strategy_enabled=event_strategy_enabled,
+            strategy_states=strategy_states,
+            daily_bars=daily_bars,
+            now_utc=now_utc,
+            quote_check_time=quote_check_time,
+            selected_symbols=selected_symbols,
+            latest_quotes=latest_quotes,
+            risk_config=risk_config,
+            rank_score=rank_score,
+            lifecycle=lifecycle,
+            multi_factor_signals=multi_factor_signals,
+            momentum_signals=momentum_signals,
+            runtime_settings=ALGO_RUNTIME_SETTINGS,
+            pending_by_symbol=pending_by_symbol,
+            universe=universe,
+            fresh_signal_bar_symbols=fresh_signal_bar_symbols,
+            scan_errors=scan_errors,
+            entry_pause_reasons=entry_pause_reasons,
         )
-        if force_intraday_flatten:
-            generated.append({
-                "ticker": ticker,
-                "action": "cover" if position_qty < 0 else "sell",
-                "strategy": owner,
-                "reason": "portfolio coordinator mandatory intraday session flatten",
-                "strength": 1.0,
-                "rank_score": 1_000_000.0,
-                "signal_bar_time": symbol_bars[-1].get("t") if symbol_bars else None,
-                "timeframe": "5Min",
-                "software_protection": True,
-                "coordinator_force_flatten": True,
-            })
-            continue
-        if track_owners and position_qty != 0 and owner is None:
-            # On the continuous shared account, don't let a newly active
-            # strategy take over a holding whose entry strategy is unknown.
-            continue
-        candidates = [owner] if owner and owner not in SATELLITE_STRATEGIES else [
-            name for name in regime.get("active", [])
-            if name in CORE_STRATEGIES
-            or name in {"intraday_trend", "intraday_momentum"}
-        ]
-        factor_target = factor_confirmation_signals.get(ticker)
-        if (
-            mode == "algo" and owner is None and position_qty == 0
-            and satellite_config.multi_factor_enabled
-            and "multi_factor" in allowed_satellites
-            and factor_target is not None
-        ):
-            candidates.append("multi_factor")
-        # Existing satellite-owned holdings remain exit-manageable. A flat
-        # ticker never receives a satellite entry candidate.
-        if owner in SATELLITE_STRATEGIES and position_qty != 0:
-            candidates = [owner]
-        elif owner in SATELLITE_STRATEGIES:
-            candidates = []
-        event_signal = None
-        if (
-            mode == "algo" and event_generator is not None
-            and (event_strategy_enabled or owner == "event_driven")
-            and session_name in {None, "regular"}
-            and "event_driven" in candidates
-        ):
-            try:
-                event_state = strategy_states.setdefault("event_driven", {})
-                event_signal = event_generator.generate(
-                    ticker, daily_bars.get(ticker, []), as_of=now_utc,
-                    universe=set(selected_symbols) | ({"SPY"} if ticker == "SPY" else set()),
-                    regime=str(regime.get("regime", "unknown")),
-                    strategy_state=event_state,
-                    position_qty=position_qty if owner == "event_driven" else 0,
-                    entry_at=event_state.get(ticker, {}).get("opened_at") if owner == "event_driven" else None,
-                    entry_price=(position.get("avg_entry_price") if owner == "event_driven" else None),
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                scan_errors.append(f"daily event strategy signal {ticker}: {type(exc).__name__}: {exc}")
-        protective_state = (strategy_states or {}).get(owner, {}).get(ticker, {}) if owner else {}
-        quote = latest_quotes.get(ticker)
-        if owner and position_qty != 0 and quote:
-            quote_age = (datetime.now(timezone.utc) - quote["timestamp"]).total_seconds()
-            # Evaluate protection on the closing side: bid for longs, ask for shorts.
-            current_price = float(
-                quote.get("ask" if position_qty < 0 else "bid", quote["price"])
-            )
-            stop_price = _positive_price_level(protective_state.get("stop_price"))
-            if 0 <= quote_age <= int(STRATEGY_CONFIG["quote_stale_seconds"]):
-                stop_price = _update_trailing_stop(
-                    protective_state,
-                    strategy=owner,
-                    qty=position_qty,
-                    entry_price=position.get("avg_entry_price"),
-                    current_price=current_price,
-                    mode_risk=risk_config,
-                )
-            target_price = _positive_price_level(protective_state.get("take_profit"))
-            protective_reason = None
-            if 0 <= quote_age <= int(STRATEGY_CONFIG["quote_stale_seconds"]):
-                if position_qty > 0:
-                    if stop_price is not None and current_price <= stop_price:
-                        protective_reason = "software stop-loss reached"
-                    elif target_price is not None and current_price >= target_price:
-                        protective_reason = "software take-profit reached"
-                else:
-                    if stop_price is not None and current_price >= stop_price:
-                        protective_reason = "software short stop-loss reached"
-                    elif target_price is not None and current_price <= target_price:
-                        protective_reason = "software short take-profit reached"
-            if protective_reason:
-                signal_bar_time = symbol_bars[-1].get("t") if symbol_bars else None
-                if lifecycle is None or lifecycle.allows_protective_exit(owner, ticker):
-                    options.append({
-                        "ticker": ticker,
-                        "action": "cover" if position_qty < 0 else "sell",
-                        "strategy": owner,
-                        "reason": protective_reason,
-                        "strength": 1.0,
-                        "rank_score": rank_score.get(owner, 0),
-                        "signal_bar_time": signal_bar_time,
-                        "software_protection": True,
-                    })
-        for strategy_name in candidates:
-            if strategy_name == "event_driven" and (mode != "algo" or session_name not in {None, "regular"}):
-                continue
-            signal_bar_time = symbol_bars[-1].get("t") if symbol_bars else None
-            strategy_spec = STRATEGY_CATALOG.get(strategy_name)
-            if strategy_spec is not None and strategy_spec.bar_interval == "1Day":
-                daily_signal_bars = daily_bars.get(ticker, [])
-                signal_bar_time = (
-                    daily_signal_bars[-1].get("t", daily_signal_bars[-1].get("date"))
-                    if daily_signal_bars else None
-                )
-            if strategy_name == "multi_factor":
-                signal = multi_factor_signals.get(ticker)
-                if signal is None and owner is None and position_qty == 0:
-                    signal = factor_confirmation_signals.get(ticker)
-                signal_action = signal.get("action") if isinstance(signal, dict) else getattr(signal, "action", None)
-                if signal is None or signal_action not in {"buy", "short", "sell", "cover"}:
-                    continue
-            elif strategy_name == "event_driven":
-                if event_signal is None:
-                    continue
-                signal = event_signal
-            elif strategy_name == "momentum":
-                signal = momentum_signals.get(ticker)
-            else:
-                signal = None
-            if lifecycle:
-                lifecycle.observe(strategy_name, ticker, signal_bar_time)
-            if signal is None and (strategy_name in RULE_MODULES or strategy_name in ALGO_RULE_MODULES):
-                try:
-                    if mode == "algo":
-                        daily_strategy = bool(
-                            strategy_spec and strategy_spec.bar_interval == "1Day"
-                        )
-                        if strategy_name == "momentum":
-                            continue
-                        if (
-                            strategy_spec is not None
-                            and strategy_spec.runtime_setting
-                            and not getattr(ALGO_RUNTIME_SETTINGS, strategy_spec.runtime_setting)
-                        ):
-                            continue
-                        signal_bars = daily_bars.get(ticker, []) if daily_strategy else symbol_bars
-                        protective_state = (strategy_states or {}).get(strategy_name, {}).get(ticker, {})
-                        signal = evaluate_rule_signal(
-                            strategy_name, ticker, signal_bars,
-                            parameters=parameters_for_regime(strategy_name, regime_name),
-                            position_qty=position_qty,
-                            entry_at=protective_state.get("opened_at"),
-                            entry_price=(position.get("avg_entry_price") if position else None),
-                            position_target=protective_state.get("take_profit"),
-                        )
-                    else:
-                        signal = evaluate_strategy(
-                            strategy_name, mode, ticker, symbol_bars, position_qty,
-                        )
-                except Exception as exc:
-                    if mode != "algo":
-                        raise
-                    scan_errors.append(f"{strategy_name} signal {ticker}: {type(exc).__name__}: {exc}")
-                    entry_pause_reasons.append("one or more Algo signal rules failed")
-                    continue
-            signal_action = signal.get("action") if isinstance(signal, dict) else getattr(signal, "action", None)
-            expected_exit = "cover" if position_qty < 0 else "sell"
-            if signal is None or (owner and signal_action != expected_exit):
-                continue
-            item = dict(signal) if isinstance(signal, dict) else signal.to_dict()
-            item["rank_score"] = (
-                -float(item.get("rank") or 1) if strategy_name == "multi_factor"
-                else -1.0 if strategy_name == "event_driven"
-                else rank_score.get(strategy_name, 0)
-            )
-            item["signal_bar_time"] = signal_bar_time
-            item["timeframe"] = strategy_spec.bar_interval if strategy_spec else "5Min"
-            if lifecycle and not lifecycle.allows(
-                strategy_name, ticker, signal_action, item["signal_bar_time"],
-            ):
-                continue
-            options.append(item)
-
-        factor_confirmation = None
-        if "multi_factor" in allowed_satellites:
-            factor_confirmation = factor_confirmation_signals.get(ticker)
-
-        event_confirmation = event_signal.to_dict() if event_signal is not None else None
-
-        if mode == "algo" and options:
-            options = [
-                apply_satellite_confirmations(
-                    item,
-                    factor_signal=factor_confirmation,
-                    event_signal=(event_confirmation if "event_driven" in allowed_satellites else None),
-                    config=satellite_config,
-                )
-                for item in options
-            ]
-        if not options:
-            continue
-        # One action per ticker per scan prevents conflicting strategy orders.
-        if mode == "algo" and len(options) > 1:
-            chosen, lower_priority = choose_priority(options)
-            generated.extend(lower_priority)
-        else:
-            chosen = max(
-                options,
-                key=lambda item: (
-                    bool(item.get("software_protection")),
-                    item["rank_score"],
-                    float(item.get("strength", 0.0) or 0.0),
-                ),
-            )
-        ticker_orders = pending_by_symbol.get(ticker, [])
-        pending_entry = position_qty == 0 and any(
-            str(order.get("side", "")).lower() in {"buy", "sell"}
-            for order in ticker_orders
-        )
-        protective_exit_order = any(
-            _is_protective_sell_order(order, position_qty) for order in ticker_orders
-        )
-        pending_exit = any(
-            str(order.get("side", "")).lower() == ("buy" if position_qty < 0 else "sell")
-            and not _is_protective_sell_order(order, position_qty)
-            for order in ticker_orders
-        )
-        if (
-            (chosen["action"] in {"buy", "short"} and ticker_orders)
-            or pending_entry
-            or (pending_exit and not chosen.get("coordinator_force_flatten"))
-        ):
-            chosen["suppressed_reason"] = "a conflicting Alpaca order is already open for this symbol"
-            generated.append(chosen)
-            continue
-        if chosen["action"] == "short":
-            regime_name = str(regime.get("regime", "unknown"))
-            if session_name not in {None, "regular"}:
-                chosen["suppressed_reason"] = "short entries are restricted to regular market hours"
-                generated.append(chosen)
-                continue
-            if ticker not in set(universe.get("easy_to_borrow_tickers") or []):
-                chosen["suppressed_reason"] = "Alpaca has not confirmed this ticker as easy to borrow"
-                generated.append(chosen)
-                continue
-            if regime_name == "range_bound":
-                chosen["risk_multiplier"] = float(risk_config.get("range_regime_short_risk_multiplier", 0.75))
-        if mode == "algo" and not chosen.get("software_protection") and ticker not in fresh_signal_bar_symbols:
-            chosen["suppressed_reason"] = "latest completed signal bar is stale or unavailable"
-            generated.append(chosen)
-            continue
-        generated.append(chosen)
+    )
 
     entries_paused = bool(entry_pause_reasons)
     if entries_paused:

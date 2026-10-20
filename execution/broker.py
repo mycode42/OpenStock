@@ -1,11 +1,13 @@
 """Alpaca HTTP operations used by the trade executor."""
 
-import math
 import uuid
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
 import requests
+
+from market.data import regular_feed
+from market.quotes import parse_price_timestamp, parse_quote
 
 
 API_BASE = "https://paper-api.alpaca.markets/v2"
@@ -32,47 +34,40 @@ def get_positions(headers: dict) -> dict[str, dict]:
 
 
 def get_latest_price(ticker: str, headers: dict) -> float:
-    """Fetch a recent Alpaca IEX trade for risk sizing."""
+    """Fetch a recent SIP trade for risk sizing."""
     response = requests.get(
         f"{DATA_BASE}/stocks/{ticker}/trades/latest",
         headers=headers,
-        params={"feed": "iex"},
+        params={"feed": regular_feed()},
         timeout=10,
     )
     response.raise_for_status()
     payload = response.json()
     trade = payload.get("trade") or (payload.get("trades") or {}).get(ticker) or {}
-    price = float(trade.get("p", 0) or 0)
-    if price <= 0:
-        raise ValueError(f"No positive latest Alpaca trade available for {ticker}")
-    try:
-        timestamp = datetime.fromisoformat(str(trade["t"]).replace("Z", "+00:00"))
-        age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"Latest Alpaca trade timestamp unavailable for {ticker}") from exc
+    price, timestamp = parse_price_timestamp(
+        trade.get("p"), trade.get("t"), context=f"Latest Alpaca trade for {ticker}",
+    )
+    age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
     if age < 0 or age > 90:
         raise ValueError(f"Latest Alpaca trade for {ticker} is stale ({age:.0f}s)")
     return price
 
 
-def get_latest_quote(ticker: str, side: str, headers: dict) -> float:
-    """Fetch and validate a fresh IEX ask or bid."""
-    field = "ap" if side == "ask" else "bp"
+def get_latest_quote(ticker: str, side: str, headers: dict, *, feed: str | None = None) -> float:
+    """Fetch and validate a fresh ask or bid from the selected market feed."""
+    if side not in {"ask", "bid"}:
+        raise ValueError("side must be ask or bid")
     response = requests.get(
         f"{DATA_BASE}/stocks/{ticker}/quotes/latest",
         headers=headers,
-        params={"feed": "iex"},
+        params={"feed": feed or regular_feed()},
         timeout=10,
     )
     response.raise_for_status()
-    quote = (response.json() or {}).get("quote") or {}
-    try:
-        price = float(quote[field])
-        timestamp = datetime.fromisoformat(str(quote["t"]).replace("Z", "+00:00"))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError(f"Latest Alpaca {side} unavailable for {ticker}") from exc
-    if not math.isfinite(price) or price <= 0 or timestamp.tzinfo is None:
-        raise ValueError(f"Latest Alpaca {side} invalid for {ticker}")
+    payload = response.json()
+    quote = payload.get("quote") if isinstance(payload, dict) else None
+    parsed = parse_quote(quote, side=side, assume_utc=False)
+    price, timestamp = parsed["price"], parsed["timestamp"]
     age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
     if age < 0 or age > 90:
         raise ValueError(f"Latest Alpaca {side} for {ticker} is stale ({age:.0f}s)")

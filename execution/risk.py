@@ -20,12 +20,10 @@ import sys
 import json
 import hashlib
 from copy import deepcopy
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Optional
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -35,6 +33,8 @@ load_dotenv(override=True)
 import requests
 
 from portfolio.config import get_mode_config
+from execution.risk_models import RejectionReason, ValidationResult
+from execution.risk_policy import LEVERAGED_ETFS, MOONSHOTS, build_universe_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,60 +48,12 @@ from broker.accounts import get_account_for_mode, verify_account_for_mode
 API_BASE = "https://paper-api.alpaca.markets/v2"
 MARKET_TZ = ZoneInfo("America/New_York")
 
-# Leveraged ETFs — blocked by the Algo portfolio policy.
-LEVERAGED_ETFS = {
-    "TQQQ", "SOXL", "UPRO", "SPXL", "TECL", "LABU", "SOXS", "TECS",
-    "SPXS", "SQQQ", "SDOW", "UDOW", "NAIL", "CURE", "HIBL", "HIBS",
-}
-
-# Moonshots — hard-blocked in ALL modes (not in any V2 universe)
-MOONSHOTS = {"RGTI", "SOUN", "LUNR"}
-
-# Per-mode universe maps: cached after first build to avoid repeated recomputation
+# Per-mode policy maps stay cached after their first build.
 _universe_cache: dict[str, tuple] = {}
 
 
 def _get_universe_maps(mode: str) -> tuple[dict, dict, set, dict]:
-    """
-    Build and cache ticker→sector, ticker→max_pct, tactical_tickers, and universe
-    for the given mode.
-
-    Returns: (ticker_sector, ticker_max_pct, tactical_tickers, universe)
-    """
-    if mode not in _universe_cache:
-        mode_config = get_mode_config(mode)
-        universe = mode_config["universe"]
-        default_max_pct = mode_config["risk"]["max_position_pct"]
-
-        ticker_sector: dict[str, str] = {}
-        ticker_max_pct: dict[str, float] = {}
-        for sector_key, sector_data in universe.items():
-            per_stock = sector_data.get("max_per_stock_pct", default_max_pct)
-            for t in sector_data.get("tickers", []):
-                ticker_sector[t] = sector_key
-                ticker_max_pct[t] = per_stock
-
-        # "tactical" sector is the high-risk bucket that gets a total-exposure cap
-        tactical_tickers = set(universe.get("tactical", {}).get("tickers", []))
-
-        _universe_cache[mode] = (ticker_sector, ticker_max_pct, tactical_tickers, universe)
-
-    return _universe_cache[mode]
-
-
-@dataclass
-class RejectionReason:
-    """Structured rejection with rule name and human-readable message."""
-    rule: str
-    message: str
-
-
-@dataclass
-class ValidationResult:
-    """Result of validate_trade()."""
-    approved: bool
-    reason: str
-    rule: Optional[str] = None  # which rule fired on rejection
+    return build_universe_maps(mode, get_mode_config, _universe_cache)
 
 
 def _api(endpoint: str, mode: str = None) -> dict | list:
@@ -111,464 +63,71 @@ def _api(endpoint: str, mode: str = None) -> dict | list:
     return r.json()
 
 
+from execution.risk_account import (
+    _algo_session_bounds as _account_session_bounds,
+    _count_algo_new_entries_today as _account_count_new_entries_today,
+    _is_in_algo_session as _account_is_in_session,
+    _pending_buy_exposure as _account_pending_buy_exposure,
+    _pending_short_exposure as _account_pending_short_exposure,
+    _easy_to_borrow_symbols as _fetch_easy_to_borrow_symbols,
+    _get_algo_fill_activities as _fetch_algo_fill_activities,
+    _get_algo_orders_since as _fetch_algo_orders_since,
+    _get_open_orders as _fetch_open_orders,
+    get_portfolio_state as _fetch_portfolio_state,
+)
+
+
 def _algo_session_bounds(session_date: str) -> tuple[datetime, datetime]:
-    """The Algo trade date runs from the prior 20:00 ET to 20:00 ET."""
-    trade_day = date.fromisoformat(session_date)
-    start_day = trade_day - timedelta(days=1)
-    return (
-        datetime(start_day.year, start_day.month, start_day.day, 20, tzinfo=MARKET_TZ),
-        datetime(trade_day.year, trade_day.month, trade_day.day, 20, tzinfo=MARKET_TZ),
-    )
+    return _account_session_bounds(session_date)
 
 
 def _is_in_algo_session(timestamp_value: str, session_date: str) -> bool:
-    try:
-        timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        start, end = _algo_session_bounds(session_date)
-        return start <= timestamp.astimezone(MARKET_TZ) < end
-    except (TypeError, ValueError):
-        return False
-
-
-def _get_algo_orders_since(session_start: str, mode: str) -> list[dict]:
-    """Fetch Algo orders since the ET session start using broker cursors."""
-    orders: list[dict] = []
-    after_order_id = None
-    for _ in range(100):
-        if after_order_id:
-            endpoint = (
-                "orders?status=all&limit=500&direction=asc&after_order_id="
-                f"{quote(after_order_id, safe='')}"
-            )
-        else:
-            endpoint = f"orders?status=all&after={session_start}&limit=500&direction=asc"
-        page = _api(endpoint, mode=mode)
-        if not isinstance(page, list):
-            raise ValueError("Algo order response was not a list")
-        orders.extend(item for item in page if isinstance(item, dict))
-        if len(page) < 500:
-            return orders
-        after_order_id = str(page[-1].get("id") or "")
-        if not after_order_id:
-            raise ValueError("Algo order pagination omitted its last order ID")
-    raise RuntimeError("Algo order pagination exceeded 100 pages")
+    return _account_is_in_session(timestamp_value, session_date)
 
 
 def _count_algo_new_entries_today(
-    orders: list[dict],
-    fills: list[dict],
-    positions: dict[str, dict],
-    session_date: str,
+    orders: list[dict], fills: list[dict], positions: dict[str, dict], session_date: str,
 ) -> int:
-    """Count today's filled or pending long and short openings using signed qty."""
-    fills_by_order: dict[str, float] = {}
-    today_fills: list[tuple[str, datetime, str, float, str]] = []
-    filled_delta: dict[str, float] = {}
-
-    for fill in fills:
-        ticker = str(fill.get("symbol", "")).upper()
-        side = str(fill.get("side", "")).lower()
-        if not ticker or side not in {"buy", "sell"}:
-            continue
-        raw_timestamp = fill.get("transaction_time") or fill.get("date")
-        if not raw_timestamp:
-            continue
-        try:
-            timestamp = datetime.fromisoformat(str(raw_timestamp).replace("Z", "+00:00"))
-            qty = max(0.0, float(fill.get("qty", fill.get("quantity", 0)) or 0))
-        except (TypeError, ValueError):
-            continue
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        if not _is_in_algo_session(raw_timestamp, session_date):
-            continue
-        if qty <= 0:
-            continue
-        order_id = str(fill.get("order_id") or fill.get("id") or "")
-        today_fills.append((ticker, timestamp, side, qty, order_id))
-        if order_id:
-            fills_by_order[order_id] = fills_by_order.get(order_id, 0.0) + qty
-        signed_qty = qty if side == "buy" else -qty
-        filled_delta[ticker] = filled_delta.get(ticker, 0.0) + signed_qty
-
-    today_order_ids: set[str] = set()
-    events_by_ticker: dict[str, list[tuple[datetime, str, float, bool, str]]] = {}
-
-    for order in orders:
-        ticker = str(order.get("symbol", "")).upper()
-        side = str(order.get("side", "")).lower()
-        submitted_at = order.get("submitted_at") or order.get("created_at")
-        if not ticker or side not in {"buy", "sell"} or not submitted_at:
-            continue
-        try:
-            timestamp = datetime.fromisoformat(str(submitted_at).replace("Z", "+00:00"))
-            order_qty = max(0.0, float(order.get("qty", 0) or 0))
-            reported_filled = max(0.0, float(order.get("filled_qty", 0) or 0))
-        except (TypeError, ValueError):
-            continue
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        if not _is_in_algo_session(submitted_at, session_date):
-            continue
-
-        order_id = str(order.get("id") or "")
-        status = str(order.get("status", "")).lower()
-        pending = status not in {
-            "canceled", "expired", "rejected", "filled", "done_for_day",
-            "replaced", "stopped", "suspended", "calculated",
-        }
-        filled_qty = max(fills_by_order.get(order_id, 0.0), reported_filled)
-        if filled_qty <= 0 and not pending:
-            continue
-        missing_fill_qty = max(0.0, reported_filled - fills_by_order.get(order_id, 0.0))
-        if missing_fill_qty:
-            delta = missing_fill_qty if side == "buy" else -missing_fill_qty
-            filled_delta[ticker] = filled_delta.get(ticker, 0.0) + delta
-        projected_qty = max(filled_qty, order_qty if pending else filled_qty)
-        events_by_ticker.setdefault(ticker, []).append((timestamp, side, projected_qty, True, order_id))
-        if order_id:
-            today_order_ids.add(order_id)
-
-    # Prior-session orders (including protective bracket legs) can fill today.
-    for ticker, timestamp, side, qty, order_id in today_fills:
-        if order_id and order_id in today_order_ids:
-            continue
-        events_by_ticker.setdefault(ticker, []).append((timestamp, side, qty, False, order_id))
-
-    entries = 0
-    for ticker, events in events_by_ticker.items():
-        current_qty = float((positions.get(ticker) or {}).get("qty", 0) or 0)
-        running_qty = current_qty - filled_delta.get(ticker, 0.0)
-        for _, side, qty, countable, order_id in sorted(events, key=lambda event: event[0]):
-            if countable and abs(running_qty) < 1e-9:
-                entries += 1
-            running_qty += qty if side == "buy" else -qty
-    return entries
-
-
-def _pending_short_exposure(open_orders: list[dict], positions: dict[str, dict]) -> dict[str, float]:
-    """Reserve remaining opening sell-short orders by ticker."""
-    exposure: dict[str, float] = {}
-    terminal = {"canceled", "expired", "rejected", "filled", "done_for_day", "replaced", "stopped"}
-    for order in open_orders:
-        if str(order.get("side", "")).lower() != "sell":
-            continue
-        symbol = str(order.get("symbol") or "").upper()
-        if not symbol:
-            raise ValueError("Open sell order has no symbol")
-        intent = str(order.get("position_intent") or "").lower()
-        position_qty = float((positions.get(symbol) or {}).get("qty", 0) or 0)
-        if intent == "sell_to_close" or (not intent and position_qty > 0):
-            continue
-        if str(order.get("status", "")).lower() in terminal:
-            continue
-        quantity = max(0.0, float(order.get("qty") or 0) - float(order.get("filled_qty") or 0))
-        if quantity <= 0:
-            continue
-        prices = [
-            float(value) for value in (
-                order.get("limit_price"), order.get("filled_avg_price"),
-                (positions.get(symbol) or {}).get("current_price"),
-            ) if value not in (None, "") and float(value) > 0
-        ]
-        if not prices:
-            raise ValueError(f"Open short order for {symbol} has no usable price")
-        exposure[symbol] = exposure.get(symbol, 0.0) + quantity * max(prices) * 1.02
-    return exposure
-
-
-def _easy_to_borrow_symbols(mode: str) -> set[str]:
-    """Read Alpaca's current easy-to-borrow symbols; unknown/HTB names fail closed."""
-    assets = _api("assets?status=active&asset_class=us_equity", mode=mode)
-    if not isinstance(assets, list):
-        raise ValueError("Alpaca asset response was not a list")
-    return {
-        str(asset.get("symbol", "")).upper()
-        for asset in assets
-        if isinstance(asset, dict)
-        and asset.get("symbol")
-        and asset.get("tradable") is True
-        and asset.get("shortable") is True
-        and str(asset.get("borrow_status", "")).lower() == "easy_to_borrow"
-    }
-
-
-def _get_algo_fill_activities(session_start: str, mode: str) -> list[dict]:
-    """Fetch every Algo fill activity since the current New York session began."""
-    activities: list[dict] = []
-    page_token = None
-    for _ in range(100):
-        endpoint = (
-            f"account/activities/FILL?after={session_start}"
-            "&direction=asc&page_size=100"
-        )
-        if page_token:
-            endpoint += f"&page_token={quote(page_token, safe='')}"
-        page = _api(endpoint, mode=mode)
-        if not isinstance(page, list):
-            raise ValueError("Algo fill activity response was not a list")
-        activities.extend(item for item in page if isinstance(item, dict))
-        if len(page) < 100:
-            return activities
-        page_token = str(page[-1].get("id") or "")
-        if not page_token:
-            raise ValueError("Algo fill activity pagination omitted its next page ID")
-    raise RuntimeError("Algo fill activity pagination exceeded 100 pages")
-
-
-def _get_open_orders(mode: str) -> list[dict]:
-    """Read all open orders, including orders submitted on an earlier date."""
-    orders: list[dict] = []
-    after_order_id = None
-    for _ in range(100):
-        endpoint = "orders?status=open&limit=500&direction=asc"
-        if after_order_id:
-            endpoint += f"&after_order_id={quote(after_order_id, safe='')}"
-        page = _api(endpoint, mode=mode)
-        if not isinstance(page, list):
-            raise ValueError("Open order response was not a list")
-        orders.extend(item for item in page if isinstance(item, dict))
-        if len(page) < 500:
-            return orders
-        after_order_id = str(page[-1].get("id") or "")
-        if not after_order_id:
-            raise ValueError("Open order pagination omitted its next page ID")
-    raise RuntimeError("Open order pagination exceeded 100 pages")
+    return _account_count_new_entries_today(orders, fills, positions, session_date)
 
 
 def _pending_buy_exposure(open_orders: list[dict], positions: dict[str, dict]) -> dict[str, float]:
-    """Reserve the still-unfilled value of every open buy order.
+    return _account_pending_buy_exposure(open_orders, positions)
 
-    For a market buy without a usable broker price, the amount is unknown; the
-    caller must block new entries rather than assume that the order costs zero.
-    """
-    exposure: dict[str, float] = {}
-    for order in open_orders:
-        if str(order.get("side", "")).lower() != "buy":
-            continue
-        symbol = str(order.get("symbol") or "").upper()
-        if not symbol:
-            raise ValueError("Open buy order has no symbol")
-        filled_qty = max(0.0, float(order.get("filled_qty") or 0))
-        raw_qty = order.get("qty")
-        if raw_qty not in (None, ""):
-            remaining_qty = max(0.0, float(raw_qty) - filled_qty)
-            if remaining_qty == 0:
-                continue
-            prices = [
-                float(value)
-                for value in (
-                    order.get("limit_price"), order.get("stop_price"),
-                    order.get("filled_avg_price"),
-                    (positions.get(symbol) or {}).get("current_price"),
-                )
-                if value not in (None, "") and float(value) > 0
-            ]
-            if not prices:
-                raise ValueError(f"Open market buy for {symbol} has no usable price")
-            value = remaining_qty * max(prices) * 1.02
-        else:
-            notional = float(order.get("notional") or 0)
-            if notional <= 0:
-                raise ValueError(f"Open buy for {symbol} has neither quantity nor notional")
-            fill_price = float(order.get("filled_avg_price") or 0)
-            value = max(0.0, notional - filled_qty * fill_price) * 1.02
-        if not math.isfinite(value):
-            raise ValueError(f"Open buy for {symbol} has nonfinite exposure")
-        exposure[symbol] = exposure.get(symbol, 0.0) + value
-    return exposure
+
+def _pending_short_exposure(open_orders: list[dict], positions: dict[str, dict]) -> dict[str, float]:
+    return _account_pending_short_exposure(open_orders, positions)
+
+
+def _get_algo_orders_since(session_start: str, mode: str) -> list[dict]:
+    return _fetch_algo_orders_since(session_start, mode, api=_api)
+
+
+def _get_algo_fill_activities(session_start: str, mode: str) -> list[dict]:
+    return _fetch_algo_fill_activities(session_start, mode, api=_api)
+
+
+def _get_open_orders(mode: str) -> list[dict]:
+    return _fetch_open_orders(mode, api=_api)
+
+
+def _easy_to_borrow_symbols(mode: str) -> set[str]:
+    return _fetch_easy_to_borrow_symbols(mode, api=_api)
 
 
 def get_portfolio_state(mode: str = None) -> dict:
-    """
-    Fetch live portfolio state from Alpaca.
-
-    Args:
-        mode: Algo account route; defaults to Algo.
-
-    Returns a dict with:
-      equity and its daily/weekly dollar baselines and P&L, cash, cash_pct,
-      daily_pnl_pct, weekly_pnl_pct,
-      positions (symbol → position dict),
-      sector_alloc (sector → $ value),
-      trade_count_today (all nonterminal long and short entry orders),
-      entry_count_today (new-position entries counted in the Algo session),
-      open_position_count.
-    """
-    mode = mode or "algo"
-    risk = get_mode_config(mode)["risk"]
-    allow_short_positions = bool(risk.get("allow_short_positions", False))
-    ticker_sector, _, _, _ = _get_universe_maps(mode)
-
-    # A risk snapshot must belong to the configured, active paper account.
-    # The executor verifies too, but standalone status and strategy callers
-    # must not evaluate a closed or replaced account.
-    _, account = verify_account_for_mode(mode)
-    positions_raw = _api("positions", mode=mode)
-
-    equity = float(account.get("equity", 0))
-    cash = float(account.get("cash", 0))
-    last_equity = float(account.get("last_equity", equity))
-
-    daily_pnl_pct = ((equity - last_equity) / last_equity) if last_equity else 0.0
-    daily_baseline_equity = (
-        last_equity if math.isfinite(last_equity) and last_equity > 0 else None
+    return _fetch_portfolio_state(
+        mode,
+        api=_api,
+        get_universe_maps=_get_universe_maps,
+        verify_account=verify_account_for_mode,
+        get_algo_orders_since=_get_algo_orders_since,
+        get_algo_fill_activities=_get_algo_fill_activities,
+        get_open_orders=_get_open_orders,
+        fetch_easy_to_borrow_symbols=_easy_to_borrow_symbols,
+        find_weekly_equity_baseline=_find_weekly_equity_baseline,
+        estimate_weekly_pnl=_estimate_weekly_pnl,
     )
-    daily_pnl_dollars = (
-        equity - daily_baseline_equity if daily_baseline_equity is not None else None
-    )
-    cash_pct = (cash / equity) if equity else 0.0
-
-    positions: dict[str, dict] = {}
-    sector_alloc: dict[str, float] = {}
-
-    for p in positions_raw:
-        sym = p["symbol"]
-        market_value = float(p.get("market_value", 0))
-        positions[sym] = {
-            "symbol": sym,
-            "qty": float(p.get("qty", 0)),
-            "market_value": market_value,
-            "current_price": float(p.get("current_price", 0)),
-            "avg_entry_price": float(p.get("avg_entry_price", 0)),
-            "unrealized_plpc": float(p.get("unrealized_plpc", 0)),
-            "pct_of_equity": (market_value / equity) if equity else 0,
-        }
-        sector = ticker_sector.get(sym, "other")
-        sector_alloc[sector] = sector_alloc.get(sector, 0) + abs(market_value)
-
-    now_et = datetime.now(MARKET_TZ)
-    session_day = now_et.date() + timedelta(days=1) if now_et.hour >= 20 else now_et.date()
-    session_date = session_day.isoformat()
-    session_start_et, _ = _algo_session_bounds(session_date)
-    session_start = session_start_et.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    entry_count_today = None
-    entry_count_available = True
-    entry_count_error = None
-    try:
-        orders = _get_algo_orders_since(session_start, mode=mode)
-        entry_orders_today = [
-            o for o in orders
-            if str(o.get("side", "")).lower() in {"buy", "sell"}
-            and (
-                _is_in_algo_session(o.get("submitted_at", ""), session_date)
-            )
-            and (
-                o.get("status") not in ("canceled", "expired", "rejected")
-                or float(o.get("filled_qty") or 0) > 0
-            )
-            and (
-                str(o.get("side", "")).lower() == "buy"
-                or str(o.get("position_intent", "")).lower() == "sell_to_open"
-                or (
-                    str(o.get("position_intent", "")).lower() not in {"sell_to_close", "buy_to_close"}
-                    and float((positions.get(str(o.get("symbol") or "").upper()) or {}).get("qty", 0) or 0) <= 0
-                )
-            )
-        ]
-        trade_count_today = len(entry_orders_today)
-        fills = _get_algo_fill_activities(session_start, mode=mode)
-        entry_count_today = _count_algo_new_entries_today(
-            orders, fills, positions, session_date,
-        )
-        trade_count_today = entry_count_today
-    except Exception as exc:
-        log.warning("Could not read %s order history: %s", mode, exc)
-        trade_count_today = None
-        entry_count_today = None
-        entry_count_available = False
-        entry_count_error = f"Could not read today's {mode} order history"
-
-    pending_buy_value_by_ticker: dict[str, float] = {}
-    pending_short_value_by_ticker: dict[str, float] = {}
-    pending_exposure_available = True
-    pending_exposure_error = None
-    easy_to_borrow_symbols: set[str] = set()
-    shortability_available = False
-    try:
-        open_orders = _get_open_orders(mode)
-        pending_buy_value_by_ticker = _pending_buy_exposure(
-            open_orders, positions,
-        )
-        if allow_short_positions:
-            pending_short_value_by_ticker = _pending_short_exposure(open_orders, positions)
-        for symbol, value in pending_buy_value_by_ticker.items():
-            sector = ticker_sector.get(symbol, "other")
-            sector_alloc[sector] = sector_alloc.get(sector, 0.0) + value
-        for symbol, value in pending_short_value_by_ticker.items():
-            sector = ticker_sector.get(symbol, "other")
-            sector_alloc[sector] = sector_alloc.get(sector, 0.0) + value
-    except Exception as exc:
-        log.warning("Could not value %s pending entry orders: %s", mode, exc)
-        pending_exposure_available = False
-        pending_exposure_error = f"Could not value {mode} open buy/short orders"
-
-    if allow_short_positions:
-        try:
-            easy_to_borrow_symbols = _easy_to_borrow_symbols(mode)
-            shortability_available = True
-        except Exception as exc:
-            log.warning("Could not verify %s shortability: %s", mode, exc)
-
-    pending_buy_reservation = sum(pending_buy_value_by_ticker.values())
-    available_cash = cash - pending_buy_reservation
-    pending_new_symbols = {
-        symbol for symbol in pending_buy_value_by_ticker
-        if float((positions.get(symbol) or {}).get("qty", 0)) == 0
-    }
-    pending_new_symbols.update(
-        symbol for symbol in pending_short_value_by_ticker
-        if float((positions.get(symbol) or {}).get("qty", 0)) == 0
-    )
-
-    broker_account_id = str(account.get("id") or account.get("account_number") or "")
-    weekly_baseline = _find_weekly_equity_baseline(
-        mode=mode, account_id=broker_account_id, session_day=session_day,
-    )
-    weekly_baseline_equity = weekly_baseline["equity"] if weekly_baseline else None
-    weekly_pnl_pct = _estimate_weekly_pnl(
-        equity, mode=mode, account_id=broker_account_id, session_day=session_day,
-    )
-    weekly_pnl_dollars = (
-        equity - weekly_baseline_equity
-        if weekly_baseline_equity is not None else None
-    )
-
-    return {
-        "account_id": broker_account_id,
-        "account_shorting_enabled": bool(account.get("shorting_enabled", False)),
-        "equity": equity,
-        "daily_baseline_equity": daily_baseline_equity,
-        "daily_pnl_dollars": daily_pnl_dollars,
-        "cash": cash,
-        "cash_pct": cash_pct,
-        "available_cash": available_cash,
-        "available_cash_pct": available_cash / equity if equity else 0.0,
-        "pending_buy_reservation": pending_buy_reservation,
-        "pending_buy_value_by_ticker": pending_buy_value_by_ticker,
-        "pending_short_value_by_ticker": pending_short_value_by_ticker,
-        "pending_new_symbols": sorted(pending_new_symbols),
-        "pending_exposure_available": pending_exposure_available,
-        "pending_exposure_error": pending_exposure_error,
-        "daily_pnl_pct": daily_pnl_pct,
-        "weekly_pnl_pct": weekly_pnl_pct,
-        "weekly_baseline_equity": weekly_baseline_equity,
-        "weekly_baseline_date": weekly_baseline["date"] if weekly_baseline else None,
-        "weekly_baseline_kind": weekly_baseline["kind"] if weekly_baseline else None,
-        "weekly_pnl_dollars": weekly_pnl_dollars,
-        "positions": positions,
-        "sector_alloc": sector_alloc,
-        "shortability_available": shortability_available,
-        "easy_to_borrow_symbols": sorted(easy_to_borrow_symbols),
-        "trade_count_today": trade_count_today,
-        "entry_count_today": entry_count_today,
-        "entry_count_available": entry_count_available,
-        "entry_count_error": entry_count_error,
-        "open_position_count": len([p for p in positions.values() if p["qty"] != 0]) + len(pending_new_symbols),
-    }
 
 
 def stage_approved_trade(
@@ -1207,6 +766,19 @@ def print_status(portfolio_state: dict, mode: str = "algo") -> None:
             flag = "⚠️" if pct > cap * 0.9 else "  "
             print(f"    {flag} {sector:<20} ${value:>10,.0f}  ({pct:>5.1f}% / {cap:.0f}% cap)")
     print()
+
+
+__all__ = [
+    "LEVERAGED_ETFS",
+    "MOONSHOTS",
+    "RejectionReason",
+    "ValidationResult",
+    "capture_account_inception_baseline",
+    "get_portfolio_state",
+    "print_status",
+    "stage_approved_trade",
+    "validate_trade",
+]
 
 
 if __name__ == "__main__":

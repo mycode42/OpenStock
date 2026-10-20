@@ -17,6 +17,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
+from runtime.atomic import atomic_write_json
 from strategies.catalog import STRATEGY_IDS
 from strategies.state_machine import ACTIVE_PHASES, PHASES
 
@@ -411,24 +412,12 @@ class AlgoStateStore:
 
     def _write_snapshot(self, market_state: str, portfolio: dict) -> None:
         self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self.snapshot_path.name}.", suffix=".tmp", dir=self.snapshot_path.parent,
+        atomic_write_json(
+            self.snapshot_path,
+            {"market_state": market_state, "strategy_portfolio": portfolio},
+            allow_nan=False,
+            mode=0o600,
         )
-        temporary_path = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(
-                    {"market_state": market_state, "strategy_portfolio": portfolio},
-                    stream, indent=2, sort_keys=True, allow_nan=False,
-                )
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(temporary_path, 0o600)
-            os.replace(temporary_path, self.snapshot_path)
-        except Exception:
-            temporary_path.unlink(missing_ok=True)
-            raise
 
 
 __all__ = ["AlgoStateStore", "StateStoreError", "StateCorruptionError", "empty_portfolio", "validate_portfolio"]

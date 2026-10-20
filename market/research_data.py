@@ -13,11 +13,9 @@ No paid API keys required.
 import datetime
 import hashlib
 import json
-import os
 import time
 
 import pandas as pd
-import requests
 
 from market.cache import get_cache
 from market.models import (
@@ -29,6 +27,8 @@ from market.models import (
     CompanyFacts,
     CompanyFactsResponse,
 )
+from market.sec import get_sec_response, resolve_cik
+from runtime.atomic import atomic_write_json
 
 # ---------------------------------------------------------------------------
 # Config
@@ -39,28 +39,9 @@ _cache = get_cache()
 from runtime.paths import CACHE_DIR
 CACHE_DIR.mkdir(exist_ok=True)
 
-SEC_USER_AGENT = os.environ.get(
-    "SEC_USER_AGENT", "GLORFT mordecai@naboo.lan"
-)
-SEC_HEADERS = {
-    "User-Agent": SEC_USER_AGENT,
-    "Accept": "application/json",
-}
-_sec_last_request = 0.0
-SEC_MIN_INTERVAL = 0.11  # ~9 req/sec, safely under 10
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _sec_throttle():
-    """Respect SEC EDGAR rate limit of 10 req/sec."""
-    global _sec_last_request
-    elapsed = time.time() - _sec_last_request
-    if elapsed < SEC_MIN_INTERVAL:
-        time.sleep(SEC_MIN_INTERVAL - elapsed)
-    _sec_last_request = time.time()
 
 
 def _disk_cache_get(namespace: str, key: str, ttl_seconds: int):
@@ -85,7 +66,7 @@ def _disk_cache_set(namespace: str, key: str, payload):
     ns_dir.mkdir(exist_ok=True)
     path = ns_dir / f"{safe_key}.json"
     try:
-        path.write_text(json.dumps({"ts": time.time(), "payload": payload}, default=str))
+        atomic_write_json(path, {"ts": time.time(), "payload": payload}, indent=None, default=str)
     except Exception:
         pass
 
@@ -101,24 +82,11 @@ def _resolve_cik(ticker: str) -> str | None:
     cached = _disk_cache_get("cik", ticker, ttl_seconds=30 * 86400)
     if cached:
         return cached
-
-    _sec_throttle()
-    url = "https://efts.sec.gov/LATEST/search-index?q=%22{}%22&dateRange=custom&startdt=2020-01-01&forms=10-K".format(ticker)
-    # Better: use the tickers.json mapping
     try:
-        _sec_throttle()
-        resp = requests.get(
-            "https://www.sec.gov/files/company_tickers.json",
-            headers=SEC_HEADERS,
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            for entry in data.values():
-                if entry.get("ticker", "").upper() == ticker.upper():
-                    cik = str(entry["cik_str"]).zfill(10)
-                    _disk_cache_set("cik", ticker, cik)
-                    return cik
+        cik = resolve_cik(ticker)
+        if cik:
+            _disk_cache_set("cik", ticker, cik)
+            return cik
     except Exception:
         pass
     return None
@@ -131,12 +99,10 @@ def _get_company_facts_sec(cik: str) -> dict | None:
     if cached:
         return cached
 
-    _sec_throttle()
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
     try:
-        resp = requests.get(url, headers=SEC_HEADERS, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
+        data = get_sec_response(url, timeout=30).json()
+        if isinstance(data, dict):
             _disk_cache_set("edgar", cache_key, data)
             return data
     except Exception:
@@ -632,7 +598,6 @@ def get_insider_trades(
         return []
 
     try:
-        _sec_throttle()
         # Use EDGAR full-text search for Form 4 filings
         url = f"https://efts.sec.gov/LATEST/search-index?q=%22{ticker}%22&forms=4&dateRange=custom"
         if start_date:
@@ -640,14 +605,8 @@ def get_insider_trades(
         url += f"&enddt={end_date}"
 
         # Alternative: use the submissions API
-        _sec_throttle()
         submissions_url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-        resp = requests.get(submissions_url, headers=SEC_HEADERS, timeout=30)
-
-        if resp.status_code != 200:
-            return []
-
-        data = resp.json()
+        data = get_sec_response(submissions_url, timeout=30).json()
         company_name = data.get("name", ticker)
         recent = data.get("filings", {}).get("recent", {})
         forms = recent.get("form", [])
@@ -711,12 +670,9 @@ def _parse_form4_xml(cik: str, accession: str) -> dict | None:
     """Parse a Form 4 XML filing for transaction details."""
     try:
         acc_clean = accession.replace("-", "")
-        _sec_throttle()
         # Try to get the index page for the filing
         index_url = f"https://www.sec.gov/Archives/edgar/data/{cik.lstrip('0')}/{acc_clean}/"
-        resp = requests.get(index_url, headers=SEC_HEADERS, timeout=15)
-        if resp.status_code != 200:
-            return None
+        resp = get_sec_response(index_url, timeout=15)
 
         # Look for the XML file in a simple way
         import re
@@ -725,10 +681,7 @@ def _parse_form4_xml(cik: str, accession: str) -> dict | None:
             return None
 
         xml_url = f"{index_url}{xml_files[0]}"
-        _sec_throttle()
-        xml_resp = requests.get(xml_url, headers=SEC_HEADERS, timeout=15)
-        if xml_resp.status_code != 200:
-            return None
+        xml_resp = get_sec_response(xml_url, timeout=15)
 
         # Simple XML parsing
         import xml.etree.ElementTree as ET
@@ -922,15 +875,11 @@ def get_company_facts(ticker: str, api_key: str = None) -> CompanyFactsResponse:
 
     sec_info: dict = {}
     if cik:
-        _sec_throttle()
         try:
-            resp = requests.get(
-                f"https://data.sec.gov/submissions/CIK{cik}.json",
-                headers=SEC_HEADERS,
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                sec_info = resp.json()
+            response = get_sec_response(f"https://data.sec.gov/submissions/CIK{cik}.json", timeout=15)
+            payload = response.json()
+            if isinstance(payload, dict):
+                sec_info = payload
         except Exception:
             pass
 

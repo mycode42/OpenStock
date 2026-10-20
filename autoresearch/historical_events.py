@@ -18,45 +18,34 @@ import os
 from pathlib import Path
 import re
 import tempfile
-import time as wall_time
 from typing import Iterable, Iterator
 from zoneinfo import ZoneInfo
 
 import requests
-from dotenv import load_dotenv
 
 from market.store import DEFAULT_DB, SQLiteBarStore
+from market.sec import (
+    SEC_ARCHIVE_URL, SEC_SUBMISSIONS_URL,
+    get_sec_json, get_sec_response, tickers_to_ciks,
+)
 from strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
 from strategies.event_driven.models import ScheduledEvent
 from strategies.universe import configured_universe
 
 
 LOG = logging.getLogger("historical_events")
+from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
-SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
-SEC_ARCHIVE_URL = "https://data.sec.gov/submissions/{filename}"
 BLS_YEAR_URL = "https://www.bls.gov/schedule/{year}/home.htm"
 FED_YEAR_URL = "https://www.federalreserve.gov/monetarypolicy/fomchistorical{year}.htm"
 FED_CALENDARS_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-SEC_MIN_INTERVAL_SECONDS = 0.12
 REACTION_WINDOW = timedelta(days=2)
 _RETROSPECTIVE_CUTOFF_DAYS = 45
 _SOURCE_PRIORITY = {"8-K": 0, "10-Q": 1, "10-K": 2}
 DEFAULT_OUTPUT = ROOT / "data" / "research" / "event_calendar_historical.csv"
 SOURCE_CACHE = ROOT / "data" / "research" / "event_sources"
-
-load_dotenv(ROOT / ".env")
-SEC_HEADERS = {
-    "User-Agent": os.environ.get(
-        "SEC_USER_AGENT", "GLORFT mordecai@naboo.lan",
-    ),
-    "Accept": "application/json, text/html",
-}
-_last_sec_request = 0.0
-
 
 class _TableRows(HTMLParser):
     def __init__(self) -> None:
@@ -151,18 +140,10 @@ class _FedCalendarRows(HTMLParser):
             self.row = None
 
 
-def _respect_sec_rate_limit() -> None:
-    global _last_sec_request
-    elapsed = wall_time.monotonic() - _last_sec_request
-    if elapsed < SEC_MIN_INTERVAL_SECONDS:
-        wall_time.sleep(SEC_MIN_INTERVAL_SECONDS - elapsed)
-    _last_sec_request = wall_time.monotonic()
-
-
 def _get(url: str, *, sec: bool = False, timeout: int = 30) -> requests.Response:
     if sec:
-        _respect_sec_rate_limit()
-    headers = SEC_HEADERS if sec else {"User-Agent": "AlgoTraderResearch/1.6"}
+        return get_sec_response(url, timeout=timeout)
+    headers = {"User-Agent": "AlgoTraderResearch/1.6"}
     response = requests.get(url, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
@@ -180,13 +161,15 @@ def _fetch_cached_text(url: str, path: Path, *, refresh_after: timedelta) -> str
 def _json_payload(url: str, *, cache_path: Path | None = None, sec: bool = False) -> dict:
     if cache_path is not None and cache_path.is_file() and not sec:
         return json.loads(cache_path.read_text(encoding="utf-8"))
+    if sec:
+        return get_sec_json(url, cache_path=cache_path, timeout=30)
     response = _get(url, sec=sec)
     payload = response.json()
     if not isinstance(payload, dict):
         raise ValueError(f"Expected a JSON object from {url}")
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(payload), encoding="utf-8")
+        atomic_write_json(cache_path, payload, indent=None, sort_keys=True)
     return payload
 
 
@@ -221,17 +204,7 @@ def _event(
 
 
 def _ticker_ciks(tickers: set[str]) -> tuple[dict[str, str], dict]:
-    cache = SOURCE_CACHE / "sec" / "company_tickers.json"
-    payload = _json_payload(SEC_TICKERS_URL, cache_path=cache, sec=True)
-    mapping = {}
-    values = payload.values() if all(isinstance(key, str) for key in payload) else ()
-    for item in values:
-        if not isinstance(item, dict):
-            continue
-        symbol = str(item.get("ticker", "")).strip().upper()
-        cik = item.get("cik_str")
-        if symbol in tickers and cik is not None:
-            mapping[symbol] = str(cik).zfill(10)
+    mapping = tickers_to_ciks(tickers)
     return mapping, {"tickers_requested": len(tickers), "tickers_mapped": len(mapping), "unmapped_tickers": sorted(tickers - set(mapping))}
 
 
@@ -253,8 +226,7 @@ def _load_company_submissions(cik: str) -> list[dict]:
     root = SOURCE_CACHE / "sec" / "submissions"
     main_path = root / f"CIK{cik}.json"
     main = _json_payload(SEC_SUBMISSIONS_URL.format(cik=cik), sec=True)
-    main_path.parent.mkdir(parents=True, exist_ok=True)
-    main_path.write_text(json.dumps(main), encoding="utf-8")
+    atomic_write_json(main_path, main, indent=None, sort_keys=True)
     recent = main.get("filings", {}).get("recent")
     records: list[dict] = [recent] if isinstance(recent, dict) else []
     for index, meta in enumerate(_submission_files(main)):
@@ -266,7 +238,7 @@ def _load_company_submissions(cik: str) -> list[dict]:
             older = json.loads(cache.read_text(encoding="utf-8"))
         else:
             older = _json_payload(SEC_ARCHIVE_URL.format(filename=filename), sec=True)
-            cache.write_text(json.dumps(older), encoding="utf-8")
+            atomic_write_json(cache, older, indent=None, sort_keys=True)
         recent = older.get("filings", {}).get("recent")
         if isinstance(recent, dict):
             records.append(recent)

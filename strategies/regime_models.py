@@ -6,9 +6,6 @@ from functools import lru_cache
 import math
 
 import numpy as np
-from hmmlearn.hmm import GaussianHMM
-from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler
 
 
 def _regime_for_state(means: dict[str, float]) -> str:
@@ -39,7 +36,14 @@ def _cached_model_fit(
     feature_names: tuple[str, ...],
     training: tuple[tuple[str, tuple[float, ...]], ...],
     seed: int,
-) -> tuple[object, StandardScaler, bool]:
+) -> tuple[object, object, bool]:
+    try:
+        from hmmlearn.hmm import GaussianHMM
+        from sklearn.mixture import GaussianMixture
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as exc:
+        raise ImportError("HMM/GMM regime models require the optional 'ml' dependency group") from exc
+
     x_train = np.asarray([values for _day, values in training], dtype=float)
     if x_train.ndim != 2 or not np.isfinite(x_train).all():
         raise ValueError("invalid training features")
@@ -88,6 +92,11 @@ def _cached_fit(
         else:
             posterior = model.predict_proba(prediction_scaled[-1:])[0]
         state_means = scaler.inverse_transform(model.means_)
+    except ImportError as exc:
+        return {
+            "status": "unavailable", "error": str(exc),
+            "regime": "unknown", "confidence": 0.0, "probabilities": {},
+        }
     except (ValueError, FloatingPointError, ArithmeticError, np.linalg.LinAlgError) as exc:
         return {
             "status": "fit_failed", "error": type(exc).__name__,

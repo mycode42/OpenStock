@@ -25,7 +25,7 @@ keys you use. Keep .env private; it is ignored by Git.
 
     git clone git@github.com:mycode42/algo-trader.git
     cd algo-trader
-    poetry install
+    poetry install --with ai,ml,research
     cp .env.example .env
 
 The systemd unit is algo-trader.service and runs from /opt/algo-trader.
@@ -53,6 +53,11 @@ The systemd unit is algo-trader.service and runs from /opt/algo-trader.
 
 Scheduled jobs and report prompts are documented in ops/. Research behavior is
 described in docs/adaptive_research.md and docs/event_driven_strategy.md.
+
+The optional `ai`, `ml`, and `research` dependency groups add the event analyst,
+statistical/tree models, and yfinance-backed research/reporting features. A
+minimal coordinator install can omit them with `poetry install`; install the
+groups used by the configured strategies and scheduled jobs.
 
 ## Layout
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
-import json
-import os
 from pathlib import Path
+
+from runtime.atomic import atomic_write_json
 
 @contextmanager
 def _research_lock(path: Path):
@@ -20,6 +20,4 @@ def _research_lock(path: Path):
 
 def _atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
-    os.replace(temporary, path)
+    atomic_write_json(path, payload, default=str)
