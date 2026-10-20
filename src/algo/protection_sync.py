@@ -175,9 +175,14 @@ def sync_broker_stops(
         or bool(getattr(window, "extended_hours", extended_hours)) != extended_hours
     ):
         return report
-    local_now = now.astimezone(window.regular_open.tzinfo)
-    if session_name == "regular" and not window.regular_open <= local_now < window.regular_close:
-        return report
+    if session_name == "regular":
+        regular_open = getattr(window, "regular_open", None)
+        regular_close = getattr(window, "regular_close", None)
+        if not isinstance(regular_open, datetime) or not isinstance(regular_close, datetime):
+            return report
+        local_now = now.astimezone(regular_open.tzinfo or timezone.utc)
+        if not regular_open <= local_now < regular_close:
+            return report
 
     owners = portfolio.get("position_owners") or {}
     states = portfolio.get("strategy_states") or {}

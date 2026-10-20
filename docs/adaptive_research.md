@@ -22,17 +22,20 @@ verification, and forward simulation; they are not required for search
 novelty.
 
 The nightly pipeline also runs rolling out-of-sample verification over the
-historical data range. A strategy must pass its existing walk-forward gates
-before one of its regime candidates can be staged. That historical gate
-evaluates the adaptive search process across unseen folds; it does not claim
-that the exact newly discovered parameter set was selected in every historical
-fold. The staged profile then has to prove itself on data that arrives after
+historical data range. A completed verification is required, but its
+strategy-wide `overall_pass` no longer blocks a regime candidate from entering
+a forward trial. The candidate still has to improve on the same-window
+training baseline for its target regime. Historical verification results and
+failed checks are attached to the candidate as evidence; they remain visible
+when comparing it with later folds and trials. This lets a promising regime
+candidate gather prospective evidence even when the strategy's aggregate
+historical score is weak. An errored or missing verification still blocks
 staging.
 
 ## Forward simulation gates
 
 For the current SPY regime, the validator stages at most one profile per
-strategy. It starts paired replays on the first stored trading session after
+strategy at a time. It starts paired replays on the first stored trading session after
 staging: one uses the candidate for its target regime, and one uses the
 currently promoted profile. Both use the same symbols, market data, portfolio
 risk controls, and cost assumptions. Pre-staging bars can warm up indicators,
@@ -61,6 +64,43 @@ manifest each scan and applies signal parameters for the matching regime;
 portfolio risk limits are not promoted. The trial history and last cycle live
 in `data/research/algo-auto/forward-validation.json`. Discovery, verification,
 and trial artifacts remain under `data/research/algo-auto/`.
+
+## Durable run and candidate lineage
+
+Every scheduled invocation is recorded in
+`data/research/algo-auto/research.sqlite3`. Each invocation also gets an
+immutable `invocations/<invocation_id>/report.json` snapshot; `latest.json`,
+the date-named reports, and the existing fitness-history JSON remain for
+compatibility. The first ledger initialization imports the existing fitness
+scorecards and candidate archive, including its saved verification folds.
+
+The database links invocations and stage outcomes to candidate evaluations,
+training and out-of-sample folds, portfolio folds, forward-trial observations,
+promotion events, and source artifacts. Candidate evaluations retain the data
+fingerprint, search sequence and seed, date windows, metrics, gate results,
+reuse/source links, and artifact path. Forward trials keep their originating
+invocation and source candidate, baseline profile fingerprint, simulation
+observations, final status, and promotion release ID. Full reports and replay
+details remain in JSON so the ledger stays compact while retaining links and
+SHA-256 fingerprints.
+
+For example, this query follows one candidate through its discovery and
+historical evaluations:
+
+```sql
+SELECT c.strategy, c.regime, e.stage, e.evaluation_kind, e.data_version,
+       e.train_start, e.train_end, e.test_start, e.test_end,
+       e.net_return_pct, e.sharpe, e.passed, e.artifact_path
+FROM candidate_evaluation AS e
+JOIN research_candidate AS c USING (candidate_id)
+WHERE c.candidate_id = ?
+ORDER BY e.recorded_at, e.test_start;
+```
+
+To inspect its prospective trials and promotion history, join
+`forward_trial_observation` and `research_promotion` on `trial_id`. SQLite can
+be queried with the system `sqlite3` command or Python's standard `sqlite3`
+module; no additional tracking service is required.
 
 This is forward simulation, not a Shadow account or a broker paper-order path.
 It does not model live quote-level fills, latency, market impact, or overnight

@@ -162,7 +162,10 @@ def _fitness_timeline_entry(report: dict, *, source: str = "scheduled_run") -> d
     ).get("strategies") or {}
     created_at = report.get("created_at") or datetime.now(timezone.utc).isoformat()
     return {
-        "invocation_id": datetime.now(timezone.utc).isoformat(),
+        "invocation_id": (
+            report.get("invocation_id") or orchestration.get("invocation_id")
+            or datetime.now(timezone.utc).isoformat()
+        ),
         "run_id": orchestration.get("run_id") or report.get("run_id"),
         "run_date_et": report.get("run_date_et"),
         "created_at": created_at,

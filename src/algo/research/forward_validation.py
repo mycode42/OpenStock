@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import time
 from types import SimpleNamespace
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from src.algo.profile_store import FORWARD_VALIDATION_PATH, PROMOTED_PROFILE_PATH, write_json_atomic
@@ -96,9 +97,14 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
     verification_rows = verification.get("strategies") or {}
     for strategy, discovery_status in (discovery.get("strategies") or {}).items():
         verification_status = verification_rows.get(strategy) or {}
-        checks = (verification_status.get("summary") or {}).get("checks") or {}
-        if verification_status.get("status") == "error" or checks.get("overall_pass") is not True:
+        verification_summary = verification_status.get("summary") or {}
+        if (
+            discovery_status.get("status") not in {"completed", "reused"}
+            or verification_status.get("status") not in {"completed", "reused"}
+            or not verification_summary
+        ):
             continue
+        checks = verification_summary.get("checks") or {}
         artifact = discovery_status.get("detail_artifact")
         if not artifact:
             continue
@@ -118,13 +124,26 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
                 continue
             output.append({
                 "candidate_id": candidate_id(strategy, parameters, regime),
+                "source_candidate_id": item.get("source_candidate_id"),
                 "strategy": strategy,
                 "regime": regime,
                 "parameters": parameters,
                 "discovery_fitness": item.get("fitness"),
                 "discovery_metrics": item.get("metrics"),
                 "baseline_discovery_fitness": item.get("baseline_fitness"),
-                "historical_verification": {"overall_pass": True, "checks": checks},
+                "historical_verification": {
+                    "status": verification_status.get("status"),
+                    "overall_pass": checks.get("overall_pass"),
+                    "checks": checks,
+                    "thresholds": verification_summary.get("thresholds"),
+                    "stitched_oos": verification_summary.get("stitched_oos"),
+                    "average_fitness_decay": verification_summary.get("average_fitness_decay"),
+                    "fold_count": verification_summary.get("fold_count"),
+                },
+                "screening": {
+                    "improved_over_training_baseline": bool(item.get("improved_over_baseline")),
+                    "regime": regime,
+                },
                 "discovery_artifact": str(Path(artifact).resolve()),
             })
     return output
@@ -207,7 +226,9 @@ def _promote(trial: dict, metrics: dict, promoted: dict) -> dict:
     strategy, regime = trial["strategy"], trial["regime"]
     promoted.setdefault("regime_profiles", {}).setdefault(strategy, {})[regime] = trial["parameters"]
     promoted.setdefault("regime_profile_ids", {}).setdefault(strategy, {})[regime] = trial["candidate_id"]
+    release_id = f"forward-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     record = {
+        "trial_id": trial.get("trial_id"),
         "candidate_id": trial["candidate_id"],
         "strategy": strategy,
         "regime": regime,
@@ -216,10 +237,11 @@ def _promote(trial: dict, metrics: dict, promoted: dict) -> dict:
         "forward_metrics": metrics,
         "historical_verification": trial.get("historical_verification"),
         "discovery_artifact": trial.get("discovery_artifact"),
+        "release_id": release_id,
     }
     promoted["schema"] = "swarm_algo_promoted_profiles_v1"
     promoted["updated_at"] = datetime.now(timezone.utc).isoformat()
-    promoted["release_id"] = f"forward-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    promoted["release_id"] = release_id
     prior = promoted.setdefault("history", [])
     prior.append(record)
     promoted["history"] = prior[-200:]
@@ -229,6 +251,7 @@ def _promote(trial: dict, metrics: dict, promoted: dict) -> dict:
 def run_forward_validation_cycle(
     *, discovery: dict, verification: dict, store, database: str,
     symbols: list[str], end: date, data_version: str, allow_stage: bool = True,
+    invocation_id: str | None = None, ledger_path: str | Path | None = None,
 ) -> dict:
     """Replay staged profiles only over sessions after their discovery date."""
     started = time.monotonic()
@@ -245,6 +268,9 @@ def run_forward_validation_cycle(
             history = state.setdefault("history", [])
             if not isinstance(active, dict) or not isinstance(history, list):
                 raise ValueError("Forward validation record has invalid active_trials or history")
+            for trial in [*active.values(), *history]:
+                if isinstance(trial, dict):
+                    trial.setdefault("trial_id", uuid4().hex)
             regime = _current_regime(store, end)
         except Exception as exc:
             return {
@@ -258,6 +284,7 @@ def run_forward_validation_cycle(
         expired = []
         simulation_errors = []
         staging_errors = []
+        observed_trial_ids = set()
         for key, trial in list(active.items()):
             if not isinstance(trial, dict) or trial.get("status") != "validating":
                 continue
@@ -285,6 +312,7 @@ def run_forward_validation_cycle(
                     "status": "waiting_for_future_sessions",
                     "data_end": end.isoformat(), "data_version": data_version,
                 }
+                observed_trial_ids.add(trial["trial_id"])
                 continue
             simulation_start = sessions[0]
             previous = trial.get("latest_simulation") or {}
@@ -300,6 +328,7 @@ def run_forward_validation_cycle(
             ):
                 candidate_metrics = previous["candidate_metrics"]
                 baseline_metrics = previous["baseline_metrics"]
+                previous["reused"] = True
             else:
                 try:
                     baseline_report = _simulate(
@@ -326,6 +355,7 @@ def run_forward_validation_cycle(
                         "simulation_start": simulation_start.isoformat(),
                         "candidate_metrics": candidate_metrics,
                         "baseline_metrics": baseline_metrics,
+                        "reused": False,
                     }
                 except Exception as exc:
                     trial["latest_simulation"] = {
@@ -339,7 +369,10 @@ def run_forward_validation_cycle(
                         "candidate_id": trial.get("candidate_id"),
                         "error": trial["latest_simulation"]["error"],
                     })
+                    observed_trial_ids.add(trial["trial_id"])
                     continue
+
+            observed_trial_ids.add(trial["trial_id"])
 
             sample_met = bool(
                 candidate_metrics["closed_trades"] >= MIN_CLOSED_TRADES
@@ -411,6 +444,10 @@ def run_forward_validation_cycle(
                 ):
                     continue
                 candidate.update({
+                    "trial_id": uuid4().hex,
+                    "origin_invocation_id": invocation_id,
+                    "source_candidate_id": candidate.get("source_candidate_id"),
+                    "baseline_profile_sha256": _baseline_profile_fingerprint(strategy),
                     "status": "validating", "staged_on": end.isoformat(),
                     "staged_at": now.isoformat(), "latest_simulation": None,
                 })
@@ -451,6 +488,15 @@ def run_forward_validation_cycle(
             "history": history[-500:],
         })
         write_json_atomic(FORWARD_VALIDATION_PATH, state)
+
+    if invocation_id and ledger_path:
+        from .research_ledger import ResearchLedger
+
+        ResearchLedger(ledger_path).record_forward_cycle(
+            invocation_id, active_trials=active, terminal_trials=history,
+            promoted_rows=promoted_rows, data_version=data_version,
+            data_end=end.isoformat(), observed_trial_ids=observed_trial_ids,
+        )
 
     return {
         "status": "partial_error" if simulation_errors or staging_errors else "completed",

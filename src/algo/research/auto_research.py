@@ -11,8 +11,7 @@ from pathlib import Path
 import sys
 from time import perf_counter
 from types import SimpleNamespace
-
-import requests
+from uuid import uuid4
 
 from src.config import get_algo_runtime_settings
 from src.algo.cpu import available_cpu_count
@@ -33,6 +32,7 @@ from .data import (
 from .files import _atomic_json, _research_lock
 from .fitness_timeline import _attach_fitness_timeline
 from .live_manifest import live_configuration_manifest
+from .research_ledger import ResearchLedger
 from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
     ADAPTIVE_VERIFICATION_CANDIDATES,
@@ -58,6 +58,17 @@ def _refresh_incremental(store, *, selected_symbols, end_date):
 
 def run_daily_research(args) -> dict:
     """Run one versioned research cohort, reusing compatible artifacts when possible."""
+    output_dir = Path(args.output_dir)
+    invocation_id = getattr(args, "invocation_id", None) or uuid4().hex
+    ledger_path = Path(getattr(args, "ledger_path", output_dir / "research.sqlite3"))
+    ledger = ResearchLedger(ledger_path)
+    ledger.start_invocation(invocation_id, request={
+        "workers": args.workers, "no_refresh": args.no_refresh,
+        "factor_only": args.factor_only, "force": args.force,
+    })
+    ledger.import_legacy(output_dir)
+    args.invocation_id = invocation_id
+    args.ledger_path = str(ledger_path)
     refresh_active_parameter_profile()
     runtime_settings = get_algo_runtime_settings()
     total_started = perf_counter()
@@ -152,6 +163,12 @@ def run_daily_research(args) -> dict:
     run_id = f"session-{cohort_end:%Y%m%d}-{fingerprint[:16]}"
     context["fingerprint"] = fingerprint
     context["run_id"] = run_id
+    context["invocation_id"] = invocation_id
+    ledger.set_run_context(
+        invocation_id, cohort_id=run_id, data_version=data_version,
+        pipeline_version=AUTO_RESEARCH_PIPELINE_VERSION,
+        metadata={"research_context": context},
+    )
     logger.info(
         "Research cohort %s: %s through %s, %d symbols, %d workers",
         run_id, RESEARCH_START, cohort_end, len(covered_symbols), args.workers,
@@ -173,6 +190,7 @@ def run_daily_research(args) -> dict:
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
+    ledger.record_discovery_stage(invocation_id, adaptive_discovery, data_version=data_version)
     adaptive_discovery_seconds = round(perf_counter() - adaptive_discovery_started, 3)
     logger.info(
         "Adaptive discovery finished: %s in %.1fs",
@@ -191,6 +209,12 @@ def run_daily_research(args) -> dict:
             output_dir=adaptive_root, workers=args.workers, force=args.force,
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
+    )
+    ledger.record_verification_stage(
+        invocation_id, adaptive_verification,
+        {strategy: {"verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact")}
+         for strategy in RESEARCHABLE_STRATEGIES},
+        data_version=data_version,
     )
     adaptive_verification_seconds = round(perf_counter() - adaptive_verification_started, 3)
     logger.info(
@@ -220,9 +244,11 @@ def run_daily_research(args) -> dict:
                 discovery=adaptive_discovery, verification=adaptive_verification,
                 store=store, database=database, symbols=covered_symbols,
                 end=cohort_end, data_version=data_version,
+                invocation_id=invocation_id, ledger_path=ledger_path,
             )
             cached = {
                 **cached,
+                "invocation_id": invocation_id,
                 "status": (
                     "partial_error"
                     if forward_validation.get("status") in {"error", "partial_error"}
@@ -269,6 +295,7 @@ def run_daily_research(args) -> dict:
             })
             cached["orchestration"] = {
                 **(cached.get("orchestration") or {}),
+                "invocation_id": invocation_id,
                 "cache_hit": False,
                 "cohort_report_reused": True,
                 "portfolio_reused": True,
@@ -279,6 +306,7 @@ def run_daily_research(args) -> dict:
                 "reused": True,
             }
             cached["run_date_et"] = datetime.now(ET).date().isoformat()
+            cached["created_at"] = datetime.now(timezone.utc).isoformat()
             cached = _attach_fitness_timeline(cached, Path(args.output_dir))
             _atomic_json(report_path, cached)
             _atomic_json(root / "latest.json", cached)
@@ -329,12 +357,14 @@ def run_daily_research(args) -> dict:
             discovery=adaptive_discovery, verification=adaptive_verification,
             store=store, database=database, symbols=covered_symbols,
             end=cohort_end, data_version=data_version, allow_stage=False,
+            invocation_id=invocation_id, ledger_path=ledger_path,
         )
         timings["forward_validation"] = {
             "seconds": round(perf_counter() - validation_started, 3),
             "status": forward_validation.get("status"),
         }
         report = {
+            "invocation_id": invocation_id,
             "schema": "swarm_algo_nightly_research_v2",
             "status": (
                 "partial_error"
@@ -426,12 +456,14 @@ def run_daily_research(args) -> dict:
         discovery=adaptive_discovery, verification=adaptive_verification,
         store=store, database=database, symbols=covered_symbols,
         end=cohort_end, data_version=data_version,
+        invocation_id=invocation_id, ledger_path=ledger_path,
     )
     timings["forward_validation"] = {
         "seconds": round(perf_counter() - validation_started, 3),
         "status": forward_validation.get("status"),
     }
     report = {
+        "invocation_id": invocation_id,
         "schema": "swarm_algo_nightly_research_v2",
         "status": (
             "partial_error"
@@ -576,6 +608,11 @@ def _configure_progress_logging(output_dir: Path) -> Path | None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     output_dir = Path(args.output_dir)
+    invocation_id = uuid4().hex
+    ledger_path = output_dir / "research.sqlite3"
+    ledger = None
+    args.invocation_id = invocation_id
+    args.ledger_path = str(ledger_path)
     log_path = _configure_progress_logging(output_dir)
     today = datetime.now(ET).date().isoformat()
     logger.info(
@@ -585,14 +622,21 @@ def main(argv: list[str] | None = None) -> int:
     if log_path is not None:
         logger.info("Progress log: %s", log_path.resolve())
     try:
+        ledger = ResearchLedger(ledger_path)
+        ledger.start_invocation(invocation_id, request={
+            "workers": args.workers, "no_refresh": args.no_refresh,
+            "factor_only": args.factor_only, "force": args.force,
+        })
         with _research_lock(Path(output_dir) / "locks" / "nightly-layers.lock"):
+            ledger.import_legacy(output_dir)
             report = run_daily_research(args)
             report["run_date_et"] = today
             report["workers_requested"] = args.workers
-    except (ValueError, OSError, requests.RequestException, RuntimeError) as exc:
+    except Exception as exc:
         logger.error("AutoResearch failed: %s: %s", type(exc).__name__, exc)
         report = {
             "schema": "swarm_algo_nightly_research_v2",
+            "invocation_id": invocation_id,
             "status": "error", "run_date_et": today,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "run_id": f"error-{datetime.now(ET).strftime('%Y%m%dT%H%M%S')}",
@@ -602,6 +646,13 @@ def main(argv: list[str] | None = None) -> int:
         }
         report = _attach_fitness_timeline(report, output_dir)
         print(json.dumps(report, sort_keys=True), file=sys.stderr)
+        invocation_report_path = output_dir / "invocations" / invocation_id / "report.json"
+        report["invocation_report_path"] = str(invocation_report_path.resolve())
+        _atomic_json(invocation_report_path, report)
+        if ledger is not None:
+            ledger.record_completed_report(
+                invocation_id, report, report_path=str(invocation_report_path.resolve()),
+            )
         _atomic_json(output_dir / f"{today}.json", report)
         _atomic_json(output_dir / "latest.json", report)
         return 2
@@ -613,6 +664,14 @@ def main(argv: list[str] | None = None) -> int:
         (report.get("orchestration") or {}).get("cache_hit", False),
         (report.get("stage_timings") or {}).get("total_seconds", 0.0),
     )
+    report["invocation_id"] = invocation_id
+    invocation_report_path = output_dir / "invocations" / invocation_id / "report.json"
+    report["invocation_report_path"] = str(invocation_report_path.resolve())
+    _atomic_json(invocation_report_path, report)
+    if ledger is not None:
+        ledger.record_completed_report(
+            invocation_id, report, report_path=str(invocation_report_path.resolve()),
+        )
     _atomic_json(output_dir / f"{today}.json", report)
     _atomic_json(output_dir / "latest.json", report)
     discovery_report = ((report.get("adaptive_research") or {}).get("discovery") or {})
