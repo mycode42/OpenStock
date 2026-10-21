@@ -134,20 +134,35 @@ function statusClass(value) {
     return '';
 }
 
-function renderOptimizerPanel(optimizer) {
-    const strategies = Array.isArray(optimizer?.strategies) ? optimizer.strategies : [];
+function renderOptimizerDetail(optimizer) {
+    if (!optimizer) return '<div class="algo-empty">Select an optimizer run to inspect its results.</div>';
+    const strategies = Array.isArray(optimizer.strategies) ? optimizer.strategies : [];
     const rows = strategies.map(strategy => `<article class="algo-optimizer-strategy">
         <div class="algo-optimizer-strategy-head"><div><strong>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</strong><span>Archive #${strategy.archive_sequence ?? '—'} · ${strategy.new_variants ?? 0} new variants</span></div><span class="algo-status-pill ${strategy.selected_eligible ? 'promising' : ''}">${strategy.selected_eligible ? 'CANDIDATE ELIGIBLE' : strategy.selected_candidate === 'baseline' ? 'BASELINE RETAINED' : 'NOT ELIGIBLE'}</span></div>
         <div class="algo-optimizer-search-grid"><div><span>Top tested candidate</span><strong title="${escapeHtml(strategy.top_tested_candidate || '')}">${escapeHtml(strategy.top_tested_candidate || 'Unavailable')}</strong></div><div><span>Fitness</span><strong class="${classForReturn(strategy.top_tested_fitness)}">${signedScore(strategy.top_tested_fitness)}</strong></div><div><span>Δ vs baseline</span><strong class="${classForReturn(strategy.top_tested_delta)}">${signedScore(strategy.top_tested_delta)}</strong></div></div>
         <div class="algo-optimizer-selection"><span>Archive choice <strong title="${escapeHtml(strategy.selected_candidate || '')}">${escapeHtml(strategy.selected_candidate || 'Unavailable')}</strong></span><span>${strategy.selected_closed_trades ?? 0} closed trades · ${signedPercent(strategy.selected_return_pct, 4)} research return</span>${strategy.top_tested_window_days ? `<span>Best window ${strategy.top_tested_window_days} sessions</span>` : ''}</div>
     </article>`).join('');
-    return `<section class="card algo-panel algo-optimizer-panel" id="algo-optimizer">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER</span><h2>Latest optimization cycle</h2><p>${optimizer ? `${escapeHtml(optimizer.range_start || '—')} to ${escapeHtml(optimizer.range_end || '—')} · ${optimizer.created_at ? `completed ${escapeHtml(dateTime(optimizer.created_at))}` : 'completion time unavailable'}` : 'Independent parameter discovery cycles and archive results.'}</p></div><span class="algo-status-pill ${statusClass(optimizer?.status)}">${escapeHtml(optimizer?.status || 'NO CYCLE')}</span></div>
-        ${optimizer ? `<div class="algo-optimizer-run-meta"><span title="${escapeHtml(optimizer.run_id || '')}">Run ${escapeHtml(optimizer.run_id || 'ID unavailable')}</span><span>${optimizer.duration_seconds === null || optimizer.duration_seconds === undefined ? 'Duration unavailable' : `${Math.round(optimizer.duration_seconds / 60)} min`}</span></div>
+    return `<div class="algo-optimizer-detail">
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER CYCLE</span><h3>${escapeHtml(optimizer.date || 'Undated run')}</h3><p>${escapeHtml(optimizer.range_start || '—')} to ${escapeHtml(optimizer.range_end || '—')} · ${optimizer.created_at ? `completed ${escapeHtml(dateTime(optimizer.created_at))}` : 'completion time unavailable'}</p></div><span class="algo-status-pill ${statusClass(optimizer.status)}">${escapeHtml(optimizer.status || 'UNKNOWN')}</span></div>
+        <div class="algo-optimizer-run-meta"><span title="${escapeHtml(optimizer.run_id || '')}">Run ${escapeHtml(optimizer.run_id || 'ID unavailable')}</span><span>${optimizer.duration_seconds === null || optimizer.duration_seconds === undefined ? 'Duration unavailable' : `${Math.round(optimizer.duration_seconds / 60)} min`}</span></div>
             <div class="algo-optimizer-summary"><div><span>Strategies</span><strong>${optimizer.strategy_count ?? 0}</strong></div><div><span>New variants</span><strong>${optimizer.new_variants ?? 0}</strong></div><div><span>Search iterations</span><strong>${optimizer.search_iterations ?? 0}</strong></div><div><span>Archive sequence</span><strong>#${optimizer.archive_sequence ?? '—'}</strong></div></div>
-            <div class="algo-optimizer-strategies">${rows || '<div class="algo-empty">No per-strategy discovery results were recorded.</div>'}</div>
-            <p class="algo-optimizer-note">Discovery results use the research window. Candidates are not forward verified or promoted by this optimizer-only cycle.</p>` : '<div class="algo-empty">No optimizer cycles are available yet.</div>'}
-    </section>`;
+        <div class="algo-optimizer-strategies">${rows || '<div class="algo-empty">No per-strategy discovery results were recorded.</div>'}</div>
+        <p class="algo-optimizer-note">Discovery fitness is measured on the search window. Optimizer-only cycles do not verify or promote candidates.</p>
+    </div>`;
+}
+
+function renderOptimizerPanel(optimizer, selectedCycleId) {
+    const history = Array.isArray(optimizer?.history) ? optimizer.history : [];
+    const selected = history.find(run => run.cycle_id === selectedCycleId) || history[0] || null;
+    const runs = history.map(run => `<button type="button" class="algo-optimizer-run-row ${run.cycle_id === selected?.cycle_id ? 'selected' : ''}" data-optimizer-run="${escapeHtml(run.cycle_id || '')}" aria-pressed="${run.cycle_id === selected?.cycle_id}">
+        <span class="algo-optimizer-run-date">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved cycle'}</small></span>
+        <span class="algo-optimizer-run-id" title="${escapeHtml(run.run_id || '')}">${escapeHtml(run.run_id || 'Run ID unavailable')}<small>${run.new_variants ?? 0} variants · ${run.search_iterations ?? 0} iterations</small></span>
+        <span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span>
+    </button>`).join('');
+    return `<article class="card algo-panel algo-research-panel algo-optimizer-panel" id="algo-optimizer">
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER</span><h2>Runs history</h2><p>Browse saved discovery cycles and their per-strategy results.</p></div><span class="algo-status-pill">${history.length} ${history.length === 1 ? 'RUN' : 'RUNS'}</span></div>
+        <div class="algo-optimizer-history-layout"><div class="algo-optimizer-run-list" role="list">${runs || '<div class="algo-empty">No optimizer cycles are available yet.</div>'}</div><aside class="algo-optimizer-detail-pane">${renderOptimizerDetail(selected)}</aside></div>
+    </article>`;
 }
 
 function activityIcon(kind) {
@@ -207,6 +222,7 @@ export function createAlgoTrader({ request, charts }) {
     let range = '1M';
     let researchFilter = 'all';
     let selectedRunDate = null;
+    let selectedOptimizerRunId = null;
     let activityPage = 0;
     let pollTimer = null;
 
@@ -275,6 +291,10 @@ export function createAlgoTrader({ request, charts }) {
         const settings = draftSettingsByAccount[accountMode] || snapshot.settings || {};
         const research = snapshot.research || { latest: null, history: [] };
         const latestResearch = research.latest;
+        const optimizerRuns = research.optimizer?.history || [];
+        if (!optimizerRuns.some(run => run.cycle_id === selectedOptimizerRunId)) {
+            selectedOptimizerRunId = optimizerRuns[0]?.cycle_id || null;
+        }
         const runs = visibleRuns();
         if (!runs.some(run => run.date === selectedRunDate)) selectedRunDate = runs[0]?.date || null;
         const selectedRun = runs.find(run => run.date === selectedRunDate) || null;
@@ -333,17 +353,15 @@ export function createAlgoTrader({ request, charts }) {
                     <div class="algo-view-more"><span>Entries are read from the Algo state and trade journal</span><span aria-hidden="true">↻</span></div>
                 </article>
 
-                <article class="card algo-panel algo-research-panel">
+                ${isOptions ? `<article class="card algo-panel algo-research-panel">
                     <div class="algo-section-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS RESEARCH' : 'AUTORESEARCH'}</span><h2>Latest result</h2></div><span class="algo-status-pill ${statusClass(latestResearch?.status)}">${escapeHtml(latestResearch?.status || 'NO REPORT')}</span></div>
                     ${latestResearch ? `<div class="algo-latest-run"><div class="algo-run-icon">AR</div><div><strong>${escapeHtml(latestResearch.result || 'Research report')}</strong><span>${escapeHtml(latestResearch.date || 'Undated')} · ${latestResearch.created_at ? `completed ${escapeHtml(dateTime(latestResearch.created_at))}` : 'completion time unavailable'}</span></div></div>
                         <div class="algo-latest-result">${Array.isArray(latestResearch.options_strategies) ? `<div><span>Approved</span><strong>${latestResearch.promoted ?? 0}</strong></div><div><span>Completed</span><strong>${latestResearch.options_strategies.filter(strategy => strategy.status === 'completed').length}</strong></div><div><span>Strategies</span><strong>${latestResearch.active_trials ?? '—'}</strong></div>` : latestResearch.factor_model ? `<div><span>Observations</span><strong>${latestResearch.factor_model.observations ?? '—'}</strong></div><div><span>Rolling evals</span><strong>${latestResearch.factor_model.rolling_evaluations ?? '—'}</strong></div><div><span>Training sample</span><strong>${latestResearch.factor_model.training_samples ?? '—'}</strong></div>` : `<div><span>Promoted</span><strong>${latestResearch.promoted ?? 0}</strong></div><div><span>Staged</span><strong>${latestResearch.staged ?? 0}</strong></div><div><span>Active trials</span><strong>${latestResearch.active_trials ?? '—'}</strong></div>`}</div>
                         <div class="algo-research-recommendation"><span class="algo-recommendation-mark">i</span><p><strong>${escapeHtml(Array.isArray(latestResearch.options_strategies) ? 'Options research · research only' : latestResearch.factor_model ? `${latestResearch.factor_model.family} · factor-only` : latestResearch.portfolio_status === 'skipped' ? 'Portfolio replay skipped' : latestResearch.portfolio_status || 'Research status')}</strong><br>${Array.isArray(latestResearch.options_strategies) ? latestResearch.options_strategies.map(strategy => `${strategy.name.replaceAll('_', ' ')}: ${strategy.status}${strategy.approved ? ' · approved' : ''}`).join(' · ') || 'No strategy results in this run.' : latestResearch.factor_model ? `Discovery ${escapeHtml(latestResearch.discovery_status)}${latestResearch.discovery_reason ? ` · ${escapeHtml(latestResearch.discovery_reason)}` : ''}.` : latestResearch.portfolio_return_pct === null ? 'No portfolio return was reported for this run.' : `Reported portfolio return: ${signedPercent(latestResearch.portfolio_return_pct)}.`}</p></div>`
                         : '<div class="algo-empty">No autoresearch reports are available in the Algo data directory.</div>'}
                     <button type="button" class="btn btn-secondary algo-open-history" data-action="open-history">Browse research history <span>→</span></button>
-                </article>
+                </article>` : renderOptimizerPanel(research.optimizer, selectedOptimizerRunId)}
             </section>
-
-            ${!isOptions ? renderOptimizerPanel(research.optimizer) : ''}
 
             <section class="card algo-panel algo-history-panel" id="algo-history">
                 <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${isOptions ? 'Options research history' : 'Autoresearch history'}</h2><p>${isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from /opt/algo-trader/data/research.'}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${researchFilter === key ? 'active' : ''}" aria-pressed="${researchFilter === key}">${label}</button>`).join('')}</div></div>
@@ -478,6 +496,9 @@ export function createAlgoTrader({ request, charts }) {
         } else if (button.dataset.researchFilter) {
             researchFilter = button.dataset.researchFilter;
             selectedRunDate = null;
+            render();
+        } else if (button.dataset.optimizerRun) {
+            selectedOptimizerRunId = button.dataset.optimizerRun;
             render();
         } else if (button.dataset.runDate) {
             selectedRunDate = button.dataset.runDate;

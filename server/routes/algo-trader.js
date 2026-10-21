@@ -203,7 +203,7 @@ function summarizeResearch(report, fallbackDate = null) {
     };
 }
 
-function summarizeOptimizer(report) {
+function summarizeOptimizer(report, fallbackId = '') {
     if (!report) return null;
     const data = safeObject(report.data);
     const adaptive = safeObject(report.adaptive_research);
@@ -243,7 +243,8 @@ function summarizeOptimizer(report) {
         };
     });
     return {
-        run_id: String(report.run_id || (report.invocation_id ? `optimization-${report.invocation_id}` : '')),
+        cycle_id: String(report.invocation_id || fallbackId || report.run_id || ''),
+        run_id: String(report.run_id || (report.invocation_id ? `optimization-${report.invocation_id}` : fallbackId ? `optimization-${fallbackId}` : '')),
         date: String(report.run_date_et || report.created_at || '').slice(0, 10),
         created_at: isoTimestamp(report.created_at),
         status: String(report.status || 'unknown'),
@@ -259,15 +260,53 @@ function summarizeOptimizer(report) {
 }
 
 async function readOptimizer(dataDir) {
-    const reportPath = path.join(dataDir, 'research', 'algo-auto', 'optimizer', 'latest.json');
+    const optimizerDir = path.join(dataDir, 'research', 'algo-auto', 'optimizer');
+    const cyclesDir = path.join(optimizerDir, 'cycles');
+    const entries = [];
     try {
-        const stat = await fs.stat(reportPath);
-        const cached = researchSummaryCache.get(reportPath);
-        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.summary;
-        const summary = summarizeOptimizer(await readJson(reportPath));
-        researchSummaryCache.set(reportPath, { mtimeMs: stat.mtimeMs, size: stat.size, summary });
-        return summary;
-    } catch { return null; }
+        const names = await fs.readdir(cyclesDir);
+        for (const name of names.filter(value => /^[a-f0-9]{32}\.json$/i.test(value))) {
+            const reportPath = path.join(cyclesDir, name);
+            try {
+                const stat = await fs.stat(reportPath);
+                entries.push({ name, reportPath, mtimeMs: stat.mtimeMs, size: stat.size });
+            } catch { /* A cycle may be rotated while the directory is read. */ }
+        }
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    entries.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const history = [];
+    for (const entry of entries.slice(0, 100)) {
+        try {
+            const cached = researchSummaryCache.get(entry.reportPath);
+            const summary = cached && cached.mtimeMs === entry.mtimeMs && cached.size === entry.size
+                ? cached.summary
+                : summarizeOptimizer(await readJson(entry.reportPath), entry.name.slice(0, -5));
+            if (!cached || cached.mtimeMs !== entry.mtimeMs || cached.size !== entry.size) {
+                researchSummaryCache.set(entry.reportPath, {
+                    mtimeMs: entry.mtimeMs, size: entry.size, summary,
+                });
+            }
+            history.push(summary);
+        } catch { /* One incomplete or corrupt report does not hide older cycles. */ }
+    }
+    const latestPath = path.join(optimizerDir, 'latest.json');
+    try {
+        const stat = await fs.stat(latestPath);
+        const cached = researchSummaryCache.get(latestPath);
+        const latest = cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size
+            ? cached.summary
+            : summarizeOptimizer(await readJson(latestPath));
+        if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+            researchSummaryCache.set(latestPath, { mtimeMs: stat.mtimeMs, size: stat.size, summary: latest });
+        }
+        if (latest && !history.some(item => item.cycle_id && item.cycle_id === latest.cycle_id)) {
+            history.push(latest);
+        }
+    } catch (error) { if (error.code !== 'ENOENT') { /* Ignore a malformed latest pointer. */ } }
+    history.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    return { latest: history[0] || null, history };
 }
 
 async function readResearch(dataDir) {
