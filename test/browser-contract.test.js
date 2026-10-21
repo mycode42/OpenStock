@@ -135,6 +135,7 @@ test('Journal displays instrument and quantity with trades without exposing trad
 
 test('standalone PWA supports pull-to-refresh and refreshes its cached entry assets', () => {
     const root = path.join(__dirname, '..', 'www');
+    const version = require('../package.json').version.replaceAll('.', '\\.');
     const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
     const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
@@ -145,6 +146,6 @@ test('standalone PWA supports pull-to-refresh and refreshes its cached entry ass
     assert.match(app, /window\.location\.reload\(\)/);
     assert.match(index, /id="pull-refresh-indicator"/);
     assert.match(styles, /\.pwa-standalone\{overscroll-behavior-y:contain\}/);
-    assert.match(serviceWorker, /app\.js\?v=1\.4\.0&pull-refresh=1/);
-    assert.match(serviceWorker, /styles\.css\?v=1\.4\.0&pull-refresh=1/);
+    assert.match(serviceWorker, new RegExp(`app\\.js\\?v=${version}&pull-refresh=1`));
+    assert.match(serviceWorker, new RegExp(`styles\\.css\\?v=${version}&pull-refresh=1`));
 });

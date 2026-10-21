@@ -33,6 +33,12 @@ function signedPercent(value, digits = 2) {
     return `${number > 0 ? '+' : ''}${number.toFixed(digits)}%`;
 }
 
+function signedScore(value) {
+    const number = numberOrNull(value);
+    if (number === null) return '—';
+    return `${number > 0 ? '+' : ''}${number.toFixed(4)}`;
+}
+
 function dateTime(value, options = {}) {
     if (!value) return '—';
     const date = new Date(value);
@@ -126,6 +132,22 @@ function statusClass(value) {
     if (['failed', 'error', 'rejected', 'cancelled', 'canceled'].includes(status)) return 'rejected';
     if (['staged'].includes(status)) return 'staged';
     return '';
+}
+
+function renderOptimizerPanel(optimizer) {
+    const strategies = Array.isArray(optimizer?.strategies) ? optimizer.strategies : [];
+    const rows = strategies.map(strategy => `<article class="algo-optimizer-strategy">
+        <div class="algo-optimizer-strategy-head"><div><strong>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</strong><span>Archive #${strategy.archive_sequence ?? '—'} · ${strategy.new_variants ?? 0} new variants</span></div><span class="algo-status-pill ${strategy.selected_eligible ? 'promising' : ''}">${strategy.selected_eligible ? 'CANDIDATE ELIGIBLE' : strategy.selected_candidate === 'baseline' ? 'BASELINE RETAINED' : 'NOT ELIGIBLE'}</span></div>
+        <div class="algo-optimizer-search-grid"><div><span>Top tested candidate</span><strong title="${escapeHtml(strategy.top_tested_candidate || '')}">${escapeHtml(strategy.top_tested_candidate || 'Unavailable')}</strong></div><div><span>Fitness</span><strong class="${classForReturn(strategy.top_tested_fitness)}">${signedScore(strategy.top_tested_fitness)}</strong></div><div><span>Δ vs baseline</span><strong class="${classForReturn(strategy.top_tested_delta)}">${signedScore(strategy.top_tested_delta)}</strong></div></div>
+        <div class="algo-optimizer-selection"><span>Archive choice <strong title="${escapeHtml(strategy.selected_candidate || '')}">${escapeHtml(strategy.selected_candidate || 'Unavailable')}</strong></span><span>${strategy.selected_closed_trades ?? 0} closed trades · ${signedPercent(strategy.selected_return_pct, 4)} research return</span>${strategy.top_tested_window_days ? `<span>Best window ${strategy.top_tested_window_days} sessions</span>` : ''}</div>
+    </article>`).join('');
+    return `<section class="card algo-panel algo-optimizer-panel" id="algo-optimizer">
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER</span><h2>Latest optimization cycle</h2><p>${optimizer ? `${escapeHtml(optimizer.range_start || '—')} to ${escapeHtml(optimizer.range_end || '—')} · ${optimizer.created_at ? `completed ${escapeHtml(dateTime(optimizer.created_at))}` : 'completion time unavailable'}` : 'Independent parameter discovery cycles and archive results.'}</p></div><span class="algo-status-pill ${statusClass(optimizer?.status)}">${escapeHtml(optimizer?.status || 'NO CYCLE')}</span></div>
+        ${optimizer ? `<div class="algo-optimizer-run-meta"><span title="${escapeHtml(optimizer.run_id || '')}">Run ${escapeHtml(optimizer.run_id || 'ID unavailable')}</span><span>${optimizer.duration_seconds === null || optimizer.duration_seconds === undefined ? 'Duration unavailable' : `${Math.round(optimizer.duration_seconds / 60)} min`}</span></div>
+            <div class="algo-optimizer-summary"><div><span>Strategies</span><strong>${optimizer.strategy_count ?? 0}</strong></div><div><span>New variants</span><strong>${optimizer.new_variants ?? 0}</strong></div><div><span>Search iterations</span><strong>${optimizer.search_iterations ?? 0}</strong></div><div><span>Archive sequence</span><strong>#${optimizer.archive_sequence ?? '—'}</strong></div></div>
+            <div class="algo-optimizer-strategies">${rows || '<div class="algo-empty">No per-strategy discovery results were recorded.</div>'}</div>
+            <p class="algo-optimizer-note">Discovery results use the research window. Candidates are not forward verified or promoted by this optimizer-only cycle.</p>` : '<div class="algo-empty">No optimizer cycles are available yet.</div>'}
+    </section>`;
 }
 
 function activityIcon(kind) {
@@ -320,6 +342,8 @@ export function createAlgoTrader({ request, charts }) {
                     <button type="button" class="btn btn-secondary algo-open-history" data-action="open-history">Browse research history <span>→</span></button>
                 </article>
             </section>
+
+            ${!isOptions ? renderOptimizerPanel(research.optimizer) : ''}
 
             <section class="card algo-panel algo-history-panel" id="algo-history">
                 <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${isOptions ? 'Options research history' : 'Autoresearch history'}</h2><p>${isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from /opt/algo-trader/data/research.'}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${researchFilter === key ? 'active' : ''}" aria-pressed="${researchFilter === key}">${label}</button>`).join('')}</div></div>

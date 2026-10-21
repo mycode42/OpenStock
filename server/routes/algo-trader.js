@@ -203,11 +203,78 @@ function summarizeResearch(report, fallbackDate = null) {
     };
 }
 
+function summarizeOptimizer(report) {
+    if (!report) return null;
+    const data = safeObject(report.data);
+    const adaptive = safeObject(report.adaptive_research);
+    const discovery = safeObject(safeObject(adaptive.discovery).strategies);
+    const strategies = Object.entries(discovery).map(([name, rawStrategy]) => {
+        const strategy = safeObject(rawStrategy);
+        const selected = safeObject(strategy.selected_candidate);
+        const metrics = safeObject(selected.metrics);
+        const attempts = Array.isArray(safeObject(strategy.window_search).attempts)
+            ? strategy.window_search.attempts : [];
+        const iterations = Array.isArray(strategy.search_iteration_summaries)
+            ? strategy.search_iteration_summaries : [];
+        const bestAttempt = attempts.reduce((best, attempt) => {
+            if (!best || finite(attempt.selected_fitness) > finite(best.selected_fitness)) return attempt;
+            return best;
+        }, null);
+        const bestIteration = iterations.reduce((best, iteration) => {
+            if (!best || finite(iteration.selected_fitness) > finite(best.selected_fitness)) return iteration;
+            return best;
+        }, null);
+        const best = bestAttempt || bestIteration;
+        return {
+            name,
+            status: String(strategy.status || 'unknown'),
+            archive_sequence: finite(strategy.archive_sequence),
+            new_variants: finite(safeObject(strategy.adaptive_novelty).new_parameter_variants_on_this_data),
+            search_iterations: finite(strategy.search_iterations),
+            selection_status: String(strategy.selection_status || 'unavailable'),
+            selected_candidate: String(selected.name || 'unavailable'),
+            selected_eligible: selected.eligible === true,
+            selected_return_pct: finite(metrics.net_return_pct),
+            selected_closed_trades: finite(metrics.closed_trade_count),
+            top_tested_candidate: String(best?.selected_candidate || ''),
+            top_tested_fitness: finite(best?.selected_fitness),
+            top_tested_delta: finite(best?.fitness_delta ?? best?.fitness_delta_vs_baseline),
+            top_tested_window_days: finite(best?.window_days),
+        };
+    });
+    return {
+        run_id: String(report.run_id || (report.invocation_id ? `optimization-${report.invocation_id}` : '')),
+        date: String(report.run_date_et || report.created_at || '').slice(0, 10),
+        created_at: isoTimestamp(report.created_at),
+        status: String(report.status || 'unknown'),
+        duration_seconds: finite(safeObject(report.stage_timings).total_seconds),
+        range_start: String(safeObject(data.strategy_research_range).start || data.range_start || ''),
+        range_end: String(safeObject(data.strategy_research_range).end || data.research_data_end || ''),
+        strategy_count: strategies.length,
+        new_variants: strategies.reduce((total, strategy) => total + (strategy.new_variants || 0), 0),
+        search_iterations: strategies.reduce((total, strategy) => total + (strategy.search_iterations || 0), 0),
+        archive_sequence: strategies.reduce((latest, strategy) => Math.max(latest, strategy.archive_sequence || 0), 0),
+        strategies,
+    };
+}
+
+async function readOptimizer(dataDir) {
+    const reportPath = path.join(dataDir, 'research', 'algo-auto', 'optimizer', 'latest.json');
+    try {
+        const stat = await fs.stat(reportPath);
+        const cached = researchSummaryCache.get(reportPath);
+        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.summary;
+        const summary = summarizeOptimizer(await readJson(reportPath));
+        researchSummaryCache.set(reportPath, { mtimeMs: stat.mtimeMs, size: stat.size, summary });
+        return summary;
+    } catch { return null; }
+}
+
 async function readResearch(dataDir) {
     const directory = path.join(dataDir, 'research', 'algo-auto');
-    let names;
+    let names = [];
     try { names = await fs.readdir(directory); }
-    catch (error) { if (error.code === 'ENOENT') return { latest: null, history: [] }; throw error; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const dates = names.filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort().slice(-90);
     const history = [];
     for (const name of dates) {
@@ -238,7 +305,7 @@ async function readResearch(dataDir) {
     }
     catch (error) { if (error.code !== 'ENOENT') latestReport = null; }
     if (!latestReport && history.length) latestReport = history[history.length - 1] || null;
-    return { latest: latestReport, history: history.reverse() };
+    return { latest: latestReport, history: history.reverse(), optimizer: await readOptimizer(dataDir) };
 }
 
 async function readJournal(dataDir, accountId) {

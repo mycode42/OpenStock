@@ -4,7 +4,7 @@ import { createCharts } from './modules/charts.js';
 import { createDashboard } from './modules/dashboard.js';
 import { createConfig } from './modules/config.js';
 import { createJournal } from './modules/journal.js';
-import { createAlgoTrader } from './modules/algo-trader.js?v=1.4.2&options-api-guard=1';
+import { createAlgoTrader } from './modules/algo-trader.js?v=1.4.3&options-api-guard=1';
 
 // Keep the Trading module in the repository for a future re-enable, but do
 // not expose or load it while broker trading is not in use.

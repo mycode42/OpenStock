@@ -121,6 +121,47 @@ test('options paper account payload reads its own account journal and research',
   assert.equal(Object.hasOwn(res.body.account, 'account_id'), false);
 });
 
+test('equity research payload includes the latest optimizer cycle and strategy discovery results', async t => {
+  const root = await fixture(t);
+  const dataDir = path.join(root, 'data');
+  const researchDir = path.join(dataDir, 'research', 'algo-auto', 'optimizer');
+  await fs.mkdir(researchDir, { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'algo_state.json'), JSON.stringify({
+    strategy_portfolio: { account_id: 'test-account', universe: { tickers: [] } },
+  }));
+  await fs.writeFile(path.join(researchDir, 'latest.json'), JSON.stringify({
+    invocation_id: 'run123', status: 'completed', run_date_et: '2026-10-21',
+    created_at: '2026-10-21T15:09:36.925Z',
+    data: { strategy_research_range: { start: '2024-01-01', end: '2026-10-19' } },
+    stage_timings: { total_seconds: 1574.2 },
+    adaptive_research: { discovery: { strategies: {
+      mean_reversion: {
+        status: 'completed', archive_sequence: 28, search_iterations: 5,
+        adaptive_novelty: { new_parameter_variants_on_this_data: 12 },
+        selection_status: 'eligible_positive_candidate',
+        selected_candidate: { name: 'iteration_02:bayes_011', eligible: true, metrics: { net_return_pct: 0.0153, closed_trade_count: 4 } },
+        window_search: { attempts: [
+          { window_days: 10, selected_candidate: 'candidate_a', selected_fitness: -0.1, fitness_delta: 0.05 },
+          { window_days: 20, selected_candidate: 'iteration_02:bayes_011', selected_fitness: 0.5244, fitness_delta: 0.6744 },
+        ] },
+      },
+    } } },
+  }));
+
+  const handlers = routeHandlers(root);
+  const res = response();
+  await handlers['GET /api/algo-trader']({ query: { account: 'equity' } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.research.optimizer.run_id, 'optimization-run123');
+  assert.equal(res.body.research.optimizer.range_start, '2024-01-01');
+  assert.equal(res.body.research.optimizer.new_variants, 12);
+  assert.equal(res.body.research.optimizer.archive_sequence, 28);
+  assert.equal(res.body.research.optimizer.strategies[0].selected_candidate, 'iteration_02:bayes_011');
+  assert.equal(res.body.research.optimizer.strategies[0].top_tested_fitness, 0.5244);
+  assert.equal(res.body.research.optimizer.strategies[0].top_tested_delta, 0.6744);
+});
+
 test('options settings save to their own config without changing equity overrides', async t => {
   const originalEnv = {
     account: process.env.ALPACA_OPTIONS_ACCOUNT_ID,
