@@ -159,10 +159,10 @@ function renderOptimizerPanel(optimizer, selectedCycleId) {
         <span class="algo-optimizer-run-id" title="${escapeHtml(run.run_id || '')}">${escapeHtml(run.run_id || 'Run ID unavailable')}<small>${run.new_variants ?? 0} variants · ${run.search_iterations ?? 0} iterations</small></span>
         <span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span>
     </button>`).join('');
-    return `<article class="card algo-panel algo-research-panel algo-optimizer-panel" id="algo-optimizer">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER</span><h2>Runs history</h2><p>Browse saved discovery cycles and their per-strategy results.</p></div><span class="algo-status-pill">${history.length} ${history.length === 1 ? 'RUN' : 'RUNS'}</span></div>
+    return `<section class="card algo-panel algo-history-panel algo-optimizer-panel" id="algo-optimizer">
+        <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">OPTIMIZER ARCHIVE</span><h2>Optimizer history</h2><p>Browse saved discovery cycles and their per-strategy results.</p></div><span class="algo-status-pill">${history.length} ${history.length === 1 ? 'RUN' : 'RUNS'}</span></div>
         <div class="algo-optimizer-history-layout"><div class="algo-optimizer-run-list" role="list">${runs || '<div class="algo-empty">No optimizer cycles are available yet.</div>'}</div><aside class="algo-optimizer-detail-pane">${renderOptimizerDetail(selected)}</aside></div>
-    </article>`;
+    </section>`;
 }
 
 function activityIcon(kind) {
@@ -346,7 +346,7 @@ export function createAlgoTrader({ request, charts }) {
                 </article>
             </section>
 
-            <section class="algo-secondary-grid">
+            <section class="algo-secondary-grid ${isOptions ? '' : 'algo-secondary-grid-equity'}">
                 <article class="card algo-panel algo-activity-panel">
                     <div class="algo-section-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS ENGINE &amp; JOURNAL' : 'COORDINATOR &amp; JOURNAL'}</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> REFRESHING</span></div>
                     ${activities.length ? `<ol class="algo-activity-list">${visibleActivities.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-content"><div class="algo-activity-title"><strong>${escapeHtml(item.title)}</strong><time>${escapeHtml(timeOnly(item.at))}</time></div><p>${escapeHtml(item.detail || '')}</p><span class="algo-activity-tag ${statusClass(item.status)}">${escapeHtml(item.status || item.kind)}</span></div></li>`).join('')}</ol><div class="journal-pagination algo-activity-pagination"><span>Showing ${activityStart + 1}–${Math.min(activityStart + visibleActivities.length, activities.length)} of ${activities.length} entries · ${ACTIVITY_PAGE_SIZE} per page</span>${activityPageCount > 1 ? `<div class="journal-pagination-actions"><button type="button" class="btn btn-secondary" data-activity-page="${activityPage - 1}" ${activityPage === 0 ? 'disabled' : ''} aria-label="Previous activity page">Previous</button><span>Page ${activityPage + 1} of ${activityPageCount}</span><button type="button" class="btn btn-secondary" data-activity-page="${activityPage + 1}" ${activityPage >= activityPageCount - 1 ? 'disabled' : ''} aria-label="Next activity page">Next</button></div>` : ''}</div>` : '<div class="algo-empty">No recent scans, signals or order journal entries are available.</div>'}
@@ -360,7 +360,7 @@ export function createAlgoTrader({ request, charts }) {
                         <div class="algo-research-recommendation"><span class="algo-recommendation-mark">i</span><p><strong>${escapeHtml(Array.isArray(latestResearch.options_strategies) ? 'Options research · research only' : latestResearch.factor_model ? `${latestResearch.factor_model.family} · factor-only` : latestResearch.portfolio_status === 'skipped' ? 'Portfolio replay skipped' : latestResearch.portfolio_status || 'Research status')}</strong><br>${Array.isArray(latestResearch.options_strategies) ? latestResearch.options_strategies.map(strategy => `${strategy.name.replaceAll('_', ' ')}: ${strategy.status}${strategy.approved ? ' · approved' : ''}`).join(' · ') || 'No strategy results in this run.' : latestResearch.factor_model ? `Discovery ${escapeHtml(latestResearch.discovery_status)}${latestResearch.discovery_reason ? ` · ${escapeHtml(latestResearch.discovery_reason)}` : ''}.` : latestResearch.portfolio_return_pct === null ? 'No portfolio return was reported for this run.' : `Reported portfolio return: ${signedPercent(latestResearch.portfolio_return_pct)}.`}</p></div>`
                         : '<div class="algo-empty">No autoresearch reports are available in the Algo data directory.</div>'}
                     <button type="button" class="btn btn-secondary algo-open-history" data-action="open-history">Browse research history <span>→</span></button>
-                </article>` : renderOptimizerPanel(research.optimizer, selectedOptimizerRunId)}
+                </article>` : ''}
             </section>
 
             <section class="card algo-panel algo-history-panel" id="algo-history">
@@ -368,6 +368,8 @@ export function createAlgoTrader({ request, charts }) {
                 <div class="algo-history-layout"><div class="algo-run-list" role="list">${runs.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === selectedRunDate ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === selectedRunDate}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? `${run.promoted ?? 0} approved` : signedPercent(run.portfolio_return_pct)}<small>${isOptions ? 'paper config approval' : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>
                     <aside class="algo-run-detail">${renderRunDetail(selectedRun)}</aside></div>
             </section>
+
+            ${!isOptions ? renderOptimizerPanel(research.optimizer, selectedOptimizerRunId) : ''}
 
         </main>`;
         charts.attachInteractiveLineCharts(host);
