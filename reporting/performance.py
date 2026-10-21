@@ -2,6 +2,7 @@
 """Algo account performance, benchmark comparison, and broker-fill reports."""
 
 import argparse
+import fcntl
 import json
 import logging
 import math
@@ -409,15 +410,35 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
 # Snapshot
 # ---------------------------------------------------------------------------
 
-def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | None = None) -> dict | None:
-    """Record today's Algo equity and benchmark data."""
-    if snapshot_kind not in (None, "close"):
+def take_snapshot(
+    force: bool = False,
+    mode: str = "algo",
+    snapshot_kind: str | None = None,
+    *,
+    now: datetime | None = None,
+    portfolio_data: dict | None = None,
+    include_benchmarks: bool = True,
+) -> dict | None:
+    """Record an Algo equity point or the daily close and benchmark data."""
+    if snapshot_kind not in (None, "intraday", "close"):
         raise ValueError(f"Unsupported snapshot kind: {snapshot_kind}")
-    snapshot_dir = _snapshot_dir(mode)
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(MARKET_TZ)
+    snapshot_root = _snapshot_dir(mode)
+    snapshot_root.mkdir(parents=True, exist_ok=True)
+    now = now or datetime.now(MARKET_TZ)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Snapshot time must be timezone-aware")
+    now = now.astimezone(MARKET_TZ)
     today = now.strftime("%Y-%m-%d")
-    snap_file = snapshot_dir / f"{today}.json"
+    effective_kind = snapshot_kind or "intraday"
+    if snapshot_kind == "intraday":
+        snapshot_dir = snapshot_root / "intraday"
+        snap_file = snapshot_dir / f"{today}.jsonl"
+    else:
+        # Keep the legacy one-off default and the daily close in the root
+        # directory. Risk baselines and the daily performance report read here.
+        snapshot_dir = snapshot_root
+        snap_file = snapshot_root / f"{today}.json"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     if snapshot_kind == "close":
         schedule = get_market_schedule(on_date=now.date(), mode=mode)
@@ -426,20 +447,22 @@ def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | 
         if now < schedule.closes_at:
             raise ValueError(f"Close snapshot is due after {schedule.closes_at.isoformat()}")
 
-    try:
-        portfolio = get_portfolio(mode=mode)
-    except Exception as e:
-        log.error(f"Failed to fetch portfolio: {e}")
-        return None
-    if snap_file.exists() and not force:
+    if portfolio_data is None:
+        try:
+            portfolio_data = get_portfolio(mode=mode)
+        except Exception as e:
+            log.error(f"Failed to fetch portfolio: {e}")
+            return None
+    portfolio = portfolio_data
+    if snapshot_kind != "intraday" and snap_file.exists() and not force:
         with open(snap_file) as f:
             existing = json.load(f)
         if (
             existing.get("account_id") == portfolio["account_id"]
             and existing.get("trading_mode") == mode
-            and existing.get("snapshot_kind") == (snapshot_kind or "intraday")
+            and existing.get("snapshot_kind") == effective_kind
         ):
-            log.info("Snapshot for %s already exists for this account and kind", today)
+            log.info("Snapshot for %s already exists for this account and kind", snap_file.name)
             return existing
 
     spy_price = None
@@ -447,34 +470,35 @@ def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | 
     spy_daily = None
     qqq_daily = None
 
-    try:
-        import yfinance as yf
+    if include_benchmarks:
+        try:
+            import yfinance as yf
 
-        spy_ticker = yf.Ticker("SPY")
-        spy_hist = spy_ticker.history(period="2d", interval="1d")
-        if not spy_hist.empty:
-            spy_price = float(spy_hist["Close"].iloc[-1])
-            if len(spy_hist) >= 2:
-                spy_daily = (spy_price - float(spy_hist["Close"].iloc[-2])) / float(spy_hist["Close"].iloc[-2])
-    except Exception as e:
-        log.warning(f"SPY fetch failed: {e}")
+            spy_ticker = yf.Ticker("SPY")
+            spy_hist = spy_ticker.history(period="2d", interval="1d")
+            if not spy_hist.empty:
+                spy_price = float(spy_hist["Close"].iloc[-1])
+                if len(spy_hist) >= 2:
+                    spy_daily = (spy_price - float(spy_hist["Close"].iloc[-2])) / float(spy_hist["Close"].iloc[-2])
+        except Exception as e:
+            log.warning(f"SPY fetch failed: {e}")
 
-    try:
-        import yfinance as yf
+        try:
+            import yfinance as yf
 
-        qqq_ticker = yf.Ticker("QQQ")
-        qqq_hist = qqq_ticker.history(period="2d", interval="1d")
-        if not qqq_hist.empty:
-            qqq_price = float(qqq_hist["Close"].iloc[-1])
-            if len(qqq_hist) >= 2:
-                qqq_daily = (qqq_price - float(qqq_hist["Close"].iloc[-2])) / float(qqq_hist["Close"].iloc[-2])
-    except Exception as e:
-        log.warning(f"QQQ fetch failed: {e}")
+            qqq_ticker = yf.Ticker("QQQ")
+            qqq_hist = qqq_ticker.history(period="2d", interval="1d")
+            if not qqq_hist.empty:
+                qqq_price = float(qqq_hist["Close"].iloc[-1])
+                if len(qqq_hist) >= 2:
+                    qqq_daily = (qqq_price - float(qqq_hist["Close"].iloc[-2])) / float(qqq_hist["Close"].iloc[-2])
+        except Exception as e:
+            log.warning(f"QQQ fetch failed: {e}")
 
     snapshot = {
         "date": today,
         "timestamp": now.isoformat(),
-        "snapshot_kind": snapshot_kind or "intraday",
+        "snapshot_kind": effective_kind,
         "trading_mode": mode,
         "account_name": portfolio["account_name"],
         "account_id": portfolio["account_id"],
@@ -490,7 +514,17 @@ def take_snapshot(force: bool = False, mode: str = "algo", snapshot_kind: str | 
         "qqq_daily_pct": round(qqq_daily * 100, 4) if qqq_daily is not None else None,
     }
 
-    atomic_write_json(snap_file, snapshot, indent=2, sort_keys=True)
+    if snapshot_kind == "intraday":
+        line = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        with snap_file.open("a", encoding="utf-8") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            try:
+                stream.write(line + "\n")
+                stream.flush()
+            finally:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    else:
+        atomic_write_json(snap_file, snapshot, indent=2, sort_keys=True)
 
     spy_label = f"${spy_price:.2f}" if spy_price is not None else "N/A"
     qqq_label = f"${qqq_price:.2f}" if qqq_price is not None else "N/A"
@@ -574,9 +608,9 @@ def terminal_report(perf: dict, trade_stats: dict, mode: str = "algo") -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Algo Trader Performance Tracker")
     parser.add_argument("--snapshot", action="store_true", help="Record today's snapshot")
-    parser.add_argument("--force", action="store_true", help="Overwrite today's snapshot")
-    parser.add_argument("--snapshot-kind", choices=["close"],
-                        help="Mark a broker-calendar-verified end-of-session snapshot")
+    parser.add_argument("--force", action="store_true", help="Overwrite the daily snapshot; intraday points always append")
+    parser.add_argument("--snapshot-kind", choices=["intraday", "close"],
+                        help="Write a timestamped intraday point or a broker-calendar-verified close")
     parser.add_argument("--report", action="store_true", help="Terminal performance report")
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--fill-report", action="store_true",

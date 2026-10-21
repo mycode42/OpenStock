@@ -29,10 +29,13 @@ from execution.strategy import execute_strategy_trades
 from strategies.runner.scan import scan as scan_strategy_portfolio
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
 from strategies.universe import configured_universe, load_algo_universe
+from reporting.performance import take_snapshot
 
 
 LOG = logging.getLogger("algo_trader.algo")
 STOP = False
+INTRADAY_SNAPSHOT_INTERVAL_SECONDS = 15 * 60
+CLOSE_SNAPSHOT_RETRY_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,51 @@ def _load_portfolio_state(path: Path) -> dict:
 
 def _save(path: Path, market_state: str, portfolio_state: dict) -> None:
     AlgoStateStore(path).save(market_state, portfolio_state)
+
+
+def _capture_equity_snapshot(snapshot_kind: str, now: datetime, account: dict, broker) -> bool:
+    """Capture account equity without interrupting the trading coordinator."""
+    try:
+        equity = float(account["equity"])
+        cash = float(account["cash"])
+        last_equity = float(account.get("last_equity", equity))
+        account_id = str(account.get("id") or account.get("account_number") or "")
+        if not account_id:
+            raise ValueError("Algo broker account omitted its ID")
+        positions = broker.positions()
+        portfolio_data = {
+            "equity": equity,
+            "cash": cash,
+            "invested": equity - cash,
+            "position_count": len(positions),
+            "account_name": "Algo",
+            "account_id": account_id,
+            "daily_pnl": equity - last_equity,
+            "daily_pnl_pct": (equity - last_equity) / last_equity if last_equity else 0.0,
+        }
+        snapshot = take_snapshot(
+            mode="algo",
+            snapshot_kind=snapshot_kind,
+            now=now,
+            portfolio_data=portfolio_data,
+            include_benchmarks=snapshot_kind == "close",
+        )
+    except Exception:
+        LOG.exception("[ALGO] %s equity snapshot failed; coordinator continues", snapshot_kind)
+        return False
+    if snapshot is None:
+        LOG.error("[ALGO] %s equity snapshot returned no account data; coordinator continues", snapshot_kind)
+        return False
+    if snapshot.get("skipped"):
+        LOG.info("[ALGO] %s equity snapshot skipped: %s", snapshot_kind, snapshot.get("reason", "unspecified"))
+        return True
+    LOG.info(
+        "[ALGO] %s equity snapshot saved: %s equity=$%s",
+        snapshot_kind,
+        snapshot.get("timestamp", snapshot.get("date", "unknown time")),
+        f"{float(snapshot['equity']):,.2f}",
+    )
+    return True
 
 
 def _load_reconciliation_orders(portfolio: dict, broker) -> ReconciliationOrders:
@@ -387,6 +435,9 @@ def run_loop(
     last_recovery_monotonic: float | None = None
     last_recovery_wait_signature: tuple[str, ...] | None = None
     last_recovery_wait_log_monotonic: float | None = None
+    last_intraday_snapshot_attempt: float | None = None
+    close_snapshot_trade_date: str | None = None
+    next_close_snapshot_attempt = 0.0
     last_window_name: str | None = None
     last_loop_error: str | None = None
 
@@ -411,7 +462,25 @@ def run_loop(
                     last_reconciliation_monotonic = None
                     last_window_name = window.name
 
+                snapshot_monotonic = time.monotonic()
+                intraday_snapshot_due = window.name == "regular" and (
+                    last_intraday_snapshot_attempt is None
+                    or snapshot_monotonic - last_intraday_snapshot_attempt >= INTRADAY_SNAPSHOT_INTERVAL_SECONDS
+                )
+                close_snapshot_due = (
+                    window.name == "after_hours"
+                    and close_snapshot_trade_date != window.trade_date
+                    and snapshot_monotonic >= next_close_snapshot_attempt
+                )
+
                 account = broker.account()  # validates that Algo keys identify the configured account
+                if intraday_snapshot_due:
+                    last_intraday_snapshot_attempt = time.monotonic()
+                    _capture_equity_snapshot("intraday", now, account, broker)
+                elif close_snapshot_due:
+                    next_close_snapshot_attempt = time.monotonic() + CLOSE_SNAPSHOT_RETRY_SECONDS
+                    if _capture_equity_snapshot("close", now, account, broker):
+                        close_snapshot_trade_date = window.trade_date
                 broker_account_id = str(account.get("id") or account.get("account_number") or "")
                 if not broker_account_id:
                     raise AlgoAccountMismatchError("Alpaca omitted the Algo broker account ID")
