@@ -73,3 +73,5 @@ app/backend/alembic/versions/__pycache__/.cache/
 
 # Runtime data (generated per-deployment)
 data/
+ops/openclaw/DREAMS.md
+ops/openclaw/memory/
