@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -78,23 +78,66 @@ def run_adaptive_discoveries(
         ))
 
     if jobs:
-        worker_count = min(max(1, workers), available_cpu_count())
+        worker_budget = min(max(1, workers), available_cpu_count())
+        strategy_concurrency = min(len(jobs), max(1, (worker_budget + 3) // 4))
+        batch_count = (len(jobs) + strategy_concurrency - 1) // strategy_concurrency
         logger.info(
-            "Discovery: running %d new strategy searches; each candidate search can use up to %d workers",
-            len(jobs), worker_count,
+            "Discovery: running %d new strategy searches with %d candidate workers; up to %d strategies concurrently",
+            len(jobs), worker_budget, strategy_concurrency,
         )
-        for job in jobs:
-            strategy = job[0]
-            try:
-                statuses[strategy] = _run_adaptive_discovery_job((*job, worker_count))
-            except Exception as exc:
-                statuses[strategy] = {
-                    "status": "error", "strategy": strategy,
-                    "error": f"{type(exc).__name__}: {exc}",
+        for offset in range(0, len(jobs), strategy_concurrency):
+            batch = jobs[offset:offset + strategy_concurrency]
+            batch_number = offset // strategy_concurrency + 1
+            if len(batch) == 1:
+                job = batch[0]
+                strategy = job[0]
+                logger.info(
+                    "Discovery batch %d/%d: running %s with up to %d candidate workers",
+                    batch_number, batch_count, strategy, worker_budget,
+                )
+                try:
+                    statuses[strategy] = _run_adaptive_discovery_job((*job, worker_budget))
+                except Exception as exc:
+                    statuses[strategy] = {
+                        "status": "error", "strategy": strategy,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                status = statuses[strategy].get("status", "unknown")
+                log = logger.warning if status == "error" else logger.info
+                log("Discovery progress %d/%d: %s %s", len(statuses), total, strategy, status)
+                continue
+
+            # Strategy threads coordinate independent candidate process pools.
+            # Split the candidate worker budget so concurrent strategies cannot
+            # multiply the configured CPU limit.
+            base_workers, extra_workers = divmod(worker_budget, len(batch))
+            candidate_workers = [
+                base_workers + (1 if index < extra_workers else 0)
+                for index in range(len(batch))
+            ]
+            logger.info(
+                "Discovery batch %d/%d: launching %d strategies with candidate worker counts %s",
+                batch_number, batch_count, len(batch), candidate_workers,
+            )
+            with ThreadPoolExecutor(
+                max_workers=len(batch), thread_name_prefix="adaptive-discovery",
+            ) as executor:
+                futures = {
+                    executor.submit(_run_adaptive_discovery_job, (*job, candidate_workers[index])): job[0]
+                    for index, job in enumerate(batch)
                 }
-            status = statuses[strategy].get("status", "unknown")
-            log = logger.warning if status == "error" else logger.info
-            log("Discovery progress %d/%d: %s %s", len(statuses), total, strategy, status)
+                for future in as_completed(futures):
+                    strategy = futures[future]
+                    try:
+                        statuses[strategy] = future.result()
+                    except Exception as exc:
+                        statuses[strategy] = {
+                            "status": "error", "strategy": strategy,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    status = statuses[strategy].get("status", "unknown")
+                    log = logger.warning if status == "error" else logger.info
+                    log("Discovery progress %d/%d: %s %s", len(statuses), total, strategy, status)
     errors = [strategy for strategy, item in statuses.items() if item.get("status") == "error"]
     stage_status = "error" if len(errors) == total else "completed" if not errors else "partial_error"
     logger.info("Discovery stage finished: %s (%d errors)", stage_status, len(errors))

@@ -1,7 +1,7 @@
 Pipeline steps
 1. Run exactly one combined nightly cycle:
 cd /opt/algo-trader && /usr/bin/nice -n 2 poetry run python -m autoresearch.nightly --workers 8
-The command starts the unchanged equity AutoResearch pipeline and the separate configured options research batch concurrently. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
+Set the OpenClaw `exec` call's `timeoutSeconds` to `36000` (10 hours) for this command. The command starts the unchanged equity AutoResearch pipeline and the separate configured options research batch concurrently. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
 2. Read /opt/algo-trader/data/research/algo-auto/latest.json and /opt/algo-trader/data/options/research/automation/latest.json. The equity report also has a top-level options_research field. Report equity and options under separate headings. Do not edit settings, restart services, or place or modify trades.
 
 If a report is missing, invalid, stale for today's America/New_York date, or has status error, say so clearly. A fresh options status of waiting_for_data means the configured historical chain dataset is absent; report its path and do not describe it as a strategy failure.

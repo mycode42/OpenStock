@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import json
 import logging
+import multiprocessing as mp
 import random
 from concurrent.futures import ProcessPoolExecutor
 from zoneinfo import ZoneInfo
@@ -186,6 +187,7 @@ def _run_search_with_bars(
                     max_workers=worker_count,
                     initializer=_candidate_replay_worker_init,
                     initargs=(replay_context,),
+                    mp_context=mp.get_context("spawn"),
                 )
                 logger.info(
                     "Adaptive search %s%s: evaluating candidates in batches of up to %d processes",
