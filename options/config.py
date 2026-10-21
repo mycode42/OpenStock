@@ -111,6 +111,14 @@ def load_options_config(path: str | Path | None = None) -> dict:
         raise ValueError("long_volatility DTE window or target is invalid")
     if long_vol["iv_rank_min_samples"] < 1 or long_vol["iv_percentile_lookback_sessions"] < long_vol["iv_rank_min_samples"]:
         raise ValueError("long_volatility IV history window must cover its minimum sample count")
+    atm_delta_tolerance = long_vol.get("atm_delta_tolerance", 0.20)
+    if (
+        isinstance(atm_delta_tolerance, bool)
+        or not isinstance(atm_delta_tolerance, (int, float))
+        or not math.isfinite(atm_delta_tolerance)
+        or not 0 < atm_delta_tolerance <= 0.5
+    ):
+        raise ValueError("long_volatility.atm_delta_tolerance must be in (0, 0.5]")
     if long_vol["max_holding_days"] < 1 or long_vol["max_entries_per_day"] < 1:
         raise ValueError("long_volatility holding and entry limits must be positive")
     if long_vol["close_dte"] >= long_vol["max_dte"]:

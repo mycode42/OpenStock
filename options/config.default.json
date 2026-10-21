@@ -12,6 +12,7 @@
     "range_bound": 1.0,
     "trending_up": 0.75,
     "trending_down": 0.5,
+    "volatile": 1.0,
     "unknown": 0.0
   },
   "costs": {
@@ -19,17 +20,17 @@
     "slippage_per_contract_usd": 5.0
   },
   "risk": {
-    "max_risk_per_trade_pct": 0.005,
+    "max_risk_per_trade_pct": 0.01,
     "max_total_defined_risk_pct": 0.10,
     "max_open_structures": 3,
-    "max_entries_per_day": 2,
+    "max_entries_per_day": 10,
     "max_daily_loss_pct": 0.02,
     "max_contracts_per_trade": 1,
     "max_delta_notional_pct": 0.75,
     "max_vega_per_vol_point_pct": 0.01,
     "max_gamma_1pct_loss_pct": 0.005,
     "max_theta_loss_per_day_pct": 0.001,
-    "max_assignment_shares": 200,
+    "max_assignment_shares": 300,
     "max_margin_pct": 0.15,
     "stress_spot_shocks": [0.05, 0.10],
     "stress_iv_shock": 0.10
@@ -85,9 +86,10 @@
     "otm_delta": 0.25,
     "iv_percentile_lookback_sessions": 252,
     "iv_rank_min_samples": 20,
+    "atm_delta_tolerance": 0.20,
     "bootstrap_iv_history_from_cboe": true,
     "iv_percentile_ceiling": 75.0,
-    "max_risk_per_trade_pct": 0.005,
+    "max_risk_per_trade_pct": 0.01,
     "realized_lookback_sessions": 20,
     "max_iv_to_realized_ratio": null,
     "max_spread_pct": 0.15,

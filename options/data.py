@@ -227,8 +227,12 @@ class AlpacaOptionDataProvider:
         symbols = [str(row.get("symbol") or "") for row in contracts if row.get("symbol")]
         for offset in range(0, len(symbols), 100):
             snapshot_rows.update(self.client.option_snapshots(symbols[offset:offset + 100], feed=self.feed))
+        # Live snapshots are fetched after the cycle's initial as_of. Anchor
+        # quote freshness to the time the snapshots were received, while
+        # historical replay keeps its strict snapshot timestamp checks.
+        quote_as_of = max(as_of.astimezone(timezone.utc), datetime.now(timezone.utc))
         return _parse_chain_snapshot(
-            underlying, spot, as_of, contracts, snapshot_rows, feed=self.feed,
+            underlying, spot, quote_as_of, contracts, snapshot_rows, feed=self.feed,
             rate=self.rate, dividend_yield=self.dividend_yield,
             max_quote_age_seconds=self.max_quote_age_seconds,
         )

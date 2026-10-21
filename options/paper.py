@@ -138,6 +138,36 @@ def _option_position_exposures(
         if _safe_number(row.get("qty")) != 0 and _OCC_LIKE.fullmatch(str(row.get("symbol") or "").upper())
     ]
     output, audit_rows, quality = [], [], []
+    covered_short_risk: dict[str, float] = {}
+    short_groups: dict[tuple[str, object, str], list[tuple[str, float, float]]] = {}
+    for row in option_rows:
+        symbol = str(row.get("symbol") or "").upper()
+        quantity = _safe_number(row.get("qty"))
+        if not float(quantity).is_integer():
+            continue
+        contract = parse_occ_symbol(symbol)
+        key = (contract.underlying, contract.expiration, contract.right)
+        short_groups.setdefault(key, []).append((symbol, quantity, contract.strike))
+    uncovered_shorts = False
+    for rows in short_groups.values():
+        short_quantity = sum(abs(quantity) for _symbol, quantity, _strike in rows if quantity < 0)
+        long_quantity = sum(quantity for _symbol, quantity, _strike in rows if quantity > 0)
+        if short_quantity <= 0:
+            continue
+        if long_quantity < short_quantity:
+            uncovered_shorts = True
+            continue
+        strikes = [strike for _symbol, quantity, strike in rows if quantity != 0]
+        spread_width = max(strikes) - min(strikes) if strikes else 0.0
+        if spread_width <= 0:
+            uncovered_shorts = True
+            continue
+        # Reserve the full strike width for each short contract. This bounds
+        # spread risk conservatively when Alpaca reports zero maintenance
+        # margin for a fully paired vertical position.
+        for symbol, quantity, _strike in rows:
+            if quantity < 0:
+                covered_short_risk[symbol] = spread_width * 100.0 * abs(quantity)
     symbols = [str(row["symbol"]).upper() for row in option_rows]
     snapshots: dict = {}
     for offset in range(0, len(symbols), 100):
@@ -162,8 +192,9 @@ def _option_position_exposures(
                 tradable=bool(contract_row.get("tradable", True)),
             )
             spot = client.underlying_price(contract.underlying)
+            quote_as_of = max(as_of.astimezone(timezone.utc), datetime.now(timezone.utc))
             quote = parse_snapshot_quote(
-                contract, snapshots.get(symbol) or {}, spot=spot, as_of=as_of,
+                contract, snapshots.get(symbol) or {}, spot=spot, as_of=quote_as_of,
                 feed=feed, rate=float(config["rate"]),
                 dividend_yield=float(config["dividend_yield"]),
                 max_quote_age_seconds=int(config["max_quote_age_seconds"]),
@@ -191,8 +222,8 @@ def _option_position_exposures(
                 theta_per_day=quote.greeks.theta * scale,
                 vega_per_volatility=quote.greeks.vega * scale,
                 # Individual short legs can be temporarily uncovered after early assignment.
-                max_loss=market_value if quantity > 0 else 0.0,
-                margin=0.0,
+                max_loss=market_value if quantity > 0 else covered_short_risk.get(symbol, 0.0),
+                margin=(covered_short_risk.get(symbol, 0.0) if quantity < 0 and maintenance_margin <= 0 else 0.0),
                 assignment_shares=assignment_shares,
                 source="broker_option_position",
             ))
@@ -229,9 +260,59 @@ def _option_position_exposures(
             underlying="OPTIONS_MARGIN", spot=1.0, delta_shares=0.0,
             max_loss=maintenance_margin, margin=maintenance_margin, source="broker_account_margin",
         ))
-    if any(_safe_number(row.get("qty")) < 0 for row in option_rows) and maintenance_margin <= 0:
+    if uncovered_shorts and maintenance_margin <= 0:
         quality.append("short_option_positions_without_broker_maintenance_margin")
     return output, audit_rows, len({(item["underlying"], item["expiration"]) for item in audit_rows}), quality
+
+
+def _pending_open_option_positions(open_orders: list[dict]) -> tuple[list[dict], int, set[str], list[str]]:
+    """Represent unfilled opening orders as positions for conservative risk sizing."""
+    positions = []
+    symbols: set[str] = set()
+    errors = []
+    order_count = 0
+    for order in open_orders:
+        total_qty = _safe_number(order.get("qty"))
+        filled_qty = _safe_number(order.get("filled_qty"))
+        if total_qty <= 0 or not float(total_qty).is_integer() or filled_qty < 0:
+            errors.append("open_option_order_missing_or_invalid_quantity")
+            continue
+        remaining = total_qty - filled_qty
+        if remaining <= 0:
+            continue
+        if not float(remaining).is_integer():
+            errors.append("fractional_remaining_open_option_order")
+            continue
+        raw_legs = order.get("legs")
+        legs = raw_legs if isinstance(raw_legs, list) and raw_legs else [order]
+        order_positions = []
+        for leg in legs:
+            intent = str(leg.get("position_intent") or "").lower()
+            if intent in {"buy_to_close", "sell_to_close"}:
+                continue
+            if intent not in {"buy_to_open", "sell_to_open"}:
+                errors.append("open_option_order_missing_position_intent")
+                continue
+            symbol = str(leg.get("symbol") or "").upper()
+            if not _OCC_LIKE.fullmatch(symbol):
+                errors.append("open_option_order_missing_occ_symbol")
+                continue
+            ratio = _safe_number(leg.get("ratio_qty"), _safe_number(leg.get("qty"), 1.0))
+            if ratio <= 0 or not float(ratio).is_integer():
+                errors.append(f"invalid_open_option_order_ratio:{symbol}")
+                continue
+            signed_qty = int(remaining) * int(ratio) * (1 if intent == "buy_to_open" else -1)
+            # For a long leg, reserve the full order debit as a conservative
+            # premium loss. Short-leg spread width is reserved by the position
+            # risk adapter below.
+            limit_price = abs(_safe_number(order.get("limit_price")))
+            market_value = limit_price * 100.0 * abs(signed_qty) if signed_qty > 0 else 0.0
+            order_positions.append({"symbol": symbol, "qty": signed_qty, "market_value": market_value})
+            symbols.add(symbol)
+        if order_positions:
+            positions.extend(order_positions)
+            order_count += 1
+    return positions, order_count, symbols, errors
 
 
 def _position_attributions(journal: OptionsJournal, audit_rows: list[dict], now: datetime) -> list[dict]:
@@ -270,16 +351,19 @@ def _position_attributions(journal: OptionsJournal, audit_rows: list[dict], now:
                 observed_at=stamp,
                 source=str(old_greeks.get("source") or "journal"),
             )
+            current_greeks = current.get("greeks") or {}
+            current_iv = (
+                current_greeks.implied_volatility
+                if isinstance(current_greeks, GreeksSnapshot)
+                else _safe_number(current_greeks.get("implied_volatility"))
+            )
             elapsed_days = max(0.0, (now.astimezone(timezone.utc) - stamp.astimezone(timezone.utc)).total_seconds() / 86400)
             result.append({
                 "symbol": current["symbol"],
                 "attribution": pnl_attribution(
                     previous_greeks=greeks,
                     underlying_move=float(current["spot"]) - float(old["spot"]),
-                    implied_volatility_move=(
-                        _safe_number((current.get("greeks") or {}).get("implied_volatility"))
-                        - greeks.implied_volatility
-                    ),
+                    implied_volatility_move=current_iv - greeks.implied_volatility,
                     days_elapsed=elapsed_days,
                     multiplier=multiplier,
                     contracts=int(abs(current_qty)),
@@ -735,7 +819,9 @@ def run_paper_cycle(
                     "signal": signal is not None,
                     "iv_percentile": iv_percentile,
                     "iv_percentile_samples": len(prior_samples),
-                    "iv_rank_warmup": iv_percentile is None,
+                    "iv_rank_warmup": len(prior_samples) < minimum_samples,
+                    "iv_rank_available": iv_percentile is not None,
+                    "atm_iv_available": current_atm_iv is not None,
                     "iv_percentile_sources": history_sources,
                     "feed": feed,
                     "chain_quality": list(chain.data_quality),
@@ -804,29 +890,43 @@ def run_paper_cycle(
     elif event_regime_weight <= 0:
         diagnostics["event_driven"]["entries_disabled_for_regime"] = True
 
-    # A flat options account may be used immediately; existing unrecognized
-    # holdings prevent new entries until the risk adapter can price them.
-    options_positions, position_audit, existing_structures, data_quality = _option_position_exposures(
-        client, option_positions_all, as_of=now, feed=feed, config=config,
-        maintenance_margin=_safe_number(account.get("maintenance_margin")),
-    )
-    equity_exposures = _stock_position_exposures(client, algo_positions)
-    option_account_stock_exposures = _stock_position_exposures(client, option_positions_all)
-    if data_quality:
-        raise RuntimeError("cannot value current option holdings: " + "; ".join(data_quality))
     open_option_order_exposure = [
         order for order in open_orders
         if str(order.get("asset_class") or "us_option") == "us_option"
     ]
-    if open_option_order_exposure:
-        raise RuntimeError("open option orders exist; reconcile or cancel before another strategy entry")
+    pending_position_rows, pending_order_count, pending_order_symbols, pending_order_errors = (
+        _pending_open_option_positions(open_option_order_exposure)
+    )
+    if pending_order_errors:
+        raise RuntimeError("cannot risk-size pending options orders: " + "; ".join(pending_order_errors))
 
+    # A flat options account may be used immediately; existing unrecognized
+    # holdings and pending opening orders must be priced before new entries.
+    options_positions, position_audit, existing_structures, data_quality = _option_position_exposures(
+        client, option_positions_all, as_of=now, feed=feed, config=config,
+        maintenance_margin=_safe_number(account.get("maintenance_margin")),
+    )
+    pending_options_positions, _pending_audit, _pending_structure_count, pending_data_quality = (
+        _option_position_exposures(
+            client, pending_position_rows, as_of=now, feed=feed, config=config,
+            maintenance_margin=0.0,
+        )
+    )
+    diagnostics["pending_open_option_orders"] = {
+        "count": pending_order_count,
+        "symbols": sorted(pending_order_symbols),
+    }
+    equity_exposures = _stock_position_exposures(client, algo_positions)
+    option_account_stock_exposures = _stock_position_exposures(client, option_positions_all)
+    data_quality.extend(pending_data_quality)
+    if data_quality:
+        raise RuntimeError("cannot value current option holdings: " + "; ".join(data_quality))
     # Use broker account maintenance margin as a conservative fallback for the
     # current book; broker margin remains the final authority.
     cost_model = OptionsCostModel(**config.get("costs", {}))
     manager = PortfolioRiskManager(config["risk"], cost_model)
-    staged_options = list(options_positions)
-    staged_structures = existing_structures
+    staged_options = [*options_positions, *pending_options_positions]
+    staged_structures = existing_structures + pending_order_count
     decisions = []
     submitted_exposure = []
     account_id = str(account.get("id") or account.get("account_number") or client.account_id)
@@ -1018,7 +1118,7 @@ def run_paper_cycle(
             continue
         if any(
             str(position.get("symbol") or "").upper() in {leg.contract.symbol for leg in signal.structure.legs}
-            for position in option_positions_all
+            for position in [*option_positions_all, *pending_position_rows]
         ):
             decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "one or more target contracts are already held"})
             continue
@@ -1129,7 +1229,7 @@ def run_paper_cycle(
 
     # Record account and option marks every run. This summary is option-account
     # only in the shared snapshot; equity risk is added when the coordinator reads it.
-    published_rows = [*options_positions, *option_account_stock_exposures]
+    published_rows = [*options_positions, *pending_options_positions, *option_account_stock_exposures]
     if submit:
         published_rows.extend(submitted_exposure)
     option_only = summarize_portfolio(

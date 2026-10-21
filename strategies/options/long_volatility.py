@@ -74,6 +74,12 @@ def atm_implied_volatility(chain: OptionChain, config: dict) -> float | None:
     put = nearest_delta(puts, -0.50)
     if call is None or put is None:
         return None
+    delta_tolerance = float(config.get("atm_delta_tolerance", 0.20))
+    if (
+        abs(call.greeks.delta - 0.50) > delta_tolerance
+        or abs(put.greeks.delta + 0.50) > delta_tolerance
+    ):
+        return None
     values = (call.greeks.implied_volatility, put.greeks.implied_volatility)
     if any(not math.isfinite(value) or value <= 0 for value in values):
         return None
