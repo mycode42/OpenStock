@@ -396,7 +396,7 @@ def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
     assert result["data_status"]["owned_positions_without_fresh_quotes"] == ["AAPL"]
 
 
-def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
+def test_overnight_swing_signal_bar_within_extended_window_does_not_pause(monkeypatch):
     _mock_common(monkeypatch)
     monkeypatch.setattr(
         runner, "_fetch_bars",
@@ -430,11 +430,13 @@ def test_stale_overnight_signal_bar_pauses_new_entries(monkeypatch):
         overnight_tradable_tickers={"AAPL"},
     )
 
-    assert result["entries_paused"] is True
-    assert result["data_status"]["historical_bars"] == "stale"
+    assert result["entries_paused"] is False
+    assert result["data_status"]["historical_bars"] == "ok"
+    assert result["data_status"]["fresh_signal_bar_count"] == 0
+    assert result["data_status"]["overnight_swing_extended_age_signal_bar_count"] == 1
     assert result["trades"] == []
-    # Algo Momentum is cross-sectional and daily now. With no daily history it
-    # emits no 5-minute fallback signal while the stale-data pause is active.
+    # The overnight bar is within the swing-context window. Momentum still
+    # needs daily history, so this scan emits no 5-minute fallback signal.
     assert result["signals"] == []
 
 
