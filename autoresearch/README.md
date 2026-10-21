@@ -1,9 +1,24 @@
 # Algo adaptive research
 
-The scheduled entry point is `python -m autoresearch.auto_research`.
-It refreshes and fingerprints SIP data, runs a new seeded discovery search on
-every invocation, reuses compatible rolling verification results, then replays
-the verified selections through the portfolio coordinator when needed.
+The full scheduled entry point is `python -m autoresearch.auto_research`.
+It refreshes and fingerprints SIP data, runs archive-backed discovery, performs
+rolling verification, then replays verified selections through the portfolio
+coordinator when needed. For repeated optimization cycles between full
+verification runs, use `--optimization-only`:
+
+```bash
+poetry run python -m autoresearch.auto_research --optimization-only --no-refresh --workers 8
+```
+
+Each optimizer cycle advances the persistent per-strategy search sequence,
+re-scores the strongest archived candidates on the available bars, mutates
+those parents, and explores unseen settings. It can run repeatedly against the
+same stored sessions; it does not wait for a new trading date or bar. The
+SQLite research ledger keeps each invocation and candidate evaluation, while
+`optimizer/latest.json` and `optimizer/cycles/` hold optimizer reports. These
+cycles do not run rolling verification, portfolio replay, or promotion. The
+full scheduled run supplies those validation stages and is the only path that
+can promote a candidate.
 
 The pipeline uses dynamic parameter search over bounded signal-parameter
 spaces. Discovery tries recent windows (10/20/30 sessions for intraday and
@@ -46,10 +61,16 @@ walk-forward implementation is the rolling verification stage in
 `pipeline/adaptive_verification.py`; it owns fold construction, fitting, and
 out-of-sample evaluation.
 
-Discovery always advances each strategy's persistent search sequence and can
-use eligible archive members as parents even when the quote window is unchanged.
-The market data still determines candidate scores and the rolling verification
-range. Verification artifacts are reused only when their strategy, data range,
+Discovery always advances each strategy's persistent search sequence and uses
+archive members as evaluated parents even when the quote window is unchanged.
+Archived candidates retain per-window, per-data-version fitness observations;
+the search ranks them by rolling OOS evidence or improvement over their paired
+training baseline. This lets the optimizer keep learning when all candidates
+are still unprofitable in absolute terms. The market data determines candidate
+scores and the rolling verification range, but new data is not required to run
+another optimizer cycle. Rolling verification continues to fit each historical
+fold from its own training data. Verification artifacts are reused only when
+their strategy, data range,
 universe, window policy, candidate count, and policy version and iteration
 count match. Discovery evaluates candidate replays in process batches up to
 the configured CPU budget; Bayesian proposals for each batch use the results
@@ -58,7 +79,7 @@ workers do not oversubscribe the machine. Verification shares its CPU budget
 across strategies and folds. Multi Factor candidates can change the live signal
 profile only after historical verification and forward simulation pass.
 
-Each nightly invocation adds a fitness scorecard to
+Each full invocation adds a fitness scorecard to
 `layers/fitness-history.json` and embeds the latest comparison and recent
 timeline in `latest.json`. Discovery fitness is reported against its training
 baseline; verified fitness is computed from stitched out-of-sample results.
@@ -66,7 +87,7 @@ Run-to-run comparisons are shown only when the strategy set, fixed universe,
 research start, configuration, and score policy match. Since the rolling OOS
 range expands over time, those changes show performance trends rather than a
 controlled test of the newest parameters. Each invocation advances discovery
-seeds and explores eligible archive parents plus independent variants, even if
+seeds and explores archived parents plus independent variants, even if
 the quote window is unchanged. Rolling verification and forward simulation
 still gate promotion to live settings.
 Equity compounds across OOS folds within a run, not across nightly reports.

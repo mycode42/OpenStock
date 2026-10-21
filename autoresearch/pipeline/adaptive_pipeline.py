@@ -30,7 +30,7 @@ from ..settings import (
     STRATEGY_FLAVORS,
 )
 
-ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v15-ridge-weight-replay-2026"
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v16-persistent-archive-optimizer-2026"
 ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v12-ridge-weight-replay-2026"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,

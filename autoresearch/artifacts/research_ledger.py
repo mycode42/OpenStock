@@ -115,6 +115,17 @@ class ResearchLedger:
                 ),
             )
 
+    def interrupt_abandoned_invocations(self, *, except_invocation_id: str) -> int:
+        """Close stale running rows after the exclusive research lock is acquired."""
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """UPDATE research_run SET finished_at=?, status='interrupted',
+                   error=COALESCE(error, 'Process ended before the invocation report was saved.')
+                   WHERE status='running' AND invocation_id<>?""",
+                (_now(), except_invocation_id),
+            )
+            return int(cursor.rowcount)
+
     def record_stage(
         self, invocation_id: str, *, stage: str, status: str,
         strategy: str | None = None, reused: bool = False,
@@ -358,7 +369,7 @@ class ResearchLedger:
         orchestration = report.get("orchestration") or {}
         self.set_run_context(
             invocation_id,
-            cohort_id=orchestration.get("run_id"),
+            cohort_id=orchestration.get("cohort_id") or orchestration.get("run_id"),
             data_version=orchestration.get("data_version"),
             pipeline_version=orchestration.get("pipeline_version"),
             metadata={"orchestration": orchestration, "run_date_et": report.get("run_date_et")},

@@ -8,8 +8,11 @@ The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `Ameri
 | `event-briefing` | 10:00, 13:00, and 15:00 ET, weekdays | Refresh the read-only Event Driven signal snapshot and report market context. |
 | `midday` | 11:35 ET, weekdays | Send a concise Algo account and strategy update. |
 | `close-snapshot` | 16:07 ET, weekdays | Save a broker-calendar-verified account close snapshot. |
+| `optimization` | 08:00 ET, daily | Run an archive-backed AutoResearch optimizer cycle on stored bars, without refreshing, rolling verification, or portfolio replay. |
 | `autoresearch` | 20:15 ET, daily | Run equity AutoResearch alongside the independent VRP and event-driven options research batch, then report them in separate sections. Research may write artifacts; it does not place trades or alter live settings. |
 | `morning` | 04:00 ET, weekdays | Send an overnight session, order, risk, and fill-attribution report. |
+
+Trigger `optimization` on demand with `openclaw automations run 3731fb23-c610-4b7a-9032-61c7beefe55e`. It shares the AutoResearch single-run lock with `autoresearch`, so do not start it while another AutoResearch process is active. Reports are written to `data/research/algo-auto/optimizer/`.
 
 The live OpenClaw Gateway is the source of truth for job schedules and prompts. Use `openclaw automations list --all` and `openclaw automations get <job-id>` to inspect the declarations. Report templates are in [`openclaw_prompts/`](openclaw_prompts/).
 

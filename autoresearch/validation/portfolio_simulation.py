@@ -6,6 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import multiprocessing as mp
 from pathlib import Path
 import sys
 
@@ -474,7 +475,12 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
 
 def _execute_fold_jobs(jobs: list[tuple], *, worker_count: int, label: str) -> list[dict]:
     results_by_index = {}
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
+    # Research already initializes BLAS and logging threads before coordinator
+    # replay. Forking that live interpreter can strand queue and library locks;
+    # use clean workers, as discovery and verification do.
+    with ProcessPoolExecutor(
+        max_workers=worker_count, mp_context=mp.get_context("spawn"),
+    ) as executor:
         futures = [executor.submit(_run_coordinated_fold, job) for job in jobs]
         for completed, future in enumerate(as_completed(futures), start=1):
             index, replay = future.result()

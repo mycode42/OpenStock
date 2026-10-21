@@ -45,7 +45,7 @@ from .settings import (
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v18-pit-boosted-tree-replay-2026"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v19-persistent-optimizer-cycles-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -59,14 +59,17 @@ def _refresh_incremental(store, *, selected_symbols, end_date):
 
 
 def run_daily_research(args) -> dict:
-    """Run one versioned research cohort, reusing compatible artifacts when possible."""
+    """Run one full research cohort or archive-backed optimizer cycle."""
     output_dir = Path(args.output_dir)
+    optimization_only = bool(getattr(args, "optimization_only", False))
     invocation_id = getattr(args, "invocation_id", None) or uuid4().hex
     ledger_path = Path(getattr(args, "ledger_path", output_dir / "research.sqlite3"))
     ledger = ResearchLedger(ledger_path)
     ledger.start_invocation(invocation_id, request={
         "workers": args.workers, "no_refresh": args.no_refresh,
-        "factor_only": args.factor_only, "force": args.force,
+        "factor_only": args.factor_only,
+        "optimization_only": optimization_only,
+        "force": args.force,
     })
     ledger.import_legacy(output_dir)
     args.invocation_id = invocation_id
@@ -111,7 +114,7 @@ def run_daily_research(args) -> dict:
         len(covered_symbols), len(symbols), history_start, latest_end,
     )
     latest_age_days = (datetime.now(ET).date() - latest_end).days
-    if not args.no_refresh and latest_age_days > 4:
+    if not args.no_refresh and latest_age_days > 4 and not optimization_only:
         raise ValueError(
             f"Plus SIP data is stale after refresh: latest common session {latest_end} "
             f"is {latest_age_days} calendar days old"
@@ -124,8 +127,12 @@ def run_daily_research(args) -> dict:
 
     holdout_state_at_start = read_final_holdout_state(output_dir)
     holdout_quarantine = holdout_is_quarantining(output_dir)
-    holdout_report = advance_final_holdout(
-        database=database, latest_end=latest_end, output_dir=output_dir,
+    holdout_report = (
+        {"status": "deferred_for_optimizer_cycle"}
+        if optimization_only else
+        advance_final_holdout(
+            database=database, latest_end=latest_end, output_dir=output_dir,
+        )
     )
     # While the frozen holdout is accruing, all research stages stay anchored
     # at its pre-holdout cutoff. The holdout evaluator is the only consumer of
@@ -193,6 +200,7 @@ def run_daily_research(args) -> dict:
     live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "multi_factor", "event_driven"])
     context = {
         "pipeline_version": AUTO_RESEARCH_PIPELINE_VERSION,
+        "cohort_id": None,
         "database": database,
         "feed": FEED,
         "adjustment": ADJUSTMENT,
@@ -243,6 +251,10 @@ def run_daily_research(args) -> dict:
     if args.force:
         fingerprint = stable_hash({"context": context, "forced_at": datetime.now(timezone.utc).isoformat()})
     run_id = f"session-{cohort_end:%Y%m%d}-{fingerprint[:16]}"
+    context["cohort_id"] = run_id
+    optimization_cycle_id = f"optimization-{invocation_id}"
+    if optimization_only:
+        context["optimization_cycle_id"] = optimization_cycle_id
     context["fingerprint"] = fingerprint
     context["run_id"] = run_id
     context["invocation_id"] = invocation_id
@@ -317,6 +329,75 @@ def run_daily_research(args) -> dict:
         "Adaptive discovery finished: %s in %.1fs",
         adaptive_discovery.get("status"), adaptive_discovery_seconds,
     )
+    multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("multi_factor", {})
+    if optimization_only:
+        discovery_failed = adaptive_discovery.get("status") in {"error", "partial_error"}
+        report = {
+            "invocation_id": invocation_id,
+            "schema": "swarm_algo_optimizer_cycle_v1",
+            "status": "partial_error" if discovery_failed else "completed",
+            "optimization_only": True,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "run_date_et": datetime.now(ET).date().isoformat(),
+            "research_only": True,
+            "live_configuration_changed": False,
+            "trade_or_order_actions": 0,
+            "data": _data_summary(
+                history_start, latest_end, cohort_end, latest_age_days,
+                covered_symbols, symbols, missing, universe_meta, refresh_report,
+                research_start=RESEARCH_START, warmup_start=warmup_start,
+            ),
+            "factor_model": factor_report,
+            "adaptive_research": {
+                "discovery": adaptive_discovery,
+                "verification": {
+                    "status": "deferred",
+                    "reason": "Optimizer cycles do not wait for rolling verification.",
+                },
+            },
+            "adaptive_strategy_artifacts": {
+                strategy: {
+                    "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
+                    "verification": None,
+                    "coordinator_artifact": None,
+                    "verification_summary": None,
+                }
+                for strategy in RESEARCHABLE_STRATEGIES
+            },
+            "multi_factor_discovery": multi_factor_discovery,
+            "final_holdout": holdout_report,
+            "orchestration": {
+                **context,
+                "cohort_id": run_id,
+                "run_id": optimization_cycle_id,
+                "optimization_cycle_id": optimization_cycle_id,
+                "cycle_type": "archive_backed_optimizer",
+                "cache_hit": False,
+            },
+            "stage_timings": {
+                "factor_model": factor_model_timing,
+                "data_refresh_seconds": refresh_seconds,
+                "adaptive_discovery": {
+                    "seconds": adaptive_discovery_seconds,
+                    "status": adaptive_discovery.get("status"),
+                },
+                "adaptive_verification": {"seconds": 0.0, "status": "deferred"},
+                "portfolio_replay": {"seconds": 0.0, "status": "deferred"},
+                "forward_validation": {"seconds": 0.0, "status": "deferred"},
+                "total_seconds": round(perf_counter() - total_started, 3),
+            },
+            "recommendation": {
+                "optimizer": "The next optimizer cycle re-scores archived candidates, mutates the strongest parents, and explores unseen settings on the available bars.",
+                "verification": "Run the full research cycle to evaluate archived and newly discovered candidates on rolling out-of-sample folds and apply promotion gates.",
+                "adaptive_parameter_promotion_requires_human_confirmation": False,
+            },
+            "limitations": [
+                "This cycle records research candidates only; it does not run rolling verification, portfolio replay, or forward promotion checks.",
+                "Training fitness can vary across rolling windows and does not guarantee future performance.",
+            ],
+        }
+        return report
+
     adaptive_verification_started = perf_counter()
     logger.info(
         "Rolling verification %s",
@@ -358,7 +439,6 @@ def run_daily_research(args) -> dict:
     if holdout_quarantine:
         promotion_pause_reasons.append("final_holdout_quarantine")
     promotion_allowed = not promotion_pause_reasons
-    multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("multi_factor", {})
     adaptive_coordinator_root = adaptive_root / "verification-coordinator"
     verification_statuses = adaptive_verification.get("strategies") or {}
     adaptive_portfolio_ready = all(
@@ -743,7 +823,7 @@ def _data_summary(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run adaptive Algo discovery, rolling verification, and portfolio replay",
+        description="Run an archive-backed optimization cycle or full Algo research verification",
     )
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
@@ -753,7 +833,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-refresh", action="store_true", help="use existing bars without fetching recent SIP history")
     parser.add_argument("--factor-only", action="store_true", help="fit the factor model without adaptive or portfolio stages")
-    parser.add_argument("--force", action="store_true", help="create a fresh cohort and recompute dynamic research stages")
+    parser.add_argument(
+        "--optimization-only", action="store_true",
+        help="run a new archive-backed discovery cycle and defer rolling verification and portfolio replay",
+    )
+    parser.add_argument("--force", action="store_true", help="create a fresh data cohort and recompute cached research stages")
     return parser
 
 
@@ -783,8 +867,13 @@ def _configure_progress_logging(output_dir: Path) -> Path | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.optimization_only and args.factor_only:
+        parser.error("--optimization-only cannot be combined with --factor-only")
     output_dir = Path(args.output_dir)
+    optimizer_latest_path = output_dir / "optimizer" / "latest.json"
+    latest_report_path = optimizer_latest_path if args.optimization_only else output_dir / "latest.json"
     invocation_id = uuid4().hex
     ledger_path = output_dir / "research.sqlite3"
     ledger = None
@@ -793,18 +882,25 @@ def main(argv: list[str] | None = None) -> int:
     log_path = _configure_progress_logging(output_dir)
     today = datetime.now(ET).date().isoformat()
     logger.info(
-        "AutoResearch starting (workers=%d, refresh=%s, factor_only=%s, force=%s)",
-        args.workers, not args.no_refresh, args.factor_only, args.force,
+        "AutoResearch starting (workers=%d, refresh=%s, optimization_only=%s, factor_only=%s, force=%s)",
+        args.workers, not args.no_refresh, args.optimization_only, args.factor_only, args.force,
     )
     if log_path is not None:
         logger.info("Progress log: %s", log_path.resolve())
     try:
         ledger = ResearchLedger(ledger_path)
-        ledger.start_invocation(invocation_id, request={
-            "workers": args.workers, "no_refresh": args.no_refresh,
-            "factor_only": args.factor_only, "force": args.force,
-        })
         with _research_lock(Path(output_dir) / "locks" / "nightly-layers.lock"):
+            interrupted = ledger.interrupt_abandoned_invocations(
+                except_invocation_id=invocation_id,
+            )
+            if interrupted:
+                logger.warning("Marked %d abandoned AutoResearch invocations interrupted", interrupted)
+            ledger.start_invocation(invocation_id, request={
+                "workers": args.workers, "no_refresh": args.no_refresh,
+                "factor_only": args.factor_only,
+                "optimization_only": args.optimization_only,
+                "force": args.force,
+            })
             ledger.import_legacy(output_dir)
             report = run_daily_research(args)
             report["run_date_et"] = today
@@ -812,26 +908,41 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         logger.error("AutoResearch failed: %s: %s", type(exc).__name__, exc)
         report = {
-            "schema": "swarm_algo_nightly_research_v2",
+            "schema": (
+                "swarm_algo_optimizer_cycle_v1"
+                if args.optimization_only else "swarm_algo_nightly_research_v2"
+            ),
             "invocation_id": invocation_id,
             "status": "error", "run_date_et": today,
+            "optimization_only": args.optimization_only,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "run_id": f"error-{datetime.now(ET).strftime('%Y%m%dT%H%M%S')}",
             "research_only": True, "live_configuration_changed": False,
             "trade_or_order_actions": 0,
             "error": f"{type(exc).__name__}: {exc}",
         }
-        report = _attach_fitness_timeline(report, output_dir)
+        if not args.optimization_only:
+            report = _attach_fitness_timeline(report, output_dir)
         print(json.dumps(report, sort_keys=True), file=sys.stderr)
         invocation_report_path = output_dir / "invocations" / invocation_id / "report.json"
         report["invocation_report_path"] = str(invocation_report_path.resolve())
         _atomic_json(invocation_report_path, report)
+        if args.optimization_only:
+            cycle_path = output_dir / "optimizer" / "cycles" / f"{invocation_id}.json"
+            _atomic_json(cycle_path, report)
         if ledger is not None:
+            ledger.start_invocation(invocation_id, request={
+                "workers": args.workers, "no_refresh": args.no_refresh,
+                "factor_only": args.factor_only,
+                "optimization_only": args.optimization_only,
+                "force": args.force,
+            })
             ledger.record_completed_report(
                 invocation_id, report, report_path=str(invocation_report_path.resolve()),
             )
-        _atomic_json(output_dir / f"{today}.json", report)
-        _atomic_json(output_dir / "latest.json", report)
+        if not args.optimization_only:
+            _atomic_json(output_dir / f"{today}.json", report)
+        _atomic_json(latest_report_path, report)
         return 2
 
     logger.info(
@@ -845,23 +956,30 @@ def main(argv: list[str] | None = None) -> int:
     invocation_report_path = output_dir / "invocations" / invocation_id / "report.json"
     report["invocation_report_path"] = str(invocation_report_path.resolve())
     _atomic_json(invocation_report_path, report)
+    if args.optimization_only:
+        cycle_path = output_dir / "optimizer" / "cycles" / f"{invocation_id}.json"
+        _atomic_json(cycle_path, report)
     if ledger is not None:
         ledger.record_completed_report(
             invocation_id, report, report_path=str(invocation_report_path.resolve()),
         )
-    _atomic_json(output_dir / f"{today}.json", report)
-    _atomic_json(output_dir / "latest.json", report)
+    if not args.optimization_only:
+        _atomic_json(output_dir / f"{today}.json", report)
+    _atomic_json(latest_report_path, report)
     discovery_report = ((report.get("adaptive_research") or {}).get("discovery") or {})
     print(json.dumps({
         "status": report["status"],
-        "report": str((output_dir / "latest.json").resolve()),
+        "report": str(latest_report_path.resolve()),
         "run_id": report.get("orchestration", {}).get("run_id"),
         "range": [
             report["data"]["strategy_research_range"]["start"],
             report["data"]["strategy_research_range"]["end"],
         ],
         "stored_coverage": report["data"].get("stored_coverage"),
-        "strategies": len(report.get("adaptive_strategy_artifacts", {})),
+        "strategies": len(
+            report.get("adaptive_strategy_artifacts")
+            or discovery_report.get("strategies") or {}
+        ),
         "discovery": {
             "status": discovery_report.get("status"),
             "strategies": {

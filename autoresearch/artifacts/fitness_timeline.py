@@ -58,14 +58,7 @@ def _fitness_scorecard(report: dict) -> dict:
 
         selected = discovery.get("selected_candidate") or {}
         parent = discovery.get("parent_candidate") or {}
-        selected_metrics = selected.get("metrics") or {}
-        selected_return = selected_metrics.get("net_return_pct")
-        eligible_parent = bool(
-            discovery.get("selection_status") == "eligible_positive_candidate"
-            and selected.get("eligible")
-            and isinstance(selected_return, (int, float))
-            and selected_return > 0
-        )
+        archived_parent = bool(parent.get("used"))
         strategy_scores[strategy] = {
             "discovery": {
                 "status": discovery.get("status", "missing"),
@@ -95,7 +88,8 @@ def _fitness_scorecard(report: dict) -> dict:
                     "improved": bool(selected_attempt.get("improved")),
                 } if selected_attempt else None,
                 "candidate_parent_for_next_run": {
-                    "eligible": eligible_parent,
+                    "available": archived_parent,
+                    "archive_parent_count": parent.get("count", 0),
                     "candidate": selected.get("name"),
                     "current_parent_was_used": bool(parent.get("used")),
                 },
@@ -167,6 +161,7 @@ def _fitness_timeline_entry(report: dict, *, source: str = "scheduled_run") -> d
             or datetime.now(timezone.utc).isoformat()
         ),
         "run_id": orchestration.get("run_id") or report.get("run_id"),
+        "cohort_id": orchestration.get("cohort_id") or orchestration.get("run_id") or report.get("run_id"),
         "run_date_et": report.get("run_date_et"),
         "created_at": created_at,
         "source": source,
@@ -260,7 +255,7 @@ def _compare_fitness_runs(current: dict, previous: dict | None) -> dict:
             portfolio_delta = round(float(new_return) - float(old_return), 8)
 
     same_market_cohort = bool(
-        current.get("run_id") and current.get("run_id") == previous.get("run_id")
+        current.get("cohort_id") and current.get("cohort_id") == previous.get("cohort_id")
     )
     same_search = current.get("search_sequences") == previous.get("search_sequences")
     same_run = bool(
@@ -302,15 +297,15 @@ def _next_run_plan(scorecard: dict) -> dict:
         verification = item.get("verification") or {}
         if verification.get("status") == "error":
             action = "Retry verification after resolving its reported error; the portfolio replay remains blocked until all required verifications complete."
-        elif discovery.get("candidate_parent_for_next_run", {}).get("eligible"):
-            action = "Use this eligible positive discovery as one parent in the next seeded search, alongside independent variants, even if quote dates are unchanged; require rolling OOS and forward simulation gates before promotion."
+        elif discovery.get("candidate_parent_for_next_run", {}).get("available"):
+            action = "Re-score the strongest archived candidates on the next optimizer cycle, mutate the best performers, and continue independent exploration even if quote dates are unchanged; rolling OOS and forward simulation still gate promotion."
         elif discovery.get("status") == "error":
             action = "Retry discovery after resolving its reported error; keep live parameters unchanged."
         else:
-            action = "Keep the configured baseline live; the next invocation advances the search seed and prioritizes unseen variants where available, then checks candidates against rolling OOS and forward simulation gates."
+            action = "Keep the configured baseline live; the next optimizer cycle advances its persistent search sequence, records new candidates, and checks them against rolling OOS and forward simulation gates."
         plans[strategy] = action
     return {
-        "policy": "Every invocation advances persistent search seeds and explores candidates independently of quote-date changes. Eligible positive archive members may seed mutations; baseline remains live until historical and forward simulation gates pass.",
+        "policy": "Every optimizer invocation advances persistent search seeds, re-scores archived parents, and explores new candidates independently of quote-date changes. Baseline remains live until historical and forward simulation gates pass.",
         "by_strategy": plans,
     }
 
@@ -323,11 +318,12 @@ def _attach_fitness_timeline(report: dict, output_dir: Path) -> dict:
     runs = list((history or {}).get("runs") or [])
 
     current = _fitness_timeline_entry(report)
-    current_run_id = current.get("run_id")
     if not runs:
         previous_report, _ = read_json(output_dir / "latest.json")
-        previous_id = ((previous_report or {}).get("orchestration") or {}).get("run_id")
-        if previous_report and previous_id and previous_id != current_run_id:
+        previous_orchestration = (previous_report or {}).get("orchestration") or {}
+        previous_id = previous_orchestration.get("cohort_id") or previous_orchestration.get("run_id")
+        current_cohort_id = current.get("cohort_id")
+        if previous_report and previous_id and previous_id != current_cohort_id:
             runs.append(_fitness_timeline_entry(previous_report, source="prior_latest_report"))
 
     previous = runs[-1] if runs else None

@@ -41,7 +41,7 @@ def run_discovery(args, *, search_func=None) -> dict:
         raise ValueError(f"need {window} completed SPY sessions for discovery; found {len(sessions)}")
     selected_sessions = sessions[-window:]
     start, end = selected_sessions[0], selected_sessions[-1]
-    parent_parameters, parent_metadata = _load_positive_parent(
+    parent_parameters, parent_metadata = _load_archived_parents(
         getattr(args, "archive_dir", args.output_dir), args.output_dir, args.strategy,
     )
     bars, spy = _load_window_data(
@@ -115,6 +115,13 @@ def run_window_ladder_discovery(
             window_end=end.isoformat(),
         )
         if data_version else set()
+    )
+    archived_parents, _ = parent_candidates(archive_root, args.strategy, limit=6)
+    # The archive is the optimizer's memory. Re-score its current elites on this
+    # exact window instead of excluding them merely because this data version
+    # has seen them before; their scores then seed the Bayesian batches below.
+    seen_candidate_ids.difference_update(
+        candidate_id(args.strategy, parameters) for parameters in archived_parents
     )
     attempts = []
     reports = []
@@ -273,7 +280,7 @@ def run_window_ladder_discovery(
     detail["adaptive_improvement"] = bool(successful)
     return _write_report(args.output_dir, args.strategy, "discovery", detail)
 
-def _load_positive_parent(archive_dir: str, output_dir: str, strategy: str) -> tuple[list[dict], dict]:
+def _load_archived_parents(archive_dir: str, output_dir: str, strategy: str) -> tuple[list[dict], dict]:
     archived, metadata = parent_candidates(
         archive_dir, strategy, limit=6,
     )
@@ -285,20 +292,20 @@ def _load_positive_parent(archive_dir: str, output_dir: str, strategy: str) -> t
         parent_end = str(parent.get("window", {}).get("end") or "") or None
         selected = parent.get("selected_candidate") or {}
         metrics = selected.get("metrics") or {}
-        valid = (
-            parent.get("schema") == "swarm_algo_adaptive_discovery_v1"
-            and parent.get("strategy") == strategy
-            and parent.get("selection_status") == "eligible_positive_candidate"
-            and bool(selected.get("eligible"))
-            and float(metrics.get("net_return_pct") or 0) > 0
-        )
-        if not valid:
-            return [], {"used": False, "reason": "no positive archived candidate or prior discovery"}
+        if (
+            parent.get("schema") != "swarm_algo_adaptive_discovery_v1"
+            or parent.get("strategy") != strategy
+            or not isinstance(selected.get("parameters"), dict)
+            or not metrics
+        ):
+            return [], {"used": False, "reason": "no valid archived candidate or prior discovery"}
         parameters = validate_parameter_profile({strategy: selected["parameters"]})[strategy]
         return [parameters], {
             "used": True, "artifact": str(path.resolve()),
             "window_end": parent_end,
             "candidate": selected.get("name"),
+            "candidate_ids": [candidate_id(strategy, parameters)],
+            "selection_status": parent.get("selection_status"),
             "count": 1,
         }
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):

@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import statistics
 
 from .files import _atomic_json
 
@@ -205,13 +206,19 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                 (detail.get("adaptive_window_search") or {}).get("data_version")
                 or detail.get("data_version")
             )
+            candidates = detail.get("candidates") or []
+            baseline = next(
+                (item for item in candidates if item.get("name") == "baseline"),
+                next((item for item in candidates if str(item.get("name", "")).endswith(":baseline")), {}),
+            )
+            baseline_fitness = baseline.get("fitness")
             prior_record = (evaluated.get(data_version) or {}) if data_version else {}
             prior_ids = (
                 prior_record.get("candidate_ids") or []
                 if isinstance(prior_record, dict) else prior_record
             )
             seen_for_version = set(prior_ids)
-            for item in detail.get("candidates") or []:
+            for item in candidates:
                 parameters = item.get("parameters")
                 if not isinstance(parameters, dict):
                     continue
@@ -236,11 +243,58 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                     "search_iteration": item.get("search_iteration"),
                     "model_family": item.get("model_family") or model_family(strategy, parameters),
                     "logic_version": item.get("logic_version") or logic_version(strategy),
-                    "parent_candidate_id": item.get("parent_candidate_id"),
+                    "parent_candidate_id": item.get("parent_candidate_id") or existing.get("parent_candidate_id"),
                     "data_version": data_version,
                     "cost_model_version": item.get("cost_model_version"),
+                    "minimum_trade_count_met": bool(item.get("minimum_trade_count_met")),
+                    "positive_after_costs": bool(item.get("positive_after_costs")),
                 })
                 existing["discovery_observations"] = int(existing.get("discovery_observations", 0)) + 1
+                history = existing.setdefault("evaluation_history", [])
+                if not isinstance(history, list):
+                    history = []
+                    existing["evaluation_history"] = history
+                evaluation_key = "|".join((
+                    str(data_version or "unknown"),
+                    str(window.get("start") or ""),
+                    str(window.get("end") or ""),
+                    str(item.get("cost_model_version") or ""),
+                    str(detail.get("archive_sequence") or detail.get("search_seed") or ""),
+                ))
+                fitness = item.get("fitness")
+                fitness_delta = None
+                if (
+                    isinstance(fitness, (int, float))
+                    and isinstance(baseline_fitness, (int, float))
+                ):
+                    fitness_delta = float(fitness) - float(baseline_fitness)
+                observation = {
+                    "evaluation_key": evaluation_key,
+                    "archive_sequence": detail.get("archive_sequence"),
+                    "search_seed": detail.get("search_seed"),
+                    "data_version": data_version,
+                    "window": window,
+                    "fitness": fitness,
+                    "baseline_fitness": baseline_fitness,
+                    "fitness_delta": fitness_delta,
+                    "metrics": item.get("metrics"),
+                    "minimum_trade_count_met": bool(item.get("minimum_trade_count_met")),
+                    "eligible": bool(item.get("eligible")),
+                    "positive_after_costs": bool(item.get("positive_after_costs")),
+                    "logic_version": item.get("logic_version") or logic_version(strategy),
+                    "cost_model_version": item.get("cost_model_version"),
+                    "last_seen": timestamp,
+                }
+                prior_observation = next(
+                    (row for row in history if row.get("evaluation_key") == evaluation_key),
+                    None,
+                )
+                if prior_observation is None:
+                    history.append(observation)
+                else:
+                    prior_observation.update(observation)
+                history.sort(key=lambda row: str(row.get("last_seen") or ""), reverse=True)
+                del history[32:]
                 rows[key] = existing
                 count += 1
             if data_version:
@@ -283,16 +337,36 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
 
 def _candidate_rank(row: dict) -> tuple[float, float, int]:
     folds = row.get("verification_folds") or []
-    oos = [float(item.get("fitness") or 0.0) for item in folds if item.get("fitness") is not None]
-    regime = row.get("regime_metrics") or {}
-    regime_values = [
-        float(value.get("fitness") or 0.0)
-        for value in regime.values()
-        if isinstance(value, dict) and value.get("minimum_sample_met")
+    oos = [
+        float(item["fitness"])
+        for item in folds
+        if isinstance(item, dict)
+        and isinstance(item.get("fitness"), (int, float))
+        and math.isfinite(float(item["fitness"]))
     ]
-    robust = min(oos) if oos else min(regime_values) if regime_values else float(row.get("fitness") or 0.0)
-    positive_folds = sum(value > 0 for value in oos)
-    return robust, float(row.get("fitness") or 0.0), positive_folds
+    history = row.get("evaluation_history") or []
+    sampled = [
+        item for item in history
+        if isinstance(item, dict) and item.get("minimum_trade_count_met")
+    ]
+    deltas = [
+        float(item["fitness_delta"])
+        for item in sampled
+        if isinstance(item.get("fitness_delta"), (int, float))
+        and math.isfinite(float(item["fitness_delta"]))
+    ]
+    if not sampled and isinstance(row.get("fitness"), (int, float)):
+        deltas = [float(row["fitness"])]
+    discovery_score = statistics.median(deltas) if deltas else -math.inf
+    oos_score = statistics.median(oos) if oos else -math.inf
+    positive_oos = sum(value > 0 for value in oos)
+    positive_discovery = sum(value > 0 for value in deltas)
+    # OOS evidence leads; otherwise rank by repeatable improvement over that
+    # run's baseline, even when the strategy's absolute return is still negative.
+    return (
+        float(bool(oos)), oos_score if oos else discovery_score,
+        positive_oos if oos else positive_discovery,
+    )
 
 
 def record_verification(root: str | Path, strategy: str, detail: dict) -> int:
@@ -350,18 +424,12 @@ def parent_candidates(
     rows = [
         row for row in rows
         if isinstance(row.get("parameters"), dict)
+        and row.get("logic_version") in (None, logic_version(strategy))
         and (before is None or str((row.get("last_window") or {}).get("end") or "") < before)
         and (
-            (
-                bool(row.get("eligible"))
-                and float((row.get("metrics") or {}).get("net_return_pct") or 0.0) > 0
-            )
-            or any(
-                isinstance(value, dict)
-                and value.get("eligible")
-                and float((value.get("metrics") or {}).get("net_return_pct") or 0.0) > 0
-                for value in (row.get("regime_metrics") or {}).values()
-            )
+            bool(row.get("evaluation_history"))
+            or bool(row.get("verification_folds"))
+            or isinstance(row.get("fitness"), (int, float))
         )
     ]
     rows.sort(key=_candidate_rank, reverse=True)
