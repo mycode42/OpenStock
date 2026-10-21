@@ -62,6 +62,7 @@ class SignalGenerationContext:
     pending_by_symbol: dict[str, list[dict]]
     universe: dict
     fresh_signal_bar_symbols: set[str]
+    overnight_swing_signal_bar_symbols: set[str]
     scan_errors: list[str]
     entry_pause_reasons: list[str]
 
@@ -139,10 +140,18 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
                 context.risk_config.get("range_regime_short_risk_multiplier", 0.75)
             )
 
+    chosen_strategy = STRATEGY_CATALOG.get(str(chosen.get("strategy") or ""))
+    overnight_swing_bar_eligible = bool(
+        context.session_name == "overnight"
+        and chosen_strategy is not None
+        and chosen_strategy.horizon == "swing"
+        and ticker in context.overnight_swing_signal_bar_symbols
+    )
     if (
         context.mode == "algo"
         and not chosen.get("software_protection")
         and ticker not in context.fresh_signal_bar_symbols
+        and not overnight_swing_bar_eligible
     ):
         chosen["suppressed_reason"] = "latest completed signal bar is stale or unavailable"
     output.append(chosen)

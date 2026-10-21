@@ -19,13 +19,56 @@ load_dotenv(ROOT / ".env", override=True)
 from execution.risk import get_portfolio_state  # noqa: E402
 from broker.algo import AlgoAlpaca  # noqa: E402
 from portfolio.state_store import AlgoStateStore, StateStoreError  # noqa: E402
-from portfolio.config import ALGO_MODE_CONFIG, ALGO_SERVICE_CONFIG  # noqa: E402
+from portfolio.config import (
+    ALGO_MODE_CONFIG,
+    ALGO_SERVICE_CONFIG,
+    ALGO_SIGNAL_DATA_CONFIG,
+)  # noqa: E402
 
 
 ET = ZoneInfo("America/New_York")
 STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
 SNAPSHOT_PATH = DATA_DIR / "algo_monitor_snapshot.json"
 ALGO_JOURNAL_MODES = {"algo"}
+EXTENDED_MARKET_STATES = {"OVERNIGHT", "PREMARKET", "AFTER_HOURS"}
+
+
+def _expected_extended_data_limited(portfolio: dict, market_state: str | None) -> bool:
+    """Avoid calling a quiet extended-hours feed a stale strategy scan."""
+    data_status = portfolio.get("data_status") or {}
+    if (
+        market_state not in EXTENDED_MARKET_STATES
+        or not isinstance(data_status, dict)
+        or portfolio.get("scan_errors")
+    ):
+        return False
+
+    diagnostics = data_status.get("owned_position_quote_diagnostics") or []
+    legacy_session_limited = bool(
+        data_status.get("quotes") == "degraded"
+        and diagnostics
+        and all(
+            isinstance(item, dict) and item.get("status") in {"missing", "stale"}
+            for item in diagnostics
+        )
+    )
+    if (
+        data_status.get("quotes") != "session_limited"
+        and not legacy_session_limited
+    ) or data_status.get("quote_request_status", "succeeded") != "succeeded":
+        return False
+    if data_status.get("invalid_quote_symbols"):
+        return False
+
+    historical_status = data_status.get("historical_bars")
+    if historical_status in {"stale", "warming_up"}:
+        spy_age = data_status.get("spy_daily_age_days")
+        return bool(
+            data_status.get("fresh_signal_bar_count") in (None, 0)
+            and isinstance(spy_age, int)
+            and 1 <= spy_age <= int(ALGO_SIGNAL_DATA_CONFIG["max_spy_daily_age_days"])
+        )
+    return historical_status in {None, "ok"}
 
 
 def _read_json(path: Path) -> dict:
@@ -302,10 +345,18 @@ def build_report() -> dict:
     active_units = ["algo-trader.service"] if service_is_active("algo-trader.service") is True else []
     last_scan_at = portfolio.get("last_scan_at")
     last_successful_scan_at = portfolio.get("last_successful_scan_at") or last_scan_at
+    expected_session_data_limited = _expected_extended_data_limited(
+        portfolio, persisted.get("market_state"),
+    )
+    scan_age_reference = (
+        last_scan_at
+        if expected_session_data_limited
+        else last_successful_scan_at
+    )
     scan_age_seconds = None
-    if last_successful_scan_at:
+    if scan_age_reference:
         try:
-            last_scan = datetime.fromisoformat(str(last_successful_scan_at))
+            last_scan = datetime.fromisoformat(str(scan_age_reference))
             if last_scan.tzinfo is None:
                 last_scan = last_scan.replace(tzinfo=ET)
             scan_age_seconds = max(0, int((now - last_scan.astimezone(timezone.utc)).total_seconds()))
@@ -313,7 +364,12 @@ def build_report() -> dict:
             data_errors.append("Strategy scan timestamp is invalid")
     market_state = persisted.get("market_state")
     scan_is_stale = market_state in {"OVERNIGHT", "PREMARKET", "REGULAR", "AFTER_HOURS"} and (
-        scan_age_seconds is None or scan_age_seconds > 180 or portfolio.get("last_scan_status") in {"degraded", "error"}
+        scan_age_seconds is None
+        or scan_age_seconds > 180
+        or (
+            portfolio.get("last_scan_status") in {"degraded", "error"}
+            and not expected_session_data_limited
+        )
     )
     report = {
         "reported_at": now.isoformat(),
@@ -328,6 +384,7 @@ def build_report() -> dict:
             "last_scan_status": portfolio.get("last_scan_status", "unknown"),
             "strategy_scan_age_seconds": scan_age_seconds,
             "strategy_scan_stale": scan_is_stale,
+            "expected_session_data_limited": expected_session_data_limited,
             "entries_paused": portfolio.get("entries_paused", True),
             "entry_pause_reasons": portfolio.get("entry_pause_reasons") or [],
             "scan_errors": portfolio.get("scan_errors") or [],

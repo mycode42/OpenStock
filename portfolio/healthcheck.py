@@ -20,8 +20,7 @@ from portfolio.protection.evidence import verified_recovery_oco
 from portfolio.reconciliation import OPEN_ORDER_STATUSES
 from market.sessions import ET, TradingWindow, get_trading_window
 from portfolio.state_store import AlgoStateStore, StateStoreError
-from portfolio.config import ALGO_SERVICE_CONFIG
-from portfolio.config import STRATEGY_CONFIG
+from portfolio.config import ALGO_SERVICE_CONFIG, ALGO_SIGNAL_DATA_CONFIG, STRATEGY_CONFIG
 
 
 from runtime.paths import ROOT
@@ -43,6 +42,11 @@ SESSION_QUOTE_PAUSE_REASONS = frozenset({
     "the Algo universe has no fresh quotes",
 })
 EXTENDED_SESSIONS = frozenset({"premarket", "after_hours", "overnight"})
+EXTENDED_SESSION_DATA_PAUSE_REASONS = (
+    SESSION_QUOTE_PAUSE_REASONS
+    | WARMUP_PAUSE_REASONS
+    | frozenset({"historical bar scan is stale"})
+)
 EXPECTED_OVERNIGHT_PAUSE = "overnight entries are disabled by configuration"
 
 
@@ -161,10 +165,8 @@ def _expected_data_warmup(
     )
 
 
-def _expected_session_quote_pause(
-    window: TradingWindow, portfolio: dict, pause_reasons: list[str],
-) -> bool:
-    """Treat quiet extended-session quotes as a data limitation, not a service fault."""
+def _session_quotes_are_limited(window: TradingWindow, portfolio: dict) -> bool:
+    """Identify successful extended-session quote requests with no usable updates."""
     data_status = portfolio.get("data_status") or {}
     diagnostics = data_status.get("owned_position_quote_diagnostics") or [] if isinstance(data_status, dict) else []
     legacy_session_limited = bool(
@@ -179,8 +181,39 @@ def _expected_session_quote_pause(
         and (data_status.get("quotes") == "session_limited" or legacy_session_limited)
         and data_status.get("quote_request_status", "succeeded") == "succeeded"
         and not portfolio.get("scan_errors")
-        and pause_reasons
-        and all(reason in SESSION_QUOTE_PAUSE_REASONS for reason in pause_reasons)
+        and not data_status.get("invalid_quote_symbols")
+    )
+
+
+def _expected_extended_session_data(
+    window: TradingWindow, portfolio: dict,
+) -> bool:
+    """Recognize quiet-session quote/bar gaps while preserving real data errors."""
+    data_status = portfolio.get("data_status") or {}
+    if not isinstance(data_status, dict) or not _session_quotes_are_limited(window, portfolio):
+        return False
+
+    historical_status = data_status.get("historical_bars")
+    fresh_signal_bar_count = data_status.get("fresh_signal_bar_count")
+    if historical_status in {"stale", "warming_up"}:
+        spy_age = data_status.get("spy_daily_age_days")
+        max_spy_age = int(ALGO_SIGNAL_DATA_CONFIG["max_spy_daily_age_days"])
+        if (
+            fresh_signal_bar_count not in (None, 0)
+            or not isinstance(spy_age, int)
+            or not 1 <= spy_age <= max_spy_age
+        ):
+            return False
+    elif historical_status not in {None, "ok"}:
+        return False
+
+    return True
+
+
+def _only_expected_extended_session_data_pause(pause_reasons: list[str]) -> bool:
+    return bool(
+        pause_reasons
+        and all(reason in EXTENDED_SESSION_DATA_PAUSE_REASONS for reason in pause_reasons)
     )
 
 
@@ -463,32 +496,60 @@ def build_report(
             and pause_reasons
             and all(reason == EXPECTED_OVERNIGHT_PAUSE for reason in pause_reasons)
         )
-        expected_session_quote_pause = bool(
+        expected_extended_session_data = bool(
             scanned_this_window
-            and scan_status == "ok"
-            and _expected_session_quote_pause(window, portfolio, pause_reasons)
+            and _expected_extended_session_data(window, portfolio)
         )
-        if expected_session_quote_pause:
+        expected_extended_session_bar_gap = bool(
+            expected_extended_session_data
+            and (portfolio.get("data_status") or {}).get("historical_bars") in {"stale", "warming_up"}
+        )
+        expected_extended_session_data_pause = bool(
+            expected_extended_session_data
+            and _only_expected_extended_session_data_pause(pause_reasons)
+        )
+        if scanned_this_window and _session_quotes_are_limited(window, portfolio):
             diagnostics = (portfolio.get("data_status") or {}).get("owned_position_quote_diagnostics") or []
             affected = sorted(
                 str(item.get("symbol")) for item in diagnostics
                 if isinstance(item, dict) and item.get("status") != "fresh" and item.get("symbol")
             )
             symbols = (" for " + ", ".join(affected)) if affected else ""
+            historical_limited = (
+                " and no recent completed signal bars"
+                if (portfolio.get("data_status") or {}).get("historical_bars") in {"stale", "warming_up"}
+                else ""
+            )
             warnings.append(_problem(
                 "session_limited_quotes",
-                f"No quote update within the freshness window{symbols}; entries remain paused until a fresh quote arrives",
+                f"Extended-session market data has no quote update within the freshness window{symbols}{historical_limited}; entries remain paused until fresh data arrives",
             ))
         if (scan_age is None or scan_age > scan_limit) and startup_grace_passed:
             problems.append(_problem("scan_stale", f"Algo scan age exceeds {scan_limit}s in the {window.name} session"))
-        if (startup_grace_passed or scanned_this_window) and scan_status in {"degraded", "error"} and not (expected_warmup or expected_idle_data):
+        if (
+            (startup_grace_passed or scanned_this_window)
+            and scan_status in {"degraded", "error"}
+            and not (expected_warmup or expected_idle_data or expected_extended_session_bar_gap)
+        ):
             problems.append(_problem("scan_degraded", f"Last Algo scan status is {scan_status}"))
         if (
             (startup_grace_passed or scanned_this_window)
             and portfolio.get("entries_paused")
-            and not (expected_warmup or expected_idle_data or expected_policy_pause or expected_session_quote_pause)
+            and not (
+                expected_warmup
+                or expected_idle_data
+                or expected_policy_pause
+                or expected_extended_session_data_pause
+            )
         ):
-            detail = "; ".join(pause_reasons) or "entry pause has no recorded reason"
+            visible_pause_reasons = [
+                reason for reason in pause_reasons
+                if not (
+                    expected_extended_session_data
+                    and reason in EXTENDED_SESSION_DATA_PAUSE_REASONS
+                )
+            ]
+            detail = "; ".join(visible_pause_reasons) or "entry pause has no recorded reason"
             problems.append(_problem("entries_paused", f"Algo entries are paused: {detail}"))
 
     unowned: list[str] = []

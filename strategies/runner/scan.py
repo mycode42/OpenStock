@@ -292,13 +292,23 @@ def scan(
         ALGO_SIGNAL_DATA_CONFIG["delayed_signal_bar_max_age_minutes"] if delay_seconds
         else ALGO_SIGNAL_DATA_CONFIG["signal_bar_max_age_minutes"]
     ) * 60
-    fresh_signal_bar_symbols = set()
+    overnight_swing_signal_bar_max_age_seconds = (
+        ALGO_SIGNAL_DATA_CONFIG["overnight_swing_signal_bar_max_age_minutes"] * 60
+        if session_name == "overnight" else 0
+    )
     fresh_signal_bar_symbols = {
         ticker for ticker, bars in bars_by_symbol.items()
         if (age := _latest_bar_age_seconds(bars, now)) is not None
         and 0 <= age <= signal_bar_max_age_seconds
     }
-    if selected_symbols and not fresh_signal_bar_symbols.intersection(selected_symbols):
+    overnight_swing_signal_bar_symbols = {
+        ticker for ticker, bars in bars_by_symbol.items()
+        if overnight_swing_signal_bar_max_age_seconds
+        and (age := _latest_bar_age_seconds(bars, now)) is not None
+        and signal_bar_max_age_seconds < age <= overnight_swing_signal_bar_max_age_seconds
+    }
+    eligible_signal_bar_symbols = fresh_signal_bar_symbols | overnight_swing_signal_bar_symbols
+    if selected_symbols and not eligible_signal_bar_symbols.intersection(selected_symbols):
         entry_pause_reasons.append("the Algo universe has no recent completed signal bars")
         if historical_status == "ok":
             historical_status = "stale"
@@ -571,6 +581,7 @@ def scan(
             pending_by_symbol=pending_by_symbol,
             universe=universe,
             fresh_signal_bar_symbols=fresh_signal_bar_symbols,
+            overnight_swing_signal_bar_symbols=overnight_swing_signal_bar_symbols,
             scan_errors=scan_errors,
             entry_pause_reasons=entry_pause_reasons,
         )
@@ -897,6 +908,10 @@ def scan(
             "historical_delay_seconds": delay_seconds,
             "fresh_signal_bar_count": len(fresh_signal_bar_symbols),
             "signal_bar_max_age_seconds": signal_bar_max_age_seconds if mode == "algo" else None,
+            "overnight_swing_extended_age_signal_bar_count": len(overnight_swing_signal_bar_symbols),
+            "overnight_swing_signal_bar_max_age_seconds": (
+                overnight_swing_signal_bar_max_age_seconds or None
+            ),
             "spy_last_completed_date": spy_last_completed_date,
             "spy_daily_age_days": spy_daily_age_days,
         },

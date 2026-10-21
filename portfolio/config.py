@@ -64,6 +64,11 @@ ALGO_DASHBOARD_OVERRIDES_PATH = DATA_DIR / "dashboard-runtime-overrides.json"
 ALGO_SIGNAL_DATA_CONFIG = {
     "signal_bar_max_age_minutes": 20,
     "delayed_signal_bar_max_age_minutes": 20,
+    # During the BOATS overnight session, swing-horizon signals may use the
+    # last completed 5-minute bar as context for up to two hours. Intraday
+    # strategies and all quote-based execution/protection checks keep their
+    # normal freshness limits.
+    "overnight_swing_signal_bar_max_age_minutes": 120,
     "max_spy_daily_age_days": 5,
 }
 
