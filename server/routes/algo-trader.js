@@ -126,7 +126,13 @@ function calculateMetrics(history) {
         peak = Math.max(peak, item.equity);
         maxDrawdown = Math.min(maxDrawdown, (item.equity / peak - 1) * 100);
     }
-    const returns = valid.slice(1).map((item, index) => (item.equity / valid[index].equity - 1) * 100).filter(Number.isFinite);
+    const daily = [];
+    for (const item of valid) {
+        const day = String(item.date || item.timestamp || '').slice(0, 10);
+        if (daily.length && daily[daily.length - 1].day === day) daily[daily.length - 1] = { day, equity: item.equity };
+        else daily.push({ day, equity: item.equity });
+    }
+    const returns = daily.slice(1).map((item, index) => (item.equity / daily[index].equity - 1) * 100).filter(Number.isFinite);
     let sharpe = null;
     if (returns.length >= 3) {
         const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length;
@@ -146,18 +152,31 @@ function calculateMetrics(history) {
 }
 
 async function readSnapshotHistory(dataDir, accountId) {
-    const directory = path.join(dataDir, 'snapshots');
-    let names;
-    try { names = await fs.readdir(directory); }
-    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-    const files = names.filter(name => /^\d{4}-\d{2}-\d{2}.*\.json$/.test(name)).sort().slice(-370);
-    const snapshots = await Promise.all(files.map(async name => {
-        try { return await readJson(path.join(directory, name)); }
-        catch { return null; }
+    const root = path.join(dataDir, 'snapshots');
+    const directories = [root, path.join(root, 'intraday')];
+    const files = [];
+    for (const directory of directories) {
+        let names;
+        try { names = await fs.readdir(directory); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        for (const name of names) {
+            const isIntraday = directory !== root;
+            const matches = isIntraday
+                ? /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)
+                : /^\d{4}-\d{2}-\d{2}.*\.json$/.test(name);
+            if (matches) files.push({ path: path.join(directory, name), isIntraday });
+        }
+    }
+    files.sort((left, right) => path.basename(left.path).localeCompare(path.basename(right.path)));
+    const snapshotGroups = await Promise.all(files.slice(-740).map(async file => {
+        try {
+            return file.isIntraday ? await readJsonLines(file.path, 50) : [await readJson(file.path)];
+        }
+        catch { return []; }
     }));
+    const snapshots = snapshotGroups.flat();
     const matching = snapshots.filter(item => item && item.trading_mode === 'algo' && (!accountId || item.account_id === accountId));
-    const closed = matching.filter(item => !item.snapshot_kind || item.snapshot_kind === 'close');
-    return (closed.length ? closed : matching).map(snapshotView)
+    return matching.map(snapshotView)
         .filter(item => item.date && item.equity !== null)
         .sort((a, b) => (a.timestamp || a.date).localeCompare(b.timestamp || b.date));
 }

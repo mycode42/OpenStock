@@ -109,7 +109,7 @@ function renderChart(history, range, charts) {
     const hoverPoints = coords.map((point, index) => ({
         x: point.x,
         y: point.y,
-        primary: dateOnly(points[index].date || points[index].timestamp),
+        primary: points[index].timestamp ? dateTime(points[index].timestamp) : dateOnly(points[index].date),
         secondary: '',
         price: money(point.value),
     }));
@@ -334,7 +334,7 @@ export function createAlgoTrader({ request, charts }) {
                     <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Recorded paper-account equity · USD</p></div><div class="algo-chart-summary"><strong data-chart-value data-default-chart-value="${money(metrics.equity)}">${money(metrics.equity)}</strong><span class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)} since first snapshot</span></div></div>
                     <div class="algo-range-controls" role="group" aria-label="Chart time range">${RANGES.map(value => `<button type="button" class="algo-range-btn ${range === value ? 'active' : ''}" data-range="${value}" aria-pressed="${range === value}">${value}</button>`).join('')}</div>
                     <div class="algo-chart-wrap">${renderChart(history, range, charts)}</div>
-                    <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Source: ${isOptions ? 'Options paper risk journal' : 'Algo daily snapshots'}</span></div>
+                    <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Source: ${isOptions ? 'Options paper risk journal' : 'Algo intraday and close snapshots'}</span></div>
                 </article>
 
                 <article class="card algo-panel algo-strategy-panel">
