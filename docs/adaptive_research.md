@@ -21,6 +21,27 @@ Quote updates provide additional data for candidate scoring, historical
 verification, and forward simulation; they are not required for search
 novelty.
 
+## Exact-candidate validation
+
+Full research runs also select a small, diverse cohort from the persistent
+candidate archive. The current discovery winner is included when it is
+sample-qualified, alongside up to two strong archive candidates. Each exact
+parameter set is replayed on the same chronological out-of-sample folds used by
+rolling verification. Fold results are stored by candidate ID, data version,
+cost/logic version, and fold range, so later runs reuse unchanged evaluations
+and only replay new candidate/fold pairs.
+
+An archived candidate can enter a forward trial only when its exact-parameter
+checks cover at least three folds and ten closed trades, have positive median
+fitness and return, and at least 60% of the folds have positive fitness. The
+candidate must also qualify for the current regime in discovery. The normal
+forward trial still pairs it with the current profile and applies the separate
+prospective sample and promotion gates. A weak candidate remains in the archive
+with its fold evidence while it remains in the bounded archive; it does not
+replace a stronger candidate merely because it had a higher score on one
+discovery window. The final holdout remains outside these repeated searches and
+checks.
+
 The nightly pipeline also runs rolling out-of-sample verification over the
 historical data range. A completed verification is required, but its
 strategy-wide `overall_pass` no longer blocks a regime candidate from entering

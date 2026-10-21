@@ -30,7 +30,7 @@ from ..settings import (
     STRATEGY_FLAVORS,
 )
 
-ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v16-persistent-archive-optimizer-2026"
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v17-robust-archive-candidate-cohort-2026"
 ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v12-ridge-weight-replay-2026"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
@@ -62,6 +62,7 @@ def _adaptive_window_options(strategy: str) -> list[int]:
 def run_adaptive_discoveries(
     *, database: str, symbols: list[str], latest_end: date, data_version: str, output_dir: Path,
     workers: int, factor_weight_timeline: list[dict] | None = None,
+    invocation_id: str | None = None,
 ) -> dict:
     """Run a new seeded search for every strategy on each research invocation."""
     statuses = {}
@@ -74,7 +75,8 @@ def run_adaptive_discoveries(
         seed, sequence = reserve_search_seed(archive_dir, strategy, ADAPTIVE_PIPELINE_VERSION)
         jobs.append((
             strategy, database, symbols, latest_end, data_version,
-            output_dir, options, archive_dir, seed, sequence, factor_weight_timeline or [],
+            output_dir, options, archive_dir, seed, sequence,
+            factor_weight_timeline or [], invocation_id,
         ))
 
     if jobs:
@@ -143,6 +145,7 @@ def run_adaptive_discoveries(
     logger.info("Discovery stage finished: %s (%d errors)", stage_status, len(errors))
     return {
         "status": stage_status,
+        "invocation_id": invocation_id,
         "window_days_by_strategy": {
             strategy: _adaptive_window_options(strategy) for strategy in RESEARCHABLE_STRATEGIES
         },
@@ -153,7 +156,8 @@ def run_adaptive_discoveries(
 
 def _run_adaptive_discovery_job(payload: tuple) -> dict:
     (strategy, database, symbols, latest_end, data_version, output_dir, options,
-     archive_dir, seed, sequence, factor_weight_timeline, candidate_workers) = payload
+     archive_dir, seed, sequence, factor_weight_timeline, invocation_id,
+     candidate_workers) = payload
     from .adaptive_discovery import run_window_ladder_discovery
     from .adaptive_search import _run_search_with_bars
 
@@ -171,6 +175,7 @@ def _run_adaptive_discovery_job(payload: tuple) -> dict:
         window_days=options[len(options) // 2], output_dir=str(output_dir),
         candidate_workers=candidate_workers,
         factor_weight_timeline=factor_weight_timeline,
+        invocation_id=invocation_id,
     )
     report = run_window_ladder_discovery(
         discovery_args, options, pipeline_version=ADAPTIVE_PIPELINE_VERSION,

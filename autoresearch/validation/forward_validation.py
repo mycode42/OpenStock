@@ -137,6 +137,18 @@ def _current_regime(store, end: date) -> str | None:
 def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
     output = []
     verification_rows = verification.get("strategies") or {}
+    candidate_validation_rows = (
+        (verification.get("candidate_validation") or {}).get("strategies") or {}
+    )
+    exact_validation_by_strategy = {}
+    for strategy, validation in candidate_validation_rows.items():
+        if validation.get("status") != "completed":
+            continue
+        exact_validation_by_strategy[strategy] = {
+            row.get("candidate_id"): row
+            for row in validation.get("candidates") or []
+            if row.get("candidate_id")
+        }
     for strategy, discovery_status in (discovery.get("strategies") or {}).items():
         verification_status = verification_rows.get(strategy) or {}
         verification_summary = verification_status.get("summary") or {}
@@ -158,12 +170,19 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
         for item in (detail.get("adaptive_regime_search") or {}).get("profiles") or []:
             if item.get("regime") != regime:
                 continue
+            if not item.get("planned_ablation") and not item.get("improved_over_baseline"):
+                continue
             params = item.get("parameters")
             if not isinstance(params, dict):
                 continue
             try:
                 parameters = validate_parameter_profile({strategy: params})[strategy]
             except (ValueError, KeyError):
+                continue
+            exact_validation = exact_validation_by_strategy.get(strategy, {}).get(
+                candidate_id(strategy, parameters),
+            )
+            if not exact_validation or exact_validation.get("status") != "passed":
                 continue
             output.append({
                 "candidate_id": candidate_id(strategy, parameters, regime),
@@ -188,6 +207,7 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
                     "stitched_oos": verification_summary.get("stitched_oos"),
                     "average_fitness_decay": verification_summary.get("average_fitness_decay"),
                     "fold_count": verification_summary.get("fold_count"),
+                    "exact_candidate_validation": exact_validation,
                 },
                 "screening": {
                     "improved_over_training_baseline": bool(item.get("improved_over_baseline")),
@@ -209,6 +229,75 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
         strategy_candidates[:] = strategy_candidates[:MAX_ACTIVE_COHORT_PER_STRATEGY_REGIME]
         output = [row for row in output if row.get("strategy") != strategy]
         output.extend(strategy_candidates)
+
+    existing_ids = {row.get("candidate_id") for row in output}
+    for strategy, validation in candidate_validation_rows.items():
+        if validation.get("status") != "completed":
+            continue
+        verification_status = verification_rows.get(strategy) or {}
+        verification_summary = verification_status.get("summary") or {}
+        if (
+            verification_status.get("status") not in {"completed", "reused"}
+            or not verification_summary
+        ):
+            continue
+        checks = verification_summary.get("checks") or {}
+        for candidate in validation.get("candidates") or []:
+            if candidate.get("status") != "passed":
+                continue
+            if candidate.get("source_invocation_id") != discovery.get("invocation_id"):
+                continue
+            regime_metrics = (candidate.get("current_regime_metrics") or {}).get(regime) or {}
+            if not regime_metrics.get("eligible"):
+                continue
+            if not regime_metrics.get("planned_ablation") and not regime_metrics.get("improved_over_baseline"):
+                continue
+            params = candidate.get("parameters")
+            if not isinstance(params, dict):
+                continue
+            try:
+                parameters = validate_parameter_profile({strategy: params})[strategy]
+            except (ValueError, KeyError):
+                continue
+            forward_id = candidate_id(strategy, parameters, regime)
+            if forward_id in existing_ids:
+                continue
+            output.append({
+                "candidate_id": forward_id,
+                "source_candidate_id": candidate.get("candidate_id"),
+                "source_invocation_id": candidate.get("source_invocation_id"),
+                "source_invocation_ids": candidate.get("source_invocation_ids") or [],
+                "parent_candidate_id": regime_metrics.get("parent_candidate_id"),
+                "strategy": strategy,
+                "regime": regime,
+                "parameters": parameters,
+                "model_family": candidate.get("model_family"),
+                "logic_version": candidate.get("logic_version"),
+                "candidate_name": f"archive:{candidate.get('candidate_id')}",
+                "planned_ablation": False,
+                "cost_model_version": candidate.get("cost_model_version"),
+                "discovery_fitness": regime_metrics.get("fitness"),
+                "discovery_metrics": regime_metrics.get("metrics"),
+                "baseline_discovery_fitness": regime_metrics.get("baseline_fitness"),
+                "historical_verification": {
+                    "status": verification_status.get("status"),
+                    "overall_pass": checks.get("overall_pass"),
+                    "checks": checks,
+                    "thresholds": verification_summary.get("thresholds"),
+                    "stitched_oos": verification_summary.get("stitched_oos"),
+                    "average_fitness_decay": verification_summary.get("average_fitness_decay"),
+                    "fold_count": verification_summary.get("fold_count"),
+                    "exact_candidate_validation": candidate,
+                },
+                "screening": {
+                    "improved_over_training_baseline": bool(regime_metrics.get("improved_over_baseline")),
+                    "historical_sample_met": bool(regime_metrics.get("historical_sample_met")),
+                    "historical_positive_after_costs": bool(regime_metrics.get("historical_positive_after_costs")),
+                    "regime": regime,
+                },
+                "discovery_artifact": candidate.get("archive_artifact"),
+            })
+            existing_ids.add(forward_id)
     return output
 
 

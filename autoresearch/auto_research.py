@@ -45,7 +45,7 @@ from .settings import (
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v19-persistent-optimizer-cycles-2026"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v20-exact-archive-candidate-validation-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -320,6 +320,7 @@ def run_daily_research(args) -> dict:
             database=database, symbols=covered_symbols, latest_end=cohort_end, data_version=data_version,
             output_dir=adaptive_root, workers=args.workers,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
+            invocation_id=getattr(args, "invocation_id", None),
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
@@ -412,6 +413,28 @@ def run_daily_research(args) -> dict:
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
+    )
+    candidate_validation_started = perf_counter()
+    if not args.factor_only:
+        from .pipeline.candidate_validation import run_candidate_validation
+
+        candidate_validation = run_candidate_validation(
+            database=database, symbols=covered_symbols,
+            start=RESEARCH_START, end=cohort_end,
+            data_version=data_version, output_dir=adaptive_root,
+            verification=adaptive_verification, discovery=adaptive_discovery,
+            workers=args.workers, force=args.force,
+            factor_weight_timeline=factor_report.get("weight_timeline") or [],
+        )
+    else:
+        candidate_validation = {
+            "status": "skipped", "reason": "factor-only run", "strategies": {},
+        }
+    adaptive_verification["candidate_validation"] = candidate_validation
+    candidate_validation_seconds = round(perf_counter() - candidate_validation_started, 3)
+    logger.info(
+        "Exact candidate validation finished: %s in %.1fs",
+        candidate_validation.get("status"), candidate_validation_seconds,
     )
     ledger.record_verification_stage(
         invocation_id, adaptive_verification,
@@ -506,6 +529,10 @@ def run_daily_research(args) -> dict:
                         "seconds": adaptive_verification_seconds,
                         "status": adaptive_verification.get("status"),
                     },
+                    "adaptive_candidate_validation": {
+                        "seconds": candidate_validation_seconds,
+                        "status": candidate_validation.get("status"),
+                    },
                     "forward_validation": {
                         "seconds": round(perf_counter() - validation_started, 3),
                         "status": forward_validation.get("status"),
@@ -563,6 +590,10 @@ def run_daily_research(args) -> dict:
         },
         "adaptive_verification": {
             "seconds": adaptive_verification_seconds, "status": adaptive_verification.get("status"),
+        },
+        "adaptive_candidate_validation": {
+            "seconds": candidate_validation_seconds,
+            "status": candidate_validation.get("status"),
         },
     }
     if args.factor_only:

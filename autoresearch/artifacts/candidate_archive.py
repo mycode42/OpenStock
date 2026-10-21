@@ -249,6 +249,16 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                     "minimum_trade_count_met": bool(item.get("minimum_trade_count_met")),
                     "positive_after_costs": bool(item.get("positive_after_costs")),
                 })
+                invocation_id = detail.get("invocation_id")
+                if invocation_id:
+                    existing["last_invocation_id"] = invocation_id
+                    invocation_ids = existing.get("source_invocation_ids")
+                    if not isinstance(invocation_ids, list):
+                        invocation_ids = []
+                        existing["source_invocation_ids"] = invocation_ids
+                    if invocation_id not in invocation_ids:
+                        invocation_ids.append(invocation_id)
+                        del invocation_ids[:-32]
                 existing["discovery_observations"] = int(existing.get("discovery_observations", 0)) + 1
                 history = existing.setdefault("evaluation_history", [])
                 if not isinstance(history, list):
@@ -272,6 +282,7 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                     "evaluation_key": evaluation_key,
                     "archive_sequence": detail.get("archive_sequence"),
                     "search_seed": detail.get("search_seed"),
+                    "invocation_id": invocation_id,
                     "data_version": data_version,
                     "window": window,
                     "fitness": fitness,
@@ -335,8 +346,20 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
     return count
 
 
-def _candidate_rank(row: dict) -> tuple[float, float, int]:
-    folds = row.get("verification_folds") or []
+def _candidate_rank(row: dict) -> tuple[float, float, float, int]:
+    exact_folds = row.get("candidate_validation_folds") or []
+    if exact_folds:
+        latest_by_window = {}
+        for item in exact_folds:
+            if not isinstance(item, dict) or not isinstance(item.get("fitness"), (int, float)):
+                continue
+            key = (item.get("test_start"), item.get("test_end"))
+            prior = latest_by_window.get(key)
+            if prior is None or str(item.get("evaluated_at") or "") > str(prior.get("evaluated_at") or ""):
+                latest_by_window[key] = item
+        folds = list(latest_by_window.values())
+    else:
+        folds = row.get("verification_folds") or []
     oos = [
         float(item["fitness"])
         for item in folds
@@ -361,12 +384,193 @@ def _candidate_rank(row: dict) -> tuple[float, float, int]:
     oos_score = statistics.median(oos) if oos else -math.inf
     positive_oos = sum(value > 0 for value in oos)
     positive_discovery = sum(value > 0 for value in deltas)
-    # OOS evidence leads; otherwise rank by repeatable improvement over that
-    # run's baseline, even when the strategy's absolute return is still negative.
+    # Rank by lower-quartile OOS fitness when available; otherwise use repeatable
+    # improvement over each run's baseline, even if absolute return is negative.
+    ranked_oos = sorted(oos)
+    lower_quartile = ranked_oos[int((len(ranked_oos) - 1) * 0.25)] if ranked_oos else -math.inf
     return (
-        float(bool(oos)), oos_score if oos else discovery_score,
+        lower_quartile if oos else discovery_score, float(bool(oos)),
+        oos_score if oos else discovery_score,
         positive_oos if oos else positive_discovery,
     )
+
+
+def candidate_validation_candidates(
+    root: str | Path, strategy: str, *, limit: int = 3,
+    include_parameters: list[dict] | None = None,
+    invocation_id: str | None = None,
+) -> list[dict]:
+    """Return a small, diverse archive cohort for exact rolling OOS checks."""
+    if limit < 1:
+        return []
+    archive = _read(_archive_path(root))
+    rows = list((archive.get("candidates") or {}).get(strategy, {}).values())
+    rows = [
+        row for row in rows
+        if isinstance(row.get("parameters"), dict)
+        and row.get("logic_version") in (None, logic_version(strategy))
+        and (
+            row.get("eligible")
+            or any(
+                isinstance(item, dict)
+                and item.get("eligible")
+                and item.get("minimum_trade_count_met")
+                for item in row.get("evaluation_history") or []
+            )
+            or any(
+                isinstance(item, dict) and item.get("eligible")
+                for item in (row.get("regime_metrics") or {}).values()
+            )
+        )
+    ]
+    by_id = {row.get("candidate_id"): row for row in rows if row.get("candidate_id")}
+    ordered = []
+    for parameters in include_parameters or []:
+        if not isinstance(parameters, dict):
+            continue
+        row = by_id.get(candidate_id(strategy, parameters))
+        if row is None:
+            row = {
+                "candidate_id": candidate_id(strategy, parameters),
+                "strategy": strategy,
+                "parameters": parameters,
+                "eligible": True,
+                "model_family": model_family(strategy, parameters),
+                "logic_version": logic_version(strategy),
+                "last_invocation_id": invocation_id,
+                "source_invocation_ids": [invocation_id] if invocation_id else [],
+                "candidate_validation_folds": [],
+                "archive_artifact": str(_archive_path(root).resolve()),
+            }
+        if row not in ordered:
+            ordered.append(row)
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            *_candidate_rank(row), str(row.get("last_seen") or ""),
+            str(row.get("candidate_id") or ""),
+        ),
+        reverse=True,
+    )
+    selected = []
+    for row in [*ordered, *ranked]:
+        parameters = row.get("parameters") or {}
+        if any(
+            item.get("candidate_id") == row.get("candidate_id")
+            or _parameter_distance(parameters, item.get("parameters") or {}) < 0.08
+            for item in selected
+        ):
+            continue
+        selected.append({
+            "candidate_id": row["candidate_id"],
+            "parameters": parameters,
+            "eligible": bool(row.get("eligible")),
+            "model_family": row.get("model_family") or model_family(strategy, parameters),
+            "logic_version": row.get("logic_version") or logic_version(strategy),
+            "cost_model_version": row.get("cost_model_version"),
+            "parent_candidate_id": row.get("parent_candidate_id"),
+            "last_invocation_id": row.get("last_invocation_id"),
+            "source_invocation_ids": row.get("source_invocation_ids") or [],
+            "last_window": row.get("last_window") or {},
+            "regime_metrics": row.get("regime_metrics") or {},
+            "candidate_validation_folds": row.get("candidate_validation_folds") or [],
+            "last_seen": row.get("last_seen"),
+            "archive_rank": _candidate_rank(row),
+            "archive_artifact": str(_archive_path(root).resolve()),
+        })
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def record_candidate_validation_folds(
+    root: str | Path, strategy: str, records: list[dict],
+) -> int:
+    """Persist exact-parameter OOS folds, deduplicated by data and fold version."""
+    path = _archive_path(root)
+    added = 0
+    with _locked(path):
+        archive = _read(path)
+        rows = archive.setdefault("candidates", {}).setdefault(strategy, {})
+        timestamp = datetime.now(timezone.utc).isoformat()
+        for record in records:
+            parameters = record.get("parameters")
+            if not isinstance(parameters, dict):
+                continue
+            key = candidate_id(strategy, parameters)
+            row = rows.get(key) or {
+                "candidate_id": key, "strategy": strategy,
+                "parameters": parameters, "first_seen": timestamp,
+                "discovery_observations": 0, "regime_metrics": {},
+                "verification_folds": [],
+            }
+            for name in (
+                "model_family", "logic_version", "cost_model_version",
+                "parent_candidate_id", "last_invocation_id",
+            ):
+                if record.get(name) is not None:
+                    row[name] = record[name]
+            invocation_id = record.get("last_invocation_id")
+            if invocation_id:
+                invocation_ids = row.get("source_invocation_ids")
+                if not isinstance(invocation_ids, list):
+                    invocation_ids = []
+                    row["source_invocation_ids"] = invocation_ids
+                if invocation_id not in invocation_ids:
+                    invocation_ids.append(invocation_id)
+                    del invocation_ids[:-32]
+            folds = row.get("candidate_validation_folds")
+            if not isinstance(folds, list):
+                folds = []
+                row["candidate_validation_folds"] = folds
+            fold = {
+                **{name: record.get(name) for name in (
+                    "validation_version", "data_version", "train_start", "train_end",
+                    "test_start", "test_end", "fitness", "metrics", "status",
+                    "validation_cost_model_version", "validation_context_sha256",
+                    "logic_version",
+                )},
+                "evaluated_at": timestamp,
+            }
+            dedupe_key = (
+                fold.get("validation_version"), fold.get("data_version"),
+                fold.get("validation_cost_model_version"), fold.get("logic_version"),
+                fold.get("validation_context_sha256"),
+                fold.get("test_start"), fold.get("test_end"),
+            )
+            prior_index = next((index for index, item in enumerate(folds) if (
+                item.get("validation_version"), item.get("data_version"),
+                item.get("validation_cost_model_version"), item.get("logic_version"),
+                item.get("validation_context_sha256"),
+                item.get("test_start"), item.get("test_end"),
+            ) == dedupe_key), None)
+            if prior_index is None:
+                folds.append(fold)
+                added += 1
+            else:
+                folds[prior_index] = fold
+            folds.sort(key=lambda item: (str(item.get("test_start") or ""), str(item.get("evaluated_at") or "")))
+            del folds[:-32]
+            row["last_candidate_validation_at"] = timestamp
+            rows[key] = row
+        if len(rows) > MAX_CANDIDATES_PER_STRATEGY:
+            ranked = sorted(rows.values(), key=_candidate_rank, reverse=True)
+            retained = []
+            for row in ranked:
+                parameters = row.get("parameters") or {}
+                if any(
+                    _parameter_distance(parameters, old.get("parameters") or {}) < 0.08
+                    for old in retained
+                ):
+                    continue
+                retained.append(row)
+                if len(retained) >= MAX_CANDIDATES_PER_STRATEGY:
+                    break
+            rows.clear()
+            rows.update({row["candidate_id"]: row for row in retained})
+        archive["updated_at"] = timestamp
+        _atomic_json(path, archive)
+    return added
 
 
 def record_verification(root: str | Path, strategy: str, detail: dict) -> int:

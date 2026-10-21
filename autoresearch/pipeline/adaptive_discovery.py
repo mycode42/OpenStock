@@ -69,6 +69,7 @@ def run_discovery(args, *, search_func=None) -> dict:
         "data_version": getattr(args, "data_version", None),
         "parent_candidate": parent_metadata,
         "archive_sequence": getattr(args, "archive_sequence", None),
+        "invocation_id": getattr(args, "invocation_id", None),
         "search_seed": args.seed,
         "adaptive_novelty": _novelty_summary(
             args.strategy, report.get("candidates") or [], excluded_candidate_ids,
