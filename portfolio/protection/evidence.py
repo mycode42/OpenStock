@@ -18,18 +18,25 @@ def to_finite_decimal(value: object) -> Decimal | None:
     return result if result.is_finite() else None
 
 
+def normalize_broker_price(value: object) -> Decimal | None:
+    """Apply the same cent rounding that the Algo executor sends to Alpaca."""
+    price = to_finite_decimal(value)
+    if price is None or price <= 0:
+        return None
+    try:
+        rounded = Decimal(str(round(float(price), 2)))
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return rounded if rounded.is_finite() and rounded > 0 else None
+
+
 def broker_prices_match(actual: object, expected: object) -> bool:
     """Compare prices using the executor's two-decimal broker submission value."""
     actual_price = to_finite_decimal(actual)
-    expected_price = to_finite_decimal(expected)
-    if actual_price is None or expected_price is None:
+    broker_expected = normalize_broker_price(expected)
+    if actual_price is None or broker_expected is None:
         return False
-    try:
-        # execution.orders rounds bracket/OCO prices with round(float(value), 2).
-        broker_expected = to_finite_decimal(round(float(expected_price), 2))
-    except (OverflowError, TypeError, ValueError):
-        return False
-    return broker_expected is not None and actual_price == broker_expected
+    return actual_price == broker_expected
 
 
 def remaining_order_quantity(order: dict) -> Decimal | None:
@@ -60,8 +67,8 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
     quantity = abs(signed_quantity) if signed_quantity is not None else None
     is_short = signed_quantity is not None and signed_quantity < 0
     exit_side = "buy" if is_short else "sell"
-    stop = to_finite_decimal(state.get("stop_price"))
-    target = to_finite_decimal(state.get("take_profit"))
+    stop = normalize_broker_price(state.get("stop_price"))
+    target = normalize_broker_price(state.get("take_profit"))
     valid_levels = stop < target if stop is not None and target is not None and not is_short else (
         stop > target if stop is not None and target is not None else False
     )
@@ -69,9 +76,13 @@ def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Dec
         return None
     if recovery.get("qty") is not None and to_finite_decimal(recovery["qty"]) != quantity:
         return None
-    if recovery.get("stop_price") is not None and to_finite_decimal(recovery["stop_price"]) != stop:
+    if recovery.get("stop_price") is not None and not broker_prices_match(
+        recovery["stop_price"], state.get("stop_price"),
+    ):
         return None
-    if recovery.get("take_profit") is not None and to_finite_decimal(recovery["take_profit"]) != target:
+    if recovery.get("take_profit") is not None and not broker_prices_match(
+        recovery["take_profit"], state.get("take_profit"),
+    ):
         return None
 
     matches = [
@@ -117,4 +128,4 @@ def verified_recovery_oco(nested_orders: list[dict], state: dict, position_qty: 
     return recovery_oco_order(nested_orders, state, position_qty) is not None
 
 
-__all__ = ["ACTIVE_ORDER_STATUSES", "broker_prices_match", "recovery_oco_order", "remaining_order_quantity", "to_finite_decimal", "verified_recovery_oco"]
+__all__ = ["ACTIVE_ORDER_STATUSES", "broker_prices_match", "normalize_broker_price", "recovery_oco_order", "remaining_order_quantity", "to_finite_decimal", "verified_recovery_oco"]

@@ -385,6 +385,8 @@ def run_loop(
     last_universe_attempt_monotonic: float | None = None
     last_reconciliation_monotonic: float | None = None
     last_recovery_monotonic: float | None = None
+    last_recovery_wait_signature: tuple[str, ...] | None = None
+    last_recovery_wait_log_monotonic: float | None = None
     last_window_name: str | None = None
     last_loop_error: str | None = None
 
@@ -450,6 +452,23 @@ def run_loop(
                             )
                         if recovery.get("errors"):
                             LOG.error("[ALGO] Broker stop repair degraded: %s", "; ".join(recovery["errors"]))
+                        waiting = tuple(str(item) for item in recovery.get("waiting") or [])
+                        if waiting:
+                            now_monotonic = time.monotonic()
+                            if (
+                                waiting != last_recovery_wait_signature
+                                or last_recovery_wait_log_monotonic is None
+                                or now_monotonic - last_recovery_wait_log_monotonic >= 900
+                            ):
+                                LOG.warning(
+                                    "[ALGO] Broker stop repair waiting age=%ss: %s",
+                                    recovery.get("waiting_age_seconds", 0), "; ".join(waiting),
+                                )
+                                last_recovery_wait_signature = waiting
+                                last_recovery_wait_log_monotonic = now_monotonic
+                        else:
+                            last_recovery_wait_signature = None
+                            last_recovery_wait_log_monotonic = None
                         if recovery.get("verified"):
                             last_reconciliation_monotonic = None
                     except Exception as exc:

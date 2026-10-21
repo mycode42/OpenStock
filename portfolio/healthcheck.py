@@ -16,7 +16,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from broker.algo import AlgoAlpaca
-from portfolio.protection.evidence import verified_recovery_oco
+from portfolio.protection.evidence import broker_prices_match, verified_recovery_oco
 from portfolio.reconciliation import OPEN_ORDER_STATUSES
 from market.sessions import ET, TradingWindow, get_trading_window
 from portfolio.state_store import AlgoStateStore, StateStoreError
@@ -309,7 +309,7 @@ def _bracket_stop_gaps(
         # has been synchronized, require the broker leg to match the live trail.
         stop_level_matches = (
             state.get("broker_stop_price") is None
-            or (expected_stop is not None and actual_stop == expected_stop)
+            or (expected_stop is not None and broker_prices_match(actual_stop, expected_stop))
         )
         bracket_stop_covers_position = (
             position_size is not None
@@ -372,6 +372,18 @@ def build_report(
         else:
             detail = str(recovery_errors)
         problems.append(_problem("protection_recovery_degraded", f"Algo broker protection repair is {recovery_status}: {detail}"))
+    recovery_waiting = recovery.get("waiting") if isinstance(recovery, dict) else None
+    recovery_waiting = recovery_waiting if isinstance(recovery_waiting, list) else []
+    recovery_waiting_age = recovery.get("waiting_age_seconds") if isinstance(recovery, dict) else None
+    if state_available and recovery_waiting and recovery_status in {
+        "waiting", "outside_trading_session", "stale_reconciliation", "broker_market_closed",
+    }:
+        detail = "; ".join(str(item) for item in recovery_waiting[:2])
+        age = f"; waiting {int(recovery_waiting_age)}s" if isinstance(recovery_waiting_age, (int, float)) else ""
+        problems.append(_problem(
+            "protection_recovery_waiting",
+            f"Algo broker protection repair is waiting{age}: {detail}",
+        ))
     stop_sync = portfolio.get("protection_sync_status") or {}
     stop_sync_status = stop_sync.get("status") if isinstance(stop_sync, dict) else None
     if state_available and stop_sync_status in {"degraded", "waiting"}:
@@ -623,6 +635,8 @@ def build_report(
         "entry_pause_reasons": pause_reasons,
         "execution_incident_status": incident_status,
         "protection_recovery_status": recovery_status,
+        "protection_recovery_waiting": recovery_waiting,
+        "protection_recovery_waiting_age_seconds": recovery_waiting_age,
         "broker_stop_sync_status": stop_sync_status,
         "broker_position_count": len(positions) if positions is not None else None,
         "unsupported_positions": unsupported_positions,

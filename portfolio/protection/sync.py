@@ -8,6 +8,7 @@ from decimal import Decimal
 from portfolio.protection.evidence import (
     ACTIVE_ORDER_STATUSES,
     broker_prices_match,
+    normalize_broker_price,
     recovery_oco_order,
     remaining_order_quantity,
     to_finite_decimal,
@@ -23,7 +24,7 @@ RETRY_SECONDS = 60
 
 def _valid_oco_parent(parent: dict, state: dict, recovery: dict, qty: Decimal, stop: Decimal) -> bool:
     """Confirm the existing OCO is the recorded full-size order before PATCH."""
-    if to_finite_decimal(state.get("take_profit")) != to_finite_decimal(recovery.get("take_profit")):
+    if not broker_prices_match(recovery.get("take_profit"), state.get("take_profit")):
         return False
     check_state = dict(state)
     check_state["stop_price"] = stop
@@ -202,8 +203,8 @@ def sync_broker_stops(
         if not isinstance(state, dict) or state.get("phase") != "open" or symbol not in positions:
             continue
         signed_qty = to_finite_decimal(positions[symbol].get("qty"))
-        desired = to_finite_decimal(state.get("stop_price"))
-        target = to_finite_decimal(state.get("take_profit"))
+        desired = normalize_broker_price(state.get("stop_price"))
+        target = normalize_broker_price(state.get("take_profit"))
         entry_id = str(state.get("entry_order_id") or "")
         if (
             signed_qty is None or signed_qty == 0 or desired is None or target is None

@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Callable
 
 from portfolio.incidents import record_incident, resolve_incident
-from portfolio.protection.evidence import recovery_oco_order, to_finite_decimal
+from portfolio.protection.evidence import normalize_broker_price, recovery_oco_order, to_finite_decimal
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
 RETRY_SECONDS = 90
 MAX_DECISIONS = 3
@@ -21,15 +21,7 @@ MAX_SUBMISSIONS_PER_DECISION = 3
 
 
 def _price(value: object) -> Decimal | None:
-    number = to_finite_decimal(value)
-    if number is None or number <= 0:
-        return None
-    try:
-        if number != number.quantize(Decimal("0.01")):
-            return None
-    except InvalidOperation:
-        return None
-    return number
+    return normalize_broker_price(value)
 
 
 def _timestamp(value: object) -> datetime | None:
@@ -43,6 +35,40 @@ def _timestamp(value: object) -> datetime | None:
 def _age_seconds(now: datetime, value: object) -> float | None:
     parsed = _timestamp(value)
     return (now - parsed).total_seconds() if parsed else None
+
+
+def _finish_report(portfolio: dict, report: dict, previous_report: object, now: datetime) -> dict:
+    """Persist a clear, age-tracked recovery status on every return path."""
+    waiting = report.get("waiting") or []
+    if waiting:
+        previous = previous_report if isinstance(previous_report, dict) else {}
+        previous_waiting = previous.get("waiting") or []
+        previous_by_item = previous.get("waiting_since_by_item")
+        previous_by_item = previous_by_item if isinstance(previous_by_item, dict) else {}
+        since_by_item: dict[str, str] = {}
+        item_ages: list[float] = []
+        for item in waiting:
+            since = previous_by_item.get(item)
+            if since is None and item in previous_waiting:
+                since = previous.get("waiting_since") or previous.get("checked_at")
+            age = _age_seconds(now, since)
+            if age is None or age < 0:
+                since = now.isoformat()
+                age = 0.0
+            since_by_item[item] = str(since)
+            item_ages.append(age)
+        report["waiting_since_by_item"] = since_by_item
+        report["waiting_since"] = min(since_by_item.values(), key=lambda value: _timestamp(value) or now)
+        report["waiting_age_seconds"] = int(max(item_ages, default=0.0))
+    portfolio["protection_recovery_status"] = report
+    return report
+
+
+def _wait_report(status: str, message: str, now: datetime) -> dict:
+    return {
+        "status": status, "checked_at": now.isoformat(), "attempted": [],
+        "submitted": [], "verified": [], "waiting": [message], "errors": [],
+    }
 
 
 def _open_symbol_orders(symbol: str, open_orders: list[dict], nested_orders: list[dict]) -> list[dict]:
@@ -161,27 +187,55 @@ def recover_broker_protection(
     if now.tzinfo is None:
         raise ValueError("Protection recovery requires a timezone-aware clock")
     startup = portfolio.get("startup_reconciliation") or {}
+    previous_report = portfolio.get("protection_recovery_status") or {}
     gaps = set(startup.get("unprotected_positions") or [])
     verified = set(startup.get("verified_positions") or [])
-    if not gaps or not verified:
-        return {"status": "not_needed", "submitted": [], "verified": [], "waiting": [], "errors": []}
+    if not gaps:
+        return _finish_report(
+            portfolio,
+            {"status": "not_needed", "checked_at": now.isoformat(), "attempted": [],
+             "submitted": [], "verified": [], "waiting": [], "errors": []},
+            previous_report, now,
+        )
+    if not verified:
+        return _finish_report(
+            portfolio,
+            _wait_report("waiting", "no broker-verified positions are available for protection repair", now),
+            previous_report, now,
+        )
     session_name = getattr(window, "name", None)
     extended_hours = session_name != "regular"
     if (
         session_name not in {"regular", "premarket", "after_hours", "overnight"}
         or bool(getattr(window, "extended_hours", extended_hours)) != extended_hours
     ):
-        return {"status": "outside_trading_session", "submitted": [], "verified": [], "waiting": [], "errors": []}
+        return _finish_report(
+            portfolio,
+            _wait_report("outside_trading_session", "replacement OCO submission is deferred outside a supported trading session", now),
+            previous_report, now,
+        )
     local_now = now.astimezone(window.regular_open.tzinfo)
     if session_name == "regular" and not window.regular_open <= local_now < window.regular_close:
-        return {"status": "outside_trading_session", "submitted": [], "verified": [], "waiting": [], "errors": []}
+        return _finish_report(
+            portfolio,
+            _wait_report("outside_trading_session", "replacement OCO submission is deferred outside regular market hours", now),
+            previous_report, now,
+        )
     checked_age = _age_seconds(now, startup.get("checked_at"))
     if checked_age is None or not -5 <= checked_age <= 600:
-        return {"status": "stale_reconciliation", "submitted": [], "verified": [], "waiting": [], "errors": []}
+        return _finish_report(
+            portfolio,
+            _wait_report("stale_reconciliation", "startup broker reconciliation is stale; refresh it before repairing protection", now),
+            previous_report, now,
+        )
     if session_name == "regular":
         clock = broker.clock()
         if not isinstance(clock, dict) or clock.get("is_open") is not True:
-            return {"status": "broker_market_closed", "submitted": [], "verified": [], "waiting": [], "errors": []}
+            return _finish_report(
+                portfolio,
+                _wait_report("broker_market_closed", "broker reports the regular market is closed; replacement OCO is deferred", now),
+                previous_report, now,
+            )
 
     positions = broker.positions()
     if not isinstance(positions, list):
@@ -205,23 +259,41 @@ def recover_broker_protection(
         owner = owners.get(symbol)
         state = (states.get(owner) or {}).get(symbol) if owner else None
         if not isinstance(state, dict) or state.get("phase") != "open" or state.get("owner") != owner:
-            report["waiting"].append(f"{symbol}: no open owned strategy state")
+            report["waiting"].append(f"{symbol}: no open strategy state matching the persisted owner")
             continue
         entry_id = state.get("entry_order_id")
         qty = to_finite_decimal(by_symbol[symbol].get("qty"))
+        if not isinstance(entry_id, str) or not entry_id:
+            report["waiting"].append(f"{symbol}: persisted entry order ID is missing")
+            continue
+        if qty is None or qty == 0:
+            report["waiting"].append(f"{symbol}: current broker quantity is missing or zero")
+            continue
         is_short = qty is not None and qty < 0
-        quantity = abs(qty) if qty is not None else None
+        quantity = abs(qty)
+        if quantity != quantity.to_integral_value():
+            report["waiting"].append(f"{symbol}: fractional broker quantity cannot use an integer-share OCO")
+            continue
+        if (startup.get("verified_entries") or {}).get(symbol) != entry_id:
+            report["waiting"].append(f"{symbol}: entry order ID differs from broker-verified reconciliation")
+            continue
+        if to_finite_decimal((startup.get("verified_quantities") or {}).get(symbol)) != qty:
+            report["waiting"].append(f"{symbol}: broker quantity changed since reconciliation")
+            continue
+        if to_finite_decimal(state.get("last_known_qty")) != qty:
+            report["waiting"].append(f"{symbol}: broker quantity differs from persisted strategy state")
+            continue
         stop = _price(state.get("stop_price"))
         target = _price(state.get("take_profit"))
-        if (
-            not isinstance(entry_id, str) or not entry_id
-            or quantity is None or quantity <= 0 or quantity != quantity.to_integral_value()
-            or (startup.get("verified_entries") or {}).get(symbol) != entry_id
-            or to_finite_decimal((startup.get("verified_quantities") or {}).get(symbol)) != qty
-            or to_finite_decimal(state.get("last_known_qty")) != qty
-            or stop is None or target is None or ((stop <= target) if is_short else (stop >= target))
-        ):
-            report["waiting"].append(f"{symbol}: current entry, quantity, or exit levels differ from broker-verified state")
+        if stop is None:
+            report["waiting"].append(f"{symbol}: persisted stop is not a valid positive broker price")
+            continue
+        if target is None:
+            report["waiting"].append(f"{symbol}: persisted take-profit is not a valid positive broker price")
+            continue
+        crossed_levels = stop <= target if is_short else stop >= target
+        if crossed_levels:
+            report["waiting"].append(f"{symbol}: rounded stop and take-profit cross or coincide")
             continue
 
         # Symbol-filtered open orders avoid the account-wide 500-order cap.
@@ -459,8 +531,7 @@ def recover_broker_protection(
         "submitted" if report["submitted"] else
         "waiting" if report["waiting"] else "not_needed"
     )
-    portfolio["protection_recovery_status"] = report
-    return report
+    return _finish_report(portfolio, report, previous_report, now)
 
 
 __all__ = ["recover_broker_protection"]
