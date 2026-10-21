@@ -27,6 +27,7 @@ from options.config import load_options_config
 from options.costs import OptionsCostModel
 from options.data import AlpacaOptionDataProvider, OptionChain, parse_snapshot_quote
 from options.journal import OptionsJournal
+from options.iv_history import seed_cboe_iv_history
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
 from options.assignment import simulate_early_assignment
 from options.risk import (
@@ -605,6 +606,27 @@ def run_paper_cycle(
             ),
         },
     }
+    iv_history_bootstrap = {}
+    if (
+        long_volatility_config.get("enabled", True)
+        and long_volatility_config.get("bootstrap_iv_history_from_cboe", True)
+    ):
+        for symbol in long_volatility_config.get("underlyings", ["SPY"]):
+            symbol = str(symbol).upper()
+            try:
+                iv_history_bootstrap[symbol] = seed_cboe_iv_history(
+                    journal,
+                    symbol,
+                    before_date=datetime.fromisoformat(session_date).date(),
+                    config=long_volatility_config,
+                )
+            except Exception as exc:
+                iv_history_bootstrap[symbol] = {
+                    "status": "error",
+                    "underlying": symbol,
+                    "error": type(exc).__name__,
+                }
+                LOG.warning("Options Cboe IV-history bootstrap failed for %s: %s", symbol, type(exc).__name__)
     exclusive_long_volatility = bool(
         long_volatility_config.get("enabled")
         and long_volatility_config.get("mode") == "exclusive"
@@ -632,7 +654,11 @@ def run_paper_cycle(
             candidates.append((replace(signal, structure=structure), vrp_chain, closes))
         diagnostics["vrp"] = {"chain_contracts": len(vrp_chain.contracts), "signal": signal is not None, "feed": feed}
 
-    long_volatility_diagnostics = {"enabled": bool(long_volatility_config.get("enabled")), "underlyings": {}}
+    long_volatility_diagnostics = {
+        "enabled": bool(long_volatility_config.get("enabled")),
+        "underlyings": {},
+        "history_bootstrap": iv_history_bootstrap,
+    }
     if long_volatility_config.get("enabled", True):
         history_rows = journal.rows("iv_history")
         lookback = int(long_volatility_config.get("iv_percentile_lookback_sessions", 252))
@@ -662,6 +688,12 @@ def run_paper_cycle(
                     if session and session < session_date:
                         prior_by_date[session] = _safe_number(row.get("atm_iv"))
                 prior_samples = [value for _day, value in sorted(prior_by_date.items()) if value > 0][-lookback:]
+                history_sources = sorted({
+                    str(row.get("feed") or "unknown")
+                    for row in history_rows
+                    if str(row.get("underlying") or "").upper() == symbol
+                    and str(row.get("session_date") or "") < session_date
+                })
                 current_atm_iv = atm_implied_volatility(chain, long_volatility_config)
                 iv_percentile = historical_iv_percentile(
                     current_atm_iv, prior_samples, min_samples=minimum_samples,
@@ -687,7 +719,10 @@ def run_paper_cycle(
                     as_of=now,
                     iv_percentile=iv_percentile,
                     iv_percentile_samples=len(prior_samples),
-                    iv_percentile_source="options_paper_journal_atm_iv",
+                    iv_percentile_source=(
+                        "options_paper_journal_atm_iv:" + ",".join(history_sources)
+                        if history_sources else "options_paper_journal_atm_iv"
+                    ),
                 ))
                 if signal:
                     structure = replace(
@@ -701,6 +736,7 @@ def run_paper_cycle(
                     "iv_percentile": iv_percentile,
                     "iv_percentile_samples": len(prior_samples),
                     "iv_rank_warmup": iv_percentile is None,
+                    "iv_percentile_sources": history_sources,
                     "feed": feed,
                     "chain_quality": list(chain.data_quality),
                 }

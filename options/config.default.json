@@ -85,6 +85,7 @@
     "otm_delta": 0.25,
     "iv_percentile_lookback_sessions": 252,
     "iv_rank_min_samples": 20,
+    "bootstrap_iv_history_from_cboe": true,
     "iv_percentile_ceiling": 75.0,
     "max_risk_per_trade_pct": 0.005,
     "realized_lookback_sessions": 20,

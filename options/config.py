@@ -74,6 +74,8 @@ def load_options_config(path: str | Path | None = None) -> dict:
     long_vol = config["long_volatility"]
     if not isinstance(long_vol.get("enabled"), bool) or not isinstance(long_vol.get("close_on_regime_exit"), bool):
         raise ValueError("long_volatility enabled and close_on_regime_exit must be booleans")
+    if not isinstance(long_vol.get("bootstrap_iv_history_from_cboe", True), bool):
+        raise ValueError("long_volatility.bootstrap_iv_history_from_cboe must be a boolean")
     if long_vol.get("mode") not in {"alongside", "exclusive"}:
         raise ValueError("long_volatility.mode must be alongside or exclusive")
     if long_vol.get("activation_mode") not in {"regime_only", "regime_or_realized_vol"}:
