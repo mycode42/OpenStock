@@ -153,13 +153,14 @@ test('equity research payload includes the latest optimizer cycle and strategy d
   await handlers['GET /api/algo-trader']({ query: { account: 'equity' } }, res);
 
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.research.optimizer.run_id, 'optimization-run123');
-  assert.equal(res.body.research.optimizer.range_start, '2024-01-01');
-  assert.equal(res.body.research.optimizer.new_variants, 12);
-  assert.equal(res.body.research.optimizer.archive_sequence, 28);
-  assert.equal(res.body.research.optimizer.strategies[0].selected_candidate, 'iteration_02:bayes_011');
-  assert.equal(res.body.research.optimizer.strategies[0].top_tested_fitness, 0.5244);
-  assert.equal(res.body.research.optimizer.strategies[0].top_tested_delta, 0.6744);
+  const optimizer = res.body.research.optimizer.latest;
+  assert.equal(optimizer.run_id, 'optimization-run123');
+  assert.equal(optimizer.range_start, '2024-01-01');
+  assert.equal(optimizer.new_variants, 12);
+  assert.equal(optimizer.archive_sequence, 28);
+  assert.equal(optimizer.strategies[0].selected_candidate, 'iteration_02:bayes_011');
+  assert.equal(optimizer.strategies[0].top_tested_fitness, 0.5244);
+  assert.equal(optimizer.strategies[0].top_tested_delta, 0.6744);
 });
 
 test('options settings save to their own config without changing equity overrides', async t => {
