@@ -120,6 +120,16 @@ When reach-out and quiet conditions both apply, stay quiet. Only an urgent item 
 
 Add conventions, style, and rules as you learn what works for this workspace.
 
+## algo-trader Push Checks
+
+Before every push of algo-trader to GitHub, run the full pytest suite in the repository's Poetry environment, from the repository root:
+
+```sh
+poetry run python -m pytest -q
+```
+
+Commits may be created without testing. This push check does not require building the package.
+
 ## Related
 
 - [Default AGENTS.md](/reference/AGENTS.default)
