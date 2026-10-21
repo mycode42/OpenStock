@@ -20,6 +20,14 @@ class WalkForwardFold:
 def longest_strategy_lookback_sessions(strategy: str, section: dict, config: dict) -> int:
     if strategy == "vrp":
         return int(section.get("realized_lookback_sessions", 20))
+    if strategy == "long_volatility":
+        lookbacks = [int(section.get("iv_percentile_lookback_sessions", 252))]
+        if (
+            section.get("activation_mode") == "regime_or_realized_vol"
+            or section.get("max_iv_to_realized_ratio") is not None
+        ):
+            lookbacks.append(int(section.get("realized_lookback_sessions", 20)))
+        return max(lookbacks)
     if strategy == "event_driven":
         # The frozen LLM recommendation is a point-in-time dataset input; the
         # options expression does not inspect a rolling calendar history.

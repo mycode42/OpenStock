@@ -20,6 +20,9 @@ class OptionsStrategyContext:
     event_recommendations: Mapping[str, object] = field(default_factory=dict)
     equity_signals: Mapping[str, object] = field(default_factory=dict)
     as_of: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    iv_percentile: float | None = None
+    iv_percentile_samples: int = 0
+    iv_percentile_source: str = "unavailable"
 
 
 class OptionsStrategy(Protocol):

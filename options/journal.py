@@ -33,7 +33,7 @@ class OptionsJournal:
         self.account_digest = digest
 
     def append(self, name: str, payload: dict) -> None:
-        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions"}:
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
             raise ValueError("unsupported options journal stream")
         path = self.directory / f"{name}.jsonl"
         row = {"logged_at": datetime.now().astimezone().isoformat(), "account_digest": self.account_digest, **payload}
@@ -47,7 +47,7 @@ class OptionsJournal:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
     def latest(self, name: str) -> dict | None:
-        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions"}:
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
             raise ValueError("unsupported options journal stream")
         path = self.directory / f"{name}.jsonl"
         try:
@@ -72,7 +72,7 @@ class OptionsJournal:
 
     def latest_matching(self, name: str, field: str, value: str) -> dict | None:
         """Return the newest row matching a field."""
-        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions"}:
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
             raise ValueError("unsupported options journal stream")
         path = self.directory / f"{name}.jsonl"
         match = None
@@ -94,7 +94,7 @@ class OptionsJournal:
         return match
 
     def contains(self, name: str, field: str, value: str) -> bool:
-        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions"}:
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
             raise ValueError("unsupported options journal stream")
         path = self.directory / f"{name}.jsonl"
         try:
@@ -112,6 +112,29 @@ class OptionsJournal:
         except FileNotFoundError:
             return False
         return False
+
+    def rows(self, name: str) -> list[dict]:
+        """Read a journal stream in append order for strategy lifecycle recovery."""
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
+            raise ValueError("unsupported options journal stream")
+        path = self.directory / f"{name}.jsonl"
+        result = []
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+                try:
+                    for line in stream:
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(row, dict):
+                            result.append(row)
+                finally:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError:
+            return []
+        return result
 
 
 __all__ = ["OptionsJournal"]

@@ -43,7 +43,11 @@ def candidate_pool(strategy: str, config: dict, base_config: dict) -> list[Candi
         if len(choices) > 7:
             raise ValueError(f"search grid {strategy}.{name} exceeds the seven-value limit")
         values.append(choices)
-    regime_sets = config.get("search", {}).get("regime_sets") or [
+    search_config = config.get("search", {})
+    regime_sets = search_config.get("regime_sets_by_strategy", {}).get(strategy)
+    if regime_sets is None:
+        regime_sets = search_config.get("regime_sets")
+    regime_sets = regime_sets or [
         base_config.get(strategy, {}).get("allowed_regimes", ["range_bound"]),
     ]
     if not isinstance(regime_sets, list) or not regime_sets:

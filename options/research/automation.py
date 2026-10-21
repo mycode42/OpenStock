@@ -16,7 +16,7 @@ from runtime.paths import ROOT
 
 
 ET = ZoneInfo("America/New_York")
-SUPPORTED_STRATEGIES = ("vrp", "event_driven", "directional_overlay")
+SUPPORTED_STRATEGIES = ("vrp", "event_driven", "directional_overlay", "long_volatility")
 
 
 def _append_jsonl(path: Path, row: dict) -> None:
@@ -115,7 +115,9 @@ def run_automated_options_research(*, config_path: str | Path | None = None) -> 
     """Run the configured options sleeves without touching broker credentials or orders."""
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
     config = _merge(_read_json(RESEARCH_DEFAULTS_PATH), _read_json(config_path_resolved))
-    strategies = [str(item).strip().lower() for item in config.get("automation", {}).get("strategies", ["vrp", "event_driven"])]
+    strategies = [str(item).strip().lower() for item in config.get("automation", {}).get(
+        "strategies", ["vrp", "event_driven", "long_volatility"],
+    )]
     if not strategies or any(item not in SUPPORTED_STRATEGIES for item in strategies):
         raise ValueError(f"automation strategies must be selected from {', '.join(SUPPORTED_STRATEGIES)}")
     data_path = _project_path(config.get("data_path", "data/options/research/chains.jsonl"))

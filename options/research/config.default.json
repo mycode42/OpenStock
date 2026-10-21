@@ -5,7 +5,7 @@
   "output_dir": "data/options/research/runs",
   "automation": {
     "enabled": true,
-    "strategies": ["vrp", "event_driven"]
+    "strategies": ["vrp", "event_driven", "long_volatility"]
   },
   "model_surface": {
     "strike_steps": 15,
@@ -59,7 +59,7 @@
     "final_holdout_sessions": 252,
     "minimum_holdout_regime_labels": 2,
     "minimum_high_volatility_holdout_sessions": 5,
-    "high_volatility_labels": ["high_vol", "high_volatility", "elevated", "crisis", "risk_off"]
+    "high_volatility_labels": ["volatile", "high_vol", "high_volatility", "elevated", "crisis", "risk_off"]
   },
   "search": {
     "mode": "surrogate",
@@ -73,8 +73,12 @@
       ["range_bound", "trending_up", "trending_down"],
       ["range_bound"],
       ["trending_up"],
-      ["trending_down"]
+      ["trending_down"],
+      ["volatile"]
     ],
+    "regime_sets_by_strategy": {
+      "long_volatility": [["volatile"]]
+    },
     "grids": {
       "vrp": {
         "min_iv_minus_rv": [0.03, 0.05, 0.07],
@@ -89,6 +93,22 @@
         "long_delta": [0.40, 0.50],
         "short_delta": [0.20, 0.30],
         "min_signal_confidence": [0.60, 0.75]
+      },
+      "long_volatility": {
+        "min_dte": [7, 14],
+        "max_dte": [30, 45],
+        "iv_percentile_ceiling": [65, 75, 80],
+        "otm_delta": [0.20, 0.25, 0.30],
+        "profit_target_pct": [0.30, 0.40, 0.50],
+        "stop_loss_pct": [0.35, 0.50, 0.65],
+        "max_premium_per_trade_usd": [500, 1000, 1500],
+        "max_risk_per_trade_pct": [0.0025, 0.005],
+        "underlyings": [["SPY"], ["SPX"]],
+        "max_spread_pct": [0.10, 0.15, 0.20],
+        "min_open_interest": [100, 500],
+        "close_dte": [2, 3, 5],
+        "max_holding_days": [7, 14, 21],
+        "structure": ["strangle", "straddle"]
       }
     }
   },
@@ -104,6 +124,7 @@
   "strategy_defaults": {
     "vrp": {"min_dte": 25, "max_dte": 45, "realized_lookback_sessions": 20, "short_delta_max": 0.20},
     "event_driven": {"min_dte": 3, "max_dte": 35, "target_dte": 21},
-    "directional_overlay": {"min_dte": 25, "max_dte": 60, "target_dte": 40, "short_delta": 0.25}
+    "directional_overlay": {"min_dte": 25, "max_dte": 60, "target_dte": 40, "short_delta": 0.25},
+    "long_volatility": {"min_dte": 7, "max_dte": 45, "target_dte": 30, "iv_percentile_lookback_sessions": 252}
   }
 }

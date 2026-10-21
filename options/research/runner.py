@@ -291,7 +291,7 @@ def run_research(
 ) -> dict:
     """Research one options expression module; it never reads credentials or submits orders."""
     strategy = str(strategy).strip().lower()
-    supported = {"vrp", "event_driven", "directional_overlay"}
+    supported = {"vrp", "event_driven", "directional_overlay", "long_volatility"}
     if strategy not in supported:
         raise ValueError(f"strategy must be one of {', '.join(sorted(supported))}")
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
@@ -313,12 +313,15 @@ def run_research(
         Path(__file__).parents[1] / "models.py", Path(__file__).parents[1] / "structures.py",
         Path(__file__).parents[1] / "assignment.py", live_config_path,
         ROOT / "strategies/options/vrp.py", ROOT / "strategies/options/event_driven.py",
-        ROOT / "strategies/options/directional_overlay.py", ROOT / "strategies/options/base.py",
+        ROOT / "strategies/options/directional_overlay.py", ROOT / "strategies/options/long_volatility.py",
+        ROOT / "strategies/options/base.py",
         ROOT / "strategies/event_driven/models.py",
     ])
     section = deepcopy(base_config[strategy])
     section.update(research_config.get("strategy_defaults", {}).get(strategy, {}))
     section["underlying"] = underlying
+    if strategy == "long_volatility":
+        section["underlyings"] = [underlying]
     config_digest = hashlib.sha256(json.dumps(research_config, sort_keys=True).encode("utf-8")).hexdigest()
     timestamp = datetime.now(timezone.utc)
     source_digest = hashlib.sha256(selected_data_path.read_bytes()).hexdigest() if selected_data_path.is_file() else "missing"
@@ -574,7 +577,10 @@ def run_research(
         strategy, parameters=final_candidate.parameters,
         allowed_regimes=final_candidate.allowed_regimes, base_config=exported,
     )
-    exported[strategy]["underlying"] = underlying
+    if strategy == "long_volatility":
+        exported[strategy]["underlyings"] = [underlying]
+    else:
+        exported[strategy]["underlying"] = underlying
     exported[strategy]["enabled"] = bool(validation["approved"])
 
     report = {

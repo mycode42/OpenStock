@@ -61,6 +61,7 @@ class OptionDataProvider(Protocol):
 
     def get_chain(
         self, underlying: str, *, as_of: datetime, min_dte: int, max_dte: int,
+        exercise_style: str = "american",
     ) -> OptionChain: ...
 
     def underlying_closes(self, underlying: str, *, as_of: datetime, sessions: int) -> list[tuple[date, float]]: ...
@@ -191,14 +192,25 @@ class AlpacaOptionDataProvider:
         self.rate = float(rate)
         self.dividend_yield = float(dividend_yield)
 
-    def get_chain(self, underlying: str, *, as_of: datetime, min_dte: int, max_dte: int) -> OptionChain:
+    def get_chain(
+        self,
+        underlying: str,
+        *,
+        as_of: datetime,
+        min_dte: int,
+        max_dte: int,
+        exercise_style: str = "american",
+    ) -> OptionChain:
         if as_of.tzinfo is None or min_dte < 0 or max_dte < min_dte:
             raise ValueError("invalid chain as_of or DTE range")
+        if exercise_style not in {"american", "european"}:
+            raise ValueError("exercise_style must be american or european")
         spot = self.client.underlying_price(underlying)
         contracts = self.client.list_contracts(
             underlying,
             expiration_date_gte=(as_of.date() + timedelta(days=min_dte)).isoformat(),
             expiration_date_lte=(as_of.date() + timedelta(days=max_dte)).isoformat(),
+            style=exercise_style,
         )
         contracts = [
             row for row in contracts

@@ -9,6 +9,7 @@ from pathlib import Path
 from options.config import DEFAULT_CONFIG_PATH
 from strategies.options.directional_overlay import DirectionalOverlayStrategy
 from strategies.options.event_driven import EventDrivenOptionsStrategy
+from strategies.options.long_volatility import LongVolatilitySleeve
 from strategies.options.vrp import VolatilityRiskPremiumStrategy
 
 
@@ -16,11 +17,13 @@ STRATEGIES = {
     "vrp": VolatilityRiskPremiumStrategy,
     "event_driven": EventDrivenOptionsStrategy,
     "directional_overlay": DirectionalOverlayStrategy,
+    "long_volatility": LongVolatilitySleeve,
 }
 STRATEGY_IDS = {
     "vrp": "options_vrp",
     "event_driven": "options_event_driven",
     "directional_overlay": "options_directional_overlay",
+    "long_volatility": "options_long_volatility_sleeve",
 }
 
 
@@ -54,6 +57,8 @@ def make_strategy(
             # A new regime label may be supplied by a deployment config.
             for key in regime_filter:
                 section["regime_risk_multipliers"].setdefault(key, 1.0)
+            if name == "long_volatility":
+                section["allowed_regimes"] = regime_filter
     return STRATEGIES[name](section), section
 
 

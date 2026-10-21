@@ -44,6 +44,12 @@ from strategies.event_driven.ai import AIEventSignalBook
 from strategies.options.base import OptionsStrategyContext
 from strategies.options.base import regime_risk_multiplier
 from strategies.options.event_driven import EventDrivenOptionsStrategy
+from strategies.options.long_volatility import (
+    LongVolatilitySleeve,
+    atm_implied_volatility,
+    historical_iv_percentile,
+    long_volatility_exit_reason,
+)
 from strategies.options.vrp import VolatilityRiskPremiumStrategy
 
 
@@ -200,6 +206,7 @@ def _option_position_exposures(
                 "symbol": symbol,
                 "underlying": contract.underlying,
                 "qty": quantity,
+                "average_entry_price": _safe_number(row.get("avg_entry_price")),
                 "market_value": _safe_number(row.get("market_value")),
                 "bid": quote.bid,
                 "ask": quote.ask,
@@ -318,6 +325,176 @@ def _order_payload(signal, contracts: int, limit_price: float, client_order_id: 
     }
 
 
+def _long_volatility_exit_plans(
+    *,
+    journal: OptionsJournal,
+    broker_orders: list[dict],
+    positions: list[dict],
+    position_audit: list[dict],
+    now: datetime,
+    regime: str,
+    config: dict,
+    slippage_per_contract: float,
+) -> list[dict]:
+    """Recover live sleeve structures from journaled multi-leg intents and holdings."""
+    def value(record, key, default=None):
+        return record.get(key, default) if isinstance(record, dict) else getattr(record, key, default)
+
+    broker_by_client_id = {
+        str(order.get("client_order_id") or ""): order
+        for order in broker_orders if order.get("client_order_id")
+    }
+    latest_records = {}
+    for record in journal.rows("orders"):
+        client_order_id = str(record.get("client_order_id") or "")
+        if client_order_id:
+            latest_records[client_order_id] = record
+    order_records = list(latest_records.values())
+    already_closed = {
+        str(row.get("entry_client_order_id"))
+        for row in order_records
+        if row.get("kind") == "long_volatility_exit"
+        and str(((row.get("broker_response") or {}).get("status") or "")).lower() == "filled"
+    }
+    position_by_symbol = {
+        str(row.get("symbol") or "").upper(): row
+        for row in positions if row.get("symbol")
+    }
+    audit_by_symbol = {
+        str(row.get("symbol") or "").upper(): row
+        for row in position_audit if row.get("symbol")
+    }
+    plans = []
+    for record in order_records:
+        signal = record.get("signal") or {}
+        if signal.get("strategy") != LongVolatilitySleeve.strategy_id:
+            continue
+        entry_client_order_id = str(record.get("client_order_id") or "")
+        if not entry_client_order_id or entry_client_order_id in already_closed:
+            continue
+        payload = record.get("order") or {}
+        response = record.get("broker_response") or {}
+        broker_order = broker_by_client_id.get(entry_client_order_id) or response
+        status = str(broker_order.get("status") or "").lower()
+        if status not in {"filled", "partially_filled"}:
+            continue
+        entry_legs = payload.get("legs") or []
+        if len(entry_legs) != 2:
+            continue
+        actual_legs = []
+        filled_units = []
+        valid = True
+        for leg in entry_legs:
+            symbol = str(leg.get("symbol") or "").upper()
+            position = position_by_symbol.get(symbol)
+            audit = audit_by_symbol.get(symbol)
+            ratio = int(_safe_number(leg.get("ratio_qty"), 0))
+            qty = int(_safe_number((position or {}).get("qty"), 0))
+            expected_sign = 1 if str(leg.get("side", "")).lower() == "buy" else -1
+            if not position or not audit or ratio <= 0 or qty * expected_sign <= 0 or abs(qty) % ratio:
+                valid = False
+                break
+            filled_units.append(abs(qty) // ratio)
+            actual_legs.append((leg, position, audit, ratio, qty))
+        if not valid or not filled_units or min(filled_units) <= 0 or len(set(filled_units)) != 1:
+            continue
+        units = filled_units[0]
+        recorded_fill_units = int(_safe_number(
+            broker_order.get("filled_qty"),
+            _safe_number(payload.get("qty"), 0),
+        ))
+        if recorded_fill_units <= 0 or units != recorded_fill_units:
+            # Do not close a netted holding that may include unrelated option trades.
+            continue
+        if any(str(leg.get("side", "")).lower() != "buy" for leg, *_rest in actual_legs):
+            continue
+        entry_debit = sum(
+            _safe_number(position.get("avg_entry_price")) * abs(qty)
+            * int(_safe_number(audit.get("multiplier"), 100))
+            for _leg, position, audit, _ratio, qty in actual_legs
+        )
+        current_value = sum(
+            _safe_number(audit.get("bid")) * abs(qty)
+            * int(_safe_number(audit.get("multiplier"), 100))
+            for _leg, _position, audit, _ratio, qty in actual_legs
+        )
+        expirations = [
+            datetime.fromisoformat(str(audit["expiration"])).date()
+            for _leg, _position, audit, _ratio, _qty in actual_legs
+            if audit.get("expiration")
+        ]
+        if len(expirations) != 2 or expirations[0] != expirations[1]:
+            continue
+        entry_stamp = None
+        try:
+            entry_stamp = datetime.fromisoformat(str(signal.get("created_at")).replace("Z", "+00:00"))
+            if entry_stamp.tzinfo is None:
+                entry_stamp = None
+        except (TypeError, ValueError):
+            pass
+        if entry_stamp is None:
+            entry_stamp = now
+        market_date = now.astimezone(_US_EQUITY_TZ).date()
+        held_days = max(0, (market_date - entry_stamp.astimezone(_US_EQUITY_TZ).date()).days)
+        exit_reason = long_volatility_exit_reason(
+            entry_debit=entry_debit,
+            current_value=current_value,
+            held_days=held_days,
+            days_to_expiry=(expirations[0] - market_date).days,
+            regime=regime,
+            entry_regime=str(signal.get("regime") or "unknown"),
+            config=config,
+        )
+        close_legs = [
+            {
+                "symbol": str(leg.get("symbol")).upper(),
+                "ratio_qty": str(ratio),
+                "side": "sell",
+                "position_intent": "sell_to_close",
+            }
+            for leg, _position, _audit, ratio, _qty in actual_legs
+        ]
+        multiplier = int(_safe_number(actual_legs[0][2].get("multiplier"), 100))
+        leg_units = sum(ratio for _leg, _position, _audit, ratio, _qty in actual_legs)
+        credit_limit = max(0.01, current_value / max(units * multiplier, 1) - slippage_per_contract * leg_units / multiplier)
+        close_payload = {
+            "order_class": "mleg",
+            "qty": str(units),
+            "type": "limit",
+            "limit_price": str(round(-credit_limit, 2)),
+            "time_in_force": "day",
+            "legs": close_legs,
+        }
+        greek_path_point = {
+            "at": now.isoformat(),
+            "delta": sum(_safe_number(value(audit.get("greeks"), "delta")) * qty * int(_safe_number(audit.get("multiplier"), 100)) for _leg, _position, audit, _ratio, qty in actual_legs),
+            "gamma": sum(_safe_number(value(audit.get("greeks"), "gamma")) * qty * int(_safe_number(audit.get("multiplier"), 100)) for _leg, _position, audit, _ratio, qty in actual_legs),
+            "vega": sum(_safe_number(value(audit.get("greeks"), "vega")) * qty * int(_safe_number(audit.get("multiplier"), 100)) for _leg, _position, audit, _ratio, qty in actual_legs),
+            "theta": sum(_safe_number(value(audit.get("greeks"), "theta")) * qty * int(_safe_number(audit.get("multiplier"), 100)) for _leg, _position, audit, _ratio, qty in actual_legs),
+            "iv": [
+                _safe_number(value(audit.get("greeks"), "implied_volatility"))
+                for _leg, _position, audit, _ratio, _qty in actual_legs
+            ],
+        }
+        plans.append({
+            "entry_client_order_id": entry_client_order_id,
+            "underlying": signal.get("underlying"),
+            "structure_id": signal.get("structure_id"),
+            "structure_type": signal.get("structure_type"),
+            "entry_reason": signal.get("reason"),
+            "entry_regime": signal.get("regime"),
+            "entry_iv_percentile": (signal.get("data_quality") or {}).get("iv_percentile"),
+            "entry_debit": entry_debit,
+            "current_value": current_value,
+            "held_days": held_days,
+            "exit_reason": exit_reason,
+            "contracts": units,
+            "greek_path_point": greek_path_point,
+            "order": close_payload if exit_reason else None,
+        })
+    return plans
+
+
 def _daily_order_count(orders: list[dict], now: datetime) -> int:
     count = 0
     for order in orders:
@@ -351,6 +528,7 @@ def run_paper_cycle(
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("cycle time must be timezone-aware")
+    session_date = now.astimezone(_US_EQUITY_TZ).date().isoformat()
     client = options_client or OptionsPaperClient()
     account = client.verify_account()
     algo = algo_client or AlgoAlpaca()
@@ -416,8 +594,23 @@ def run_paper_cycle(
         "combined_daily_pnl_pct": combined_daily_pnl_pct,
     }
     diagnostics["options_entries_today"] = entries_today
+    long_volatility_config = {
+        **config["long_volatility"],
+        "min_open_interest": config["long_volatility"].get("min_open_interest", config["min_open_interest"]),
+        "regime_risk_multipliers": {
+            **config.get("regime_risk_multipliers", {}),
+            **config["long_volatility"].get("regime_risk_multipliers", {}),
+            "volatile": config["long_volatility"].get("regime_risk_multipliers", {}).get(
+                "volatile", config.get("regime_risk_multipliers", {}).get("volatile", 1.0),
+            ),
+        },
+    }
+    exclusive_long_volatility = bool(
+        long_volatility_config.get("enabled")
+        and long_volatility_config.get("mode") == "exclusive"
+    )
 
-    if config["vrp"].get("enabled", True):
+    if config["vrp"].get("enabled", True) and not exclusive_long_volatility:
         symbol = str(config["vrp"].get("underlying", "SPY")).upper()
         vrp_chain = provider.get_chain(
             symbol, as_of=now, min_dte=int(config["vrp"]["min_dte"]), max_dte=int(config["vrp"]["max_dte"]),
@@ -438,6 +631,86 @@ def run_paper_cycle(
             structure = replace(signal.structure, metadata={**signal.structure.metadata, "underlying_spot": vrp_chain.spot})
             candidates.append((replace(signal, structure=structure), vrp_chain, closes))
         diagnostics["vrp"] = {"chain_contracts": len(vrp_chain.contracts), "signal": signal is not None, "feed": feed}
+
+    long_volatility_diagnostics = {"enabled": bool(long_volatility_config.get("enabled")), "underlyings": {}}
+    if long_volatility_config.get("enabled", True):
+        history_rows = journal.rows("iv_history")
+        lookback = int(long_volatility_config.get("iv_percentile_lookback_sessions", 252))
+        minimum_samples = int(long_volatility_config.get("iv_rank_min_samples", 20))
+        sleeve = LongVolatilitySleeve(long_volatility_config)
+        for symbol in long_volatility_config.get("underlyings", ["SPY"]):
+            symbol = str(symbol).upper()
+            try:
+                style = long_volatility_config.get("exercise_style_by_underlying", {}).get(symbol, "american")
+                chain = provider.get_chain(
+                    symbol,
+                    as_of=now,
+                    min_dte=int(long_volatility_config["min_dte"]),
+                    max_dte=int(long_volatility_config["max_dte"]),
+                    exercise_style=style,
+                )
+                closes = provider.underlying_closes(
+                    symbol,
+                    as_of=now,
+                    sessions=max(3, int(long_volatility_config.get("realized_lookback_sessions", 20)) + 1),
+                )
+                prior_by_date = {}
+                for row in history_rows:
+                    if str(row.get("underlying") or "").upper() != symbol:
+                        continue
+                    session = str(row.get("session_date") or "")
+                    if session and session < session_date:
+                        prior_by_date[session] = _safe_number(row.get("atm_iv"))
+                prior_samples = [value for _day, value in sorted(prior_by_date.items()) if value > 0][-lookback:]
+                current_atm_iv = atm_implied_volatility(chain, long_volatility_config)
+                iv_percentile = historical_iv_percentile(
+                    current_atm_iv, prior_samples, min_samples=minimum_samples,
+                )
+                if current_atm_iv is not None and not any(
+                    str(row.get("underlying") or "").upper() == symbol
+                    and str(row.get("session_date") or "") == session_date
+                    for row in history_rows
+                ):
+                    journal.append("iv_history", {
+                        "underlying": symbol,
+                        "session_date": session_date,
+                        "as_of": now.isoformat(),
+                        "atm_iv": current_atm_iv,
+                        "feed": chain.feed,
+                    })
+                    history_rows.append({"underlying": symbol, "session_date": session_date, "atm_iv": current_atm_iv})
+                signal = sleeve.generate(OptionsStrategyContext(
+                    chain=chain,
+                    underlying_closes=closes,
+                    regime=regime,
+                    volatility_state=volatility_state,
+                    as_of=now,
+                    iv_percentile=iv_percentile,
+                    iv_percentile_samples=len(prior_samples),
+                    iv_percentile_source="options_paper_journal_atm_iv",
+                ))
+                if signal:
+                    structure = replace(
+                        signal.structure,
+                        metadata={**signal.structure.metadata, "underlying_spot": chain.spot},
+                    )
+                    candidates.append((replace(signal, structure=structure), chain, closes))
+                long_volatility_diagnostics["underlyings"][symbol] = {
+                    "chain_contracts": len(chain.contracts),
+                    "signal": signal is not None,
+                    "iv_percentile": iv_percentile,
+                    "iv_percentile_samples": len(prior_samples),
+                    "iv_rank_warmup": iv_percentile is None,
+                    "feed": feed,
+                    "chain_quality": list(chain.data_quality),
+                }
+            except Exception as exc:
+                long_volatility_diagnostics["underlyings"][symbol] = {
+                    "signal": False,
+                    "chain_error": type(exc).__name__,
+                }
+                LOG.warning("Options long-volatility sleeve could not build %s: %s", symbol, type(exc).__name__)
+    diagnostics["long_volatility"] = long_volatility_diagnostics
 
     recommendations, ai_status = _load_ai_recommendations()
     event_config = {
@@ -463,7 +736,7 @@ def run_paper_cycle(
     }
     event_regime_weight = regime_risk_multiplier(event_config, regime)
     diagnostics["event_driven"]["regime_risk_multiplier"] = event_regime_weight
-    if config["event_driven"].get("enabled", True) and event_regime_weight > 0:
+    if not exclusive_long_volatility and config["event_driven"].get("enabled", True) and event_regime_weight > 0:
         strategy = EventDrivenOptionsStrategy(event_config)
         event_errors = []
         for recommendation in selected_recommendations:
@@ -541,10 +814,132 @@ def run_paper_cycle(
         "regime": regime, "pnl_attribution_since_previous_mark": mark_attributions,
     })
 
-    # Event trades outrank VRP if both propose the same underlying.
-    candidates.sort(key=lambda entry: (0 if entry[0].strategy == "options_event_driven" else 1, entry[0].underlying))
-    seen_underlyings = set()
+    long_vol_exit_plans = _long_volatility_exit_plans(
+        journal=journal,
+        broker_orders=all_orders,
+        positions=option_positions_all,
+        position_audit=position_audit,
+        now=now,
+        regime=regime,
+        config=long_volatility_config,
+        slippage_per_contract=float(config.get("costs", {}).get("slippage_per_contract_usd", 5.0)),
+    )
+    managed_long_vol_underlyings = set()
+    lifecycle_decisions = []
+    for plan in long_vol_exit_plans:
+        underlying = str(plan.get("underlying") or "").upper()
+        if underlying:
+            managed_long_vol_underlyings.add(underlying)
+        journal.append("strategy_greeks", {
+            "kind": "long_volatility_position_mark",
+            "entry_client_order_id": plan["entry_client_order_id"],
+            "underlying": underlying,
+            "structure_id": plan.get("structure_id"),
+            "regime": regime,
+            "entry_regime": plan.get("entry_regime"),
+            "entry_iv_percentile": plan.get("entry_iv_percentile"),
+            "entry_debit": plan["entry_debit"],
+            "current_value_at_bid": plan["current_value"],
+            "greek_path_point": plan["greek_path_point"],
+            "exit_reason": plan["exit_reason"],
+        })
+        if not plan["exit_reason"]:
+            continue
+        identity = (
+            f"{account_id}:{now.astimezone(_US_EQUITY_TZ).date()}:long_vol_exit:"
+            f"{plan['entry_client_order_id']}:{plan['exit_reason']}"
+        )
+        exit_client_order_id = "optx-" + hashlib.sha256(identity.encode()).hexdigest()[:30]
+        prior_intent = journal.latest_matching("orders", "client_order_id", exit_client_order_id)
+        prior_broker_order = next(
+            (order for order in all_orders if str(order.get("client_order_id") or "") == exit_client_order_id),
+            None,
+        )
+        result = {
+            "kind": "long_volatility_exit",
+            "underlying": underlying,
+            "structure_id": plan.get("structure_id"),
+            "entry_client_order_id": plan["entry_client_order_id"],
+            "client_order_id": exit_client_order_id,
+            "exit_reason": plan["exit_reason"],
+            "entry_reason": plan.get("entry_reason"),
+            "entry_debit": plan["entry_debit"],
+            "current_value_at_bid": plan["current_value"],
+            "greek_path_point": plan["greek_path_point"],
+            "approved": False,
+        }
+        if prior_broker_order or (prior_intent is not None and (not submit or prior_intent.get("status") != "dry_run")):
+            result["reason"] = "this long-volatility exit already has an order intent"
+        else:
+            close_payload = {**plan["order"], "client_order_id": exit_client_order_id}
+            result.update({"approved": True, "order": close_payload, "status": "dry_run" if not submit else "submitting"})
+            if submit:
+                journal.append("orders", {
+                    "kind": "long_volatility_exit",
+                    "status": "submitting",
+                    "client_order_id": exit_client_order_id,
+                    "entry_client_order_id": plan["entry_client_order_id"],
+                    "order": close_payload,
+                    "exit_reason": plan["exit_reason"],
+                    "mark": plan,
+                })
+                response = client.submit_order(close_payload)
+                result["broker_order"] = response
+                result["status"] = str(response.get("status") or "accepted").lower()
+                journal.append("orders", {
+                    "kind": "long_volatility_exit",
+                    "status": "submitted",
+                    "client_order_id": exit_client_order_id,
+                    "entry_client_order_id": plan["entry_client_order_id"],
+                    "order": close_payload,
+                    "broker_response": response,
+                    "exit_reason": plan["exit_reason"],
+                    "mark": plan,
+                })
+            else:
+                journal.append("orders", {
+                    "kind": "long_volatility_exit",
+                    "status": "dry_run",
+                    "client_order_id": exit_client_order_id,
+                    "entry_client_order_id": plan["entry_client_order_id"],
+                    "order": close_payload,
+                    "exit_reason": plan["exit_reason"],
+                    "mark": plan,
+                })
+        lifecycle_decisions.append(result)
+
+    # The volatile-regime sleeve gets first claim on an underlying; open sleeve
+    # positions are managed before new strategy entries are considered.
+    candidates.sort(key=lambda entry: (
+        0 if entry[0].strategy == LongVolatilitySleeve.strategy_id
+        else 1 if entry[0].strategy == "options_event_driven" else 2,
+        entry[0].underlying,
+    ))
+    seen_underlyings = set(managed_long_vol_underlyings)
+    decisions = lifecycle_decisions
+    long_vol_entry_intents_today = {}
+    for row in journal.rows("orders"):
+        signal = row.get("signal") or {}
+        if signal.get("strategy") != LongVolatilitySleeve.strategy_id or row.get("kind") == "long_volatility_exit":
+            continue
+        stamp_raw = signal.get("created_at") or row.get("logged_at")
+        try:
+            stamp = datetime.fromisoformat(str(stamp_raw).replace("Z", "+00:00"))
+            if stamp.tzinfo is None or stamp.astimezone(_US_EQUITY_TZ).date().isoformat() != session_date:
+                continue
+        except (TypeError, ValueError):
+            continue
+        client_order_id = str(row.get("client_order_id") or "")
+        if client_order_id:
+            long_vol_entry_intents_today[client_order_id] = True
+    long_vol_entries_today = len(long_vol_entry_intents_today)
     for signal, chain, _closes in candidates:
+        if (
+            signal.strategy == LongVolatilitySleeve.strategy_id
+            and long_vol_entries_today >= int(long_volatility_config.get("max_entries_per_day", 1))
+        ):
+            decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "long-volatility daily entry limit reached"})
+            continue
         max_daily_loss_pct = float(config["risk"].get("max_daily_loss_pct", 0.02))
         if combined_daily_pnl_pct is not None and combined_daily_pnl_pct <= -max_daily_loss_pct:
             decisions.append({
@@ -664,6 +1059,8 @@ def run_paper_cycle(
             staged_options.append(manager._candidate_exposure(signal.structure, decision.contracts))
             staged_structures += 1
             entries_today += 1
+            if signal.strategy == LongVolatilitySleeve.strategy_id:
+                long_vol_entries_today += 1
         decisions.append(result)
         journal.append("decisions", result)
 

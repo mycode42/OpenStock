@@ -177,12 +177,28 @@ class PortfolioRiskManager:
         regime_weight = _safe_number(signal.data_quality.get("regime_risk_multiplier"), 1.0)
         if regime_weight <= 0 or regime_weight > 2.0:
             return self._reject("signal regime risk weight disables this entry", signal)
-        trade_budget = options_equity * float(limits.get("max_risk_per_trade_pct", 0.005)) * regime_weight
+        max_risk_pct = float(limits.get("max_risk_per_trade_pct", 0.005))
+        strategy_risk_pct = signal.data_quality.get("max_risk_per_trade_pct")
+        if strategy_risk_pct is not None:
+            strategy_risk_pct = _safe_number(strategy_risk_pct, 0.0)
+            if strategy_risk_pct <= 0 or strategy_risk_pct > 1:
+                return self._reject("strategy-specific premium risk budget is invalid", signal)
+            max_risk_pct = min(max_risk_pct, strategy_risk_pct)
+        trade_budget = options_equity * max_risk_pct * regime_weight
         max_by_loss = int(trade_budget // risk_per_unit)
+        max_by_premium = signal.desired_contracts
+        premium_cap = signal.data_quality.get("max_premium_per_trade_usd")
+        if premium_cap is not None:
+            premium_cap = _safe_number(premium_cap, 0.0)
+            premium_per_structure = structure.risk.premium_at_risk
+            if premium_cap <= 0 or premium_per_structure <= 0:
+                return self._reject("strategy-specific premium cap is invalid", signal)
+            max_by_premium = int(premium_cap // premium_per_structure)
         contracts = min(
             signal.desired_contracts,
             int(limits.get("max_contracts_per_trade", 1)),
             max_by_loss,
+            max_by_premium,
             covered_structure_units if covered_structure_units is not None else signal.desired_contracts,
         )
         if contracts <= 0:
