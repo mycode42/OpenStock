@@ -22,7 +22,7 @@
   "risk": {
     "max_risk_per_trade_pct": 0.01,
     "max_total_defined_risk_pct": 0.10,
-    "max_open_structures": 3,
+    "max_open_structures": 4,
     "max_entries_per_day": 10,
     "max_daily_loss_pct": 0.02,
     "max_contracts_per_trade": 1,

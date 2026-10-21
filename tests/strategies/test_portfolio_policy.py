@@ -1,6 +1,7 @@
 import pytest
 
 from execution import risk as risk_validator
+import portfolio.config as portfolio_config
 from portfolio.config import ALGO_MODE_CONFIG, STRATEGY_CONFIG, get_mode_config
 from strategies import mean_reversion, momentum, trend_following
 from strategies.regime import rank_strategies
@@ -389,7 +390,11 @@ def test_regime_filter_prefers_trend_strategies_in_a_rising_market():
     [("intraday_trend", "enable_intraday_trend"),
      ("intraday_momentum", "enable_intraday_momentum")],
 )
-def test_legacy_five_minute_satellites_are_opt_in_and_smaller(name, flag, monkeypatch):
+def test_legacy_five_minute_satellites_are_opt_in_and_smaller(name, flag, monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        portfolio_config, "ALGO_DASHBOARD_OVERRIDES_PATH",
+        tmp_path / "runtime-overrides.json",
+    )
     monkeypatch.setitem(STRATEGY_CONFIG, flag, False)
     monkeypatch.setattr(
         rule_pipeline, "evaluate_strategy",

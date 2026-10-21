@@ -34,7 +34,13 @@ def test_regime_candidate_can_enter_forward_trial_when_strategy_gate_fails(tmp_p
             "stitched_oos": {"daily_sharpe_annualized": -0.4},
             "fold_count": 10,
         },
-    }}}
+    }}, "candidate_validation": {"strategies": {"momentum": {
+        "status": "completed",
+        "candidates": [{
+            "candidate_id": candidate_id("momentum", parameters),
+            "status": "passed",
+        }],
+    }}}}
 
     result = _candidates(discovery, verification, "range_bound")
 
