@@ -98,9 +98,9 @@ ALGO_PORTFOLIO_UNIVERSE = {
     },
     "tactical": {
         "label": "Optional Tactical Satellite",
-        "tickers": ["PLTR", "CRM", "PANW"],
-        "max_sector_pct": 0.04,
-        "max_per_stock_pct": 0.02,
+        "tickers": ["PLTR", "CRM", "PANW", "TSLA", "SPCX"],
+        "max_sector_pct": 0.10,
+        "max_per_stock_pct": 0.07,
     },
 }
 ALGO_FACTOR_SECTOR_BY_SYMBOL = {
@@ -110,6 +110,7 @@ ALGO_FACTOR_SECTOR_BY_SYMBOL = {
     "PLTR": "information_technology", "CRM": "information_technology",
     "PANW": "information_technology", "GOOGL": "communication_services",
     "META": "communication_services", "AMZN": "consumer_discretionary",
+    "TSLA": "consumer_discretionary", "SPCX": "industrials",
     "JPM": "financials", "V": "financials", "UNH": "health_care",
     "JNJ": "health_care", "PG": "consumer_staples", "KO": "consumer_staples",
 }
@@ -226,8 +227,8 @@ ALGO_MODE_CONFIG = {
             },
         },
         "min_cash_pct": ALGO_MIN_CASH_PCT,
-        "max_tactical_pct": 0.04,
-        "max_tactical_positions": 2,
+        "max_tactical_pct": 0.10,
+        "max_tactical_positions": 3,
         "flatten_eod": False,
         "allow_leveraged_etfs": False,
     },
