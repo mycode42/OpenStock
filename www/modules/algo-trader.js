@@ -255,7 +255,7 @@ function optionsSettingFields(settings, readonlyFields = []) {
                 ? `<div class="algo-config-field"><label>${escapeHtml(label)}</label><textarea data-setting-path="${escapeHtml(field.path)}" rows="2" ${disabled}>${escapeHtml(JSON.stringify(field.value))}</textarea></div>`
                 : field.path === 'market_data_feed'
                     ? `<div class="algo-config-field"><label>${escapeHtml(label)}</label><select data-setting-path="${escapeHtml(field.path)}" ${disabled}><option value="opra" ${field.value === 'opra' ? 'selected' : ''}>OPRA</option><option value="indicative" ${field.value === 'indicative' ? 'selected' : ''}>Indicative</option></select></div>`
-                    : `<div class="algo-config-field"><label>${escapeHtml(label)}</label><input data-setting-path="${escapeHtml(field.path)}" type="${typeof field.value === 'number' ? 'number' : 'text'}" ${typeof field.value === 'number' ? 'step="any"' : ''} value="${escapeHtml(field.value)}" ${disabled}></div>`;
+                    : `<div class="algo-config-field"><label>${escapeHtml(label)}</label><input data-setting-path="${escapeHtml(field.path)}" type="${typeof field.value === 'number' || field.value === null ? 'number' : 'text'}" ${typeof field.value === 'number' || field.value === null ? 'step="any"' : ''} ${field.value === null ? 'data-nullable="true" placeholder="Optional — leave blank to disable"' : ''} value="${escapeHtml(field.value ?? '')}" ${disabled}></div>`;
         return input;
     }).join('')}</div></details>`).join('');
 }
@@ -454,7 +454,7 @@ export function createAlgoTrader({ request, charts }) {
             let value;
             if (input.type === 'checkbox') value = input.checked;
             else if (input.tagName === 'TEXTAREA') value = JSON.parse(input.value);
-            else if (input.type === 'number') value = Number(input.value);
+            else if (input.type === 'number') value = input.dataset.nullable === 'true' && input.value.trim() === '' ? null : Number(input.value);
             else value = input.value;
             setPath(settings, input.dataset.settingPath, value);
         }
@@ -586,10 +586,11 @@ export function createAlgoTrader({ request, charts }) {
         saving = true;
         notices[mode] = `Saving ${mode} settings…`;
         if (mode === accountMode) render();
-        const result = await request(`/algo-trader/config?account=${mode}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: draftSettingsByAccount[mode] }) }, () => {});
+        let saveError = '';
+        const result = await request(`/algo-trader/config?account=${mode}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings: draftSettingsByAccount[mode] }) }, (message, data) => { saveError = data?.error || message || ''; });
         saving = false;
         if (!result?.settings) {
-            notices[mode] = 'Save failed. Check the values and retry.';
+            notices[mode] = saveError ? `Save failed: ${saveError}` : 'Save failed. Check the values and retry.';
             if (mode === accountMode) render();
             return;
         }

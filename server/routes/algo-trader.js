@@ -1070,6 +1070,12 @@ function mergeConfig(base, override) {
 }
 
 function validateConfigShape(value, template, prefix = '') {
+    if (template === null) {
+        if (value !== null && (typeof value !== 'number' || !Number.isFinite(value))) {
+            throw new Error(`${prefix} must be null or a finite number`);
+        }
+        return;
+    }
     if (template && typeof template === 'object' && !Array.isArray(template)) {
         if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${prefix || 'settings'} must be an object`);
         for (const [key, item] of Object.entries(value)) {
@@ -1106,6 +1112,10 @@ function validateOptionsConfig(config) {
     ];
     for (const [section, key] of nonNegative) {
         if (config[section][key] < 0) throw new Error(`${section}.${key} must be non-negative`);
+    }
+    const maxIvToRealizedRatio = config.long_volatility?.max_iv_to_realized_ratio;
+    if (maxIvToRealizedRatio !== undefined && maxIvToRealizedRatio !== null && maxIvToRealizedRatio <= 0) {
+        throw new Error('long_volatility.max_iv_to_realized_ratio must be null or positive');
     }
     if (config.market_data_feed !== 'opra' && config.market_data_feed !== 'indicative') throw new Error('market_data_feed must be opra or indicative');
     if (config.risk.max_risk_per_trade_pct <= 0 || config.risk.max_contracts_per_trade < 1) throw new Error('risk budget and max_contracts_per_trade must be positive');

@@ -39,6 +39,7 @@ const optionsDefaults = {
     enabled: false, underlying: 'SPY', min_dte: 25, max_dte: 60, target_dte: 40,
     long_delta: 0.5, short_delta: 0.25, min_signal_confidence: 0.6, max_spread_pct: 0.2, min_open_interest: 100,
   },
+  long_volatility: { max_iv_to_realized_ratio: null },
 };
 
 function routeHandlers(root) {
@@ -192,8 +193,47 @@ test('options settings save to their own config without changing equity override
 
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.settings.enabled, false);
-  assert.equal(JSON.parse(await fs.readFile(path.join(root, 'data', 'options', 'config.json'), 'utf8')).enabled, false);
+  const savedOptions = JSON.parse(await fs.readFile(path.join(root, 'data', 'options', 'config.json'), 'utf8'));
+  assert.equal(savedOptions.enabled, false);
+  assert.equal(savedOptions.long_volatility.max_iv_to_realized_ratio, null);
   await assert.rejects(fs.access(path.join(root, 'data', 'dashboard-runtime-overrides.json')));
+});
+
+test('options settings accept a positive nullable IV ratio and reject zero', async t => {
+  const originalEnv = {
+    account: process.env.ALPACA_OPTIONS_ACCOUNT_ID,
+    config: process.env.ALPACA_OPTIONS_CONFIG,
+    feed: process.env.ALPACA_OPTIONS_FEED,
+  };
+  delete process.env.ALPACA_OPTIONS_ACCOUNT_ID;
+  delete process.env.ALPACA_OPTIONS_CONFIG;
+  delete process.env.ALPACA_OPTIONS_FEED;
+  t.after(() => {
+    for (const [key, value] of Object.entries({
+      ALPACA_OPTIONS_ACCOUNT_ID: originalEnv.account,
+      ALPACA_OPTIONS_CONFIG: originalEnv.config,
+      ALPACA_OPTIONS_FEED: originalEnv.feed,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const root = await fixture(t);
+  const handlers = routeHandlers(root);
+  const positive = response();
+  await handlers['PUT /api/algo-trader/config']({
+    query: { account: 'options' }, body: { settings: { ...optionsDefaults, long_volatility: { max_iv_to_realized_ratio: 1.5 } } },
+  }, positive);
+  assert.equal(positive.statusCode, 200);
+  assert.equal(positive.body.settings.long_volatility.max_iv_to_realized_ratio, 1.5);
+
+  const zero = response();
+  await handlers['PUT /api/algo-trader/config']({
+    query: { account: 'options' }, body: { settings: { ...optionsDefaults, long_volatility: { max_iv_to_realized_ratio: 0 } } },
+  }, zero);
+  assert.equal(zero.statusCode, 400);
+  assert.match(zero.body.error, /must be null or positive/);
 });
 
 test('equity strategy performance combines realized and open P/L and keeps unpriced activity partial', () => {
