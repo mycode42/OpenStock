@@ -376,11 +376,6 @@ export function createAlgoTrader({ request, charts }) {
                 <article class="algo-kpi"><div class="algo-kpi-label">OPEN POSITIONS</div><strong>${latestSnapshot?.position_count ?? '—'}</strong><div class="algo-kpi-foot"><span>Active strategies</span><span>${account.active_strategies?.length ?? 0}</span></div></article>
             </section>
 
-            <section class="card algo-panel algo-config-panel" id="algo-config">
-                <div class="algo-section-heading algo-config-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS CONFIGURATION' : 'RUNTIME CONFIGURATION'}</span><h2>${isOptions ? 'Options strategy settings' : 'Algo strategy settings'}</h2><p>${isOptions ? 'Independent settings for the options paper account and research engine.' : 'These settings are read by the Algo coordinator and autoresearch runtime.'}</p></div><span class="algo-local-save">${isOptions ? 'OPTIONS CONFIG' : 'CONNECTED CONFIG'}</span></div>
-                ${renderSettings(settings, accountMode, snapshot.settings_readonly_fields || [])}
-            </section>
-
             <section class="algo-primary-grid">
                 <article class="card algo-panel algo-chart-panel" data-chart-readout>
                     <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Recorded paper-account equity · USD</p></div><div class="algo-chart-summary"><strong data-chart-value data-default-chart-value="${money(metrics.equity)}">${money(metrics.equity)}</strong><span class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)} since first snapshot</span></div></div>
@@ -399,6 +394,11 @@ export function createAlgoTrader({ request, charts }) {
             </section>
 
             ${renderStrategyPerformance(snapshot.strategy_performance, isOptions)}
+
+            <section class="card algo-panel algo-config-panel" id="algo-config">
+                <div class="algo-section-heading algo-config-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS CONFIGURATION' : 'RUNTIME CONFIGURATION'}</span><h2>${isOptions ? 'Options strategy settings' : 'Algo strategy settings'}</h2><p>${isOptions ? 'Independent settings for the options paper account and research engine.' : 'These settings are read by the Algo coordinator and autoresearch runtime.'}</p></div><span class="algo-local-save">${isOptions ? 'OPTIONS CONFIG' : 'CONNECTED CONFIG'}</span></div>
+                ${renderSettings(settings, accountMode, snapshot.settings_readonly_fields || [])}
+            </section>
 
             <section class="algo-secondary-grid ${isOptions ? '' : 'algo-secondary-grid-equity'}">
                 <article class="card algo-panel algo-activity-panel">
