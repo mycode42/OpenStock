@@ -42,9 +42,11 @@ function safeObject(value) {
 }
 
 function runPythonJson(root, script, env = {}) {
-    const python = process.env.ALGO_TRADER_PYTHON || 'python3';
+    const configuredPython = process.env.ALGO_TRADER_PYTHON;
+    const executable = configuredPython || '/usr/local/bin/poetry';
+    const args = configuredPython ? ['-c', script] : ['run', 'python', '-c', script];
     return new Promise((resolve, reject) => {
-        execFile(python, ['-c', script], {
+        execFile(executable, args, {
             cwd: root,
             env: { ...process.env, ...env },
             timeout: 90_000,
