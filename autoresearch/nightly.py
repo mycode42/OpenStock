@@ -11,6 +11,7 @@ import subprocess
 import sys
 from uuid import uuid4
 
+from autoresearch.artifacts.files import _json_safe
 from autoresearch.settings import DEFAULT_OUTPUT_DIR, ET
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -48,7 +49,12 @@ def _attach_options_report(output_dir: Path, options_report: dict, process_summa
     # at a top-level key so the daily summary can present it as a separate section.
     report["options_research"] = options_report
     report["parallel_research"] = process_summary
-    today = datetime.now(ET).date().isoformat()
+    report = _json_safe(report)
+    today = report.get("run_date_et")
+    try:
+        datetime.strptime(str(today), "%Y-%m-%d")
+    except ValueError:
+        today = datetime.now(ET).date().isoformat()
     atomic_write_json(latest_path, report, indent=2, sort_keys=True, allow_nan=False)
     atomic_write_json(output_dir / f"{today}.json", report, indent=2, sort_keys=True, allow_nan=False)
     invocation_report = report.get("invocation_report_path")

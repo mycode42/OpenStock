@@ -14,6 +14,7 @@ import sqlite3
 from uuid import uuid4
 
 from .candidate_archive import candidate_id, logic_version, model_family
+from .files import _json_safe
 
 
 LEDGER_SCHEMA_VERSION = 1
@@ -24,7 +25,10 @@ def _now() -> str:
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(
+        _json_safe(value), sort_keys=True, separators=(",", ":"),
+        default=str, allow_nan=False,
+    )
 
 
 def _read_json(path: str | Path | None) -> dict | None:

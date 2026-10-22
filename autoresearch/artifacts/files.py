@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import fcntl
+import math
 from pathlib import Path
 
 from runtime.atomic import atomic_write_json
@@ -20,4 +21,17 @@ def _research_lock(path: Path):
 
 def _atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, payload, default=str)
+    atomic_write_json(path, _json_safe(payload), default=str, allow_nan=False)
+
+
+def _json_safe(value):
+    """Keep non-finite research metrics representable in strict JSON."""
+    if isinstance(value, float) and not math.isfinite(value):
+        if math.isnan(value):
+            return None
+        return "inf" if value > 0 else "-inf"
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value

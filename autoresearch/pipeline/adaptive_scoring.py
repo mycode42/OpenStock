@@ -90,7 +90,7 @@ def _metrics_by_regime(
                 4,
             ) if capital > 0 else None,
             "win_rate_pct": round(100.0 * sum(value > 0 for value in pnls) / len(pnls), 4) if pnls else None,
-            "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else (None if not gross_profit else float("inf")),
+            "profit_factor": round(gross_profit / gross_loss, 6) if gross_loss > 0 else (None if not gross_profit else "inf"),
             "regime_session_count": len(values),
         })
         fitness, components = _fitness(metrics, weights)

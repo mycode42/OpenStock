@@ -31,7 +31,7 @@ from .data import (
     _refresh_incremental as _refresh_incremental_impl,
     load_algo_universe,
 )
-from .artifacts.files import _atomic_json, _research_lock
+from .artifacts.files import _atomic_json, _json_safe, _research_lock
 from .artifacts.fitness_timeline import _attach_fitness_timeline
 from .artifacts.live_manifest import live_configuration_manifest
 from .artifacts.research_ledger import ResearchLedger
@@ -954,6 +954,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         if not args.optimization_only:
             report = _attach_fitness_timeline(report, output_dir)
+        report = _json_safe(report)
         print(json.dumps(report, sort_keys=True), file=sys.stderr)
         invocation_report_path = output_dir / "invocations" / invocation_id / "report.json"
         report["invocation_report_path"] = str(invocation_report_path.resolve())
@@ -976,6 +977,7 @@ def main(argv: list[str] | None = None) -> int:
         _atomic_json(latest_report_path, report)
         return 2
 
+    report = _json_safe(report)
     logger.info(
         "AutoResearch finished: status=%s run_id=%s cache_hit=%s total=%.1fs",
         report.get("status"),
@@ -998,7 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
         _atomic_json(output_dir / f"{today}.json", report)
     _atomic_json(latest_report_path, report)
     discovery_report = ((report.get("adaptive_research") or {}).get("discovery") or {})
-    print(json.dumps({
+    print(json.dumps(_json_safe({
         "status": report["status"],
         "report": str(latest_report_path.resolve()),
         "run_id": report.get("orchestration", {}).get("run_id"),
@@ -1032,7 +1034,7 @@ def main(argv: list[str] | None = None) -> int:
             "staged_candidate_ids": (report.get("forward_validation") or {}).get("staged_candidate_ids", []),
             "promoted_candidate_count": len((report.get("forward_validation") or {}).get("promoted", [])),
         },
-    }, sort_keys=True, default=str))
+    }), sort_keys=True, default=str))
     return 0
 
 
