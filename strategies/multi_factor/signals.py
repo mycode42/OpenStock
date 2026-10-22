@@ -443,13 +443,19 @@ class SignalGenerator:
         # names can receive different weights without violating per-name caps.
         budget = len(selected_symbols) * equal * 0.8
         capped = np.zeros(len(selected_symbols), dtype=float)
-        active = np.ones(len(selected_symbols), dtype=bool)
+        # A zero-weight name cannot receive any of the remaining budget. Keep
+        # it out of the active set so the capped redistribution never divides
+        # by zero after all positive-weight names have hit their cap.
+        active = raw_weights > 0
         remaining = budget
         for _ in range(len(selected_symbols) + 1):
             if not active.any() or remaining <= 1e-12:
                 break
             active_weights = raw_weights[active]
-            proposed = remaining * active_weights / active_weights.sum()
+            active_weight_sum = float(active_weights.sum())
+            if not math.isfinite(active_weight_sum) or active_weight_sum <= 1e-12:
+                break
+            proposed = remaining * active_weights / active_weight_sum
             active_indices = np.flatnonzero(active)
             over = proposed > self.config.max_position_pct
             if not over.any():
@@ -458,7 +464,7 @@ class SignalGenerator:
             capped[active_indices[over]] = self.config.max_position_pct
             active[active_indices[over]] = False
             remaining = budget - capped.sum()
-        if capped.sum() <= 0:
+        if not np.isfinite(capped).all() or capped.sum() <= 0:
             return fallback, "invalid_solution"
         return dict(zip(selected_symbols, capped.tolist())), "ok"
 
