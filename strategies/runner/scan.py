@@ -587,6 +587,76 @@ def scan(
         )
     )
 
+    # A confirmed pre-submit exit failure remains a durable intent. Rebuild it
+    # from the current quote and position during regular hours so a transient
+    # strategy signal or overnight order-cancel delay cannot lose the exit.
+    if mode == "algo" and session_name == "regular" and strategy_states is not None:
+        generated_exit_keys = {
+            (str(item.get("strategy") or ""), str(item.get("ticker") or "").upper(), str(item.get("action") or "").lower())
+            for item in generated
+        }
+        for strategy, by_symbol in strategy_states.items():
+            for raw_symbol, state in by_symbol.items():
+                symbol = str(raw_symbol).upper()
+                intent = state.get("pending_exit_intent") if isinstance(state, dict) else None
+                if (
+                    not isinstance(intent, dict)
+                    or intent.get("retryable") is not True
+                    or owner_map.get(symbol) != strategy
+                ):
+                    continue
+                symbol_orders = pending_by_symbol.get(symbol, [])
+                if any(
+                    str(order.get("status") or "").lower() in {"pending_cancel", "pending_replace"}
+                    for order in symbol_orders
+                ):
+                    continue
+                retry_after = intent.get("retry_after")
+                if symbol_orders and retry_after:
+                    try:
+                        retry_after_time = datetime.fromisoformat(str(retry_after).replace("Z", "+00:00"))
+                        if retry_after_time.tzinfo is None:
+                            retry_after_time = retry_after_time.replace(tzinfo=timezone.utc)
+                        if retry_after_time > now_utc:
+                            continue
+                    except ValueError:
+                        pass
+                quantity = float((positions.get(symbol) or {}).get("qty", 0) or 0)
+                if quantity == 0:
+                    continue
+                action = "cover" if quantity < 0 else "sell"
+                if (strategy, symbol, action) in generated_exit_keys:
+                    continue
+                generated.append({
+                    "ticker": symbol,
+                    "strategy": strategy,
+                    "action": action,
+                    "reason": str(intent.get("reason") or "resume previously blocked strategy exit"),
+                    "timeframe": intent.get("timeframe"),
+                    "signal_bar_time": intent.get("signal_bar_time"),
+                    "event_id": intent.get("event_id"),
+                    "software_protection": bool(intent.get("software_protection")),
+                    "coordinator_force_flatten": bool(intent.get("coordinator_force_flatten")),
+                    "retry_client_order_id": intent.get("client_order_id"),
+                    "deferred_exit_retry": True,
+                })
+                generated_exit_keys.add((strategy, symbol, action))
+
+    if mode == "algo" and strategy_states is not None:
+        retryable_exit_symbols = sorted({
+            str(symbol).upper()
+            for by_symbol in strategy_states.values()
+            for symbol, state in by_symbol.items()
+            if isinstance(state, dict)
+            and isinstance(state.get("pending_exit_intent"), dict)
+            and state["pending_exit_intent"].get("retryable") is True
+        })
+        if retryable_exit_symbols:
+            entry_pause_reasons.append(
+                "Algo strategy exits are waiting for broker cancellation: "
+                + ", ".join(retryable_exit_symbols)
+            )
+
     entries_paused = bool(entry_pause_reasons)
     if entries_paused:
         reason = "; ".join(dict.fromkeys(entry_pause_reasons))
@@ -771,7 +841,7 @@ def scan(
                 f"{mode}:{today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:"
                 f"{item.get('event_id') or ''}:{item.get('signal_bar_time') or ''}"
             )
-            trade["client_order_id"] = f"rule-{today.replace('-', '')}-{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
+            trade["client_order_id"] = item.get("retry_client_order_id") or f"rule-{today.replace('-', '')}-{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             trade["signal_bar_time"] = item.get("signal_bar_time")
             if mode == "algo":
                 trade["market_regime"] = regime_name
@@ -812,6 +882,38 @@ def scan(
             protective_exit = any(
                 _is_protective_sell_order(order, held_qty) for order in item_orders
             )
+            state = (strategy_states or {}).get(item["strategy"], {}).get(item["ticker"], {})
+            pending_intent = state.get("pending_exit_intent") if isinstance(state, dict) else None
+            if (
+                trade["action"] in {"sell", "cover"}
+                and isinstance(pending_intent, dict)
+                and pending_intent.get("retryable") is True
+            ):
+                if any(
+                    str(order.get("status") or "").lower() in {"pending_cancel", "pending_replace"}
+                    for order in item_orders
+                ):
+                    item["suppressed_reason"] = "waiting for the broker order cancellation to finish"
+                    continue
+                retry_after = pending_intent.get("retry_after")
+                if item_orders and retry_after:
+                    try:
+                        retry_after_time = datetime.fromisoformat(str(retry_after).replace("Z", "+00:00"))
+                        if retry_after_time.tzinfo is None:
+                            retry_after_time = retry_after_time.replace(tzinfo=timezone.utc)
+                        if retry_after_time > now_utc:
+                            item["suppressed_reason"] = "waiting before retrying the broker order cancellation"
+                            continue
+                    except ValueError:
+                        pass
+            if (
+                trade["action"] in {"sell", "cover"}
+                and session_name != "regular"
+                and isinstance(pending_intent, dict)
+                and pending_intent.get("retryable") is True
+            ):
+                item["suppressed_reason"] = "persisted strategy exit deferred until regular hours"
+                continue
             if trade["action"] in {"sell", "cover"} and (protective_exit or item.get("coordinator_force_flatten")):
                 trade["cancel_open_orders"] = True
             if item.get("software_protection"):

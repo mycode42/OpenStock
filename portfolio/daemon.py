@@ -6,6 +6,7 @@ import argparse
 import fcntl
 import json
 import logging
+import math
 import os
 import secrets
 import signal
@@ -168,18 +169,21 @@ def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, wi
     """Reconcile persisted ownership and protection against one broker snapshot."""
     try:
         orders = _load_reconciliation_orders(portfolio, broker)
+        positions = broker.positions()
+        open_orders = broker.orders("open")
         report = reconcile_startup(
             portfolio,
-            positions=broker.positions(),
+            positions=positions,
             all_orders=orders.all_orders,
             nested_orders=orders.nested_orders,
-            open_orders=broker.orders("open"),
+            open_orders=open_orders,
             journal_path=state_path.parent / "trade_journal.jsonl",
             exact_entry_orders=orders.exact_entry_orders,
             exact_incident_orders=orders.exact_incident_orders,
             require_broker_stops=window.name == "regular",
             regular_session=window.name == "regular",
         )
+        _restore_pre_submit_exit_intents(portfolio, positions, open_orders)
         if not report["unprotected_positions"]:
             portfolio["protection_recovery_status"] = {
                 "status": "not_needed", "checked_at": datetime.now(ET).isoformat(),
@@ -208,6 +212,63 @@ def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, wi
         checked_monotonic = time.monotonic()
         LOG.exception("[ALGO] Startup reconciliation failed; new entries paused")
         return checked_monotonic
+
+
+def _restore_pre_submit_exit_intents(
+    portfolio: dict, positions: list[dict], open_orders: list[dict],
+) -> None:
+    """Recover exits known to have stopped before an order reached Alpaca."""
+    incident = portfolio.get("execution_incident") or {}
+    events = incident.get("events") or {}
+    positions_by_symbol = {
+        str(row.get("symbol") or "").upper(): row
+        for row in positions if isinstance(row, dict)
+    }
+    open_client_ids = {
+        str(order.get("client_order_id") or "")
+        for order in open_orders if isinstance(order, dict)
+    }
+    owners = portfolio.get("position_owners") or {}
+    states = portfolio.get("strategy_states") or {}
+    for event in events.values():
+        if not isinstance(event, dict) or event.get("kind") != "exit_submission":
+            continue
+        symbol = str(event.get("ticker") or "").upper()
+        client_id = str(event.get("client_order_id") or "")
+        reason = str(event.get("reason") or "")
+        if (
+            not symbol
+            or not client_id
+            or event.get("order_id")
+            or not reason.startswith(f"Open {symbol} orders remained after cancellation:")
+            or client_id in open_client_ids
+        ):
+            continue
+        position = positions_by_symbol.get(symbol)
+        owner = owners.get(symbol)
+        state = ((states.get(owner) or {}).get(symbol) or {}) if owner else {}
+        try:
+            quantity = float((position or {}).get("qty", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not owner or not state or not math.isfinite(quantity) or quantity == 0:
+            continue
+        if isinstance(state.get("pending_exit_intent"), dict):
+            continue
+        state["pending_exit_intent"] = {
+            "action": "cover" if quantity < 0 else "sell",
+            "strategy": owner,
+            "reason": "resume strategy exit blocked before broker submission",
+            "timeframe": None,
+            "signal_bar_time": event.get("detected_at"),
+            "event_id": None,
+            "client_order_id": client_id,
+            "software_protection": False,
+            "coordinator_force_flatten": False,
+            "retryable": True,
+            "status": "restored_pre_submission_failure",
+            "created_at": event.get("detected_at"),
+        }
 
 
 def _status(path: Path) -> None:

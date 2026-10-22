@@ -63,6 +63,7 @@ def _state_for(states: dict, strategy: str, ticker: str) -> dict:
         "entry_source": None,
         "quarantine_reason": None,
         "submission_outcome": None,
+        "pending_exit_intent": None,
         "last_known_qty": None,
         "entry_action": None,
         "research_profile_id": None,
@@ -218,6 +219,7 @@ class RuleStrategyStateMachine:
                     "take_profit": None,
                     "entry_action": None,
                     "opened_at": None,
+                    "pending_exit_intent": None,
                 })
                 self._set_cooldown(owner, owner_state)
                 _touch(owner_state)
@@ -479,6 +481,7 @@ class RuleStrategyStateMachine:
             "submission_outcome": "pending",
         })
         if is_entry:
+            state["pending_exit_intent"] = None
             state["stop_price"] = trade.get("stop_price")
             state["take_profit"] = trade.get("take_profit")
             state["trailing_stop_pct"] = trade.get("trailing_stop_pct")
@@ -500,12 +503,26 @@ class RuleStrategyStateMachine:
                 state["entry_day"] = session_day
                 state["entries_today"] = 0
             state["entries_today"] = int(state.get("entries_today", 0) or 0) + 1
+        else:
+            state["pending_exit_intent"] = {
+                "action": action,
+                "strategy": strategy,
+                "reason": str(trade.get("reasoning") or "strategy exit"),
+                "timeframe": trade.get("timeframe"),
+                "signal_bar_time": trade.get("signal_bar_time"),
+                "event_id": trade.get("event_id"),
+                "client_order_id": trade.get("client_order_id"),
+                "software_protection": bool(trade.get("software_protection")),
+                "coordinator_force_flatten": bool(trade.get("coordinator_force_flatten")),
+                "retryable": False,
+                "status": "pending_submission",
+            }
         _touch(state)
         if is_entry:
             self.position_owners[ticker] = strategy
 
     def resolve(self, trade: dict, result: dict | None) -> None:
-        """Retain accepted orders; cool down rejected entries and retry exits on a new bar."""
+        """Retain accepted orders and persist exits that are safe to retry."""
         strategy = str(trade.get("strategy", "unspecified"))
         ticker = str(trade.get("ticker", "")).upper()
         action = str(trade.get("action", "")).lower()
@@ -518,12 +535,51 @@ class RuleStrategyStateMachine:
         if successful:
             state["order_id"] = result.get("order_id")
             state["submission_outcome"] = "accepted"
+            if action in {"sell", "cover"}:
+                intent = state.get("pending_exit_intent")
+                if isinstance(intent, dict):
+                    intent["retryable"] = False
+                    intent["status"] = "submitted"
+                    intent["order_id"] = str(result.get("order_id"))
             if action in {"buy", "short"}:
                 self.position_owners[ticker] = strategy
                 if result.get("order_id"):
                     state["entry_order_id"] = str(result["order_id"])
                     state["entry_client_order_id"] = trade.get("client_order_id")
                     state["entry_source"] = "coordinator"
+            _touch(state)
+            return
+
+        # Cancellation and other explicitly marked pre-submit failures are
+        # safe to retry after a fresh broker snapshot. Preserve the exit intent
+        # while returning the lifecycle to OPEN so a later scan can resume it.
+        if action in {"sell", "cover"} and result.get("safe_to_retry") is True:
+            intent = state.get("pending_exit_intent")
+            if not isinstance(intent, dict):
+                intent = {
+                    "action": action,
+                    "strategy": strategy,
+                    "reason": str(trade.get("reasoning") or "strategy exit"),
+                    "timeframe": trade.get("timeframe"),
+                    "signal_bar_time": trade.get("signal_bar_time"),
+                    "event_id": trade.get("event_id"),
+                    "client_order_id": trade.get("client_order_id"),
+                    "software_protection": bool(trade.get("software_protection")),
+                    "coordinator_force_flatten": bool(trade.get("coordinator_force_flatten")),
+                }
+                state["pending_exit_intent"] = intent
+            intent["retryable"] = True
+            intent["status"] = "retryable_pre_submission"
+            intent["last_error"] = str(result.get("reason") or result.get("error") or "")[:240]
+            intent["retry_after"] = (datetime.now(timezone.utc) + timedelta(seconds=60)).isoformat()
+            state.update({
+                "phase": OPEN,
+                "owner": strategy,
+                "pending_action": None,
+                "client_order_id": None,
+                "order_id": None,
+                "submission_outcome": "not_submitted",
+            })
             _touch(state)
             return
 
@@ -556,6 +612,10 @@ class RuleStrategyStateMachine:
                 self.position_owners.pop(ticker, None)
         else:
             state.update({"phase": OPEN, "owner": strategy})
+            intent = state.get("pending_exit_intent")
+            if isinstance(intent, dict):
+                intent["retryable"] = False
+                intent["status"] = "rejected"
         state.update({"pending_action": None, "client_order_id": None, "order_id": None})
         state["submission_outcome"] = "rejected"
         _touch(state)

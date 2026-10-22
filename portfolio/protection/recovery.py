@@ -258,6 +258,14 @@ def recover_broker_protection(
     for symbol in sorted(gaps & verified & set(by_symbol)):
         owner = owners.get(symbol)
         state = (states.get(owner) or {}).get(symbol) if owner else None
+        pending_exit = state.get("pending_exit_intent") if isinstance(state, dict) else None
+        if (
+            session_name == "regular"
+            and isinstance(pending_exit, dict)
+            and pending_exit.get("retryable") is True
+        ):
+            report["waiting"].append(f"{symbol}: retryable strategy exit has priority over replacing protection")
+            continue
         if not isinstance(state, dict) or state.get("phase") != "open" or state.get("owner") != owner:
             report["waiting"].append(f"{symbol}: no open strategy state matching the persisted owner")
             continue

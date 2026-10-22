@@ -196,6 +196,7 @@ def cancel_open_orders_for_symbol(
                     "success": False,
                     "error": (f"Cannot cancel {ticker} broker protective orders for a software exit: " f"{[(order.get('id'), order.get('status')) for order in matched]}"),
                     "cancelled": cancelled,
+                    "safe_to_retry": True,
                 }
             to_cancel = [order for order in matched if str(order.get("status", "")).lower() != "pending_cancel"]
             if to_cancel:
@@ -208,6 +209,7 @@ def cancel_open_orders_for_symbol(
             "success": False,
             "error": (f"Open {ticker} orders remained after cancellation: " f"{[(order.get('id'), order.get('status')) for order in last_matched]}; " f"cancel errors: {errors}"),
             "cancelled": cancelled,
+            "safe_to_retry": True,
         }
     except (requests.RequestException, ValueError) as exc:
-        return {"success": False, "error": str(exc), "cancelled": cancelled}
+        return {"success": False, "error": str(exc), "cancelled": cancelled, "safe_to_retry": True}

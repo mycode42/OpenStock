@@ -327,6 +327,7 @@ def execute_trade_batch(
                             "reason": cancel_result.get("error"),
                             "strategy": strategy,
                             "client_order_id": client_order_id,
+                            "safe_to_retry": bool(cancel_result.get("safe_to_retry")),
                         }
                     )
                     continue
