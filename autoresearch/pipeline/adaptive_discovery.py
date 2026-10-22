@@ -23,6 +23,7 @@ from .adaptive_search import (
     ET, _baseline_improvement, _load_window_data, _ordered_window_options,
     _profile_for, _run_iterative_discovery_search, _trading_sessions,
 )
+from .adaptive_candidates import _extend_space_from_archived_parents
 from ..settings import FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES, RESEARCH_WARMUP_DAYS
 
 def run_discovery(args, *, search_func=None) -> dict:
@@ -43,6 +44,9 @@ def run_discovery(args, *, search_func=None) -> dict:
     start, end = selected_sessions[0], selected_sessions[-1]
     parent_parameters, parent_metadata = _load_archived_parents(
         getattr(args, "archive_dir", args.output_dir), args.output_dir, args.strategy,
+    )
+    args.search_space_data, inherited_parameter_values = _extend_space_from_archived_parents(
+        args.strategy, args.search_space_data, parent_parameters,
     )
     bars, spy = _load_window_data(
         db=args.db, symbols=args.symbols_resolved, start=start, end=end,
@@ -68,6 +72,7 @@ def run_discovery(args, *, search_func=None) -> dict:
         "window": {"start": start.isoformat(), "end": end.isoformat(), "completed_sessions": window},
         "data_version": getattr(args, "data_version", None),
         "parent_candidate": parent_metadata,
+        "inherited_archive_search_values": inherited_parameter_values,
         "archive_sequence": getattr(args, "archive_sequence", None),
         "invocation_id": getattr(args, "invocation_id", None),
         "search_seed": args.seed,
@@ -77,13 +82,15 @@ def run_discovery(args, *, search_func=None) -> dict:
         "research_controls": _profile_for(
             args.strategy, report["selected_candidate"]["parameters"],
         )["controls"],
-        "search_iterations": args.search_iterations,
+        "search_iterations": report.get("search_iterations", args.search_iterations),
+        "configured_search_iterations": args.search_iterations,
         "search_iteration_summaries": report.get("iteration_summaries", []),
+        "saturation_aware_search": report.get("saturation_aware_search", {}),
         "symbols": args.symbols_resolved, "database": str(Path(args.db).resolve()),
         "data_tier": data_tier(), "feed": FEED, "adjustment": args.adjustment,
         "limitations": [
             "The short-window winner is a discovery result, not evidence of persistent profitability.",
-            "Parameter domains are bounded and discrete; execution costs and risk limits are held fixed.",
+            "Search begins from bounded curated domains; saturation can add validated midpoints and archived parent values, while execution costs and risk limits stay fixed.",
         ],
     })
     report["baseline_comparison"] = _baseline_improvement(report)
@@ -152,7 +159,9 @@ def run_window_ladder_discovery(
             "search_iterations": detail.get("search_iterations", 1),
             "candidate_count_evaluated": detail.get("candidate_count_evaluated"),
             "adaptive_novelty": detail.get("adaptive_novelty"),
+            "inherited_archive_search_values": detail.get("inherited_archive_search_values", {}),
             "search_iteration_summaries": detail.get("search_iteration_summaries", []),
+            "saturation_aware_search": detail.get("saturation_aware_search", {}),
             "selection_status": detail.get("selection_status"),
             "selected_candidate": selected.get("name"),
             "selected_fitness": comparison.get("selected_fitness"),
@@ -193,8 +202,10 @@ def run_window_ladder_discovery(
         "data_version": data_version,
         "configured_window_days": options,
         "candidate_count": args.candidates,
-        "search_iterations": args.search_iterations,
+        "search_iterations": sum(int(attempt.get("search_iterations") or 0) for attempt in attempts),
+        "configured_search_iterations_per_window": args.search_iterations,
         "candidate_count_per_window": args.candidates * args.search_iterations,
+        "candidate_count_evaluated_total": sum(int(attempt.get("candidate_count_evaluated") or 0) for attempt in attempts),
         "search_method": args.search_method,
         "attempt_order": ordered,
         "attempts": attempts,

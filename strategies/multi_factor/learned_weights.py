@@ -13,7 +13,7 @@ from strategies.multi_factor.tree_models import TREE_LOGIC_VERSIONS
 
 
 DEFAULT_MODEL_REPORT = RESEARCH_ROOT / "layers" / "latest.json"
-RIDGE_LOGIC_VERSION = "multi_factor_ridge_v4_pit_weight_timeline"
+RIDGE_LOGIC_VERSION = "multi_factor_ridge_v5_neutral_missing_factor_timeline"
 
 
 def _validated_weights(value: object) -> dict[str, float]:
@@ -38,9 +38,11 @@ def resolve_walk_forward_weights(
     *,
     as_of: date,
     max_snapshot_age_days: int = 90,
+    max_training_age_days: int = 90,
 ) -> tuple[dict[str, float] | None, dict]:
-    """Return the most recent model whose fit and labels predate ``as_of``."""
+    """Return a recent fit with recent, fully matured training labels."""
     eligible = []
+    stale_training = []
     for snapshot in timeline or []:
         if not isinstance(snapshot, dict):
             continue
@@ -53,15 +55,29 @@ def resolve_walk_forward_weights(
             continue
         weights = _validated_weights(snapshot.get("weights"))
         snapshot_age = (as_of - effective_date).days
+        training_age = (as_of - label_cutoff).days
         if (
             effective_date <= as_of and label_cutoff < effective_date and label_cutoff < as_of
-            and 0 <= snapshot_age <= max_snapshot_age_days and weights
+            and 0 <= snapshot_age <= max_snapshot_age_days
+            and training_age > max_training_age_days
+        ):
+            stale_training.append((label_cutoff, training_age))
+        if (
+            effective_date <= as_of and label_cutoff < effective_date and label_cutoff < as_of
+            and 0 <= snapshot_age <= max_snapshot_age_days
+            and 0 <= training_age <= max_training_age_days and weights
         ):
             eligible.append((effective_date, label_cutoff, snapshot, weights))
     if not eligible:
+        reason = "no fresh, purged Ridge snapshot was available by the feature date"
+        if stale_training:
+            _, training_age = max(stale_training, key=lambda row: row[0])
+            reason = f"recent Ridge fit has stale training labels ({training_age} days old)"
         return None, {
             "status": "unavailable",
-            "reason": "no fresh, purged Ridge snapshot was available by the feature date",
+            "reason": reason,
+            "newest_stale_training_label_cutoff": max(stale_training, key=lambda row: row[0])[0].isoformat()
+            if stale_training else None,
             "as_of": as_of.isoformat(),
         }
     effective_date, label_cutoff, snapshot, weights = max(eligible, key=lambda row: row[0])
@@ -74,6 +90,7 @@ def resolve_walk_forward_weights(
         "training_observation_count": snapshot.get("training_observation_count"),
         "equal_weight_fallback": bool(snapshot.get("equal_weight_fallback", False)),
         "weight_count": len(weights), "snapshot_age_days": (as_of - effective_date).days,
+        "training_age_days": (as_of - label_cutoff).days,
         "as_of": as_of.isoformat(),
     }
 
@@ -144,6 +161,7 @@ def _valid_tree_snapshot(snapshot: object, model_mode: str) -> bool:
         return False
     expected_format = "lightgbm_text" if model_mode == "lightgbm_walk_forward" else "xgboost_json"
     names = snapshot.get("factor_names")
+    minimum_factor_coverage = snapshot.get("minimum_factor_coverage")
     return (
         snapshot.get("model_mode") == model_mode
         and snapshot.get("logic_version") == TREE_LOGIC_VERSIONS.get(model_mode)
@@ -152,6 +170,9 @@ def _valid_tree_snapshot(snapshot: object, model_mode: str) -> bool:
         and isinstance(names, list) and bool(names)
         and all(isinstance(name, str) for name in names)
         and not (set(names) - SUPPORTED_FACTORS)
+        and isinstance(minimum_factor_coverage, int)
+        and not isinstance(minimum_factor_coverage, bool)
+        and minimum_factor_coverage >= 2
     )
 
 
@@ -161,11 +182,13 @@ def resolve_walk_forward_tree_model(
     model_mode: str,
     as_of: date,
     max_snapshot_age_days: int = 90,
+    max_training_age_days: int = 90,
 ) -> tuple[dict | None, dict]:
-    """Select a point-in-time tree model with strictly matured training labels."""
+    """Select a recent point-in-time tree model trained on recent matured labels."""
     if model_mode not in TREE_LOGIC_VERSIONS:
         return None, {"status": "unavailable", "reason": "unsupported tree model mode", "as_of": as_of.isoformat()}
     eligible = []
+    stale_training = []
     for snapshot in timeline or []:
         if not _valid_tree_snapshot(snapshot, model_mode):
             continue
@@ -175,14 +198,28 @@ def resolve_walk_forward_tree_model(
         except (KeyError, TypeError, ValueError):
             continue
         snapshot_age = (as_of - effective_date).days
+        training_age = (as_of - label_cutoff).days
         if (
             effective_date <= as_of and label_cutoff < effective_date and label_cutoff < as_of
             and 0 <= snapshot_age <= max_snapshot_age_days
+            and training_age > max_training_age_days
+        ):
+            stale_training.append((label_cutoff, training_age))
+        if (
+            effective_date <= as_of and label_cutoff < effective_date and label_cutoff < as_of
+            and 0 <= snapshot_age <= max_snapshot_age_days
+            and 0 <= training_age <= max_training_age_days
         ):
             eligible.append((effective_date, label_cutoff, snapshot))
     if not eligible:
+        reason = f"no fresh, purged {model_mode} snapshot was available by the feature date"
+        if stale_training:
+            _, training_age = max(stale_training, key=lambda row: row[0])
+            reason = f"recent {model_mode} fit has stale training labels ({training_age} days old)"
         return None, {
-            "status": "unavailable", "reason": f"no fresh, purged {model_mode} snapshot was available by the feature date",
+            "status": "unavailable", "reason": reason,
+            "newest_stale_training_label_cutoff": max(stale_training, key=lambda row: row[0])[0].isoformat()
+            if stale_training else None,
             "as_of": as_of.isoformat(),
         }
     effective_date, label_cutoff, snapshot = max(eligible, key=lambda row: row[0])
@@ -191,7 +228,7 @@ def resolve_walk_forward_tree_model(
         for key in (
             "model_mode", "model_family", "logic_version", "model_format", "model_payload",
             "factor_names", "feature_importance", "cost_model_version", "data_version",
-            "fundamentals_data_version",
+            "fundamentals_data_version", "minimum_factor_coverage",
         )
     }
     return artifact, {
@@ -199,6 +236,7 @@ def resolve_walk_forward_tree_model(
         "logic_version": snapshot["logic_version"], "effective_date": effective_date.isoformat(),
         "training_label_cutoff": label_cutoff.isoformat(),
         "training_observation_count": snapshot.get("training_observation_count"),
+        "training_age_days": (as_of - label_cutoff).days,
         "factor_count": len(snapshot["factor_names"]),
         "snapshot_age_days": (as_of - effective_date).days, "as_of": as_of.isoformat(),
     }
@@ -246,7 +284,7 @@ def load_live_tree_factor_model(
             for key in (
                 "model_mode", "model_family", "logic_version", "model_format", "model_payload",
                 "factor_names", "feature_importance", "cost_model_version", "data_version",
-                "fundamentals_data_version",
+                "fundamentals_data_version", "minimum_factor_coverage",
             )
         }
         return artifact, {

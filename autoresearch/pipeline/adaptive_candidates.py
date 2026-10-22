@@ -34,6 +34,122 @@ def _search_space(strategy: str, path: str | None) -> dict[str, list]:
         raise ValueError(f"search space includes unsupported {strategy} parameters: {', '.join(sorted(unknown))}")
     return space
 
+
+def _extend_space_from_archived_parents(
+    strategy: str, space: dict[str, list], parents: list[dict] | None,
+) -> tuple[dict[str, list], dict[str, list]]:
+    """Carry strong archived parameter values into later runs' proposal domains."""
+    extended = deepcopy(space)
+    added: dict[str, list] = {}
+    for parent in parents or []:
+        if not isinstance(parent, dict):
+            continue
+        for name, values in extended.items():
+            if strategy == "multi_factor" and name == "min_universe":
+                continue
+            if name not in parent:
+                continue
+            value = deepcopy(parent[name])
+            try:
+                encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+                existing = {
+                    json.dumps(item, sort_keys=True, separators=(",", ":"))
+                    for item in values
+                }
+                if encoded in existing:
+                    continue
+                _make_parameters(strategy, {name: value})
+            except (TypeError, ValueError):
+                continue
+            # The archive supplies at most six diverse parents. Keep the extra
+            # options bounded so inherited values do not swamp fresh proposals.
+            if len(added.get(name, [])) >= 6:
+                continue
+            values.append(value)
+            added.setdefault(name, []).append(value)
+    return extended, added
+
+
+def _refine_saturated_numeric_domains(
+    strategy: str, space: dict[str, list], candidates: list[dict], *,
+    minimum_coverage: float = 0.75, max_dimensions: int = 2,
+) -> tuple[dict[str, list], list[dict]]:
+    """Insert validated local midpoints where a plateaued search covered a numeric domain."""
+    refined = deepcopy(space)
+    ranked = sorted(
+        (row for row in candidates if isinstance(row.get("parameters"), dict)),
+        key=lambda row: (bool(row.get("eligible")), float(row.get("fitness") or -1e9)),
+        reverse=True,
+    )
+    if not ranked:
+        return refined, []
+
+    dimensions = []
+    for name, values in space.items():
+        # This is a bounded, categorical coverage policy. In particular, the
+        # minimum-universe floor must stay tied to observed coverage checks.
+        if name == "min_universe" or len(values) < 2:
+            continue
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+            continue
+        numeric_values = sorted({float(value) for value in values if math.isfinite(float(value))})
+        if len(numeric_values) < 2:
+            continue
+        covered = {
+            float(row["parameters"][name])
+            for row in candidates
+            if isinstance(row.get("parameters"), dict)
+            and isinstance(row["parameters"].get(name), (int, float))
+            and not isinstance(row["parameters"].get(name), bool)
+            and math.isfinite(float(row["parameters"][name]))
+            and float(row["parameters"][name]) in numeric_values
+        }
+        coverage = len(covered) / len(numeric_values)
+        if coverage >= minimum_coverage:
+            gaps = [right - left for left, right in zip(numeric_values, numeric_values[1:])]
+            dimensions.append((coverage, max(gaps), name, numeric_values))
+
+    dimensions.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    changes = []
+    for coverage, _, name, numeric_values in dimensions[:max_dimensions]:
+        winner = next(
+            (row for row in ranked if isinstance(row["parameters"].get(name), (int, float))
+             and not isinstance(row["parameters"].get(name), bool)),
+            ranked[0],
+        )
+        winner_value = float(winner["parameters"].get(name, numeric_values[0]))
+        anchor = min(numeric_values, key=lambda value: abs(value - winner_value))
+        intervals = list(zip(numeric_values, numeric_values[1:]))
+        intervals.sort(key=lambda pair: (0 if anchor in pair else 1, -(pair[1] - pair[0])))
+        for left, right in intervals:
+            raw_midpoint = (left + right) / 2
+            if all(isinstance(value, int) and not isinstance(value, bool) for value in space[name]):
+                midpoint = int(round(raw_midpoint))
+                if midpoint <= left or midpoint >= right:
+                    continue
+            else:
+                midpoint = round(raw_midpoint, 6)
+                if midpoint <= left or midpoint >= right:
+                    continue
+            if any(float(value) == float(midpoint) for value in refined[name]):
+                continue
+            try:
+                _make_parameters(strategy, {name: midpoint})
+            except ValueError:
+                continue
+            refined[name].append(midpoint)
+            refined[name].sort(key=float)
+            changes.append({
+                "parameter": name,
+                "previous_values": list(space[name]),
+                "added_value": midpoint,
+                "refinement_interval": [left, right],
+                "observed_domain_coverage": round(coverage, 4),
+                "refined_from_candidate": winner.get("name"),
+            })
+            break
+    return refined, changes
+
 def _make_parameters(strategy: str, values: dict) -> dict:
     parameters = deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
     parameters.update(deepcopy(values))
@@ -107,12 +223,14 @@ def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str,
                 "factor_neutralization": "none",
                 "regime_factor_weights": {},
                 "min_universe": 15,
+                "factor_weight_mode": "static",
             }),
             ("ridge_factor_set_equal_weights", {
                 "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
                 "factor_neutralization": "sector",
                 "regime_factor_weights": {},
                 "min_universe": 15,
+                "factor_weight_mode": "static",
             }),
             ("ridge_walk_forward_weights", {
                 "factor_weight_mode": "ridge_walk_forward",
@@ -134,37 +252,38 @@ def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str,
             }),
             ("momentum_only", {"factor_weights": {
                 "momentum_1m": 0.33, "momentum_3m": 0.34, "momentum_6m": 0.33,
-            }, "regime_factor_weights": {}}),
-            ("low_volatility_only", {"factor_weights": {"low_volatility": 1.0}, "regime_factor_weights": {}}),
-            ("price_volume_only", {"factor_weights": {"price_volume_momentum": 1.0}, "regime_factor_weights": {}}),
+            }, "regime_factor_weights": {}, "factor_weight_mode": "static"}),
+            ("low_volatility_only", {"factor_weights": {"low_volatility": 1.0}, "regime_factor_weights": {}, "factor_weight_mode": "static"}),
+            ("price_volume_only", {"factor_weights": {"price_volume_momentum": 1.0}, "regime_factor_weights": {}, "factor_weight_mode": "static"}),
             ("value_only", {"factor_weights": {
                 "value_earnings_yield": 0.5, "value_book_to_price": 0.25,
                 "value_fcf_yield": 0.25,
-            }, "regime_factor_weights": {}, "min_universe": 15}),
+            }, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
             ("quality_only", {"factor_weights": {
                 "quality_profitability": 0.5, "quality_balance_sheet": 0.5,
-            }, "regime_factor_weights": {}, "min_universe": 15}),
-            ("earnings_yield_only", {"factor_weights": {"value_earnings_yield": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
-            ("book_to_price_only", {"factor_weights": {"value_book_to_price": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
-            ("free_cash_flow_yield_only", {"factor_weights": {"value_fcf_yield": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
-            ("profitability_only", {"factor_weights": {"quality_profitability": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
-            ("balance_sheet_quality_only", {"factor_weights": {"quality_balance_sheet": 1.0}, "regime_factor_weights": {}, "min_universe": 15}),
+            }, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
+            ("earnings_yield_only", {"factor_weights": {"value_earnings_yield": 1.0}, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
+            ("book_to_price_only", {"factor_weights": {"value_book_to_price": 1.0}, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
+            ("free_cash_flow_yield_only", {"factor_weights": {"value_fcf_yield": 1.0}, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
+            ("profitability_only", {"factor_weights": {"quality_profitability": 1.0}, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
+            ("balance_sheet_quality_only", {"factor_weights": {"quality_balance_sheet": 1.0}, "regime_factor_weights": {}, "min_universe": 15, "factor_weight_mode": "static"}),
             ("sector_neutralized_equal_weights", {
                 "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
                 "factor_neutralization": "sector", "regime_factor_weights": {},
-                "min_universe": 15,
+                "min_universe": 15, "factor_weight_mode": "static",
             }),
             ("regime_timing", {
                 "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
                 "factor_neutralization": "sector",
                 "regime_factor_weights": REGIME_FACTOR_WEIGHT_PROFILES,
-                "min_universe": 15,
+                "min_universe": 15, "factor_weight_mode": "static",
             }),
-            ("shrinkage_min_variance", {"portfolio_weight_method": "shrinkage_min_variance"}),
+            ("shrinkage_min_variance", {"portfolio_weight_method": "shrinkage_min_variance", "factor_weight_mode": "static"}),
             ("combined_shrinkage_min_variance", {
                 "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
                 "factor_neutralization": "sector", "regime_factor_weights": {},
                 "min_universe": 15,
+                "factor_weight_mode": "static",
                 "portfolio_weight_method": "shrinkage_min_variance",
             }),
         ]
@@ -248,8 +367,17 @@ def _candidate_parameters(
     seen = {json.dumps(baseline, sort_keys=True, separators=(",", ":"))}
     rng = random.Random(seed)
     baseline_id = candidate_id(strategy, baseline)
+    bayes_seed_limit = (
+        max(1, count - max(2, count // 3))
+        if method == "bayes" and count >= 4 else count
+    )
+    ablation_limit = (
+        max(1, min(len(_planned_ablation_variants(strategy, baseline)), count // 3))
+        if method == "bayes" else count
+    )
+    ablations_added = 0
     for name, changes in _planned_ablation_variants(strategy, baseline):
-        if len(output) >= count:
+        if len(output) >= bayes_seed_limit or ablations_added >= ablation_limit:
             break
         variation = deepcopy(baseline)
         variation.update(deepcopy(changes))
@@ -267,10 +395,16 @@ def _candidate_parameters(
             "logic_version": logic_version(strategy),
             "parent_candidate_id": baseline_id,
         })
-    if strategy == "multi_factor" and len(output) < count:
+        ablations_added += 1
+    if strategy == "multi_factor" and len(output) < bayes_seed_limit:
+        minimum_universe_limit = (
+            max(1, count // 8) if method == "bayes" else count
+        )
+        minimum_universe_added = 0
         for min_universe in space.get("min_universe", []):
             variation = deepcopy(baseline)
             variation["min_universe"] = min_universe
+            variation["factor_weight_mode"] = "static"
             try:
                 parameters = _make_parameters(strategy, variation)
             except ValueError:
@@ -282,7 +416,8 @@ def _candidate_parameters(
             output.append({
                 "name": f"min_universe_{min_universe}", "parameters": parameters,
             })
-            if len(output) >= count:
+            minimum_universe_added += 1
+            if len(output) >= bayes_seed_limit or minimum_universe_added >= minimum_universe_limit:
                 break
     raw_parents = parent_parameters if isinstance(parent_parameters, list) else [parent_parameters]
     parents = []
@@ -295,8 +430,9 @@ def _candidate_parameters(
             continue
         if parent not in parents:
             parents.append(parent)
-    if parents and len(output) < count:
-        for index, parent in enumerate(parents[:max(1, count // 4)]):
+    if parents and len(output) < bayes_seed_limit:
+        parent_limit = max(1, count // 8) if method == "bayes" else max(1, count // 4)
+        for index, parent in enumerate(parents[:parent_limit]):
             key = json.dumps(parent, sort_keys=True, separators=(",", ":"))
             if key not in seen and not previously_evaluated(parent):
                 seen.add(key)
@@ -307,7 +443,11 @@ def _candidate_parameters(
                 })
         # Spend a stable fraction of the budget on neighboring variants from
         # several archived elites; reserve the rest for independent exploration.
-        derivative_limit = min(count, max(len(output), count * 2 // 3))
+        derivative_limit = (
+            min(bayes_seed_limit, max(len(output), count // 3))
+            if method == "bayes"
+            else min(count, max(len(output), count * 2 // 3))
+        )
         for parameter, values in space.items():
             for parent_index, parent in enumerate(parents):
                 for value in values:
@@ -369,7 +509,7 @@ def _candidate_parameters(
     return output[:count]
 
 __all__ = [
-    "_bayes_proposal", "_candidate_parameters", "_distance", "_flatten",
-    "_make_parameters", "_planned_ablation_variants", "_random_values",
-    "_search_space",
+    "_bayes_proposal", "_candidate_parameters", "_distance", "_extend_space_from_archived_parents",
+    "_flatten", "_make_parameters", "_planned_ablation_variants", "_random_values",
+    "_refine_saturated_numeric_domains", "_search_space",
 ]

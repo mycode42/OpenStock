@@ -131,8 +131,15 @@ class SignalGenerator:
                 "factor_weight_source": "unavailable",
                 "factor_model": factor_model_diagnostics or {},
                 "factor_timing_status": "learned_snapshot_unavailable",
+                "skip_reason": "learned_snapshot_unavailable",
+                "universe_count": len(symbols),
+                "feature_count": 0,
+                "ranked_count": 0,
+                "minimum_universe_required": self.config.min_universe,
                 "minimum_universe_met": False,
-                "omitted_factors": ["No purged factor model snapshot was valid as of this session."],
+                "omitted_factors": [
+                    "No learned snapshot met point-in-time fit, purge, and label freshness limits."
+                ],
             }
         active_config = replace(self.config, factor_weights=factor_weights)
         calculator = FactorCalculator(active_config)
@@ -154,6 +161,23 @@ class SignalGenerator:
             )
             for factor, weight in factor_weights.items() if weight > 0
         }
+        usable_factor_count = sum(
+            count >= self.config.min_universe for count in factor_coverage.values()
+        )
+        required_model_factors = (
+            list((learned_factor_model or {}).get("factor_names") or [])
+            if is_tree_model else []
+        )
+        minimum_model_feature_coverage = (
+            int((learned_factor_model or {}).get("minimum_factor_coverage") or self.config.min_universe)
+            if is_tree_model else self.config.min_universe
+        )
+        model_feature_coverage = {
+            name: factor_coverage.get(name, 0) for name in required_model_factors
+        }
+        model_features_below_minimum = any(
+            count < minimum_model_feature_coverage for count in model_feature_coverage.values()
+        )
         selected_factors = sorted({factor for row in ranked for factor in row["factor_values"]})
         group_sizes: dict[str, int] = {}
         for symbol in features:
@@ -188,6 +212,10 @@ class SignalGenerator:
             "universe_count": len(symbols),
             "feature_count": len(features),
             "ranked_count": len(ranked),
+            "minimum_universe_required": self.config.min_universe,
+            "usable_factor_count": usable_factor_count,
+            "model_feature_coverage": model_feature_coverage,
+            "minimum_model_feature_coverage": minimum_model_feature_coverage if is_tree_model else None,
             "selected_factors": selected_factors,
             "active_factor_weights": factor_weights if not is_tree_model else None,
             "active_factor_features": sorted(factor_weights),
@@ -199,6 +227,7 @@ class SignalGenerator:
                 else "regime_override" if regime_override else "static_weights"
             ),
             "factor_coverage": factor_coverage,
+            "missing_factor_value_policy": "neutral_zero_cross_sectional_zscore",
             "omitted_factors": omitted_factors,
             "fundamentals_feed": fundamentals_feed_diagnostics or {
                 "status": "supplied" if fundamentals_by_symbol else "not_requested",
@@ -215,10 +244,20 @@ class SignalGenerator:
             },
             "tradability": mask_diagnostics,
             "minimum_universe_met": len(ranked) >= self.config.min_universe,
+            "skip_reason": (
+                None if len(ranked) >= self.config.min_universe else
+                "learned_model_features_below_minimum_coverage" if model_features_below_minimum else
+                "no_factor_meets_minimum_coverage" if usable_factor_count == 0 else
+                "ranked_universe_below_minimum"
+            ),
             "turnover": None,
         }
         if len(ranked) < self.config.min_universe:
-            LOG.info("Multi-factor snapshot skipped: %d ranked names; need %d", len(ranked), self.config.min_universe)
+            LOG.debug(
+                "Multi-factor snapshot skipped (%s): %d ranked names from %d features; need %d; %d usable factors",
+                diagnostics["skip_reason"], len(ranked), len(features),
+                self.config.min_universe, usable_factor_count,
+            )
             return [], diagnostics
 
         volatile_disabled = regime == "volatile" and self.config.disable_in_volatile

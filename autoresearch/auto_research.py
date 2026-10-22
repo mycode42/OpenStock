@@ -37,6 +37,9 @@ from .artifacts.live_manifest import live_configuration_manifest
 from .artifacts.research_ledger import ResearchLedger
 from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
+    ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
+    ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
+    ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
     ADAPTIVE_PURGE_SESSIONS, ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
@@ -45,7 +48,7 @@ from .settings import (
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v21-rolling-current-forward-challenger-2026"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v22-multifactor-diagnostics-saturation-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -212,6 +215,11 @@ def run_daily_research(args) -> dict:
             "discovery_method": "bayes",
             "discovery_candidates": ADAPTIVE_DISCOVERY_CANDIDATES,
             "discovery_iterations": ADAPTIVE_DISCOVERY_ITERATIONS,
+            "discovery_saturation_policy": {
+                "minimum_novelty_fraction": ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
+                "maximum_domain_refinements": ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
+                "minimum_rounds_before_early_stop": ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
+            },
             "verification_training_start": RESEARCH_START.isoformat(),
             "verification_end": cohort_end.isoformat(),
             "verification_initial_training_sessions": max(
@@ -269,6 +277,7 @@ def run_daily_research(args) -> dict:
     factor_fingerprint = stable_hash({
         "cohort_fingerprint": fingerprint,
         "factor_logic_version": LOGIC_VERSION,
+        "factor_timeline_schema_version": "current-tree-fits-in-point-in-time-timeline-v1",
         "tree_factor_logic_versions": TREE_LOGIC_VERSIONS,
         "factor_cost_model_version": COST_MODEL_VERSION,
         "sector_map": ALGO_FACTOR_SECTOR_BY_SYMBOL,

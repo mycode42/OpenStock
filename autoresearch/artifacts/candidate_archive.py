@@ -17,6 +17,7 @@ from .files import _atomic_json
 ARCHIVE_SCHEMA = "swarm_algo_candidate_archive_v1"
 MAX_CANDIDATES_PER_STRATEGY = 64
 MAX_DATA_VERSIONS_PER_STRATEGY = 32
+MAX_SEARCH_RUNS_PER_STRATEGY = 256
 
 STRATEGY_LOGIC_VERSIONS = {
     "mean_reversion": "intraday-mr-2",
@@ -51,6 +52,7 @@ def _read(path: Path) -> dict:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "run_counters": {},
             "candidates": {},
+            "search_runs": {},
         }
     try:
         value = json.loads(path.read_text())
@@ -60,7 +62,16 @@ def _read(path: Path) -> dict:
         raise ValueError("candidate archive has an unsupported schema")
     value.setdefault("run_counters", {})
     value.setdefault("candidates", {})
-    if not isinstance(value["run_counters"], dict) or not isinstance(value["candidates"], dict):
+    value.setdefault("search_runs", {})
+    if (
+        not isinstance(value["run_counters"], dict)
+        or not isinstance(value["candidates"], dict)
+        or not isinstance(value["search_runs"], dict)
+        or any(
+            not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs)
+            for runs in value["search_runs"].values()
+        )
+    ):
         raise ValueError("candidate archive counters or candidates are malformed")
     return value
 
@@ -199,6 +210,7 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
     with _locked(path):
         archive = _read(path)
         rows = archive.setdefault("candidates", {}).setdefault(strategy, {})
+        search_runs = archive.setdefault("search_runs", {}).setdefault(strategy, [])
         evaluated = archive.setdefault("evaluated_candidates_by_data_version", {}).setdefault(strategy, {})
         for detail in details:
             window = detail.get("window") or {}
@@ -212,6 +224,42 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                 next((item for item in candidates if str(item.get("name", "")).endswith(":baseline")), {}),
             )
             baseline_fitness = baseline.get("fitness")
+            selected = detail.get("selected_candidate") or {}
+            run_identity = "|".join((
+                strategy, str(data_version or "unknown"),
+                str(window.get("start") or ""), str(window.get("end") or ""),
+                str(detail.get("archive_sequence") or detail.get("search_seed") or ""),
+                str(detail.get("invocation_id") or detail.get("created_at") or ""),
+            ))
+            run_summary = {
+                "run_key": hashlib.sha256(run_identity.encode("utf-8")).hexdigest(),
+                "created_at": detail.get("created_at") or timestamp,
+                "strategy": strategy,
+                "invocation_id": detail.get("invocation_id"),
+                "archive_sequence": detail.get("archive_sequence"),
+                "search_seed": detail.get("search_seed"),
+                "data_version": data_version,
+                "window": window,
+                "selection_status": detail.get("selection_status"),
+                "selected_candidate_id": candidate_id(strategy, selected["parameters"])
+                if isinstance(selected.get("parameters"), dict) else None,
+                "selected_fitness": selected.get("fitness"),
+                "baseline_fitness": baseline_fitness,
+                "candidate_count_evaluated": detail.get("candidate_count_evaluated"),
+                "candidate_count_requested": detail.get("candidate_count_requested"),
+                "search_iterations": detail.get("search_iterations"),
+                "adaptive_novelty": detail.get("adaptive_novelty"),
+                "inherited_archive_search_values": detail.get("inherited_archive_search_values", {}),
+                "saturation_aware_search": detail.get("saturation_aware_search", {}),
+            }
+            prior_run = next(
+                (item for item in search_runs if item.get("run_key") == run_summary["run_key"]),
+                None,
+            )
+            if prior_run is None:
+                search_runs.append(run_summary)
+            else:
+                prior_run.update(run_summary)
             prior_record = (evaluated.get(data_version) or {}) if data_version else {}
             prior_ids = (
                 prior_record.get("candidate_ids") or []
@@ -313,6 +361,9 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                     "updated_at": timestamp,
                     "candidate_ids": sorted(seen_for_version),
                 }
+
+        search_runs.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
+        del search_runs[MAX_SEARCH_RUNS_PER_STRATEGY:]
 
         if len(evaluated) > MAX_DATA_VERSIONS_PER_STRATEGY:
             retained_versions = {

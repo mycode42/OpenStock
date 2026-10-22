@@ -18,11 +18,17 @@ from strategies.registry import PARAMETER_KEYS
 from strategies.universe import configured_universe
 from ..artifacts.candidate_archive import candidate_id
 from ..artifacts.replay_logging import quiet_coordinator_rejections
-from ..settings import ADJUSTMENT, FEED, RESEARCH_START, RESEARCH_WARMUP_DAYS
+from ..settings import (
+    ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
+    ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
+    ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
+    ADJUSTMENT, FEED, RESEARCH_START, RESEARCH_WARMUP_DAYS,
+)
 
 from .adaptive_candidates import (
     _bayes_proposal, _candidate_parameters, _distance, _flatten,
     _make_parameters, _planned_ablation_variants, _random_values, _search_space,
+    _refine_saturated_numeric_domains,
 )
 
 from .adaptive_evaluation import (
@@ -237,15 +243,20 @@ def _run_iterative_discovery_search(
     preaggregated_daily_bars: dict[str, list[dict]] | None = None,
     search_func=None,
 ) -> dict:
-    """Refine on training data for bounded rounds; verification remains separate."""
+    """Refine on training data and adapt saturated numeric domains before verification."""
     if iterations < 1:
         raise ValueError("search iterations must be positive")
 
     candidates = []
     iteration_summaries = []
+    saturation_expansions = []
     incumbent = None
     excluded = set(excluded_candidate_ids)
-    for iteration in range(1, iterations + 1):
+    active_space = {name: list(values) for name, values in space.items()}
+    early_stop_reason = None
+    iteration = 1
+    while iteration <= iterations:
+        excluded_before = set(excluded)
         active_parent = (
             [incumbent["parameters"], *(parent_parameters if isinstance(parent_parameters, list) else ([parent_parameters] if parent_parameters else []))]
             if incumbent else parent_parameters
@@ -254,7 +265,7 @@ def _run_iterative_discovery_search(
         search_runner = search_func or _run_search_with_bars
         search_options = dict(
             strategy=strategy, method=method, count=count,
-            seed=seed + (iteration - 1) * 104_729, space=space, symbols=symbols,
+            seed=seed + (iteration - 1) * 104_729, space=active_space, symbols=symbols,
             bars=bars, spy_daily=spy_daily, start=start, end=end, args=args,
             weights=weights, min_trades=min_trades,
             parent_parameters=active_parent,
@@ -262,16 +273,43 @@ def _run_iterative_discovery_search(
             preaggregated_daily_bars=preaggregated_daily_bars,
         )
         search = search_runner(**search_options)
-        selected = search["selected_candidate"]
+        search_rows = search.get("candidates") or []
+        selected = search.get("selected_candidate") or (search_rows[0] if search_rows else {})
         comparison = _baseline_improvement(search)
         selected_name = f"iteration_{iteration:02d}:{selected.get('name', 'unknown')}"
+        qualified_rows = [row for row in search_rows if row.get("eligible")]
+        best_qualified = max(qualified_rows, key=lambda row: float(row.get("fitness") or -1e9)) if qualified_rows else None
+        best_qualified_fitness = float(best_qualified.get("fitness") or 0.0) if best_qualified else None
+        incumbent_fitness = float(incumbent.get("fitness") or 0.0) if incumbent else None
+        best_name = str((best_qualified or {}).get("name", ""))
+        best_is_baseline = best_name == "baseline" or best_name.endswith(":baseline")
+        improved_incumbent = bool(best_qualified is not None and (
+            (incumbent is None and not best_is_baseline)
+            or (incumbent is not None and float(best_qualified.get("fitness") or 0.0) > incumbent_fitness + 1e-4)
+        ))
+        if best_qualified is not None and (improved_incumbent or incumbent is None):
+            incumbent = best_qualified
+
+        evaluated_ids = set()
+        novel_ids = set()
+        for row in search_rows:
+            parameters = row.get("parameters")
+            if not isinstance(parameters, dict):
+                continue
+            name = str(row.get("name", ""))
+            if name == "baseline" or name.endswith(":baseline"):
+                continue
+            identifier = candidate_id(strategy, parameters)
+            evaluated_ids.add(identifier)
+            if identifier not in excluded_before:
+                novel_ids.add(identifier)
+        novelty_fraction = len(novel_ids) / len(evaluated_ids) if evaluated_ids else 0.0
         logger.info(
-            "Adaptive refinement %s iteration %d/%d: %s fitness %.4f (baseline delta %+.4f)%s",
+            "Adaptive refinement %s iteration %d/%d: %s fitness %.4f (baseline delta %+.4f, new %.0f%%)%s",
             strategy, iteration, iterations, selected.get("name"),
             float(selected.get("fitness") or 0.0), comparison["fitness_delta"],
-            "; incumbent updated" if comparison["improved"] and (
-                incumbent is None or float(selected["fitness"]) > float(incumbent["fitness"])
-            ) else "",
+            novelty_fraction * 100,
+            "; incumbent updated" if improved_incumbent else "",
         )
         iteration_summaries.append({
             "iteration": iteration,
@@ -282,8 +320,13 @@ def _run_iterative_discovery_search(
             "baseline_fitness": comparison["baseline_fitness"],
             "fitness_delta_vs_baseline": comparison["fitness_delta"],
             "improved_vs_baseline": comparison["improved"],
+            "best_qualified_fitness": best_qualified_fitness,
+            "improved_vs_incumbent": improved_incumbent,
+            "unique_nonbaseline_candidates": len(evaluated_ids),
+            "new_nonbaseline_candidates": len(novel_ids),
+            "novelty_fraction": round(novelty_fraction, 4),
         })
-        for row in search["candidates"]:
+        for row in search_rows:
             excluded.add(candidate_id(strategy, row["parameters"]))
             original_name = str(row.get("name", "candidate"))
             candidates.append({
@@ -292,11 +335,52 @@ def _run_iterative_discovery_search(
                 else f"iteration_{iteration:02d}:{original_name}",
                 "search_iteration": iteration,
             })
+
+        plateaued = not improved_incumbent
+        low_novelty = (
+            novelty_fraction < ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION
+            or int(search.get("candidate_count_evaluated", 0)) < int(search.get("candidate_count_requested", count))
+        )
+        _, possible_refinements = _refine_saturated_numeric_domains(
+            strategy, active_space, candidates,
+        )
+        saturation_reasons = []
+        if low_novelty:
+            saturation_reasons.append("low_archive_novelty_or_exhausted_candidates")
+        if possible_refinements:
+            saturation_reasons.append("numeric_domain_coverage")
+        applied_refinements = []
+        if plateaued and saturation_reasons and len(saturation_expansions) < ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS:
+            active_space, applied_refinements = _refine_saturated_numeric_domains(
+                strategy, active_space, candidates,
+            )
+            if applied_refinements:
+                saturation_expansions.extend({
+                    **event, "after_iteration": iteration,
+                    "trigger": saturation_reasons,
+                    "iteration_novelty_fraction": round(novelty_fraction, 4),
+                } for event in applied_refinements)
+        iteration_summaries[-1].update({
+            "saturation_trigger": saturation_reasons if plateaued else [],
+            "domain_refinements_added": applied_refinements,
+        })
+
         if (
-            comparison["improved"]
-            and (incumbent is None or float(selected["fitness"]) > float(incumbent["fitness"]))
+            plateaued and low_novelty and not applied_refinements
+            and iteration >= ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP
+            and len(saturation_expansions) >= ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS
         ):
-            incumbent = selected
+            early_stop_reason = "search_saturated_after_max_domain_refinements"
+        elif (
+            plateaued and low_novelty and not possible_refinements
+            and iteration >= ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP
+        ):
+            early_stop_reason = "search_saturated_with_no_valid_domain_refinements"
+
+        if early_stop_reason:
+            logger.info("Adaptive refinement %s stopping after iteration %d: %s", strategy, iteration, early_stop_reason)
+            break
+        iteration += 1
 
     eligible_rows = [row for row in candidates if row["eligible"]]
     sample_eligible = [row for row in candidates if row["minimum_trade_count_met"]]
@@ -310,8 +394,10 @@ def _run_iterative_discovery_search(
     return {
         "strategy": strategy, "method": method,
         "candidate_count_requested": count * iterations,
+        "candidate_count_requested_for_completed_rounds": count * len(iteration_summaries),
         "candidate_count_per_iteration": count,
-        "search_iterations": iterations,
+        "search_iterations": len(iteration_summaries),
+        "configured_search_iterations": iterations,
         "candidate_count_evaluated": len(candidates),
         "min_trades_for_selection": min_trades,
         "selection_status": (
@@ -323,6 +409,17 @@ def _run_iterative_discovery_search(
         "leaderboard": sorted(candidates, key=lambda row: row["fitness"], reverse=True),
         "candidates": candidates,
         "iteration_summaries": iteration_summaries,
+        "saturation_aware_search": {
+            "minimum_novelty_fraction": ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
+            "minimum_rounds_before_early_stop": ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
+            "maximum_domain_refinements": ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
+            "domain_refinement_count": len(saturation_expansions),
+            "domain_refinements": saturation_expansions,
+            "early_stop_reason": early_stop_reason,
+            "configured_iteration_budget": iterations,
+            "iterations_run": len(iteration_summaries),
+            "verification_unchanged": True,
+        },
     }
 
 def _fit_window_ladder(

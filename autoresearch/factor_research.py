@@ -38,7 +38,7 @@ FACTOR_RESEARCH_START = date(2020, 1, 1)
 FACTOR_TRAINING_SAMPLES = 12
 RIDGE_ALPHA = 1.0
 MODEL_FAMILY = "ridge_cross_sectional"
-LOGIC_VERSION = "multi_factor_ridge_v4_pit_weight_timeline"
+LOGIC_VERSION = "multi_factor_ridge_v5_neutral_missing_factor_timeline"
 COST_MODEL_VERSION = "factor_shadow_costs_v1"
 
 
@@ -455,6 +455,7 @@ def train_factor_model(
                 "effective_date": observation["date"].isoformat(),
                 "training_label_cutoff": max(row["label_end"] for row in prior).isoformat(),
                 "training_observation_count": len(prior),
+                "minimum_factor_coverage": min_universe,
                 "cost_model_version": COST_MODEL_VERSION,
                 "data_version": data_version,
                 "fundamentals_data_version": fundamentals_data_version,
@@ -552,6 +553,7 @@ def train_factor_model(
             "effective_date": latest_date.isoformat(),
             "training_label_cutoff": max(row["label_end"] for row in current_train).isoformat(),
             "training_observation_count": len(current_train),
+            "minimum_factor_coverage": min_universe,
             "cost_model_version": COST_MODEL_VERSION,
             "data_version": data_version,
             "fundamentals_data_version": fundamentals_data_version,
@@ -604,6 +606,7 @@ def train_factor_model(
             "fundamentals_data_version": fundamentals_data_version,
             "cost_model_version": COST_MODEL_VERSION,
             "model_parameters": current_models[mode]["model_mode"],
+            "minimum_factor_coverage": current_models[mode]["minimum_factor_coverage"],
             "training_label_cutoff": current_models[mode]["training_label_cutoff"],
         }
         tree_model_comparisons[mode] = {
@@ -757,7 +760,11 @@ def train_factor_model(
         json.dumps(candidate_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     replay_model_timeline = [*ridge_timeline]
-    for snapshots in tree_timelines.values():
+    for mode, snapshots in tree_timelines.items():
+        # Make the latest fit available to subsequent as-of dates. Its
+        # effective_date remains the actual fit date, so an earlier replay
+        # session cannot look ahead and use this model.
+        snapshots.append(dict(current_models[mode]))
         replay_model_timeline.extend(snapshots)
     tree_model_comparisons["ridge_walk_forward"] = {
         "model_family": MODEL_FAMILY,
@@ -800,6 +807,7 @@ def train_factor_model(
         "data_version": data_version,
         "cost_model_version": COST_MODEL_VERSION,
         "factor_names": list(factor_names),
+        "missing_factor_value_policy": "neutral_zero_cross_sectional_zscore_for_missing_usable_factors",
         "factor_observation_coverage": factor_observation_coverage,
         "fundamental_data_status": (fundamentals_diagnostics or {}).get(
             "status", "supplied" if fundamentals_by_symbol else "unavailable",
@@ -833,6 +841,13 @@ def train_factor_model(
         "session_start": FACTOR_RESEARCH_START.isoformat(),
         "session_end": latest_date.isoformat(),
         "observation_count": len(observations),
+        "latest_factor_observation_date": observations[-1]["date"].isoformat(),
+        "latest_mature_training_label_cutoff": max(
+            row["label_end"] for row in current_train
+        ).isoformat(),
+        "current_training_label_age_days": (
+            latest_date - max(row["label_end"] for row in current_train)
+        ).days,
         "rolling_evaluation_count": len(adaptive_observations),
         "current_training_sample_count": len(current_train),
         "adaptive_prequential_ic": adaptive_summary,

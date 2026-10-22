@@ -65,6 +65,9 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
     "multi_factor": {
         "rebalance_frequency": ["daily", "weekly"], "top_n": [1, 2, 3, 4],
         "min_universe": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
+        "factor_weight_mode": [
+            "static", "ridge_walk_forward", "lightgbm_walk_forward", "xgboost_walk_forward",
+        ],
         "minimum_score": [0.0, 0.05, 0.1, 0.2],
         "direction_mode": ["long_only", "regime_dependent", "long_short"],
         "factor_neutralization": ["none", "sector"],

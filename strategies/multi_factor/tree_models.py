@@ -13,8 +13,8 @@ TREE_MODEL_FAMILIES = {
 }
 
 TREE_LOGIC_VERSIONS = {
-    "lightgbm_walk_forward": "multi_factor_lightgbm_v1_pit_score_timeline",
-    "xgboost_walk_forward": "multi_factor_xgboost_v1_pit_score_timeline",
+    "lightgbm_walk_forward": "multi_factor_lightgbm_v2_neutral_missing_factor_timeline",
+    "xgboost_walk_forward": "multi_factor_xgboost_v2_neutral_missing_factor_timeline",
 }
 
 

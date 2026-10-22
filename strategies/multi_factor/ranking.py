@@ -47,9 +47,12 @@ class Combiner:
         total_weight = sum(normalized_weights.values())
         rows = []
         for symbol, values in zscores.items():
-            if any(name not in values for name in usable):
+            if not any(name in values for name in usable):
                 continue
-            factor_scores = {name: values[name] for name in usable}
+            # Cross-sectional zero is the neutral value in z-score space.
+            # Retain names with partial factor coverage instead of requiring
+            # every optional/fundamental input to intersect on the same name.
+            factor_scores = {name: values.get(name, 0.0) for name in usable}
             score = sum(
                 factor_scores[name] * normalized_weights[name] / total_weight
                 for name in usable
@@ -57,7 +60,10 @@ class Combiner:
             rows.append({
                 "symbol": symbol,
                 "score": score,
-                "factor_values": {name: factor_values[symbol][name] for name in usable},
+                "factor_values": {
+                    name: factor_values[symbol][name]
+                    for name in usable if name in factor_values.get(symbol, {})
+                },
                 "factor_zscores": factor_scores,
             })
         rows.sort(key=lambda row: (-row["score"], row["symbol"]))
@@ -81,10 +87,15 @@ class FactorRanker:
         scoring_model: dict | None = None,
     ) -> list[dict]:
         active = [name for name, weight in self.config.factor_weights.items() if weight > 0]
+        factor_coverage_floor = self.config.min_universe
+        if scoring_model is not None:
+            raw_floor = scoring_model.get("minimum_factor_coverage")
+            if isinstance(raw_floor, int) and not isinstance(raw_floor, bool) and raw_floor >= 2:
+                factor_coverage_floor = raw_floor
         usable = [
             name for name in active
             if sum(name in values and math.isfinite(values[name]) for values in factor_values.values())
-            >= self.config.min_universe
+            >= factor_coverage_floor
         ]
         if not usable:
             return []
@@ -140,14 +151,17 @@ class FactorRanker:
             or any(name not in usable for name in model_factors)
         ):
             return []
+        # A missing feature has the cross-sectional neutral z-score of zero.
+        # This keeps the inference cohort aligned with each feature's own
+        # coverage threshold instead of shrinking to a complete-case subset.
         symbols = [
             symbol for symbol in sorted(zscores)
-            if all(name in zscores[symbol] for name in model_factors)
+            if any(name in zscores[symbol] for name in model_factors)
         ]
         if len(symbols) < self.config.min_universe:
             return []
         matrix = np.asarray(
-            [[zscores[symbol][name] for name in model_factors] for symbol in symbols],
+            [[zscores[symbol].get(name, 0.0) for name in model_factors] for symbol in symbols],
             dtype=float,
         )
         predictions = predict_tree_factor_model(scoring_model, matrix)
@@ -163,8 +177,13 @@ class FactorRanker:
             rows.append({
                 "symbol": symbol,
                 "score": float(score),
-                "factor_values": {name: factor_values[symbol][name] for name in model_factors},
-                "factor_zscores": {name: zscores[symbol][name] for name in model_factors},
+                "factor_values": {
+                    name: factor_values[symbol][name]
+                    for name in model_factors if name in factor_values.get(symbol, {})
+                },
+                "factor_zscores": {
+                    name: zscores[symbol].get(name, 0.0) for name in model_factors
+                },
             })
         rows.sort(key=lambda row: (-row["score"], row["symbol"]))
         for rank, row in enumerate(rows, start=1):

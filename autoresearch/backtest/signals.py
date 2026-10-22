@@ -106,6 +106,8 @@ class ReplaySignalsMixin:
             factor_model_diagnostics=factor_model_diagnostics,
         )
         if not diagnostics["minimum_universe_met"]:
+            self.last_multi_factor_rebalance_key = key
+            self.multi_factor_rebalance_diagnostics.append(diagnostics)
             return {}, diagnostics
         prior_intraday = {}
         for symbol, bars in self.intraday_bars.items():
@@ -237,6 +239,16 @@ class ReplaySignalsMixin:
         ]
         latest_weight_diagnostics = {}
         latest_active_factor_weights = {}
+        skipped_rebalances = [
+            row for row in self.multi_factor_rebalance_diagnostics
+            if row.get("skip_reason")
+        ]
+        skip_reason_counts = Counter(str(row["skip_reason"]) for row in skipped_rebalances)
+        ranked_counts = [
+            int(row["ranked_count"])
+            for row in self.multi_factor_rebalance_diagnostics
+            if isinstance(row.get("ranked_count"), int)
+        ]
         if self.multi_factor_rebalance_diagnostics:
             latest_diagnostics = self.multi_factor_rebalance_diagnostics[-1]
             latest_weight_diagnostics = dict(latest_diagnostics.get("factor_model") or {})
@@ -250,6 +262,19 @@ class ReplaySignalsMixin:
         }
         return {
             "rebalance_count": len(self.multi_factor_snapshots),
+            "attempted_rebalance_count": len(self.multi_factor_rebalance_diagnostics),
+            "skipped_rebalance_count": len(skipped_rebalances),
+            "skip_reason_counts": dict(sorted(skip_reason_counts.items())),
+            "ranked_universe_count_range": {
+                "minimum": min(ranked_counts) if ranked_counts else None,
+                "median": statistics.median(ranked_counts) if ranked_counts else None,
+                "maximum": max(ranked_counts) if ranked_counts else None,
+            },
+            "minimum_universe_required": next((
+                row.get("minimum_universe_required")
+                for row in reversed(self.multi_factor_rebalance_diagnostics)
+                if row.get("minimum_universe_required") is not None
+            ), None),
             "factor_weight_mode": self.multi_factor_generator.config.factor_weight_mode,
             "factor_weight_source_counts": dict(Counter(
                 str(row.get("factor_weight_source", "unknown"))
@@ -259,8 +284,8 @@ class ReplaySignalsMixin:
             "latest_factor_model": latest_weight_diagnostics,
             "latest_active_factor_weights": latest_active_factor_weights,
             "average_turnover": round(statistics.mean(
-                [row["turnover"] for row in self.multi_factor_rebalance_diagnostics]
-            ), 4) if self.multi_factor_rebalance_diagnostics else None,
+                [row["turnover"] for row in self.multi_factor_rebalance_diagnostics if row.get("turnover") is not None]
+            ), 4) if any(row.get("turnover") is not None for row in self.multi_factor_rebalance_diagnostics) else None,
             "gross_ic_forward_21_sessions": summary(ic_values),
             "net_of_costs_ic_forward_21_sessions": summary(net_ic_values),
             "gross_ic_forward_21_sessions_by_regime": {
