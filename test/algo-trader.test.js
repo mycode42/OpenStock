@@ -195,3 +195,75 @@ test('options settings save to their own config without changing equity override
   assert.equal(JSON.parse(await fs.readFile(path.join(root, 'data', 'options', 'config.json'), 'utf8')).enabled, false);
   await assert.rejects(fs.access(path.join(root, 'data', 'dashboard-runtime-overrides.json')));
 });
+
+test('equity strategy performance combines realized and open P/L and keeps unpriced activity partial', () => {
+  const performance = registerAlgoTraderRoutes.equityStrategyPerformance({
+    strategy_pnl: { momentum: '25.00' },
+    strategy_basis: { momentum: '100.00' },
+    strategy_open_pnl: { momentum: '5.00' },
+    strategy_open_basis: { momentum: '50.00' },
+    strategy_latest_activity: {
+      momentum: { at: '2026-10-22T10:00:00Z', action: 'SELL', pnl_usd: 25, pnl_pct: 25, status: 'closed' },
+      breakout: { at: '2026-10-22T11:00:00Z', action: 'BUY', pnl_usd: null, pnl_pct: null, status: 'open · mark unavailable' },
+    },
+    realized_pnl_complete: true,
+    strategy_attribution_complete: true,
+    strategy_open_pnl_complete: false,
+  });
+
+  assert.equal(performance.status, 'partial');
+  assert.deepEqual(performance.strategies.map(row => row.strategy), ['momentum', 'breakout']);
+  assert.equal(performance.strategies[0].cumulative_pnl_usd, 30);
+  assert.equal(performance.strategies[0].cumulative_pnl_pct, 20);
+  assert.equal(performance.strategies[1].cumulative_pnl_usd, null);
+  assert.equal(performance.strategies[1].latest_activity.action, 'BUY');
+});
+
+test('options strategy performance reports closed and marked open trades with cumulative returns', () => {
+  const entryLeg = {
+    symbol: 'SPY261120C00600000', side: 'buy', position_intent: 'buy_to_open',
+  };
+  const exitLeg = {
+    symbol: 'SPY261120C00600000', side: 'sell', position_intent: 'sell_to_close',
+  };
+  const entry = {
+    client_order_id: 'entry', logged_at: '2026-10-20T10:00:00Z',
+    signal: { strategy: 'vrp', underlying: 'SPY' },
+    order: { legs: [entryLeg] },
+    broker_response: { legs: [{ symbol: entryLeg.symbol, filled_qty: 1, filled_avg_price: 2 }] },
+  };
+  const openPerformance = registerAlgoTraderRoutes.optionsStrategyPerformance(
+    [entry], [{ client_order_id: 'entry', logged_at: entry.logged_at, status: 'filled', filled_qty: 1 }], [],
+    [{ logged_at: '2026-10-22T10:00:00Z', open_option_positions: [{ symbol: entryLeg.symbol, qty: 1, midpoint: 2.5, average_entry_price: 2 }] }],
+  );
+  assert.equal(openPerformance.strategies[0].latest_pnl_usd, 50);
+  assert.equal(openPerformance.strategies[0].latest_pnl_pct, 25);
+  assert.equal(openPerformance.strategies[0].cumulative_pnl_usd, 50);
+  assert.equal(openPerformance.strategies[0].complete, true);
+
+  const exit = {
+    client_order_id: 'exit', logged_at: '2026-10-21T10:00:00Z',
+    signal: { strategy: 'vrp', underlying: 'SPY' },
+    order: { legs: [exitLeg] },
+    broker_response: { legs: [{ symbol: exitLeg.symbol, filled_qty: 1, filled_avg_price: 3 }] },
+  };
+  const closedPerformance = registerAlgoTraderRoutes.optionsStrategyPerformance(
+    [entry, exit], [
+      { client_order_id: 'entry', logged_at: entry.logged_at, status: 'filled', filled_qty: 1 },
+      { client_order_id: 'exit', logged_at: exit.logged_at, status: 'filled', filled_qty: 1 },
+    ], [], [{ logged_at: '2026-10-22T10:00:00Z', open_option_positions: [] }],
+  );
+  assert.equal(closedPerformance.strategies[0].latest_activity.status, 'closed');
+  assert.equal(closedPerformance.strategies[0].latest_pnl_usd, 100);
+  assert.equal(closedPerformance.strategies[0].latest_pnl_pct, 50);
+  assert.equal(closedPerformance.strategies[0].cumulative_pnl_usd, 100);
+  assert.equal(closedPerformance.strategies[0].complete, true);
+});
+
+test('strategy euro amounts use the supplied current FX rate', () => {
+  const result = registerAlgoTraderRoutes.attachEuroAmounts({ strategies: [
+    { strategy: 'vrp', latest_pnl_usd: 10, cumulative_pnl_usd: 25 },
+  ] }, { rate: 0.9, date: '2026-10-21', source: 'test' });
+  assert.equal(result.strategies[0].latest_pnl_eur, 9);
+  assert.equal(result.strategies[0].cumulative_pnl_eur, 22.5);
+});

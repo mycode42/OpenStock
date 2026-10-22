@@ -165,6 +165,58 @@ function renderOptimizerPanel(optimizer, selectedCycleId) {
     </section>`;
 }
 
+function renderStrategyPerformance(performance, isOptions) {
+    const scorecard = performance || {};
+    const strategies = Array.isArray(scorecard.strategies) ? scorecard.strategies : [];
+    const ranked = strategies.filter(strategy => strategy.complete === true
+        && numberOrNull(strategy.cumulative_pnl_eur) !== null);
+    const best = ranked.reduce((current, strategy) => (
+        !current || strategy.cumulative_pnl_eur > current.cumulative_pnl_eur ? strategy : current
+    ), null);
+    const worst = ranked.reduce((current, strategy) => (
+        !current || strategy.cumulative_pnl_eur < current.cumulative_pnl_eur ? strategy : current
+    ), null);
+    const rows = [...strategies].sort((left, right) => {
+        const a = numberOrNull(left.cumulative_pnl_eur);
+        const b = numberOrNull(right.cumulative_pnl_eur);
+        if (a === null) return b === null ? String(left.strategy).localeCompare(String(right.strategy)) : 1;
+        if (b === null) return -1;
+        return b - a;
+    });
+    const fxNote = scorecard.status === 'loading'
+        ? 'Waiting for fill reconciliation'
+        : scorecard.fx_rate
+            ? `EUR converted at USD/EUR ${Number(scorecard.fx_rate).toFixed(4)}${scorecard.fx_date ? ` · ${scorecard.fx_date}` : ''}${scorecard.fx_source ? ` · ${scorecard.fx_source}` : ''}`
+            : 'EUR conversion unavailable';
+    const basisNote = isOptions ? 'percentages use summed entry leg premiums' : 'percentages use share cost basis';
+    const emptyMessage = scorecard.status === 'unavailable'
+        ? scorecard.message || 'Broker fill history could not be reconciled.'
+        : scorecard.status === 'loading'
+            ? scorecard.message || 'Reconciling broker fills and current positions.'
+            : scorecard.status === 'empty'
+                ? 'No confirmed fills with strategy attribution have been recorded yet.'
+                : 'No strategy P/L records are available yet.';
+    return `<section class="card algo-panel algo-strategy-pnl-panel" aria-labelledby="algo-strategy-pnl-title">
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">STRATEGY SCORECARD</span><h2 id="algo-strategy-pnl-title">Strategy P/L</h2><p>Latest confirmed activity and cumulative P/L by ${isOptions ? 'options' : 'equity'} strategy.</p></div><span class="algo-status-pill ${scorecard.status === 'ready' ? 'promising' : ''}">${escapeHtml(String(scorecard.status || 'unavailable').toUpperCase())}</span></div>
+        <div class="algo-strategy-pnl-meta"><span>Amounts in EUR · ${escapeHtml(basisNote)}</span><span>${escapeHtml(fxNote)}</span></div>
+        ${rows.length ? `<div class="algo-strategy-pnl-grid algo-strategy-pnl-header" role="row"><span>Strategy</span><span>Latest activity</span><span>Latest P/L</span><span>Cumulative P/L</span></div><div class="algo-strategy-pnl-rows">${rows.map(strategy => {
+            const latest = strategy.latest_activity || {};
+            const pnlClass = classForReturn(strategy.cumulative_pnl_eur);
+            const badge = strategy === best && best?.cumulative_pnl_eur > 0
+                ? '<span class="algo-strategy-pnl-badge best">Top performer</span>'
+                : strategy === worst && worst?.cumulative_pnl_eur < 0
+                    ? '<span class="algo-strategy-pnl-badge review">Review</span>' : '';
+            const quantity = numberOrNull(latest.qty);
+            const unit = isOptions ? (quantity === 1 ? 'contract' : 'contracts') : (quantity === 1 ? 'share' : 'shares');
+            const activityTitle = [latest.action, latest.symbol].filter(Boolean).join(' · ') || 'No filled activity';
+            const activityDetail = [latest.at ? dateTime(latest.at) : '', quantity === null ? '' : `${quantity} ${unit}`, latest.status || '']
+                .filter(Boolean).join(' · ');
+            return `<div class="algo-strategy-pnl-grid algo-strategy-pnl-row" role="row"><div class="algo-strategy-pnl-name"><strong>${escapeHtml(String(strategy.strategy || 'Unknown strategy').replaceAll('_', ' '))}</strong>${badge}</div><div class="algo-strategy-pnl-activity"><strong>${escapeHtml(activityTitle)}</strong><small>${escapeHtml(activityDetail || 'No activity in the fill journal')}</small></div><div class="algo-strategy-pnl-value"><strong class="${classForReturn(strategy.latest_pnl_eur)}">${signedMoney(strategy.latest_pnl_eur, 'EUR')}</strong><small class="${classForReturn(strategy.latest_pnl_pct)}">${signedPercent(strategy.latest_pnl_pct)}</small></div><div class="algo-strategy-pnl-value"><strong class="${pnlClass}">${signedMoney(strategy.cumulative_pnl_eur, 'EUR')}</strong><small class="${classForReturn(strategy.cumulative_pnl_pct)}">${signedPercent(strategy.cumulative_pnl_pct)}</small></div></div>`;
+        }).join('')}</div>` : `<div class="algo-empty algo-strategy-pnl-empty">${escapeHtml(emptyMessage)}</div>`}
+        <p class="algo-strategy-pnl-note">${escapeHtml(scorecard.message || 'Only recorded, strategy-attributed activity is included.')}${scorecard.source ? ` · Source: ${escapeHtml(scorecard.source)}` : ''} · Gross P/L before fees.</p>
+    </section>`;
+}
+
 function activityIcon(kind) {
     return ({ order: '⇄', scan: '◷', signal: '↗', research: '⌕' })[kind] || '·';
 }
@@ -194,7 +246,7 @@ function optionsSettingFields(settings, readonlyFields = []) {
         if (!groups.has(group)) groups.set(group, []);
         groups.get(group).push(field);
     }
-    return [...groups.entries()].map(([group, rows]) => `<details class="algo-options-config-section" ${group === 'General' ? 'open' : ''}><summary>${escapeHtml(group.replaceAll('_', ' '))}</summary><div class="algo-options-config-fields">${rows.map(field => {
+    return [...groups.entries()].map(([group, rows]) => `<details class="algo-options-config-section"><summary>${escapeHtml(group.replaceAll('_', ' '))}</summary><div class="algo-options-config-fields">${rows.map(field => {
         const label = field.path.replaceAll('_', ' ').replaceAll('.', ' · ');
         const disabled = field.readonly ? 'disabled' : '';
         const input = typeof field.value === 'boolean'
@@ -280,7 +332,7 @@ export function createAlgoTrader({ request, charts }) {
         const isOptions = accountMode === 'options';
         if (!snapshot) {
             const loading = loadingAccounts.has(accountMode);
-            host.innerHTML = `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1><p class="subtitle">Strategy performance, activity and research in one place.</p></div>${renderAccountSwitch()}</header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(errors[accountMode] || 'Loading the paper-account snapshot and research records.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
+            host.innerHTML = `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountSwitch()}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(errors[accountMode] || 'Loading the paper-account snapshot and research records.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
             return;
         }
 
@@ -310,8 +362,8 @@ export function createAlgoTrader({ request, charts }) {
 
         host.innerHTML = `<main class="algo-page">
             <header class="algo-page-header">
-                <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1><p class="subtitle">Paper-account performance, coordinator activity and autoresearch.</p></div>
-                <div class="algo-header-status">${renderAccountSwitch()}<span class="algo-demo-tag"><i></i> ALPACA ${isOptions ? 'OPTIONS ' : ''}PAPER</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
+                <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountSwitch()}</div>
+                <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ALPACA ${isOptions ? 'OPTIONS ' : ''}PAPER</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
             </header>
 
             ${account.entries_paused && account.entry_pause_reasons?.length ? `<section class="algo-paused-notice"><strong>New entries are paused</strong><span>${escapeHtml(account.entry_pause_reasons.join(' · '))}</span></section>` : ''}
@@ -345,6 +397,8 @@ export function createAlgoTrader({ request, charts }) {
                     <button type="button" class="algo-text-link" data-action="open-config">Manage ${isOptions ? 'options' : 'runtime'} settings <span>↗</span></button>
                 </article>
             </section>
+
+            ${renderStrategyPerformance(snapshot.strategy_performance, isOptions)}
 
             <section class="algo-secondary-grid ${isOptions ? '' : 'algo-secondary-grid-equity'}">
                 <article class="card algo-panel algo-activity-panel">
