@@ -216,11 +216,15 @@ def _daily_returns(prior: list[tuple[str, float, float, float, float, float]], p
 def _pearson(left: list[float], right: list[float]) -> float | None:
     if len(left) < 10 or len(left) != len(right):
         return None
-    left_mean = statistics.mean(left)
-    right_mean = statistics.mean(right)
-    covariance = sum((a - left_mean) * (b - right_mean) for a, b in zip(left, right))
-    left_var = sum((a - left_mean) ** 2 for a in left)
-    right_var = sum((b - right_mean) ** 2 for b in right)
+    count = len(left)
+    # statistics.mean converts floats through exact fractions, which is costly
+    # here because pairwise correlations call this repeatedly over rolling
+    # market histories. fsum keeps stable precision without that conversion.
+    left_mean = math.fsum(left) / count
+    right_mean = math.fsum(right) / count
+    covariance = math.fsum((a - left_mean) * (b - right_mean) for a, b in zip(left, right))
+    left_var = math.fsum((value - left_mean) ** 2 for value in left)
+    right_var = math.fsum((value - right_mean) ** 2 for value in right)
     if left_var <= 0 or right_var <= 0:
         return None
     return covariance / math.sqrt(left_var * right_var)

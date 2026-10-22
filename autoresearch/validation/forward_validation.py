@@ -421,11 +421,10 @@ def run_forward_validation_cycle(
     *, discovery: dict, verification: dict, store, database: str,
     symbols: list[str], end: date, data_version: str, allow_stage: bool = True,
     allow_promotion: bool = True, promotion_pause_reasons: list[str] | None = None,
-    holdout_exclude_through_date: str | None = None,
     invocation_id: str | None = None, ledger_path: str | Path | None = None,
     factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
-    """Replay staged profiles only over sessions after their discovery date."""
+    """Replay each immutable candidate version only after its staging date."""
     started = time.monotonic()
     now = datetime.now(timezone.utc)
     pause_reasons = list(promotion_pause_reasons or [])
@@ -469,12 +468,7 @@ def run_forward_validation_cycle(
             trial["forward_cost_model_version"] = FORWARD_COST_MODEL_VERSION
             try:
                 staged = date.fromisoformat(trial["staged_on"])
-                holdout_end = (
-                    date.fromisoformat(holdout_exclude_through_date)
-                    if holdout_exclude_through_date else None
-                )
-                trial_origin = max(staged, holdout_end) if holdout_end else staged
-                age_days = (end - trial_origin).days
+                age_days = (end - staged).days
             except (KeyError, TypeError, ValueError):
                 continue
             if age_days > MAX_TRIAL_DAYS and trial.get("status") == "validating":
@@ -490,21 +484,14 @@ def run_forward_validation_cycle(
                 observed_trial_ids.add(trial["trial_id"])
                 continue
 
-            start = trial_origin + timedelta(days=1)
-            if holdout_end and staged <= holdout_end:
-                trial["holdout_exclusion_end"] = holdout_end.isoformat()
+            start = staged + timedelta(days=1)
             sessions = _trading_sessions(
                 database, end, start=start, adjustment=ADJUSTMENT,
             )
             if not sessions:
                 trial["latest_simulation"] = {
-                    "status": (
-                        "waiting_for_post_holdout_sessions"
-                        if holdout_end and end <= holdout_end
-                        else "waiting_for_future_sessions"
-                    ),
+                    "status": "waiting_for_future_sessions",
                     "data_end": end.isoformat(), "data_version": data_version,
-                    "excluded_through_date": holdout_end.isoformat() if holdout_end else None,
                 }
                 observed_trial_ids.add(trial["trial_id"])
                 continue
@@ -760,12 +747,10 @@ def run_forward_validation_cycle(
             },
             "maximum_trial_days": MAX_TRIAL_DAYS,
             "promotion_paused_by_drift": "drift" in pause_reasons,
-            "promotion_paused_by_final_holdout": "final_holdout_quarantine" in pause_reasons,
-            "candidate_staging_paused_by_final_holdout": (
-                not allow_stage and "final_holdout_quarantine" in pause_reasons
-            ),
+            "promotion_paused_by_final_holdout": False,
+            "candidate_staging_paused_by_final_holdout": False,
             "promotion_pause_reasons": pause_reasons,
-            "holdout_exclude_through_date": holdout_exclude_through_date,
+            "holdout_exclude_through_date": None,
             "simulation_policy": SIMULATION_POLICY,
             "cost_model": {
                 **FORWARD_COST_MODEL,
@@ -811,12 +796,10 @@ def run_forward_validation_cycle(
         },
         "live_configuration_changed": bool(promoted_rows),
         "promotion_paused_by_drift": "drift" in pause_reasons,
-        "promotion_paused_by_final_holdout": "final_holdout_quarantine" in pause_reasons,
-        "candidate_staging_paused_by_final_holdout": (
-            not allow_stage and "final_holdout_quarantine" in pause_reasons
-        ),
+        "promotion_paused_by_final_holdout": False,
+        "candidate_staging_paused_by_final_holdout": False,
         "promotion_pause_reasons": pause_reasons,
-        "holdout_exclude_through_date": holdout_exclude_through_date,
+        "holdout_exclude_through_date": None,
         "duration_seconds": round(time.monotonic() - started, 3),
     }
 

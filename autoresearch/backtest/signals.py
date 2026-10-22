@@ -296,6 +296,16 @@ class ReplaySignalsMixin:
         }
 
     def _regime(self, trading_day: date) -> dict:
+        cached = self.regime_cache.get(trading_day) if self.regime_cache is not None else None
+        if cached is not None:
+            self.regime_history.append({
+                "date": trading_day.isoformat(),
+                "regime": cached.get("regime", "unknown"),
+                "volatility_state": cached.get("volatility_state", "unknown"),
+                "features": cached.get("regime_features", {}),
+                "models": cached.get("regime_shadow", {}),
+            })
+            return cached
         completed = []
         for bar in self.spy_daily_bars:
             try:
@@ -332,6 +342,8 @@ class ReplaySignalsMixin:
             precomputed_features=feature_rows,
         )
         result["regime_macro_data_status"] = str(config.get("macro_data_status", "provided"))
+        if self.regime_cache is not None:
+            self.regime_cache[trading_day] = result
         self.regime_history.append({
             "date": trading_day.isoformat(),
             "regime": result.get("regime", "unknown"),

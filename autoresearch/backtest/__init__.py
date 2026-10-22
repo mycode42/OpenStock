@@ -39,7 +39,7 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
         precomputed_timeline=None,
         include_extended_hours=False,
         regime_context_bars=None, regime_macro_series=None, regime_config=None,
-        execution_delay_bars=0, factor_weight_timeline=None,
+        execution_delay_bars=0, factor_weight_timeline=None, regime_cache=None,
     ):
         super().__init__(
             symbols=symbols, intraday_bars=intraday_bars, spy_daily_bars=spy_daily_bars,
@@ -62,6 +62,7 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
             regime_config=regime_config,
             execution_delay_bars=execution_delay_bars,
             factor_weight_timeline=factor_weight_timeline,
+            regime_cache=regime_cache,
             _signal_evaluator=lambda *args, **kwargs: evaluate_rule_signal(*args, **kwargs),
             _trade_validator=lambda **kwargs: validate_trade(**kwargs),
             _regime_ranker=lambda *args, **kwargs: rank_strategies(*args, **kwargs),

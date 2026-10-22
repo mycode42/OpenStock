@@ -37,7 +37,7 @@ from .artifacts.live_manifest import live_configuration_manifest
 from .artifacts.research_ledger import ResearchLedger
 from .settings import (
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
-    ADAPTIVE_VERIFICATION_CANDIDATES,
+    ADAPTIVE_PURGE_SESSIONS, ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
     REGIME_CONTEXT_WARMUP_DAYS, RESEARCH_START, RESEARCH_WARMUP_DAYS,
@@ -45,7 +45,7 @@ from .settings import (
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v20-exact-archive-candidate-validation-2026"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v21-rolling-current-forward-challenger-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -120,29 +120,13 @@ def run_daily_research(args) -> dict:
             f"is {latest_age_days} calendar days old"
         )
 
-    from .validation.final_holdout import (
-        advance_final_holdout, holdout_is_quarantining, initialize_final_holdout,
-        read_final_holdout_state,
-    )
+    from .validation.final_holdout import supersede_final_holdout
 
-    holdout_state_at_start = read_final_holdout_state(output_dir)
-    holdout_quarantine = holdout_is_quarantining(output_dir)
-    holdout_report = (
-        {"status": "deferred_for_optimizer_cycle"}
-        if optimization_only else
-        advance_final_holdout(
-            database=database, latest_end=latest_end, output_dir=output_dir,
-        )
-    )
-    # While the frozen holdout is accruing, all research stages stay anchored
-    # at its pre-holdout cutoff. The holdout evaluator is the only consumer of
-    # post-cutoff bars until it records its one-time result.
-    if holdout_quarantine:
-        cohort_end = date.fromisoformat(holdout_state_at_start["frozen_data_end"])
-        if cohort_end > latest_end:
-            raise ValueError("final holdout cutoff is newer than available common market data")
-    else:
-        cohort_end = latest_end
+    # Retain the former holdout manifest for audit, but let all research stages
+    # use the latest completed common session. Each staged candidate is then
+    # evaluated only on sessions after its own immutable staging date.
+    holdout_report = supersede_final_holdout(output_dir=output_dir)
+    cohort_end = latest_end
     warmup_start = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
     logger.info("Computing research data fingerprint for the configured universe")
     market_data_version = research_data_version(
@@ -236,6 +220,7 @@ def run_daily_research(args) -> dict:
             "verification_candidates": ADAPTIVE_VERIFICATION_CANDIDATES,
             "verification_test_days": ADAPTIVE_VERIFICATION_TEST_DAYS,
             "verification_step_days": ADAPTIVE_VERIFICATION_STEP_DAYS,
+            "verification_purge_sessions": ADAPTIVE_PURGE_SESSIONS,
             "multi_factor_min_universe_values": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
         },
         "strategies": list(RESEARCHABLE_STRATEGIES),
@@ -244,8 +229,11 @@ def run_daily_research(args) -> dict:
         "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled,
         "event_driven_enabled": runtime_settings.algo_event_driven_enabled,
         "factor_only": bool(args.factor_only),
-        "final_holdout_quarantine": holdout_quarantine,
+        "final_holdout_quarantine": False,
         "final_holdout_status": holdout_report.get("status"),
+        "research_cutoff_policy": "latest_completed_common_market_session",
+        "historical_validation_policy": "rolling_walk_forward_with_outcome_horizon_purge",
+        "forward_validation_policy": "immutable_candidate_versions_scored_on_sessions_after_staging",
     }
     fingerprint = stable_hash(context)
     if args.force:
@@ -449,18 +437,12 @@ def run_daily_research(args) -> dict:
     )
     from .validation.drift_monitor import update_research_drift_monitor
 
-    completed_holdout = holdout_report.get("result") or {}
-    holdout_end = (completed_holdout.get("holdout_range") or {}).get("end")
-    ignore_through_date = holdout_end if completed_holdout.get("status") == "completed_once" else None
     drift_report = update_research_drift_monitor(
         adaptive_verification, output_dir=output_dir,
-        ignore_through_date=ignore_through_date,
     )
     promotion_pause_reasons = []
     if drift_report.get("promotion_pause"):
         promotion_pause_reasons.append("drift")
-    if holdout_quarantine:
-        promotion_pause_reasons.append("final_holdout_quarantine")
     promotion_allowed = not promotion_pause_reasons
     adaptive_coordinator_root = adaptive_root / "verification-coordinator"
     verification_statuses = adaptive_verification.get("strategies") or {}
@@ -484,21 +466,14 @@ def run_daily_research(args) -> dict:
                 discovery=adaptive_discovery, verification=adaptive_verification,
                 store=store, database=database, symbols=covered_symbols,
                 end=cohort_end, data_version=data_version,
-                allow_stage=not holdout_quarantine,
+                allow_stage=True,
                 allow_promotion=promotion_allowed,
                 promotion_pause_reasons=promotion_pause_reasons,
-                holdout_exclude_through_date=ignore_through_date,
                 invocation_id=invocation_id, ledger_path=ledger_path,
                 factor_weight_timeline=factor_report.get("weight_timeline") or [],
             )
             if adaptive_portfolio_ready:
                 refresh_active_parameter_profile()
-                holdout_report = initialize_final_holdout(
-                    verification=adaptive_verification, database=database,
-                    symbols=covered_symbols, frozen_data_end=cohort_end,
-                    factor_weight_timeline=factor_report.get("weight_timeline") or [],
-                    output_dir=output_dir,
-                )
             cached = {
                 **cached,
                 "invocation_id": invocation_id,
@@ -557,7 +532,7 @@ def run_daily_research(args) -> dict:
             cached.setdefault("recommendation", {}).update({
                 "adaptive_parameter_promotion_requires_human_confirmation": False,
                 "forward_validation": (
-                    "Promotion follows the historical and forward simulation gates; a detected drift warning or the final holdout quarantine pauses it."
+                    "Promotion follows rolling historical and versioned forward simulation gates; a detected drift warning pauses it."
                 ),
             })
             cached["orchestration"] = {
@@ -606,7 +581,6 @@ def run_daily_research(args) -> dict:
             end=cohort_end, data_version=data_version, allow_stage=False,
             allow_promotion=promotion_allowed,
             promotion_pause_reasons=promotion_pause_reasons,
-            holdout_exclude_through_date=ignore_through_date,
             invocation_id=invocation_id, ledger_path=ledger_path,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
         )
@@ -719,21 +693,14 @@ def run_daily_research(args) -> dict:
         discovery=adaptive_discovery, verification=adaptive_verification,
         store=store, database=database, symbols=covered_symbols,
         end=cohort_end, data_version=data_version,
-        allow_stage=not holdout_quarantine,
+        allow_stage=True,
         allow_promotion=promotion_allowed,
         promotion_pause_reasons=promotion_pause_reasons,
-        holdout_exclude_through_date=ignore_through_date,
         invocation_id=invocation_id, ledger_path=ledger_path,
         factor_weight_timeline=factor_report.get("weight_timeline") or [],
     )
     if adaptive_portfolio_ready:
         refresh_active_parameter_profile()
-        holdout_report = initialize_final_holdout(
-            verification=adaptive_verification, database=database,
-            symbols=covered_symbols, frozen_data_end=cohort_end,
-            factor_weight_timeline=factor_report.get("weight_timeline") or [],
-            output_dir=output_dir,
-        )
     timings["forward_validation"] = {
         "seconds": round(perf_counter() - validation_started, 3),
         "status": forward_validation.get("status"),
@@ -796,19 +763,18 @@ def run_daily_research(args) -> dict:
             ),
             "adaptive_parameter_promotion_requires_human_confirmation": False,
             "forward_validation": (
-                "Promotion follows the historical and forward simulation gates; a detected drift warning or the final holdout quarantine pauses it."
+                "Promotion follows rolling historical and versioned forward simulation gates; a detected drift warning pauses it."
             ),
         },
         "orchestration": {**context, "cache_hit": False},
         "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
         "limitations": [
-            "Adaptive fitting, verification, and fold-aligned portfolio replay use 2024 onward; earlier bars are indicator warm-up only.",
-            "The fixed current Algo universe is used across the 2024-onward research range.",
+            "Adaptive fitting, verification, and fold-aligned portfolio replay use 2020 onward; earlier bars are indicator warm-up only.",
+            "The fixed current Algo universe is used across the 2020-onward research range; historical universe membership is not reconstructed.",
             "The portfolio replay includes only strategies active in live config and available historical overlays.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
-            "Forward trial replays use only sessions after candidate staging and modeled execution costs; results are not a performance forecast.",
-            "While a prospective final holdout is collecting, research and forward-trial data are capped at the frozen cutoff; the holdout replay runs once after at least 252 sessions spanning three rule-based regimes.",
-            "The forward drift monitor stays at the frozen cutoff during holdout collection and starts a new prospective reference after the holdout end date.",
+            "Each immutable forward candidate version is scored only on sessions after its staging date and with modeled execution costs; results are not a performance forecast.",
+            "Historical walk-forward results are reused across research cycles and are not a pristine independent holdout; all candidate trials remain in the archive and promotion requires forward evidence.",
             *([] if adaptive_portfolio_ready else [
                 "Adaptive verification did not produce coordinator artifacts for every active strategy; the portfolio replay was skipped.",
             ]),

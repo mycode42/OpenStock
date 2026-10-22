@@ -15,11 +15,13 @@ from autoresearch.backtest import (
     read_borrow_availability, strategy_warmup_days,
 )
 from autoresearch.backtest.config import REGIME_WARMUP_DAYS
+from autoresearch.backtest.execution import build_replay_timeline
 from portfolio.config import ALGO_REGIME_CONFIG
 from market.store import SQLiteBarStore
 from autoresearch.cpu import available_cpu_count
 from strategies.catalog import STRATEGY_CATALOG
 from strategies.event_driven import EventCalendar
+from strategies.multi_factor.features import aggregate_intraday_bars
 from portfolio.config import get_algo_runtime_settings
 
 from ..artifacts.live_manifest import live_configuration_manifest
@@ -169,7 +171,79 @@ def run_coordinated_portfolio(args) -> dict:
         )
         for item in fold_profiles
     ]
-    results = _execute_fold_jobs(jobs, worker_count=worker_count, label="baseline")
+    scenario_definitions = {}
+    for multiplier in ROBUSTNESS_COST_MULTIPLIERS:
+        scenario_cost = dict(cost_model)
+        scenario_cost["slippage_bps_each_side"] = float(
+            cost_model.get("slippage_bps_each_side", 5)
+        ) * multiplier
+        scenario_cost["spread_bps"] = float(cost_model.get("spread_bps", 3)) * multiplier
+        scenario_cost["commission_per_share_each_side"] = float(
+            cost_model.get("commission_per_share_each_side", 0.005)
+        ) * multiplier
+        scenario_cost["short_borrow_annual_pct"] = float(
+            cost_model.get("short_borrow_annual_pct", 3)
+        ) * multiplier
+        scenario_cost["unknown_borrow_adverse_fill_penalty_bps"] = float(
+            cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25)
+        ) * multiplier
+        scenario_name = f"cost_{multiplier:g}x"
+        scenario_definitions[scenario_name] = {
+            "jobs": [
+                (
+                    item, symbols, db, event_path, enabled_strategies,
+                    bool(args.multi_factor_overlay), scenario_cost, borrow_path,
+                    runtime_overrides, 0, False, factor_weight_timeline,
+                )
+                for item in fold_profiles
+            ],
+            "cost_multiplier": multiplier,
+            "execution_delay_bars": 0,
+            "cost_model": scenario_cost,
+        }
+
+    latency_multiplier = max(ROBUSTNESS_COST_MULTIPLIERS, default=1.5)
+    latency_cost = dict(cost_model)
+    latency_cost["slippage_bps_each_side"] = float(
+        cost_model.get("slippage_bps_each_side", 5)
+    ) * latency_multiplier
+    latency_cost["spread_bps"] = float(cost_model.get("spread_bps", 3)) * latency_multiplier
+    latency_cost["commission_per_share_each_side"] = float(
+        cost_model.get("commission_per_share_each_side", 0.005)
+    ) * latency_multiplier
+    latency_cost["short_borrow_annual_pct"] = float(
+        cost_model.get("short_borrow_annual_pct", 3)
+    ) * latency_multiplier
+    latency_cost["unknown_borrow_adverse_fill_penalty_bps"] = float(
+        cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25)
+    ) * latency_multiplier
+    latency_name = f"cost_{latency_multiplier:g}x_delay_1_bar"
+    scenario_definitions[latency_name] = {
+        "jobs": [
+            (
+                item, symbols, db, event_path, enabled_strategies,
+                bool(args.multi_factor_overlay), latency_cost, borrow_path,
+                runtime_overrides, 1, False, factor_weight_timeline,
+            )
+            for item in fold_profiles
+        ],
+        "cost_multiplier": latency_multiplier,
+        "execution_delay_bars": 1,
+        "cost_model": latency_cost,
+    }
+
+    fold_job_groups = []
+    for index, baseline_job in enumerate(jobs):
+        entries = [("baseline", baseline_job)]
+        entries.extend(
+            (name, definition["jobs"][index])
+            for name, definition in scenario_definitions.items()
+        )
+        fold_job_groups.append((index, entries))
+    grouped_results = _execute_fold_job_groups(
+        fold_job_groups, worker_count=worker_count,
+    )
+    results = [grouped_results[index]["baseline"] for index in range(len(jobs))]
     fold_returns = [item["net_return_pct"] for item in results]
     compound_return = 1.0
     for value in fold_returns:
@@ -227,71 +301,17 @@ def run_coordinated_portfolio(args) -> dict:
         initial_capital=initial_capital,
     )
     sensitivity_scenarios = {}
-    for multiplier in ROBUSTNESS_COST_MULTIPLIERS:
-        scenario_cost = dict(cost_model)
-        scenario_cost["slippage_bps_each_side"] = float(
-            cost_model.get("slippage_bps_each_side", 5)
-        ) * multiplier
-        scenario_cost["spread_bps"] = float(cost_model.get("spread_bps", 3)) * multiplier
-        scenario_cost["commission_per_share_each_side"] = float(
-            cost_model.get("commission_per_share_each_side", 0.005)
-        ) * multiplier
-        scenario_cost["short_borrow_annual_pct"] = float(
-            cost_model.get("short_borrow_annual_pct", 3)
-        ) * multiplier
-        scenario_cost["unknown_borrow_adverse_fill_penalty_bps"] = float(
-            cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25)
-        ) * multiplier
-        scenario_name = f"cost_{multiplier:g}x"
-        scenario_jobs = [
-            (
-                item, symbols, db, event_path, enabled_strategies,
-                bool(args.multi_factor_overlay), scenario_cost, borrow_path,
-                runtime_overrides, 0, False, factor_weight_timeline,
-            )
-            for item in fold_profiles
+    for scenario_name, definition in scenario_definitions.items():
+        scenario_results = [
+            grouped_results[index][scenario_name]
+            for index in range(len(fold_profiles))
         ]
         sensitivity_scenarios[scenario_name] = {
-            **_summarize_cost_sensitivity(
-                _execute_fold_jobs(scenario_jobs, worker_count=worker_count, label=scenario_name),
-            ),
-            "cost_multiplier": multiplier,
-            "execution_delay_bars": 0,
-            "cost_model": scenario_cost,
+            **_summarize_cost_sensitivity(scenario_results),
+            "cost_multiplier": definition["cost_multiplier"],
+            "execution_delay_bars": definition["execution_delay_bars"],
+            "cost_model": definition["cost_model"],
         }
-
-    latency_multiplier = max(ROBUSTNESS_COST_MULTIPLIERS, default=1.5)
-    latency_cost = dict(cost_model)
-    latency_cost["slippage_bps_each_side"] = float(
-        cost_model.get("slippage_bps_each_side", 5)
-    ) * latency_multiplier
-    latency_cost["spread_bps"] = float(cost_model.get("spread_bps", 3)) * latency_multiplier
-    latency_cost["commission_per_share_each_side"] = float(
-        cost_model.get("commission_per_share_each_side", 0.005)
-    ) * latency_multiplier
-    latency_cost["short_borrow_annual_pct"] = float(
-        cost_model.get("short_borrow_annual_pct", 3)
-    ) * latency_multiplier
-    latency_cost["unknown_borrow_adverse_fill_penalty_bps"] = float(
-        cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25)
-    ) * latency_multiplier
-    latency_name = f"cost_{latency_multiplier:g}x_delay_1_bar"
-    latency_jobs = [
-        (
-            item, symbols, db, event_path, enabled_strategies,
-            bool(args.multi_factor_overlay), latency_cost, borrow_path,
-            runtime_overrides, 1, False, factor_weight_timeline,
-        )
-        for item in fold_profiles
-    ]
-    sensitivity_scenarios[latency_name] = {
-        **_summarize_cost_sensitivity(
-            _execute_fold_jobs(latency_jobs, worker_count=worker_count, label=latency_name),
-        ),
-        "cost_multiplier": latency_multiplier,
-        "execution_delay_bars": 1,
-        "cost_model": latency_cost,
-    }
 
     return {
         "schema": "swarm_algo_coordinated_portfolio_v1",
@@ -377,14 +397,11 @@ def run_coordinated_portfolio(args) -> dict:
     }
 
 
-def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
+def _prepare_coordinated_fold_inputs(job: tuple) -> dict:
     (
-        item, symbols, db, event_path, strategies, factor_enabled, cost_model,
-        borrow_path, runtime_overrides,
+        item, symbols, db, event_path, strategies, factor_enabled, _,
+        borrow_path, _,
     ) = job[:9]
-    execution_delay_bars = job[9] if len(job) > 9 else 0
-    include_curves = job[10] if len(job) > 10 else True
-    factor_weight_timeline = job[11] if len(job) > 11 else []
     fold = item["window"]
     start = date.fromisoformat(fold["test_start"])
     end = date.fromisoformat(fold["test_end"])
@@ -413,6 +430,52 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
 
     macro_series, macro_diagnostics = load_fred_regime_series(store, refresh=False)
     calendar = EventCalendar.from_csv(event_path) if event_path else None
+    return {
+        "start": start, "end": end, "intraday": intraday, "spy_daily": spy_daily,
+        "missing": missing, "macro_series": macro_series,
+        "macro_diagnostics": macro_diagnostics, "calendar": calendar,
+        "borrow_availability": read_borrow_availability(borrow_path),
+        "preaggregated_daily_bars": aggregate_intraday_bars(intraday),
+        "precomputed_timeline": build_replay_timeline(
+            symbols, intraday, start, end,
+        ),
+    }
+
+
+def _run_coordinated_fold_group(group: tuple) -> tuple[int, dict[str, dict]]:
+    """Replay a fold's robustness scenarios against one prepared market snapshot."""
+    index, entries = group
+    prepared = _prepare_coordinated_fold_inputs(entries[0][1])
+    regime_cache = {}
+    replays = {}
+    for name, job in entries:
+        _, summary = _run_coordinated_fold(
+            job, prepared_inputs=prepared, regime_cache=regime_cache,
+        )
+        replays[name] = summary
+    return index, replays
+
+
+def _run_coordinated_fold(
+    job: tuple, *, prepared_inputs: dict | None = None,
+    regime_cache: dict[date, dict] | None = None,
+) -> tuple[int, dict]:
+    (
+        item, symbols, db, event_path, strategies, factor_enabled, cost_model,
+        borrow_path, runtime_overrides,
+    ) = job[:9]
+    execution_delay_bars = job[9] if len(job) > 9 else 0
+    include_curves = job[10] if len(job) > 10 else True
+    factor_weight_timeline = job[11] if len(job) > 11 else []
+    prepared_inputs = prepared_inputs or _prepare_coordinated_fold_inputs(job)
+    start = prepared_inputs["start"]
+    end = prepared_inputs["end"]
+    intraday = prepared_inputs["intraday"]
+    spy_daily = prepared_inputs["spy_daily"]
+    missing = prepared_inputs["missing"]
+    macro_series = prepared_inputs["macro_series"]
+    macro_diagnostics = prepared_inputs["macro_diagnostics"]
+    calendar = prepared_inputs["calendar"]
     replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=intraday, spy_daily_bars=spy_daily,
         start=start.isoformat(), end=end.isoformat(), feed=FEED,
@@ -422,7 +485,7 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         commission_per_share=cost_model.get("commission_per_share_each_side", 0.005),
         short_borrow_annual_pct=cost_model.get("short_borrow_annual_pct", 3) / 100,
         unknown_borrow_penalty_bps=cost_model.get("unknown_borrow_adverse_fill_penalty_bps", 25),
-        borrow_availability=read_borrow_availability(borrow_path),
+        borrow_availability=prepared_inputs["borrow_availability"],
         execution_delay_bars=execution_delay_bars,
         regime_macro_series=macro_series,
         regime_config={
@@ -433,6 +496,9 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
         profile=item["profile"], strategies=strategies,
         research_controls=item["controls"], event_calendar=calendar,
         research_runtime_overrides=runtime_overrides,
+        preaggregated_daily_bars=prepared_inputs["preaggregated_daily_bars"],
+        precomputed_timeline=prepared_inputs["precomputed_timeline"],
+        regime_cache=regime_cache,
     )
     with quiet_coordinator_rejections():
         report = replay.run()
@@ -474,23 +540,46 @@ def _run_coordinated_fold(job: tuple) -> tuple[int, dict]:
 
 
 def _execute_fold_jobs(jobs: list[tuple], *, worker_count: int, label: str) -> list[dict]:
+    groups = [
+        (index, [(label, job)])
+        for index, job in enumerate(jobs)
+    ]
+    grouped = _execute_fold_job_groups(groups, worker_count=worker_count)
+    return [grouped[index][label] for index in range(len(jobs))]
+
+
+def _execute_fold_job_groups(groups: list[tuple], *, worker_count: int) -> dict[int, dict[str, dict]]:
+    """Run each fold's baseline and robustness replays in one prepared worker."""
     results_by_index = {}
+    if worker_count <= 1:
+        for completed, group in enumerate(groups, start=1):
+            index, replays = _run_coordinated_fold_group(group)
+            results_by_index[index] = replays
+            first_replay = next(iter(replays.values()))
+            print(
+                f"Completed coordinator fold {completed}/{len(groups)} "
+                f"({first_replay['start']}..{first_replay['end']})",
+                file=sys.stderr, flush=True,
+            )
+        return results_by_index
+
     # Research already initializes BLAS and logging threads before coordinator
     # replay. Forking that live interpreter can strand queue and library locks;
     # use clean workers, as discovery and verification do.
     with ProcessPoolExecutor(
         max_workers=worker_count, mp_context=mp.get_context("spawn"),
     ) as executor:
-        futures = [executor.submit(_run_coordinated_fold, job) for job in jobs]
+        futures = [executor.submit(_run_coordinated_fold_group, group) for group in groups]
         for completed, future in enumerate(as_completed(futures), start=1):
-            index, replay = future.result()
-            results_by_index[index] = replay
+            index, replays = future.result()
+            results_by_index[index] = replays
+            first_replay = next(iter(replays.values()))
             print(
-                f"Completed coordinator {label} fold {completed}/{len(futures)} "
-                f"({replay['start']}..{replay['end']})",
+                f"Completed coordinator fold {completed}/{len(futures)} "
+                f"({first_replay['start']}..{first_replay['end']})",
                 file=sys.stderr, flush=True,
             )
-    return [results_by_index[index] for index in range(len(jobs))]
+    return results_by_index
 
 
 def _summarize_cost_sensitivity(folds: list[dict]) -> dict:

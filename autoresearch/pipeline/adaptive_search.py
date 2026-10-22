@@ -133,6 +133,7 @@ def _run_search_with_bars(
         "weights": weights, "min_trades": min_trades,
         "preaggregated_daily_bars": preaggregated_daily_bars,
         "precomputed_timeline": precomputed_timeline,
+        "regime_cache": getattr(args, "regime_cache", {}),
     }
     candidates = _candidate_parameters(
         strategy, method, count, seed, space, parent_parameters=parent_parameters,

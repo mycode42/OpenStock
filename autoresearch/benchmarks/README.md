@@ -1,35 +1,38 @@
 # Algo research benchmark
 
-`profile_algo_research.py` runs a small, isolated slice of the current adaptive
-research pipeline: adaptive discovery, rolling verification, and coordinated
-portfolio replay. It uses stored SIP bars, does not refresh market data, and
-writes its artifacts and profiles to a timestamped directory under `/tmp` by
-default. It does not touch the nightly artifact directory or live settings.
+`profile_algo_research.py` profiles the production per-strategy optimizer job
+and, in `full` mode, the main compute stages of the research path: factor
+diagnostics, archive-backed discovery, rolling verification, exact candidate
+validation, a forward challenger simulation, and coordinated portfolio replay.
+It reads stored SIP bars, does not refresh market data, and writes all artifacts
+and state to a timestamped directory under `/tmp` by default. Forward promotion
+is disabled, and it does not touch nightly artifacts or live settings.
 
 Run the default benchmark with:
 
 ```bash
-poetry run python -m autoresearch.benchmarks.profile_algo_research --strategy momentum --workers 2
+poetry run python -m autoresearch.benchmarks.profile_algo_research --strategy momentum --mode full
 ```
 
-The default workload uses eight symbols, two candidates, three verification
-folds, five out-of-sample sessions per fold, and the selected strategy's full
-training-window ladder. Momentum requires at least seven symbols; Multi
-Factor automatically uses at least its configured 20-symbol minimum. The
-benchmark deliberately profiles one strategy at a time so each run stays
-bounded; `--strategy` accepts only the five strategies in the current adaptive
-research catalog.
+The bounded workload uses eight symbols for the selected strategy, two
+candidates, one discovery iteration, three verification folds, 21 test
+sessions per fold, and the strategy's configured training windows. Factor
+diagnostics use the covered fixed universe and omit SEC fundamentals. Momentum
+requires at least seven symbols; Multi Factor uses at least its configured
+20-symbol minimum. The benchmark profiles one strategy at a time. The
+`--mode optimizer` option profiles factor diagnostics and the same per-strategy
+discovery job used by repeated optimizer cycles, without verification or replay.
 
-Discovery writes a readable cumulative-time profile and a raw `.pstats` file.
-Verification and portfolio replay write both files for each worker fold, so
-their worker time can be compared with stage wall time when checking parallel
-utilization. `benchmark.json` records the input cohort, timings, worker count,
-research summaries, and profile paths.
+Each parent stage writes a readable cumulative-time profile and raw `.pstats`
+file. Parallel verification, exact candidate validation, and portfolio replay
+also write per-fold worker profiles. With one worker, the stage profile includes
+the fold work directly. `benchmark.json` records the input cohort, timings,
+worker count, research summaries, and profile paths.
 
 The benchmark is a performance sample, not a strategy-quality evaluation. It
-does not include the network data refresh or the separate factor diagnostics;
-those stages are unchanged by the adaptive discovery and rolling verification
-workload being measured here.
+does not include SIP refresh, SEC fundamentals collection, all-strategy
+concurrency, or live promotion. Its forward challenger uses isolated temporary
+state and has promotion disabled.
 
 To compare the Cython OHLCV aggregation loop directly with the Python fallback
 on stored split-adjusted SIP bars, run:

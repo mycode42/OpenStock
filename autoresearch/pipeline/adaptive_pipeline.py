@@ -31,7 +31,7 @@ from ..settings import (
 )
 
 ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v17-robust-archive-candidate-cohort-2026"
-ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v12-ridge-weight-replay-2026"
+ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v13-rolling-current-cohort-2026"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
     "spread_bps": 3.0,

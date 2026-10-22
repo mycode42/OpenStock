@@ -12,6 +12,7 @@ from pathlib import Path
 import statistics
 
 from autoresearch.backtest import MIN_REGIME_DAILY_BARS, strategy_warmup_days
+from autoresearch.backtest.execution import build_replay_timeline
 from market.store import SQLiteBarStore
 from autoresearch.cpu import available_cpu_count
 from strategies.multi_factor.features import aggregate_intraday_bars
@@ -63,6 +64,7 @@ def walk_forward_windows(
 
 def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[int, dict]:
     index, window, args = payload
+    args.regime_cache = {}
     train_start = date.fromisoformat(window["train_start"])
     train_end = date.fromisoformat(window["train_end"])
     test_start = date.fromisoformat(window["test_start"])
@@ -103,11 +105,15 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
     )
     selected_parameters = selected["parameters"]
     capital_before = float(args.capital)
+    test_timeline = build_replay_timeline(
+        args.symbols_resolved, bars, test_start, test_end,
+    )
     test_report = _run_replay(
         strategy=args.strategy, parameters=selected_parameters,
         symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
         start=test_start, end=test_end, args=args, capital=capital_before,
         preaggregated_daily_bars=preaggregated_daily_bars,
+        precomputed_timeline=test_timeline, regime_cache=args.regime_cache,
     )
     train_metrics = selected["metrics"]
     oos_metrics = _metrics(test_report, capital=capital_before)
@@ -131,6 +137,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
             symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
             start=test_start, end=test_end, args=stress_args,
             capital=capital_before, preaggregated_daily_bars=preaggregated_daily_bars,
+            precomputed_timeline=test_timeline, regime_cache=args.regime_cache,
         )
         key = f"cost_{multiplier:g}x" + (f"_delay_{delay_bars}_bars" if delay_bars else "")
         execution_sensitivity[key] = {
@@ -150,6 +157,7 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
                 symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
                 start=test_start, end=test_end, args=args, capital=capital_before,
                 preaggregated_daily_bars=preaggregated_daily_bars,
+                precomputed_timeline=test_timeline, regime_cache=args.regime_cache,
             )
             min_universe_sensitivity[str(min_universe)] = {
                 "oos_metrics": _metrics(sensitivity_report, capital=capital_before),
@@ -316,7 +324,7 @@ def run_adaptive_walk_forward(args) -> dict:
     if not 0 <= float(getattr(args, "minimum_positive_fold_fraction", 0.60)) <= 1:
         raise ValueError("minimum-positive-fold-fraction must be in [0, 1]")
     if len(sessions) < args.train_days + args.test_days:
-        raise ValueError("2024-onward range does not contain enough sessions for a train and test window")
+        raise ValueError("research range does not contain enough sessions for a train and test window")
     windows = walk_forward_windows(
         sessions, train_days=args.train_days,
         test_days=args.test_days, step_days=args.step_days,
@@ -488,9 +496,9 @@ def run_adaptive_walk_forward(args) -> dict:
         "limitations": [
             "The search uses bounded discrete signal parameters; execution and risk settings are held fixed.",
             "Each fold begins with the stitched equity from the prior OOS segment; training searches use fixed starting capital.",
-            "The rolling evaluation begins in 2024 and uses the current fixed universe; this is not a profitability guarantee or live promotion.",
-            "Each rolling fit is separated from its OOS test by a 252-session embargo, matching the longest searched momentum lookback.",
-            "The final untouched holdout is managed separately from rolling verification and is not consumed by this report.",
+            "The rolling evaluation begins in 2020 and uses the current fixed universe; this is not a profitability guarantee or live promotion.",
+            f"Each rolling fit is separated from its OOS test by a {int(getattr(args, 'purge_sessions', 0))}-session forward-outcome purge; feature lookbacks use prior history and do not require an embargo of the same length.",
+            "Historical walk-forward results are reused across research cycles and are not a pristine independent holdout; immutable forward challenger versions are evaluated only after staging.",
         ],
     }
     summary = {

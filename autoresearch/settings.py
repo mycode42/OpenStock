@@ -26,7 +26,7 @@ ADJUSTMENT = "split"
 
 MIN_COVERED_UNIVERSE = 20
 
-RESEARCH_START = date(2024, 1, 1)
+RESEARCH_START = date(2020, 1, 1)
 # 252-session momentum plus regime cross-market features need a little over
 # 252 calendar sessions to cover holidays and incomplete symbols.
 RESEARCH_WARMUP_DAYS = 450
@@ -70,9 +70,10 @@ ADAPTIVE_DISCOVERY_ITERATIONS = 5
 ADAPTIVE_VERIFICATION_CANDIDATES = 8
 ADAPTIVE_VERIFICATION_TEST_DAYS = 63
 ADAPTIVE_VERIFICATION_STEP_DAYS = 63
-# The search includes 252-session momentum features. Keep at least that many
-# sessions between each fit endpoint and its OOS score to reduce overlap.
-ADAPTIVE_PURGE_SESSIONS = 252
+# The multi-factor labels use a 21-session forward return. Purge that outcome
+# horizon between fit and test; long feature lookbacks are valid historical
+# inputs and do not require an extra year of embargo.
+ADAPTIVE_PURGE_SESSIONS = 21
 MINIMUM_POSITIVE_OOS_FOLD_FRACTION = 0.60
 ADAPTIVE_MINIMUM_FOLDS = 5
 ROBUSTNESS_COST_MULTIPLIERS = (1.5, 2.0)

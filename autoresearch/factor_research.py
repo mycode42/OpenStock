@@ -34,7 +34,7 @@ FUNDAMENTAL_FACTORS = (
     "quality_profitability", "quality_balance_sheet",
 )
 FORWARD_SESSIONS = 21
-FACTOR_RESEARCH_START = date(2024, 1, 1)
+FACTOR_RESEARCH_START = date(2020, 1, 1)
 FACTOR_TRAINING_SAMPLES = 12
 RIDGE_ALPHA = 1.0
 MODEL_FAMILY = "ridge_cross_sectional"
@@ -376,7 +376,7 @@ def train_factor_model(
 ) -> dict:
     """Evaluate recent factor weights with a trailing, purged walk-forward fit.
 
-    Factor observations are limited to 2024 onward. Each prediction uses only
+    Factor observations are limited to the configured research period. Each prediction uses only
     the previous 12 observations whose 21-session labels ended before the
     prediction date. Earlier prices are indicator warm-up only.
     """
@@ -406,7 +406,7 @@ def train_factor_model(
         raise ValueError("No factor cross-sections passed the history and tradability masks")
     if len(observations) <= FACTOR_TRAINING_SAMPLES:
         raise ValueError(
-            "Need more than 12 monthly factor observations from 2024 onward; "
+            "Need more than 12 monthly factor observations in the configured research period; "
             f"found {len(observations)}"
         )
     for observation in observations:
@@ -889,7 +889,7 @@ def train_factor_model(
         "current_training_label_cutoff": max(row["label_end"] for row in current_train).isoformat(),
         "purge_rule": "Every 21-session forward label must end strictly before the feature date used for prediction.",
         "universe_limitation": (
-            "The current fixed Algo universe is replayed across the 2024-onward evaluation period; "
+            "The current fixed Algo universe is replayed across the 2020-onward evaluation period; "
             "historical membership and listing eligibility are not point-in-time, "
             "so results have survivorship and availability bias."
         ),

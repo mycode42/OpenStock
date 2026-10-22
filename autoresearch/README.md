@@ -28,15 +28,23 @@ net results. Each window gets five 16-candidate, training-only refinement
 rounds in the scheduled pipeline; an eligible training winner seeds the next
 round. Rolling verification runs after discovery and does not steer those
 rounds. Rolling verification and the fold-aligned portfolio replay cover
-2024 onward. The first 90 sessions establish the initial fit; each fold then
-tests its selection on the following 63 sessions. Profiles are re-fit for each
-fold, so the first scored fold begins around May 2024. The stitched OOS results
-cover the periods after that initial fit. Bars before 2024 are loaded only for
-indicator warm-up; older stored history does not enter training or scored replay.
-Multi Factor diagnostics also start in 2024 and refit weights from a rolling
-12-observation training window. Multi Factor is active in the live coordinator
-using its validated default parameters; research candidates do not change its
-live settings automatically.
+2020 onward. Each fold uses up to 90 sessions for fitting (with strategy
+specific 10/20/30 or 30/60/90 session fit windows), leaves a 21-session
+outcome-horizon purge, and scores the following 63 sessions. The purge protects
+forward outcomes; long feature lookbacks remain available as historical inputs.
+Multi Factor diagnostics also start in 2020 and refit weights from a rolling
+12-observation training window. Bars before 2020 are loaded only for indicator
+warm-up.
+
+There is no longer a global frozen-holdout cutoff. Full research cycles use
+the latest completed common session. Each forward challenger is versioned and
+scored only on sessions after that version's staging date; changing parameters
+creates a new candidate version. Historical walk-forward results are reused
+across research cycles, so a separate forward trial is still required before
+promotion. The current fixed Algo universe is used throughout the historical
+range; point-in-time universe membership is not reconstructed. Multi Factor
+remains on its validated live parameters unless a candidate passes the
+historical and forward promotion gates.
 
 If verification does not produce a coordinator artifact for every active
 strategy, the nightly report is marked partial and portfolio replay is skipped.
@@ -50,7 +58,7 @@ python -m autoresearch adaptive-search --strategy momentum --end 2026-10-09
 python -m autoresearch adaptive-search --strategy momentum \
   --end 2026-10-09 --search-iterations 5
 python -m autoresearch adaptive-walk-forward --strategy momentum \
-  --start 2024-01-01 --end 2026-10-09 \
+  --start 2020-01-01 --end 2026-10-09 \
   --train-window-options 10 20 30 --test-days 63 --step-days 63
 python -m autoresearch portfolio --workers 8
 ```
@@ -107,6 +115,6 @@ fits Multi Factor diagnostics. Event history and live calendar refresh remain
 available through their package commands:
 
 ```bash
-python -m autoresearch.historical_events --start 2024-01-01
+python -m autoresearch.historical_events --start 2020-01-01
 python -m autoresearch.event_calendar_refresh
 ```

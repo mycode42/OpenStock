@@ -110,6 +110,7 @@ def _run_replay(
     preaggregated_daily_bars: dict[str, list[dict]] | None = None,
     precomputed_timeline: dict[datetime, dict[str, dict]] | None = None,
     include_extended_hours: bool = False,
+    regime_cache: dict | None = None,
 ) -> dict:
     profile = _profile_for(strategy, parameters)
     replay = AlgoPortfolioBacktest(
@@ -131,6 +132,7 @@ def _run_replay(
         precomputed_timeline=precomputed_timeline,
         include_extended_hours=include_extended_hours,
         factor_weight_timeline=getattr(args, "factor_weight_timeline", None),
+        regime_cache=regime_cache,
     )
     with quiet_coordinator_rejections():
         return replay.run()
@@ -155,6 +157,7 @@ def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
         args=context["args"],
         preaggregated_daily_bars=context["preaggregated_daily_bars"],
         precomputed_timeline=context["precomputed_timeline"],
+        regime_cache=context["regime_cache"],
     )
     metrics = _metrics(report, capital=context["args"].capital)
     fitness, components = _fitness(metrics, context["weights"])

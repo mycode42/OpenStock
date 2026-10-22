@@ -21,7 +21,6 @@ RECOVERY_SESSIONS = 20
 
 def update_research_drift_monitor(
     verification: dict | None, *, output_dir: str | Path,
-    ignore_through_date: str | None = None,
 ) -> dict:
     """Consume only newly appended stitched OOS returns and update alert state.
 
@@ -78,11 +77,8 @@ def update_research_drift_monitor(
                 continue
             if previous_equity and previous_equity > 0:
                 realized_return = row["equity"] / previous_equity - 1.0
-                if ignore_through_date and row["date"] <= ignore_through_date:
-                    item["ignored_holdout_sessions"] = int(item.get("ignored_holdout_sessions", 0)) + 1
-                else:
-                    _observe(item, realized_return)
-                    consumed += 1
+                _observe(item, realized_return)
+                consumed += 1
             previous_equity = row["equity"]
             last_date = row["date"]
         item["last_observed_date"] = last_date
@@ -123,7 +119,6 @@ def update_research_drift_monitor(
         "strategy_statuses": updates,
         "all_strategy_statuses": states,
         "state_path": str(state_path.resolve()),
-        "ignored_through_date": ignore_through_date,
         "action": "pause_profile_promotion_until_drift_clears" if warning else "continue_research_monitoring",
     }
 

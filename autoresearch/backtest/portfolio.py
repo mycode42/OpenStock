@@ -80,6 +80,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         regime_config: dict | None = None,
         execution_delay_bars: int = 0,
         factor_weight_timeline: list[dict] | None = None,
+        regime_cache: dict[date, dict] | None = None,
         _signal_evaluator=None,
         _trade_validator=None,
         _regime_ranker=None,
@@ -116,6 +117,10 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.execution_delay_bars = execution_delay_bars
         self.spy_daily_bars = spy_daily_bars
         self.regime_config = {**ALGO_REGIME_CONFIG, **(regime_config or {})}
+        # Adaptive searches share this cache only across replays with identical
+        # market inputs and regime settings, avoiding repeated rankings for
+        # the same session while evaluating different parameter candidates.
+        self.regime_cache = regime_cache
         self.regime_macro_series = regime_macro_series or {}
         self.start = date.fromisoformat(start)
         self.end = date.fromisoformat(end)

@@ -61,6 +61,33 @@ def holdout_is_quarantining(output_dir: str | Path) -> bool:
     return bool(state and state.get("status") == "collecting")
 
 
+def supersede_final_holdout(
+    *, output_dir: str | Path,
+    reason: str = "Replaced by rolling walk-forward research and versioned forward challenger trials",
+) -> dict:
+    """Retire the legacy global holdout without deleting its audit record."""
+    state = read_final_holdout_state(output_dir)
+    if not state:
+        return {
+            "status": "disabled", "research_only": True,
+            "live_configuration_changed": False, "trade_or_order_actions": 0,
+            "holdout_quarantining": False, "result": None,
+            "superseded_reason": reason,
+        }
+    if state.get("status") != "superseded":
+        now = datetime.now(timezone.utc).isoformat()
+        state.update({
+            "prior_status": state.get("status"),
+            "status": "superseded",
+            "superseded_at": now,
+            "superseded_reason": reason,
+            "research_quarantine": "superseded; rolling research now advances through the latest completed session",
+            "updated_at": now,
+        })
+        _write_state(output_dir, state)
+    return _public_status(state)
+
+
 def advance_final_holdout(
     *, database: str, latest_end: date, output_dir: str | Path,
 ) -> dict:
@@ -451,6 +478,9 @@ def _public_status(state: dict) -> dict:
         "holdout_start_policy": state.get("holdout_start_policy"),
         "qualification": state.get("qualification"),
         "result": state.get("result"),
+        "prior_status": state.get("prior_status"),
+        "superseded_at": state.get("superseded_at"),
+        "superseded_reason": state.get("superseded_reason"),
         "frozen_profile": {
             key: state.get("frozen_profile", {}).get(key)
             for key in (
@@ -466,5 +496,5 @@ def _public_status(state: dict) -> dict:
 
 __all__ = [
     "FINAL_HOLDOUT_SCHEMA", "advance_final_holdout", "holdout_is_quarantining",
-    "initialize_final_holdout", "read_final_holdout_state",
+    "initialize_final_holdout", "read_final_holdout_state", "supersede_final_holdout",
 ]
