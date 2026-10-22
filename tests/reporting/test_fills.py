@@ -108,7 +108,24 @@ def test_partial_fills_use_decimal_fifo_across_entry_lots():
     assert report["position_reconciliation"] == "matched"
     assert money(report["realized_pnl"]) == Decimal("27.5")
     assert money(report["strategy_pnl"]["momentum"]) == Decimal("27.5")
+    assert money(report["strategy_basis"]["momentum"]) == Decimal("205")
+    assert report["realized_fills"][0]["strategy_qty"]["momentum"] == "1.75"
     assert report["strategy_attribution_complete"]
+
+
+def test_open_fill_reports_strategy_basis_and_marked_unrealized_pnl():
+    report = fill_analytics.calculate_realized_pnl(
+        [activity("buy", "entry", "buy", 2, 100, 0)],
+        [journal("entry", "buy", strategy="breakout")],
+        mode="algo",
+        current_positions=[{"symbol": "AAPL", "qty": "2", "market_value": "250"}],
+    )
+
+    assert money(report["strategy_open_basis"]["breakout"]) == Decimal("200")
+    assert money(report["strategy_open_pnl"]["breakout"]) == Decimal("50")
+    assert report["strategy_open_pnl_complete"]
+    assert report["open_fills"][0]["transaction_time"] == "2026-10-07T14:00:00+00:00"
+    assert money(report["open_fills"][0]["unrealized_pnl"]) == Decimal("50")
 
 
 def test_short_open_and_cover_fills_use_fifo_and_attribute_realized_pnl():

@@ -2,7 +2,7 @@ from datetime import date, timedelta
 import math
 
 from autoresearch import auto_research
-from autoresearch.factor_research import _feature_panel, train_factor_model
+from autoresearch.factor_research import FACTOR_RESEARCH_START, _feature_panel, train_factor_model
 from autoresearch.settings import INITIAL_HISTORY_DATE
 
 
@@ -118,7 +118,7 @@ def test_ridge_factor_candidate_reports_recent_rolling_evaluation():
     assert all(value >= 0 for value in weights.values())
     assert abs(sum(weights.values()) - 1.0) < 1e-6
     assert report["ridge_alpha"] == 1.0
-    assert report["research_start"] == "2024-01-01"
+    assert report["research_start"] == FACTOR_RESEARCH_START.isoformat()
     assert report["training_lookback_observations"] == 12
     assert report["adaptive_prequential_ic"]["sample_count"] >= 8
     assert "strictly before" in report["purge_rule"]

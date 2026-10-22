@@ -56,6 +56,7 @@ class _Lot:
     price: Decimal
     strategy: str | None
     order_id: str
+    transaction_time: datetime
 
 
 def _money(value: Decimal) -> str:
@@ -319,7 +320,7 @@ def calculate_realized_pnl(
             net_qty[fill.symbol] += fill.qty
             if fill.symbol not in basis_errors:
                 long_lots[fill.symbol].append(
-                    _Lot(fill.qty, fill.price, strategy_for(fill), fill.order_id)
+                    _Lot(fill.qty, fill.price, strategy_for(fill), fill.order_id, fill.transaction_time)
                 )
             continue
 
@@ -327,7 +328,7 @@ def calculate_realized_pnl(
             net_qty[fill.symbol] -= fill.qty
             if fill.symbol not in basis_errors:
                 short_lots[fill.symbol].append(
-                    _Lot(fill.qty, fill.price, strategy_for(fill), fill.order_id)
+                    _Lot(fill.qty, fill.price, strategy_for(fill), fill.order_id, fill.transaction_time)
                 )
             continue
 
@@ -347,7 +348,12 @@ def calculate_realized_pnl(
             strategy = lot.strategy if lot.strategy and lot.strategy == exit_strategy else None
             if lot.strategy and exit_strategy and lot.strategy != exit_strategy:
                 attribution_conflicts.add(fill.order_id)
-            sale["portions"].append({"qty": matched, "pnl": pnl, "strategy": strategy})
+            sale["portions"].append({
+                "qty": matched,
+                "pnl": pnl,
+                "basis": matched * lot.price,
+                "strategy": strategy,
+            })
             sale["pnl"] += pnl
             remaining -= matched
             lot.qty -= matched
@@ -382,6 +388,7 @@ def calculate_realized_pnl(
     unattributed_pnl = Decimal(0)
     unattributed_qty = Decimal(0)
     strategy_pnl: dict[str, Decimal] = defaultdict(Decimal)
+    strategy_basis: dict[str, Decimal] = defaultdict(Decimal)
     events = []
     for sale in period_sales:
         fill = sale["fill"]
@@ -399,12 +406,17 @@ def calculate_realized_pnl(
             })
             continue
         covered_pnl += sale["pnl"]
-        allocations: dict[str, Decimal] = defaultdict(Decimal)
+        allocations: dict[str, dict[str, Decimal]] = defaultdict(
+            lambda: {"pnl": Decimal(0), "basis": Decimal(0), "qty": Decimal(0)}
+        )
         for portion in sale["portions"]:
             strategy = portion["strategy"]
             if strategy:
                 strategy_pnl[strategy] += portion["pnl"]
-                allocations[strategy] += portion["pnl"]
+                strategy_basis[strategy] += portion["basis"]
+                allocations[strategy]["pnl"] += portion["pnl"]
+                allocations[strategy]["basis"] += portion["basis"]
+                allocations[strategy]["qty"] += portion["qty"]
             else:
                 unattributed_pnl += portion["pnl"]
                 unattributed_qty += portion["qty"]
@@ -417,8 +429,76 @@ def calculate_realized_pnl(
             "transaction_time": fill.transaction_time.isoformat(),
             "realized_pnl": _money(sale["pnl"]),
             "basis_status": "covered",
-            "strategy_pnl": {key: _money(value) for key, value in sorted(allocations.items())},
+            "strategy_pnl": {
+                key: _money(value["pnl"]) for key, value in sorted(allocations.items())
+            },
+            "strategy_basis": {
+                key: _money(value["basis"]) for key, value in sorted(allocations.items())
+            },
+            "strategy_qty": {
+                key: _money(value["qty"]) for key, value in sorted(allocations.items())
+            },
         })
+
+    if current_positions is None:
+        positions_by_symbol: dict[str, dict] = {}
+    elif isinstance(current_positions, Mapping):
+        positions_by_symbol = {
+            str(symbol).upper().strip(): {
+                "symbol": symbol,
+                "qty": value.get("qty") if isinstance(value, dict) else value,
+                **(value if isinstance(value, dict) else {}),
+            }
+            for symbol, value in current_positions.items()
+        }
+    else:
+        positions_by_symbol = {
+            str(row.get("symbol") or "").upper().strip(): row
+            for row in current_positions if isinstance(row, dict)
+        }
+
+    open_activities = []
+    strategy_open_pnl: dict[str, Decimal] = defaultdict(Decimal)
+    strategy_open_basis: dict[str, Decimal] = defaultdict(Decimal)
+    for symbol in sorted(set(long_lots) | set(short_lots)):
+        is_long = bool(long_lots[symbol])
+        lots = list(long_lots[symbol] if is_long else short_lots[symbol])
+        quantity = sum((lot.qty for lot in lots), Decimal(0))
+        if quantity <= 0:
+            continue
+        position = positions_by_symbol.get(symbol)
+        mark_value = None
+        if position is not None and symbol not in invalid_symbols:
+            try:
+                mark_value = abs(_decimal(position.get("market_value"), f"{symbol} market value"))
+            except FillHistoryError:
+                mark_value = None
+        for lot in lots:
+            basis = lot.qty * lot.price
+            pnl = None
+            if mark_value is not None:
+                allocated_market_value = mark_value * lot.qty / quantity
+                pnl = allocated_market_value - basis if is_long else basis - allocated_market_value
+            if lot.strategy:
+                strategy_open_basis[lot.strategy] += basis
+                if pnl is not None:
+                    strategy_open_pnl[lot.strategy] += pnl
+            open_activities.append({
+                "activity_id": None,
+                "order_id": lot.order_id,
+                "symbol": symbol,
+                "side": "buy" if is_long else "sell_short",
+                "qty": _money(lot.qty),
+                "transaction_time": lot.transaction_time.isoformat(),
+                "strategy": lot.strategy,
+                "basis": _money(basis),
+                "unrealized_pnl": _money(pnl) if pnl is not None else None,
+                "basis_status": "covered" if pnl is not None else "unknown",
+            })
+    strategy_open_pnl_complete = all(
+        item["basis_status"] == "covered" and item["strategy"]
+        for item in open_activities
+    )
 
     complete = not invalid_symbols
     return {
@@ -436,14 +516,20 @@ def calculate_realized_pnl(
         ),
         "inventory_mismatches": inventory_mismatches,
         "strategy_pnl": {key: _money(value) for key, value in sorted(strategy_pnl.items())},
+        "strategy_basis": {key: _money(value) for key, value in sorted(strategy_basis.items())},
+        "strategy_open_pnl": {key: _money(value) for key, value in sorted(strategy_open_pnl.items())},
+        "strategy_open_basis": {key: _money(value) for key, value in sorted(strategy_open_basis.items())},
+        "strategy_open_pnl_complete": strategy_open_pnl_complete,
         "unattributed_realized_pnl": _money(unattributed_pnl),
         "unattributed_closed_qty": _money(unattributed_qty),
         "strategy_attribution_complete": (
-            complete and unattributed_qty == 0 and not attribution_conflicts and not journal_conflicts
+            complete and unattributed_qty == 0 and not attribution_conflicts
+            and not journal_conflicts and strategy_open_pnl_complete
         ),
         "journal_order_conflicts": journal_conflicts,
         "attribution_conflicts": sorted(attribution_conflicts),
         "realized_fills": events,
+        "open_fills": open_activities,
         "period": {"since": since, "until": until},
         "basis_assumption": "FILL history includes all position-changing long and short share transactions; fees and corporate actions are excluded",
     }

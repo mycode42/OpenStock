@@ -16,7 +16,7 @@ from strategies.multi_factor import (
 )
 from strategies.multi_factor.features import FactorCalculator
 from strategies.multi_factor.learned_weights import (
-    load_live_factor_weights, resolve_walk_forward_weights,
+    RIDGE_LOGIC_VERSION, load_live_factor_weights, resolve_walk_forward_weights,
 )
 from strategies.registry import validate_parameter_profile
 from strategies.regime import rank_strategies
@@ -138,17 +138,17 @@ def test_ridge_weight_timeline_does_not_use_future_or_unpurged_snapshots():
     timeline = [
         {
             "effective_date": "2026-01-10", "training_label_cutoff": "2026-01-09",
-            "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+            "logic_version": RIDGE_LOGIC_VERSION,
             "weights": {"momentum_1m": 0.8, "low_volatility": 0.2},
         },
         {
             "effective_date": "2026-02-10", "training_label_cutoff": "2026-02-11",
-            "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+            "logic_version": RIDGE_LOGIC_VERSION,
             "weights": {"momentum_1m": 0.1, "low_volatility": 0.9},
         },
         {
             "effective_date": "2026-03-10", "training_label_cutoff": "2026-03-01",
-            "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+            "logic_version": RIDGE_LOGIC_VERSION,
             "weights": {"momentum_1m": 0.2, "low_volatility": 0.8},
         },
     ]
@@ -161,7 +161,7 @@ def test_ridge_weight_timeline_does_not_use_future_or_unpurged_snapshots():
 def test_live_ridge_weights_require_current_logic_and_purged_fit(tmp_path):
     report_path = tmp_path / "latest.json"
     report_path.write_text(json.dumps({"factor_model": {
-        "logic_version": "multi_factor_ridge_v4_pit_weight_timeline",
+        "logic_version": RIDGE_LOGIC_VERSION,
         "session_end": "2026-10-19",
         "current_training_label_cutoff": "2026-09-22",
         "current_candidate_weights": {"momentum_3m": 0.25, "momentum_6m": 0.75},
