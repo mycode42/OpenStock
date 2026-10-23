@@ -13,6 +13,8 @@ The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `Ameri
 
 The Algo daemon records timestamped equity points every 15 minutes during the regular session and a daily close point after the market closes. The close point remains the weekly risk-baseline source, so no separate `close-snapshot` automation is needed.
 
+The `event-briefing` analysis command uses a 300-second Gateway exec timeout; the automation retains its separate 20-minute turn timeout. Analyst phases and ticker-level progress are appended to `data/algo/event_driven/analysis-runs.jsonl`. Missing headline sentiment is classified in one batch request, and LLM requests time out after 30 seconds by default (`EVENT_ANALYSIS_LLM_TIMEOUT_SECONDS` overrides this). A timed-out run does not publish or reuse a signal snapshot.
+
 Trigger `optimization` on demand with `openclaw automations run 3731fb23-c610-4b7a-9032-61c7beefe55e`. It shares the AutoResearch single-run lock with `autoresearch`, so do not start it while another AutoResearch process is active. Reports are written to `data/research/algo-auto/optimizer/`.
 
 The live OpenClaw Gateway is the source of truth for job schedules and prompts. Use `openclaw automations list --all` and `openclaw automations get <job-id>` to inspect the declarations. Report templates are in [`openclaw_prompts/`](openclaw_prompts/).

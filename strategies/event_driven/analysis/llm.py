@@ -1,10 +1,23 @@
 """Helper functions for LLM"""
 
 import json
+import os
 from pydantic import BaseModel
 from .providers import get_model, get_model_info
 from .progress import progress
 from .state import AgentState
+
+
+DEFAULT_LLM_TIMEOUT_SECONDS = 30.0
+
+
+def _llm_timeout_seconds() -> float:
+    raw = os.getenv("EVENT_ANALYSIS_LLM_TIMEOUT_SECONDS", str(DEFAULT_LLM_TIMEOUT_SECONDS))
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        timeout = DEFAULT_LLM_TIMEOUT_SECONDS
+    return min(120.0, max(1.0, timeout))
 
 
 def call_llm(
@@ -12,7 +25,7 @@ def call_llm(
     pydantic_model: type[BaseModel],
     agent_name: str | None = None,
     state: AgentState | None = None,
-    max_retries: int = 3,
+    max_retries: int = 2,
     default_factory=None,
 ) -> BaseModel:
     """
@@ -23,7 +36,7 @@ def call_llm(
         pydantic_model: The Pydantic model class to structure the output
         agent_name: Optional name of the agent for progress updates and model config extraction
         state: Optional state object to extract agent-specific model configuration
-        max_retries: Maximum number of retries (default: 3)
+        max_retries: Maximum number of attempts (default: 2)
         default_factory: Optional factory function to create default response on failure
 
     Returns:
@@ -46,7 +59,12 @@ def call_llm(
             api_keys = request.api_keys
 
     model_info = get_model_info(model_name, model_provider)
-    llm = get_model(model_name, model_provider, api_keys)
+    llm = get_model(
+        model_name,
+        model_provider,
+        api_keys,
+        timeout_seconds=_llm_timeout_seconds(),
+    )
 
     # Use structured output for models that support JSON mode (or when model info is unavailable)
     if model_info is None or model_info.has_json_mode():

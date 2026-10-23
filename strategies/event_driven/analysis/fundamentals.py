@@ -25,7 +25,8 @@ def fundamentals_analyst_agent(state: AgentState, agent_id: str = "fundamentals_
             ticker=ticker,
             end_date=end_date,
             period="ttm",
-            limit=10,
+            # Match the growth analyst's cache key so the shared data fetch is reused.
+            limit=12,
             api_key=api_key,
         )
 
