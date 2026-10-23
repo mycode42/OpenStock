@@ -1,10 +1,11 @@
+from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from autoresearch.backtest import AlgoPortfolioBacktest
 from strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig, choose_priority, strategy_priority,
-    throttle_signal,
+    throttle_signal, get_algo_runtime_settings,
 )
 
 
@@ -131,7 +132,11 @@ def test_shared_swing_slice_allows_only_six_entries_per_day():
     assert rejected.reason == "shared swing entry slice is exhausted"
 
 
-def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_enabled():
+def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_enabled(monkeypatch):
+    monkeypatch.setattr(
+        "strategies.portfolio_coordinator.get_algo_runtime_settings",
+        lambda: replace(get_algo_runtime_settings(), overnight_entries_enabled=True),
+    )
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)

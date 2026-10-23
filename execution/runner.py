@@ -129,6 +129,8 @@ def _open_order_ids(orders_to_cancel: list[dict]) -> list[str]:
 
 
 def _cancel_orders(headers: dict, orders_to_cancel: list[dict]) -> tuple[list[str], list[str]]:
+    if _active_mode == "algo" and not _regular_market_open():
+        return [], ["Algo order cancellations are restricted to regular market hours"]
     return broker.cancel_orders(headers, orders_to_cancel)
 
 
@@ -137,7 +139,26 @@ def _position_qty(position: dict) -> Decimal:
 
 
 def _submit_flatten_order(headers: dict, position: dict) -> dict:
+    if _active_mode == "algo" and not _regular_market_open():
+        return {
+            "ticker": str(position.get("symbol") or "").upper(),
+            "status": "failed",
+            "error": "Algo order submissions are restricted to regular market hours",
+        }
     return broker.submit_flatten_order(headers, position)
+
+
+def _regular_market_open() -> bool:
+    """Require a current Alpaca calendar window before Algo order actions."""
+    try:
+        schedule = get_market_schedule(mode="algo")
+        return bool(
+            schedule is not None
+            and schedule.market_open(datetime.now(MARKET_TZ))
+        )
+    except Exception as exc:
+        log.warning("Could not verify regular market hours; blocking Algo order action: %s", exc)
+        return False
 
 
 def _get_order_status(headers: dict, order_id: str) -> str:
@@ -255,6 +276,13 @@ def cancel_open_orders_for_symbol(
     *,
     allow_protective: bool = False,
 ) -> dict:
+    if mode == "algo" and not _regular_market_open():
+        return {
+            "success": False,
+            "error": "Algo order cancellations are restricted to regular market hours",
+            "cancelled": [],
+            "safe_to_retry": True,
+        }
     return liquidation.cancel_open_orders_for_symbol(
         ticker,
         mode or _active_mode,
@@ -378,6 +406,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             place_order=place_order,
             market_tz=MARKET_TZ,
             log=log,
+            get_market_schedule=get_market_schedule,
         ),
     )
 

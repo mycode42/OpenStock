@@ -1,12 +1,13 @@
 """Focused tests for the continuous Algo scanner's data and exit safeguards."""
 
 from datetime import date, datetime, timedelta, timezone
+from dataclasses import replace
 from zoneinfo import ZoneInfo
 
 import pytest
 import requests
 
-from portfolio.config import ALGO_MODE_CONFIG
+from portfolio.config import ALGO_MODE_CONFIG, get_algo_runtime_settings
 from strategies import universe as strategy_universe
 import strategies.runner.scan as runner
 import strategies.runner.data as runner_data
@@ -36,6 +37,10 @@ def _quote(price: float) -> dict:
 
 def _mock_common(monkeypatch, *, positions=None, orders=None):
     monkeypatch.setattr(runner, "datetime", FrozenDateTime)
+    monkeypatch.setattr(
+        runner, "get_algo_runtime_settings",
+        lambda: replace(get_algo_runtime_settings(), overnight_entries_enabled=True),
+    )
     monkeypatch.setattr(
         runner, "_current_portfolio",
         lambda mode: ({"equity": "100000"}, positions or {}, orders or []),
@@ -82,21 +87,21 @@ def test_latest_quote_fetch_diagnostics_distinguish_missing_and_invalid():
     assert errors == ["latest quotes boats: Timeout: "]
 
 
-def test_algo_uses_the_configured_22_symbol_universe():
+def test_algo_uses_the_configured_portfolio_universe():
     algo = strategy_universe.configured_universe("algo")
 
     assert algo["tickers"] == [
         "NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD",
         "JPM", "V", "UNH", "JNJ", "PG", "KO",
         "SPY", "QQQ", "GLD", "TLT",
-        "PLTR", "CRM", "PANW",
+        "PLTR", "CRM", "PANW", "TSLA", "SPCX",
     ]
     assert algo["categories"]["PLTR"] == "tactical"
     assert algo["categories"]["SPY"] == "hedge"
     assert "universe_selection" not in ALGO_MODE_CONFIG
-    assert ALGO_MODE_CONFIG["universe"]["tactical"]["max_per_stock_pct"] == 0.02
-    assert ALGO_MODE_CONFIG["risk"]["max_tactical_pct"] == 0.04
-    assert ALGO_MODE_CONFIG["risk"]["max_tactical_positions"] == 2
+    assert ALGO_MODE_CONFIG["universe"]["tactical"]["max_per_stock_pct"] == 0.07
+    assert ALGO_MODE_CONFIG["risk"]["max_tactical_pct"] == 0.10
+    assert ALGO_MODE_CONFIG["risk"]["max_tactical_positions"] == 3
 
 
 def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
@@ -155,10 +160,10 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     assert result["data_status"]["historical_bars"] == "ok"
     assert result["entries_paused"] is False
     assert result["entry_pause_reasons"] == []
-    assert len(result["trades"]) == 1
-    assert result["trades"][0]["ticker"] == "AAPL"
-    assert result["trades"][0]["order_type"] == "limit"
-    assert result["trades"][0]["extended_hours"] is True
+    assert result["trades"] == []
+    assert result["signals"][0]["suppressed_reason"] == (
+        "Algo order actions are restricted to regular market hours"
+    )
 
 
 def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
@@ -190,13 +195,15 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
     assert result["data_status"]["historical_bars"] == "degraded"
     assert result["entries_paused"] is True
     assert result["scan_errors"]
-    assert len(result["trades"]) == 1
-    assert result["trades"][0]["action"] == "sell"
-    assert result["trades"][0]["qty"] == 2
+    assert result["trades"] == []
     assert result["signals"][0]["software_protection"] is True
+    intent = states["trend_following"]["AAPL"]["pending_exit_intent"]
+    assert intent["retryable"] is True
+    assert intent["status"] == "deferred_until_regular_hours"
+    assert intent["software_protection"] is True
 
 
-def test_extended_hours_software_exit_uses_limit_with_active_broker_bracket(monkeypatch):
+def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(monkeypatch):
     position = {"AAPL": {"symbol": "AAPL", "qty": "2"}}
     bracket_stop = [{
         "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
@@ -221,15 +228,14 @@ def test_extended_hours_software_exit_uses_limit_with_active_broker_bracket(monk
         extended_hours=True, data_feed="boats", quote_feed="overnight",
         overnight_tradable_tickers={"AAPL"},
     )
-    assert len(result["trades"]) == 1
-    trade = result["trades"][0]
-    assert trade["action"] == "sell"
-    assert trade["cancel_open_orders"] is True
-    assert trade["order_type"] == "limit"
-    assert trade["extended_hours"] is True
-    assert trade["limit_price"] == pytest.approx(97.9)
+    assert result["trades"] == []
+    intent = states["trend_following"]["AAPL"]["pending_exit_intent"]
+    assert intent["status"] == "deferred_until_regular_hours"
+    assert intent["retryable"] is True
     assert result["signals"][0]["software_protection"] is True
-    assert not result["signals"][0].get("suppressed_reason")
+    assert result["signals"][0]["suppressed_reason"] == (
+        "Algo order actions are restricted to regular market hours"
+    )
 
 
 @pytest.mark.parametrize("order_class", ["bracket", "oco"])
@@ -242,7 +248,7 @@ def test_extended_hours_software_exit_uses_limit_with_active_broker_bracket(monk
         ("premarket", True, datetime(2026, 10, 8, 4, 5, tzinfo=ET)),
     ],
 )
-def test_strategy_rule_sell_proceeds_with_active_broker_protection(
+def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
     monkeypatch, order_class, session_name, extended_hours, frozen_now,
 ):
     class FrozenClock(datetime):
@@ -301,16 +307,21 @@ def test_strategy_rule_sell_proceeds_with_active_broker_protection(
         overnight_tradable_tickers={"AAPL"} if extended_hours else None,
     )
 
-    assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
-    assert result["trades"][0]["action"] == "sell"
-    assert result["trades"][0]["qty"] == 2
-    assert result["trades"][0]["cancel_open_orders"] is True
-    assert not result["trades"][0].get("software_protection")
-    assert not result["signals"][0].get("suppressed_reason")
     if extended_hours:
-        assert result["trades"][0]["order_type"] == "limit"
-        assert result["trades"][0]["extended_hours"] is True
-        assert result["trades"][0]["limit_price"] == pytest.approx(99.9)
+        assert result["trades"] == []
+        intent = states["trend_following"]["AAPL"]["pending_exit_intent"]
+        assert intent["status"] == "deferred_until_regular_hours"
+        assert intent["retryable"] is True
+        assert result["signals"][0]["suppressed_reason"] == (
+            "Algo order actions are restricted to regular market hours"
+        )
+    else:
+        assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
+        assert result["trades"][0]["action"] == "sell"
+        assert result["trades"][0]["qty"] == 2
+        assert result["trades"][0]["cancel_open_orders"] is True
+        assert not result["trades"][0].get("software_protection")
+        assert not result["signals"][0].get("suppressed_reason")
     if session_name == "overnight" and frozen_now.hour == 4:
         assert (frozen_now.hour, frozen_now.minute) == (4, 0)
     if session_name == "premarket":

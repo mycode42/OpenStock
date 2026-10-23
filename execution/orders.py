@@ -84,6 +84,21 @@ def submit_broker_order(
     headers = hooks.headers(mode)
     client_order_id = order.get("client_order_id")
     replayed = False
+    if mode == "algo":
+        try:
+            now = datetime.now(MARKET_TZ)
+            schedule = hooks.get_market_schedule(mode="algo")
+            regular_open = schedule is not None and schedule.market_open(now)
+        except Exception as exc:
+            return {
+                "success": False,
+                "error": f"Algo regular-session verification unavailable: {type(exc).__name__}: {exc}",
+            }
+        if not regular_open:
+            return {
+                "success": False,
+                "error": "Algo order submissions are restricted to regular market hours",
+            }
     try:
         response = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
     except requests.RequestException as exc:
@@ -199,6 +214,8 @@ def place_order(
     mode = hooks.mode
     if action not in {"buy", "sell", "short", "cover"}:
         return {"success": False, "error": f"Unsupported trade action: {action}"}
+    if mode == "algo" and extended_hours:
+        return {"success": False, "error": "Algo orders are restricted to regular market hours"}
     if order_type not in {"market", "limit", "bracket", "stop", "oco", "trailing_stop"}:
         return {"success": False, "error": f"Unsupported order type: {order_type}"}
     if action == "short" and not hooks.get_mode_config(mode)["risk"].get("allow_short_positions", False):

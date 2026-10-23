@@ -116,7 +116,9 @@ def test_algo_trade_sizing_respects_ticker_universe_cap():
     }, 200, 100_000, {}, risk, mode_universe=ALGO_MODE_CONFIG["universe"])
 
     assert trade is not None
-    assert trade["qty"] * trade["entry_price"] <= 100_000 * 0.02
+    assert trade["qty"] * trade["entry_price"] <= (
+        100_000 * ALGO_MODE_CONFIG["universe"]["tactical"]["max_per_stock_pct"]
+    )
     state = {
         "equity": 100_000, "cash": 100_000, "available_cash": 100_000,
         "daily_pnl_pct": 0, "weekly_pnl_pct": 0,

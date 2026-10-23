@@ -66,47 +66,26 @@ def test_overnight_assets_must_be_enabled_and_not_halted():
     assert not _overnight_tradable({"tradable": True})
 
 
-def test_extended_hours_executor_sends_plain_limit_day_order(monkeypatch):
+def test_algo_executor_rejects_all_extended_hours_orders(monkeypatch):
     from execution import runner as execution_runner
 
-    submitted = {}
-
-    class Response:
-        status_code = 201
-
-        @staticmethod
-        def json():
-            return {
-                "id": "order-1", "status": "accepted", "symbol": "AAPL",
-                "side": "buy", "qty": "3", "type": "limit",
-                "order_class": "simple", "limit_price": "225.1",
-            }
-
-    def fake_post(url, *, headers, json, timeout):
-        submitted.update(json)
-        return Response()
-
     monkeypatch.setattr(execution_runner, "_active_mode", "algo")
-    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
-    monkeypatch.setattr(execution_runner, "_headers", lambda *_: {})
-    monkeypatch.setattr(execution_runner.requests, "post", fake_post)
+    monkeypatch.setattr(
+        execution_runner.requests, "post",
+        lambda *args, **kwargs: pytest.fail("extended-hours order reached the broker"),
+    )
 
     result = execution_runner.place_order(
         "AAPL", "buy", 3, order_type="limit", limit_price=225.10,
         stop_price=220, take_profit=235, extended_hours=True,
     )
 
-    assert result["success"]
-    assert submitted == {
-        "symbol": "AAPL", "qty": "3", "side": "buy", "type": "limit",
-        "time_in_force": "day", "limit_price": "225.1", "extended_hours": True,
-    }
+    assert not result["success"]
+    assert "regular market hours" in result["error"]
 
-    submitted.clear()
     cover = execution_runner.place_order(
         "AAPL", "cover", 3, order_type="limit", limit_price=225.10,
         extended_hours=True,
     )
-    assert cover["success"]
-    assert submitted["side"] == "buy"
-    assert submitted["position_intent"] == "buy_to_close"
+    assert not cover["success"]
+    assert "regular market hours" in cover["error"]

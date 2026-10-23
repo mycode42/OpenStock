@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 from contextlib import nullcontext
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from execution import runner as execution_runner
+from execution.batch import BatchHooks, execute_trade_batch
 from execution import risk as risk_validator
 from market import calendar as market_calendar
 
@@ -27,6 +29,15 @@ class Response:
     def raise_for_status(self):
         if self.status_code >= 400:
             raise RuntimeError(f"HTTP {self.status_code}")
+
+
+@pytest.fixture(autouse=True)
+def _default_regular_market_schedule(monkeypatch):
+    """Keep unrelated executor tests deterministic inside regular hours."""
+    monkeypatch.setattr(
+        execution_runner, "get_market_schedule",
+        lambda **kwargs: SimpleNamespace(market_open=lambda now: True),
+    )
 
 def _state(**overrides):
     state = {
@@ -224,15 +235,16 @@ def test_algo_short_entries_fail_closed_when_borrow_status_is_unavailable():
     assert result.rule == "shortability_unavailable"
 
 
-def test_algo_tactical_satellites_are_limited_to_two_positions():
+def test_algo_tactical_satellites_are_limited_to_three_positions():
     risk_validator._universe_cache.pop("algo", None)
     state = _state(
         positions={
             "PLTR": {"symbol": "PLTR", "qty": 10, "market_value": 1_000},
             "CRM": {"symbol": "CRM", "qty": 10, "market_value": 1_000},
+            "TSLA": {"symbol": "TSLA", "qty": 10, "market_value": 1_000},
         },
-        sector_alloc={"tactical": 2_000},
-        open_position_count=2,
+        sector_alloc={"tactical": 3_000},
+        open_position_count=3,
     )
 
     blocked_new_name = risk_validator.validate_trade("PANW", "buy", 1, 100, state, mode="algo")
@@ -245,9 +257,10 @@ def test_algo_tactical_satellites_are_limited_to_two_positions():
         positions={
             "PLTR": {"symbol": "PLTR", "qty": -10, "market_value": -1_000},
             "CRM": {"symbol": "CRM", "qty": -10, "market_value": -1_000},
+            "TSLA": {"symbol": "TSLA", "qty": -10, "market_value": -1_000},
         },
-        sector_alloc={"tactical": 2_000},
-        open_position_count=2,
+        sector_alloc={"tactical": 3_000},
+        open_position_count=3,
         shortability_available=True,
         easy_to_borrow_symbols=["PANW"],
     )
@@ -357,7 +370,61 @@ def test_extended_hours_exit_rejects_market_order_without_broker_submission(monk
     )
 
     assert not result["success"]
-    assert "Extended-hours orders require a buy/sell/cover limit order" in result["error"]
+    assert "restricted to regular market hours" in result["error"]
+
+
+def test_off_hours_batch_is_blocked_before_order_cancellation_or_submission():
+    hooks = BatchHooks(
+        risk_validator_available=True,
+        rm_validate_trade=lambda **kwargs: None,
+        rm_stage_approved_trade=lambda *args, **kwargs: None,
+        get_latest_ask=lambda *args, **kwargs: 100,
+        get_latest_bid=lambda *args, **kwargs: 100,
+        get_latest_price=lambda *args, **kwargs: 100,
+        validate_position_reduction=lambda *args, **kwargs: (True, ""),
+        cancel_open_orders_for_symbol=lambda *args, **kwargs: pytest.fail("off-hours cancel reached"),
+        get_positions=lambda *args, **kwargs: {},
+        place_order=lambda *args, **kwargs: pytest.fail("off-hours order reached"),
+        market_tz=ET,
+        log=logging.getLogger("test"),
+        get_market_schedule=lambda **kwargs: SimpleNamespace(market_open=lambda now: False),
+    )
+
+    results, submitted, would_execute = execute_trade_batch(
+        trades=[{"ticker": "AAPL", "action": "sell", "qty": 1, "strategy": "momentum"}],
+        decision_digest="test",
+        args=SimpleNamespace(dry_run=False),
+        mode="algo",
+        positions={"AAPL": {"qty": 1}},
+        rm_portfolio_state=None,
+        hooks=hooks,
+    )
+
+    assert submitted == 0
+    assert would_execute == 0
+    assert results[0]["rule"] == "regular_hours_only"
+    assert results[0]["safe_to_retry"] is True
+
+
+def test_off_hours_order_submission_fails_closed_before_post(monkeypatch):
+    monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
+    monkeypatch.setattr(execution_runner, "_headers", lambda *_: {})
+    monkeypatch.setattr(
+        execution_runner, "get_market_schedule",
+        lambda **kwargs: SimpleNamespace(market_open=lambda now: False),
+    )
+    monkeypatch.setattr(
+        execution_runner.requests, "post",
+        lambda *args, **kwargs: pytest.fail("off-hours broker POST reached"),
+    )
+
+    result = execution_runner._submit_broker_order({
+        "symbol": "AAPL", "side": "sell", "qty": "1", "type": "market",
+        "time_in_force": "day", "client_order_id": "off-hours-id",
+    }, "market")
+
+    assert not result["success"]
+    assert "restricted to regular market hours" in result["error"]
 
 def test_algo_bracket_exit_never_cancels_broker_protection(monkeypatch):
     bracket_leg = {
@@ -608,7 +675,7 @@ def test_direct_algo_order_requires_coordinator_lease(monkeypatch):
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: pytest.fail("broker POST without lease"))
 
     with pytest.raises(PermissionError, match="no lease"):
-        execution_runner.place_order("AAPL", "buy", 1, order_type="limit", limit_price=100, extended_hours=True)
+        execution_runner.place_order("AAPL", "buy", 1, order_type="limit", limit_price=100)
 
 def test_duplicate_client_order_id_reconciles_without_another_order(monkeypatch):
     monkeypatch.setattr(execution_runner, "_active_mode", "algo")

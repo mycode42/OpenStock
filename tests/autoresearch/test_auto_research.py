@@ -46,9 +46,9 @@ def _synthetic_daily_history(session_count: int = 850) -> dict[str, list[dict]]:
 def test_auto_research_uses_the_configured_fixed_algo_universe():
     symbols, metadata = auto_research.load_algo_universe()
 
-    assert len(symbols) == 22
+    assert len(symbols) == 24
     assert symbols[:9] == ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD"]
-    assert symbols[-3:] == ["PLTR", "CRM", "PANW"]
+    assert symbols[-5:] == ["PLTR", "CRM", "PANW", "TSLA", "SPCX"]
     assert metadata == {"universe_source": "configured_fixed"}
 
 

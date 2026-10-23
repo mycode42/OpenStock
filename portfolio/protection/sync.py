@@ -271,6 +271,11 @@ def sync_broker_stops(
             report["verified"].append(symbol)
             continue
 
+        # Read-only verification may continue in extended sessions, but never
+        # PATCH a bracket/OCO stop unless the regular session is open.
+        if extended_hours:
+            continue
+
         pending = state.get("protection_sync") or {}
         pending_requested = to_finite_decimal(pending.get("requested_stop_price")) if isinstance(pending, dict) else None
         pending_at = pending.get("requested_at") if isinstance(pending, dict) else None

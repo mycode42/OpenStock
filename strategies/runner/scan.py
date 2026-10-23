@@ -587,6 +587,48 @@ def scan(
         )
     )
 
+    # Keep off-hours exit signals durable, but do not cancel or submit against
+    # an Alpaca bracket/OCO outside regular hours. The same client ID is reused
+    # when the persisted exit is resumed in the next regular session.
+    if mode == "algo" and session_name != "regular" and strategy_states is not None:
+        for item in generated:
+            action = str(item.get("action") or "").lower()
+            if action not in {"sell", "cover"}:
+                continue
+            strategy = str(item.get("strategy") or "")
+            symbol = str(item.get("ticker") or "").upper()
+            if not strategy or not symbol or owner_map.get(symbol) != strategy:
+                continue
+            state = (strategy_states.get(strategy) or {}).get(symbol)
+            if not isinstance(state, dict) or state.get("phase") != "open":
+                continue
+            if isinstance(state.get("pending_exit_intent"), dict):
+                continue
+            signal_kind = "protective" if item.get("software_protection") else "rule"
+            identity = (
+                f"{mode}:{today}:{strategy}:{symbol}:{action}:{signal_kind}:"
+                f"{item.get('event_id') or ''}:{item.get('signal_bar_time') or ''}"
+            )
+            client_order_id = (
+                f"rule-{today.replace('-', '')}-"
+                f"{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
+            )
+            state["pending_exit_intent"] = {
+                "action": action,
+                "strategy": strategy,
+                "reason": str(item.get("reason") or "deferred strategy exit"),
+                "timeframe": item.get("timeframe"),
+                "signal_bar_time": item.get("signal_bar_time"),
+                "event_id": item.get("event_id"),
+                "client_order_id": client_order_id,
+                "software_protection": bool(item.get("software_protection")),
+                "coordinator_force_flatten": bool(item.get("coordinator_force_flatten")),
+                "retryable": True,
+                "status": "deferred_until_regular_hours",
+                "created_at": now_utc.isoformat(),
+            }
+            state["updated_at"] = now_utc.isoformat()
+
     # A confirmed pre-submit exit failure remains a durable intent. Rebuild it
     # from the current quote and position during regular hours so a transient
     # strategy signal or overnight order-cancel delay cannot lose the exit.
@@ -653,7 +695,7 @@ def scan(
         })
         if retryable_exit_symbols:
             entry_pause_reasons.append(
-                "Algo strategy exits are waiting for broker cancellation: "
+                "Algo strategy exits are deferred until regular hours or broker cancellation: "
                 + ", ".join(retryable_exit_symbols)
             )
 
@@ -759,6 +801,9 @@ def scan(
         if item.get("suppressed_reason"):
             continue
         action = str(item.get("action", "")).lower()
+        if mode == "algo" and session_name != "regular":
+            item["suppressed_reason"] = "Algo order actions are restricted to regular market hours"
+            continue
         strategy = str(item.get("strategy", ""))
         if action in {"buy", "short"}:
             strategy_limit = risk_config.get("max_entries_per_strategy_per_day", {}).get(strategy)
