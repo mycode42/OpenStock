@@ -35,8 +35,8 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
     config_path = _write_config(tmp_path, data_path=dataset_path, strategies=["event_driven"])
     calls = []
 
-    def fake_run_research(strategy, *, config_path):
-        calls.append((strategy, config_path))
+    def fake_run_research(strategy, *, config_path, data_path, underlying):
+        calls.append((strategy, config_path, data_path, underlying))
         return {
             "run_id": "event-run-1", "run_dir": str(tmp_path / "runs" / "event-run-1"),
             "underlying": "SPY", "data_mode": "historical_chains",
@@ -50,7 +50,7 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
 
     report = automation.run_automated_options_research(config_path=config_path)
 
-    assert calls == [("event_driven", config_path.resolve())]
+    assert calls == [("event_driven", config_path.resolve(), dataset_path.resolve(), "SPY")]
     assert report["status"] == "completed"
     assert report["strategies"]["event_driven"]["walk_forward"]["trade_count"] == 10
     assert report["strategies"]["event_driven"]["approved"] is False
