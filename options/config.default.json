@@ -37,7 +37,7 @@
   },
   "vrp": {
     "enabled": true,
-    "underlying": "SPY",
+    "underlyings": ["SPY", "QQQ"],
     "min_dte": 25,
     "max_dte": 45,
     "min_iv_minus_rv": 0.04,
@@ -59,7 +59,7 @@
     "min_open_interest": 100
   },
   "directional_overlay": {
-    "enabled": false,
+    "enabled": true,
     "underlying": "SPY",
     "min_dte": 25,
     "max_dte": 60,
@@ -67,8 +67,15 @@
     "long_delta": 0.50,
     "short_delta": 0.25,
     "min_signal_confidence": 0.60,
+    "max_signal_age_seconds": 900,
     "max_spread_pct": 0.20,
-    "min_open_interest": 100
+    "min_open_interest": 100,
+    "max_risk_per_trade_pct": 0.005,
+    "max_entries_per_day": 1,
+    "max_holding_days": 21,
+    "close_dte": 5,
+    "profit_target_pct": 0.50,
+    "stop_loss_pct": 0.50
   },
   "long_volatility": {
     "enabled": true,

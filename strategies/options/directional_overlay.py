@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from options.models import OptionSignal
 from options.structures import vertical_spread
 from strategies.options.base import (
@@ -57,7 +59,9 @@ class DirectionalOverlayStrategy:
         right = "call" if action in {"buy", "long"} else "put"
         rows = [
             row for row in context.chain.for_expiration(expiration)
-            if row.contract.right == right and valid_quote(
+            if row.contract.open_interest is not None
+            and row.contract.open_interest >= int(self.config.get("min_open_interest", 100))
+            and row.contract.right == right and valid_quote(
                 row,
                 max_spread_pct=float(self.config.get("max_spread_pct", 0.20)),
                 min_open_interest=int(self.config.get("min_open_interest", 0)),
@@ -99,6 +103,11 @@ class DirectionalOverlayStrategy:
             data_quality={
                 "source_signal_strategy": _value(signal, "strategy"),
                 "source_signal_confidence": confidence,
+                "max_risk_per_trade_pct": float(self.config.get("max_risk_per_trade_pct", 0.005)),
+                "max_holding_days": int(self.config.get("max_holding_days", 21)),
+                "close_dte": int(self.config.get("close_dte", 5)),
+                "profit_target_pct": float(self.config.get("profit_target_pct", 0.50)),
+                "stop_loss_pct": float(self.config.get("stop_loss_pct", 0.50)),
                 "regime_risk_multiplier": regime_weight,
                 "feed": context.chain.feed,
                 "chain_quality": list(context.chain.data_quality),
@@ -106,4 +115,30 @@ class DirectionalOverlayStrategy:
         )
 
 
-__all__ = ["DirectionalOverlayStrategy"]
+def directional_overlay_exit_reason(
+    *,
+    entry_debit: float,
+    current_value: float,
+    held_days: int,
+    days_to_expiry: int,
+    config: dict,
+) -> str | None:
+    """Close the directional debit spread on target, loss, age, or expiry risk."""
+    if (
+        entry_debit <= 0 or not math.isfinite(entry_debit)
+        or not math.isfinite(current_value)
+    ):
+        return None
+    if days_to_expiry <= int(config.get("close_dte", 5)):
+        return "time_to_expiry_stop"
+    if held_days >= int(config.get("max_holding_days", 21)):
+        return "maximum_holding_period"
+    pnl = current_value - entry_debit
+    if pnl <= -entry_debit * float(config.get("stop_loss_pct", 0.50)):
+        return "structure_stop_loss"
+    if pnl >= entry_debit * float(config.get("profit_target_pct", 0.50)):
+        return "profit_target"
+    return None
+
+
+__all__ = ["DirectionalOverlayStrategy", "directional_overlay_exit_reason"]

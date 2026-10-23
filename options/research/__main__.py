@@ -17,10 +17,11 @@ def main() -> int:
     parser.add_argument("--data", help="JSON/JSONL historical chain dataset (overrides config)")
     parser.add_argument("--config", help="research JSON config override")
     parser.add_argument("--output-dir", help="run output directory (overrides config)")
+    parser.add_argument("--underlying", help="underlying ticker to research (overrides config)")
     args = parser.parse_args()
     report = run_research(
         args.strategy, data_path=args.data, config_path=args.config,
-        output_dir=args.output_dir,
+        output_dir=args.output_dir, underlying=args.underlying,
     )
     print(json.dumps({
         "run_id": report["run_id"],

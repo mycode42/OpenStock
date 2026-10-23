@@ -7,11 +7,13 @@ recommendations; it never searches or invokes the LLM analyst itself.
 
 ## Run one sleeve
 
-Provide chronological SPY (default) or SPX option-chain snapshots, then run:
+Provide chronological option-chain snapshots, then run one sleeve. SPY is the
+default underlying; use `--underlying` to select another ticker:
 
 ```sh
 poetry run python -m options.research --strategy vrp \
-  --data data/options/research/chains.jsonl
+  --underlying NVDA \
+  --data data/options/research/theta/NVDA/chains.jsonl
 ```
 
 Use `--config` for a JSON override and `--output-dir` to change the artifact
@@ -31,18 +33,63 @@ unvalidated sleeve by accident.
 
 The scheduled AutoResearch automation runs `autoresearch.nightly`, which starts
 the existing equity research command and an independent options job concurrently.
-The default options batch runs `vrp` and `event_driven`; set
-`automation.strategies` in this file's JSON configuration to select a different
-subset, including `directional_overlay`. Options research runs at lower process
-priority and writes a separate dated JSON/Markdown report plus `latest.json` and
-`latest.md` under `data/options/research/automation/`. The equity report also
-contains a top-level `options_research` summary section. Candidates remain
-research-only and are never applied automatically.
+The nightly job uses `config.portfolio.json` to run `vrp`, `event_driven`, and
+`long_volatility` against all 24 tickers in the Algo portfolio universe. Each
+ticker reads its own ThetaData archive through `automation.data_path_template`;
+missing or not-yet-long-enough datasets are reported per ticker while available
+datasets continue through research. Edit `automation.strategies` in
+`config.portfolio.json` to select a different subset, including
+`directional_overlay`. The options job uses the same worker budget as equity
+AutoResearch (8 by default), capped by the CPUs available to the process.
+Options research runs at lower process priority and writes a separate dated
+JSON/Markdown report plus `latest.json` and `latest.md` under
+`data/options/research/automation/`. The report records the requested and used
+worker counts. The equity report also contains a top-level `options_research`
+summary section. Candidates remain research-only and are never applied
+automatically.
 
 If the configured chain dataset does not exist, the options report uses
 `waiting_for_data` and records the missing path. The equity research cycle still
 completes independently. Supply historical option-chain snapshots (or explicitly
 marked point-in-time IV-surface rows) before expecting options validation runs.
+
+## ThetaData historical backfill
+
+ThetaData EOD bid/ask chains and historical open interest feed the same snapshot
+loader used by the research runner. The collector writes a compressed monthly
+raw archive and a separate `chains.jsonl` per underlying, so a rerun can resume
+without loading all symbols into memory. Its default universe is the complete
+Algo portfolio universe, and it starts at 2020-01-01. Symbols with fewer than
+1,013 usable sessions remain marked `collecting` in their per-symbol manifest.
+
+Install the optional client on Python 3.12 or newer and run the collector:
+
+```sh
+poetry install --with theta,research
+poetry run python scripts/options/theta_historical_backfill.py
+```
+
+The collector reads `THETA_DATA_API_KEY` from `.env` (it also accepts ThetaData's
+official `THETADATA_API_KEY` name). To backfill a smaller set, repeat
+`--underlying`, for example `--underlying SPY --underlying NVDA`. The output is
+written under `data/options/research/theta/<SYMBOL>/`.
+
+To narrow the nightly batch, set `automation.underlyings` in
+`config.portfolio.json`. The full list matches the Algo portfolio universe and
+uses `data/options/research/theta/{underlying}/chains.jsonl`; custom datasets can
+use `automation.data_path_template` or per-symbol `automation.data_paths`. The
+automation keeps one result per strategy and underlying. Symbols remain in the
+report as `waiting_for_data` or `insufficient_history` until their own archive
+is ready, then start research automatically on a later run. One nightly run
+will evaluate each configured strategy for each ticker with usable history.
+
+The collector takes each option's EOD NBBO and prior-session open interest. It
+keeps the unadjusted close as the option-pricing spot, while split-adjusting the
+underlying close history for realized-volatility calculations using Yahoo
+Finance split events. It labels trend from 50/200-session moving averages and
+volatility from the trailing 252-session distribution of 20-session realized
+volatility. The per-symbol manifest records these assumptions. Historical
+option EOD marks are daily snapshots, not intraday replay data.
 
 ## Snapshot format
 

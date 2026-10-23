@@ -42,6 +42,11 @@ def load_options_config(path: str | Path | None = None) -> dict:
         "risk": ("max_risk_per_trade_pct", "max_total_defined_risk_pct", "max_daily_loss_pct", "max_delta_notional_pct", "max_vega_per_vol_point_pct", "max_gamma_1pct_loss_pct", "max_theta_loss_per_day_pct", "max_margin_pct"),
         "vrp": ("min_iv_minus_rv", "short_delta_min", "short_delta_max", "wing_delta_max"),
         "event_driven": ("min_llm_confidence",),
+        "directional_overlay": (
+            "long_delta", "short_delta", "min_signal_confidence",
+            "max_spread_pct", "max_risk_per_trade_pct", "profit_target_pct",
+            "stop_loss_pct",
+        ),
         "long_volatility": (
             "min_realized_volatility", "threshold_risk_multiplier", "otm_delta",
             "iv_percentile_ceiling", "max_spread_pct", "max_premium_per_trade_usd",
@@ -58,6 +63,21 @@ def load_options_config(path: str | Path | None = None) -> dict:
         raise ValueError("VRP short delta range is inverted")
     if config["vrp"]["max_dte"] < config["vrp"]["min_dte"]:
         raise ValueError("VRP DTE range is inverted")
+    vrp = config["vrp"]
+    vrp_underlyings = vrp.get("underlyings")
+    if not isinstance(vrp_underlyings, list) or not vrp_underlyings or any(
+        not isinstance(symbol, str) or not symbol or symbol != symbol.upper()
+        for symbol in vrp_underlyings
+    ) or len(set(vrp_underlyings)) != len(vrp_underlyings):
+        raise ValueError("vrp.underlyings must be a non-empty list of unique uppercase symbols")
+    if len(vrp_underlyings) > 10:
+        raise ValueError("vrp.underlyings is limited to ten symbols")
+    if (
+        isinstance(vrp.get("max_entries_per_day"), bool)
+        or not isinstance(vrp.get("max_entries_per_day"), int)
+        or vrp["max_entries_per_day"] < 1
+    ):
+        raise ValueError("vrp.max_entries_per_day must be a positive integer")
     event = config["event_driven"]
     for field in ("min_dte", "max_dte", "target_dte", "max_symbols_per_cycle", "min_open_interest"):
         value = event[field]
@@ -71,6 +91,42 @@ def load_options_config(path: str | Path | None = None) -> dict:
         raise ValueError("event-driven target_dte must be within its DTE range")
     if event["min_llm_confidence"] > 1:
         raise ValueError("event-driven min_llm_confidence must be in [0, 1]")
+    directional = config["directional_overlay"]
+    if not isinstance(directional.get("enabled"), bool):
+        raise ValueError("directional_overlay.enabled must be a boolean")
+    underlying = directional.get("underlying")
+    if not isinstance(underlying, str) or not underlying or underlying != underlying.upper():
+        raise ValueError("directional_overlay.underlying must be a non-empty uppercase ticker")
+    for field in ("min_dte", "max_dte", "target_dte", "min_open_interest",
+                  "max_signal_age_seconds", "max_entries_per_day", "max_holding_days",
+                  "close_dte"):
+        value = directional[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"directional_overlay.{field} must be a non-negative integer")
+    if (
+        directional["min_dte"] < 1
+        or directional["max_dte"] < directional["min_dte"]
+        or not directional["min_dte"] <= directional["target_dte"] <= directional["max_dte"]
+    ):
+        raise ValueError("directional_overlay DTE window or target is invalid")
+    if (
+        directional["max_signal_age_seconds"] < 1
+        or directional["max_entries_per_day"] < 1
+        or directional["max_holding_days"] < 1
+    ):
+        raise ValueError("directional_overlay signal age, holding, and daily entry limits must be positive")
+    if directional["close_dte"] >= directional["max_dte"]:
+        raise ValueError("directional_overlay.close_dte must be below max_dte")
+    if not 0 < directional["short_delta"] < directional["long_delta"] < 1:
+        raise ValueError("directional_overlay deltas must satisfy 0 < short_delta < long_delta < 1")
+    if directional["min_signal_confidence"] > 1:
+        raise ValueError("directional_overlay.min_signal_confidence must be in [0, 1]")
+    if not 0 < directional["max_spread_pct"] <= 1:
+        raise ValueError("directional_overlay.max_spread_pct must be in (0, 1]")
+    if not 0 < directional["max_risk_per_trade_pct"] <= 1:
+        raise ValueError("directional_overlay.max_risk_per_trade_pct must be in (0, 1]")
+    if directional["profit_target_pct"] <= 0 or not 0 < directional["stop_loss_pct"] <= 1:
+        raise ValueError("directional_overlay profit target and stop loss are invalid")
     long_vol = config["long_volatility"]
     if not isinstance(long_vol.get("enabled"), bool) or not isinstance(long_vol.get("close_on_regime_exit"), bool):
         raise ValueError("long_volatility enabled and close_on_regime_exit must be booleans")

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import multiprocessing as mp
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from autoresearch.cpu import available_cpu_count
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -46,12 +49,17 @@ def _strategy_summary(strategy: str, report: dict) -> dict:
 
 def _error_summary(
     strategy: str, error: Exception, *, started_at: datetime,
-    run_log: Path, output_root: Path,
+    run_log: Path, output_root: Path, underlying: str,
 ) -> dict:
     status = "error"
     message = f"{type(error).__name__}: {error}"
     if isinstance(error, FileNotFoundError) and "historical options dataset not found" in str(error):
         status = "skipped_missing_dataset"
+    elif isinstance(error, ValueError) and (
+        "insufficient history for" in str(error)
+        or "fewer than two" in str(error)
+    ):
+        status = "insufficient_history"
     # run_research records preflight failures before raising. Include the artifact
     # path so a malformed or too-short dataset can be diagnosed without guessing.
     latest_run = None
@@ -61,7 +69,11 @@ def _error_summary(
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("strategy") == strategy and row.get("status") in {"started", "preflight_failed"}:
+            if (
+                row.get("strategy") == strategy
+                and str(row.get("underlying", "")).upper() == underlying.upper()
+                and row.get("status") in {"started", "preflight_failed"}
+            ):
                 try:
                     stamp = datetime.fromisoformat(str(row.get("created_at", "")).replace("Z", "+00:00"))
                 except ValueError:
@@ -76,31 +88,45 @@ def _error_summary(
     }
 
 
+def _run_research_job(strategy: str, config_path: Path, data_path: Path, underlying: str) -> dict:
+    report = run_research(
+        strategy, config_path=config_path, data_path=data_path, underlying=underlying,
+    )
+    return _strategy_summary(strategy, report)
+
+
 def _render_markdown(report: dict) -> str:
+    dataset_label = (
+        f"`{report['dataset_path']}`" if report.get("dataset_path")
+        else "; ".join(f"{symbol}: `{path}`" for symbol, path in report.get("dataset_paths", {}).items())
+    )
     lines = [
         f"# Nightly options research ({report['run_date_et']})",
         "",
         f"Status: **{report['status']}**  ",
-        f"Dataset: `{report['dataset_path']}` ({'available' if report['dataset_available'] else 'not available'})  ",
+        f"Dataset: {dataset_label or 'none'} ({'available' if report['dataset_available'] else 'not available'})  ",
         f"Data mode: `{report.get('data_mode', 'n/a')}`  ",
         "",
         "This report is a separate research sleeve alongside equity AutoResearch. Options candidates remain research-only; exported parameters are not applied to paper or live settings.",
         "",
     ]
     for strategy, result in report.get("strategies", {}).items():
+        by_underlying = result.get("underlyings") or {result.get("underlying", "configured"): result}
         lines.extend([f"## {strategy}", "", f"Status: **{result.get('status')}**"])
-        if result.get("error"):
-            lines.extend(["", f"Error: `{result['error']}`"])
-        if result.get("status") == "completed":
-            wf = result.get("walk_forward", {})
-            holdout = result.get("holdout", {})
-            lines.extend([
-                f"  ", f"Approved for paper config export: **{result.get('approved')}**  ",
-                f"Rolling OOS: trades {wf.get('trade_count', 0)}, return {float(wf.get('total_return', 0.0)):.2%}, Sharpe {float(wf.get('annualized_sharpe', 0.0)):.3f}, max drawdown {float(wf.get('max_drawdown', 0.0)):.2%}  ",
-                f"Untouched holdout: trades {holdout.get('trade_count', 0)}, return {float(holdout.get('total_return', 0.0)):.2%}, Sharpe {float(holdout.get('annualized_sharpe', 0.0)):.3f}  ",
-                f"Parameters: `{json.dumps(result.get('final_parameters', {}), sort_keys=True)}`  ",
-                f"Detailed report: `{result.get('report_path')}`",
-            ])
+        for underlying, item in by_underlying.items():
+            lines.extend(["", f"### {underlying}", "", f"Status: **{item.get('status')}**"])
+            if item.get("error"):
+                lines.extend(["", f"Error: `{item['error']}`"])
+            if item.get("status") == "completed":
+                wf = item.get("walk_forward", {})
+                holdout = item.get("holdout", {})
+                lines.extend([
+                    "", f"Approved for paper config export: **{item.get('approved')}**  ",
+                    f"Rolling OOS: trades {wf.get('trade_count', 0)}, return {float(wf.get('total_return', 0.0)):.2%}, Sharpe {float(wf.get('annualized_sharpe', 0.0)):.3f}, max drawdown {float(wf.get('max_drawdown', 0.0)):.2%}  ",
+                    f"Untouched holdout: trades {holdout.get('trade_count', 0)}, return {float(holdout.get('total_return', 0.0)):.2%}, Sharpe {float(holdout.get('annualized_sharpe', 0.0)):.3f}  ",
+                    f"Parameters: `{json.dumps(item.get('final_parameters', {}), sort_keys=True)}`  ",
+                    f"Detailed report: `{item.get('report_path')}`",
+                ])
         lines.append("")
     lines.extend([
         "## Data and execution assumptions",
@@ -111,7 +137,9 @@ def _render_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
-def run_automated_options_research(*, config_path: str | Path | None = None) -> dict:
+def run_automated_options_research(
+    *, config_path: str | Path | None = None, workers: int | None = None,
+) -> dict:
     """Run the configured options sleeves without touching broker credentials or orders."""
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
     config = _merge(_read_json(RESEARCH_DEFAULTS_PATH), _read_json(config_path_resolved))
@@ -120,7 +148,27 @@ def run_automated_options_research(*, config_path: str | Path | None = None) -> 
     )]
     if not strategies or any(item not in SUPPORTED_STRATEGIES for item in strategies):
         raise ValueError(f"automation strategies must be selected from {', '.join(SUPPORTED_STRATEGIES)}")
-    data_path = _project_path(config.get("data_path", "data/options/research/chains.jsonl"))
+    automation_config = config.get("automation", {})
+    underlyings = [str(item).strip().upper() for item in automation_config.get(
+        "underlyings", [config.get("underlying", "SPY")],
+    )]
+    if not underlyings or any(not item or not item.replace(".", "").isalnum() for item in underlyings):
+        raise ValueError("automation underlyings must be non-empty ticker symbols")
+    underlyings = list(dict.fromkeys(underlyings))
+    base_data_path = config.get("data_path", "data/options/research/chains.jsonl")
+    data_paths = automation_config.get("data_paths", {})
+    path_template = automation_config.get("data_path_template")
+    underlying_data_paths = {
+        symbol: _project_path(
+            data_paths.get(symbol)
+            or (str(path_template).format(underlying=symbol) if path_template else base_data_path)
+        )
+        for symbol in underlyings
+    }
+    configured_workers = automation_config.get("workers", 1) if workers is None else workers
+    if isinstance(configured_workers, bool) or not isinstance(configured_workers, int) or configured_workers < 1:
+        raise ValueError("automation workers must be a positive integer")
+    worker_count = min(configured_workers, available_cpu_count(), len(strategies) * len(underlyings))
     output_root = _project_path(config.get("output_dir", "data/options/research/runs"))
     automation_dir = output_root.parent / "automation"
     automation_dir.mkdir(parents=True, exist_ok=True)
@@ -129,37 +177,93 @@ def run_automated_options_research(*, config_path: str | Path | None = None) -> 
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
     enabled = bool(config.get("automation", {}).get("enabled", True))
     strategies_report: dict[str, dict] = {}
-    data_available = data_path.is_file()
+    data_available = any(path.is_file() for path in underlying_data_paths.values())
     data_mode = config.get("data_mode", "auto")
 
     if not enabled:
         status = "disabled"
         strategies_report = {strategy: {"status": "disabled"} for strategy in strategies}
-    elif not data_available:
-        status = "waiting_for_data"
-        strategies_report = {
-            strategy: {
-                "status": "skipped_missing_dataset",
-                "message": "Add historical option-chain snapshots or dated IV-surface observations to the configured dataset path.",
-            }
-            for strategy in strategies
-        }
     else:
+        jobs = [(strategy, underlying) for strategy in strategies for underlying in underlyings]
+        job_results: dict[tuple[str, str], tuple[datetime, dict]] = {}
+        print(
+            f"Options research: {len(jobs)} strategy/ticker jobs, "
+            f"{worker_count} workers (requested {configured_workers})",
+            flush=True,
+        )
+
+        if worker_count == 1:
+            for strategy, underlying in jobs:
+                started = datetime.now(timezone.utc)
+                try:
+                    job_results[(strategy, underlying)] = (
+                        started,
+                        {"summary": _run_research_job(
+                            strategy, config_path_resolved,
+                            underlying_data_paths[underlying], underlying,
+                        )},
+                    )
+                except Exception as exc:
+                    job_results[(strategy, underlying)] = (started, {"error": exc})
+        else:
+            with ProcessPoolExecutor(
+                max_workers=worker_count,
+                mp_context=mp.get_context("spawn"),
+            ) as executor:
+                futures = {}
+                for strategy, underlying in jobs:
+                    started = datetime.now(timezone.utc)
+                    future = executor.submit(
+                        _run_research_job, strategy, config_path_resolved,
+                        underlying_data_paths[underlying], underlying,
+                    )
+                    futures[future] = (strategy, underlying, started)
+                for future in as_completed(futures):
+                    strategy, underlying, started = futures[future]
+                    try:
+                        result = {"summary": future.result()}
+                    except Exception as exc:
+                        result = {"error": exc}
+                    job_results[(strategy, underlying)] = (started, result)
+
         for strategy in strategies:
-            strategy_started = datetime.now(timezone.utc)
-            try:
-                result = run_research(strategy, config_path=config_path_resolved)
-                strategies_report[strategy] = _strategy_summary(strategy, result)
-            except Exception as exc:
-                strategies_report[strategy] = _error_summary(
-                    strategy, exc, started_at=strategy_started, run_log=run_log,
-                    output_root=output_root,
+            by_underlying = {}
+            for underlying in underlyings:
+                strategy_started, job_result = job_results[(strategy, underlying)]
+                if "error" in job_result:
+                    by_underlying[underlying] = _error_summary(
+                        strategy, job_result["error"], started_at=strategy_started, run_log=run_log,
+                        output_root=output_root, underlying=underlying,
+                    )
+                else:
+                    by_underlying[underlying] = job_result["summary"]
+            if len(underlyings) == 1:
+                strategies_report[strategy] = by_underlying[underlyings[0]]
+            else:
+                child_statuses = {item.get("status") for item in by_underlying.values()}
+                strategy_status = (
+                    "partial_error" if "error" in child_statuses
+                    else "waiting_for_data" if child_statuses <= {"skipped_missing_dataset", "insufficient_history"}
+                    else "partial_data" if child_statuses & {"skipped_missing_dataset", "insufficient_history"}
+                    else "completed"
                 )
-        statuses = {item.get("status") for item in strategies_report.values()}
+                strategies_report[strategy] = {
+                    "status": strategy_status,
+                    "underlyings": by_underlying,
+                    "completed_count": sum(item.get("status") == "completed" for item in by_underlying.values()),
+                    "approved_count": sum(item.get("approved", False) for item in by_underlying.values()),
+                }
+        statuses = {
+            item.get("status")
+            for result in strategies_report.values()
+            for item in (result.get("underlyings", {}).values() if result.get("underlyings") else [result])
+        }
         if "error" in statuses:
             status = "partial_error"
-        elif statuses == {"skipped_missing_dataset"}:
+        elif statuses and statuses <= {"skipped_missing_dataset", "insufficient_history"}:
             status = "waiting_for_data"
+        elif statuses & {"skipped_missing_dataset", "insufficient_history"}:
+            status = "partial_data"
         else:
             status = "completed"
 
@@ -171,9 +275,12 @@ def run_automated_options_research(*, config_path: str | Path | None = None) -> 
         "run_date_et": today,
         "config_path": str(config_path_resolved),
         "config_sha256": config_hash,
-        "dataset_path": str(data_path),
+        "dataset_path": str(underlying_data_paths.get(underlyings[0])) if len(underlyings) == 1 else None,
+        "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()},
         "dataset_available": data_available,
         "data_mode": data_mode,
+        "workers_requested": configured_workers,
+        "workers_used": worker_count if enabled else 0,
         "strategies": strategies_report,
         "research_only": True,
         "trade_or_order_actions": 0,
@@ -187,12 +294,26 @@ def run_automated_options_research(*, config_path: str | Path | None = None) -> 
     _append_jsonl(automation_dir / "runs.jsonl", {
         "created_at": created_at.isoformat(), "run_date_et": today,
         "status": status, "config_sha256": config_hash,
-        "dataset_path": str(data_path), "dataset_available": data_available,
+        "workers_requested": configured_workers,
+        "workers_used": worker_count if enabled else 0,
+        "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()}, "dataset_available": data_available,
         "strategies": {
-            name: {
-                "status": result.get("status"), "run_id": result.get("run_id"),
-                "run_dir": result.get("run_dir"), "error": result.get("error"),
-            }
+            name: (
+                {
+                    "status": result.get("status"),
+                    "underlyings": {
+                        symbol: {
+                            "status": child.get("status"), "run_id": child.get("run_id"),
+                            "run_dir": child.get("run_dir"), "error": child.get("error"),
+                        }
+                        for symbol, child in result.get("underlyings", {}).items()
+                    },
+                }
+                if result.get("underlyings") else {
+                    "status": result.get("status"), "run_id": result.get("run_id"),
+                    "run_dir": result.get("run_dir"), "error": result.get("error"),
+                }
+            )
             for name, result in strategies_report.items()
         },
         "report_path": str(report_path),
@@ -205,16 +326,18 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Run configured options research sleeves")
     parser.add_argument("--config", help="options research config override")
+    parser.add_argument("--workers", type=int, help="maximum concurrent research processes")
     args = parser.parse_args()
     try:
         os.nice(10)
     except (AttributeError, OSError):
         pass
-    report = run_automated_options_research(config_path=args.config)
+    report = run_automated_options_research(config_path=args.config, workers=args.workers)
     print(json.dumps({
         "status": report["status"], "report": str((ROOT / "data/options/research/automation/latest.json").resolve()),
         "strategies": {name: result.get("status") for name, result in report["strategies"].items()},
         "dataset_available": report["dataset_available"],
+        "workers_used": report["workers_used"],
     }, sort_keys=True))
     return 0
 

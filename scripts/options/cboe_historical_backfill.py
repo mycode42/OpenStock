@@ -39,7 +39,7 @@ QUOTA_WINDOW = timedelta(hours=25)  # A full daily reset window plus a safety ho
 TRIAL_LAST_RUN_DATE = date(2026, 11, 2)  # Trial was activated around 2026-10-20.
 FIRST_EQUITY_SESSION = date(2016, 1, 4)
 MAX_RESEARCH_DTE = 60
-REQUIRED_RESEARCH_SESSIONS = 806
+REQUIRED_RESEARCH_SESSIONS = 1013
 ET = ZoneInfo("America/New_York")
 UTC = timezone.utc
 

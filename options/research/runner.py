@@ -288,6 +288,7 @@ def run_research(
     data_path: str | Path | None = None,
     config_path: str | Path | None = None,
     output_dir: str | Path | None = None,
+    underlying: str | None = None,
 ) -> dict:
     """Research one options expression module; it never reads credentials or submits orders."""
     strategy = str(strategy).strip().lower()
@@ -298,9 +299,9 @@ def run_research(
     research_config = _merge(_read_json(RESEARCH_DEFAULTS_PATH), _read_json(config_path_resolved)) if config_path_resolved != RESEARCH_DEFAULTS_PATH else _read_json(RESEARCH_DEFAULTS_PATH)
     selected_data_path = _project_path(data_path or research_config.get("data_path", "data/options/research/chains.jsonl"))
     output_root = _project_path(output_dir or research_config.get("output_dir", "data/options/research/runs"))
-    underlying = str(research_config.get("underlying", "SPY")).upper()
-    if underlying not in {"SPY", "SPX"}:
-        raise ValueError("initial options research supports liquid index underlyings SPY or SPX")
+    underlying = str(underlying or research_config.get("underlying", "SPY")).strip().upper()
+    if not underlying or not underlying.replace(".", "").isalnum():
+        raise ValueError("underlying must be a non-empty ticker symbol")
     live_config_path = Path(__file__).resolve().parents[1] / "config.default.json"
     base_config = live_defaults(live_config_path)
     base_config_digest = hashlib.sha256(live_config_path.read_bytes()).hexdigest()
@@ -322,10 +323,16 @@ def run_research(
     section["underlying"] = underlying
     if strategy == "long_volatility":
         section["underlyings"] = [underlying]
-    config_digest = hashlib.sha256(json.dumps(research_config, sort_keys=True).encode("utf-8")).hexdigest()
+        research_config.setdefault("search", {}).setdefault("grids", {}).setdefault(
+            "long_volatility", {},
+        )["underlyings"] = [[underlying]]
+    config_digest = hashlib.sha256(json.dumps({
+        "research_config": research_config,
+        "selected_underlying": underlying,
+    }, sort_keys=True).encode("utf-8")).hexdigest()
     timestamp = datetime.now(timezone.utc)
     source_digest = hashlib.sha256(selected_data_path.read_bytes()).hexdigest() if selected_data_path.is_file() else "missing"
-    run_id = f"{strategy}-{timestamp:%Y%m%dT%H%M%S%fZ}-{source_digest[:10]}-{config_digest[:8]}"
+    run_id = f"{strategy}-{underlying.lower()}-{timestamp:%Y%m%dT%H%M%S%fZ}-{source_digest[:10]}-{config_digest[:8]}"
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     run_start = {

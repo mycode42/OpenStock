@@ -100,7 +100,11 @@ def main(argv: list[str] | None = None) -> int:
                 # when both CPU-heavy pipelines overlap.
                 try:
                     options_process = subprocess.Popen(
-                        [sys.executable, "-m", "options.research.automation"],
+                        [
+                            sys.executable, "-m", "options.research.automation",
+                            "--config", str(ROOT / "options/research/config.portfolio.json"),
+                            "--workers", str(args.workers),
+                        ],
                         cwd=ROOT, stdout=options_log, stderr=subprocess.STDOUT,
                     )
                 except OSError as exc:

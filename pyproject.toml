@@ -71,6 +71,12 @@ optional = true
 [tool.poetry.group.research.dependencies]
 yfinance = "^1.2.0"
 
+[tool.poetry.group.theta]
+optional = true
+
+[tool.poetry.group.theta.dependencies]
+thetadata = { version = "^1.0.15", python = ">=3.12" }
+
 [tool.poetry.group.ml]
 optional = true
 
