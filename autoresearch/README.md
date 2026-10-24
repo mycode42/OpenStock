@@ -20,6 +20,27 @@ cycles do not run rolling verification, portfolio replay, or promotion. The
 full scheduled run supplies those validation stages and is the only path that
 can promote a candidate.
 
+The candidate archive now keeps a per-strategy champion and a persistent
+challenger validation queue. A champion changes only when a candidate passes
+the exact rolling out-of-sample gates and ranks above the current champion by
+lower-quartile fitness, then median fitness and fold consistency. Every new
+optimizer cycle seeds discovery from that champion before adding other diverse
+archive parents. The top pending challengers are also seeded into the next
+search. A worse deviation therefore stays out of the champion slot; the prior
+champion remains the next search anchor while new candidates continue to be
+explored.
+
+Each full run evaluates the current live profile, the stored champion, and up
+to two queued challengers per strategy on the same chronological folds, with
+the same cost model and minimum-sample gates. Live regime overrides are replayed
+as part of the live profile. Discovery improvements enter the queue only when
+they clear the sample and positive-after-costs bar and beat their paired
+discovery baseline. Passed challengers may then enter forward validation;
+failed challengers cannot replace the champion. The live profile is included as
+a rolling reference, while forward trials continue to compare challengers
+against that live profile. Optimizer-only runs only add discovery evidence and
+queue entries; they do not spend time on these validation stages.
+
 The pipeline uses dynamic parameter search over bounded signal-parameter
 spaces. Discovery tries recent windows (10/20/30 sessions for intraday and
 30/60/90 for swing strategies), starting with the middle window and falling

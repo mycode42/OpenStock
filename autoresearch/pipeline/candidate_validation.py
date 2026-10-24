@@ -1,8 +1,9 @@
-"""Incremental exact-parameter validation for a bounded archive cohort."""
+"""Incremental rolling validation for live, champion, and queued settings."""
 
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from copy import deepcopy
 from datetime import date
 import math
 import multiprocessing as mp
@@ -10,11 +11,19 @@ import statistics
 from types import SimpleNamespace
 
 from autoresearch.cpu import available_cpu_count
+from strategies.registry import (
+    ALGO_DEFAULT_PARAMETERS, REGIME_PARAMETER_PROFILES,
+    refresh_active_parameter_profile,
+)
 from strategies.multi_factor.features import aggregate_intraday_bars
 
 from ..artifacts.artifact_cache import read_json, stable_hash
 from ..artifacts.candidate_archive import (
-    candidate_id, candidate_validation_candidates, record_candidate_validation_folds,
+    archived_candidate, candidate_id, champion_candidate,
+    logic_version, model_family,
+    pending_validation_candidates, record_candidate_validation_folds,
+    record_champion_validation_result, record_validation_queue_result,
+    update_champion_if_better,
 )
 from ..settings import ADJUSTMENT
 from .adaptive_common import _prepare_args
@@ -22,9 +31,9 @@ from .adaptive_search import _fitness, _load_window_data, _metrics, _run_replay
 from .adaptive_scoring import _cost_model_version
 
 
-VALIDATION_VERSION = "exact-candidate-rolling-oos-v1"
+VALIDATION_VERSION = "exact-candidate-rolling-oos-v2-champion-live-queue"
 VALIDATION_COST_MODEL_VERSION = "algo-replay-cost-v1-slippage5-spread3-commission0.005-borrow3-penalty25"
-MAX_ARCHIVE_CANDIDATES_PER_STRATEGY = 3
+MAX_QUEUED_CHALLENGERS_PER_STRATEGY = 2
 MINIMUM_VALIDATION_FOLDS = 3
 MINIMUM_VALIDATION_TRADES = 10
 MINIMUM_POSITIVE_FOLD_FRACTION = 0.60
@@ -49,12 +58,19 @@ def _evaluate_fold(payload: tuple) -> tuple[int, list[dict]]:
             symbols=args.symbols_resolved, bars=bars, spy_daily=spy,
             start=test_start, end=test_end, args=args, capital=args.capital,
             preaggregated_daily_bars=preaggregated_daily_bars,
+            regime_profiles=(
+                {args.strategy: candidate["regime_profiles"]}
+                if candidate.get("regime_profiles") else None
+            ),
         )
         metrics = _metrics(report, capital=args.capital)
         fitness, _ = _fitness(metrics, args.fitness_weights_data)
         rows.append({
             "candidate_id": candidate["candidate_id"],
             "parameters": parameters,
+            "regime_profiles": candidate.get("regime_profiles") or {},
+            "validation_role": candidate.get("validation_role"),
+            "validation_roles": candidate.get("validation_roles") or [],
             "model_family": candidate.get("model_family"),
             "logic_version": candidate.get("logic_version"),
             "cost_model_version": candidate.get("cost_model_version"),
@@ -63,7 +79,6 @@ def _evaluate_fold(payload: tuple) -> tuple[int, list[dict]]:
             "validation_version": VALIDATION_VERSION,
             "validation_cost_model_version": VALIDATION_COST_MODEL_VERSION,
             "validation_context_sha256": args.validation_context_sha256,
-            "logic_version": candidate.get("logic_version"),
             "data_version": args.data_version,
             "train_start": window["train_start"],
             "train_end": window["train_end"],
@@ -118,11 +133,15 @@ def _summarize_candidate(candidate: dict, folds: list[dict]) -> dict:
     return {
         "candidate_id": candidate["candidate_id"],
         "parameters": candidate["parameters"],
+        "regime_profiles": candidate.get("regime_profiles") or {},
+        "validation_role": candidate.get("validation_role"),
+        "validation_roles": candidate.get("validation_roles") or [],
+        "queue_status": candidate.get("queue_status"),
         "model_family": candidate.get("model_family"),
         "logic_version": candidate.get("logic_version"),
         "cost_model_version": candidate.get("cost_model_version"),
         "parent_candidate_id": candidate.get("parent_candidate_id"),
-        "source_invocation_id": candidate.get("last_invocation_id"),
+        "source_invocation_id": candidate.get("last_invocation_id") or candidate.get("source_invocation_id"),
         "source_invocation_ids": candidate.get("source_invocation_ids") or [],
         "last_window": candidate.get("last_window") or {},
         "archive_artifact": candidate.get("archive_artifact"),
@@ -222,7 +241,8 @@ def run_candidate_validation(
     workers: int, force: bool = False,
     factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
-    """Validate exact archived settings on the rolling folds, reusing cached pairs."""
+    """Apply identical rolling gates to live, champion, and queued challenger settings."""
+    refresh_active_parameter_profile()
     archive_root = output_dir / "archive"
     verification_strategies = verification.get("strategies") or {}
     discovery_strategies = discovery.get("strategies") or {}
@@ -252,35 +272,70 @@ def run_candidate_validation(
                 "candidates": [],
             }
             continue
-        selected = (discovery_strategies.get(strategy) or {}).get("selected_candidate") or {}
         discovery_detail_path = (discovery_strategies.get(strategy) or {}).get("detail_artifact")
         discovery_detail, _ = read_json(discovery_detail_path) if discovery_detail_path else (None, None)
         current_regime_metrics_by_strategy[strategy] = _current_regime_metrics(
             discovery_detail or {}, strategy,
         )
-        include = []
-        if selected.get("eligible") and isinstance(selected.get("parameters"), dict):
-            include.append(selected["parameters"])
-        profiles = [
-            row for row in ((discovery_detail or {}).get("adaptive_regime_search") or {}).get("profiles") or []
-            if isinstance(row.get("parameters"), dict)
-            and (row.get("planned_ablation") or row.get("improved_over_baseline"))
-        ]
-        profiles.sort(key=lambda row: (
-            not bool(row.get("planned_ablation")),
-            -float(row.get("fitness") or 0.0),
-            str(row.get("source_candidate_id") or ""),
-        ))
-        for profile in profiles:
-            parameters = profile["parameters"]
-            if not any(candidate_id(strategy, parameters) == candidate_id(strategy, existing) for existing in include):
-                include.append(parameters)
-        cohort = candidate_validation_candidates(
+        cohort_by_id = {}
+
+        def add_to_cohort(record: dict, role: str) -> None:
+            parameters = record.get("parameters")
+            if not isinstance(parameters, dict):
+                return
+            regime_profiles = record.get("regime_profiles") or {}
+            identifier = record.get("candidate_id") or candidate_id(
+                strategy, parameters, regime_profiles=regime_profiles,
+            )
+            archived = archived_candidate(archive_root, strategy, identifier) or {}
+            candidate = {
+                **archived,
+                **record,
+                "candidate_id": identifier,
+                "strategy": strategy,
+                "parameters": parameters,
+                "regime_profiles": regime_profiles,
+                "model_family": record.get("model_family") or archived.get("model_family"),
+                "logic_version": record.get("logic_version") or archived.get("logic_version"),
+                "candidate_validation_folds": archived.get("candidate_validation_folds") or [],
+                "validation_roles": list(dict.fromkeys([
+                    *(cohort_by_id.get(identifier, {}).get("validation_roles") or []),
+                    *(record.get("validation_roles") or []),
+                ])),
+                "archive_artifact": str((archive_root / "candidate-archive.json").resolve()),
+            }
+            if role not in candidate["validation_roles"]:
+                candidate["validation_roles"].append(role)
+            candidate["validation_role"] = role
+            if role == "challenger":
+                candidate["queue_status"] = record.get("status", "queued")
+            cohort_by_id[identifier] = candidate
+
+        live_parameters = deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
+        live_regimes = deepcopy(REGIME_PARAMETER_PROFILES.get(strategy) or {})
+        add_to_cohort({
+            "candidate_id": candidate_id(
+                strategy, live_parameters, regime_profiles=live_regimes,
+            ),
+            "parameters": live_parameters,
+            "regime_profiles": live_regimes,
+            "model_family": model_family(strategy, live_parameters),
+            "logic_version": logic_version(strategy),
+            "source": "live_setting",
+        }, "live_setting")
+
+        champion = champion_candidate(archive_root, strategy)
+        if champion:
+            add_to_cohort(champion, "champion")
+
+        queued = pending_validation_candidates(
             archive_root, strategy,
-            limit=MAX_ARCHIVE_CANDIDATES_PER_STRATEGY,
-            include_parameters=include,
-            invocation_id=discovery.get("invocation_id"),
+            limit=MAX_QUEUED_CHALLENGERS_PER_STRATEGY,
+            data_version=data_version,
         )
+        for candidate in queued:
+            add_to_cohort(candidate, "challenger")
+        cohort = list(cohort_by_id.values())
         if not cohort:
             results[strategy] = {"status": "completed", "candidates": []}
             continue
@@ -318,6 +373,14 @@ def run_candidate_validation(
                 missing_by_fold.append((fold_index, window, missing))
         results[strategy] = {
             "status": "running", "candidate_count": len(cohort),
+            "candidate_roles": {
+                candidate["candidate_id"]: candidate.get("validation_roles") or []
+                for candidate in cohort
+            },
+            "queued_challengers_selected": sum(
+                "challenger" in (candidate.get("validation_roles") or [])
+                for candidate in cohort
+            ),
             "reused_fold_count": sum(
                 len(cohort) for _ in detail.get("folds", [])
             ) - sum(len(missing) for _, _, missing in missing_by_fold),
@@ -402,7 +465,13 @@ def run_candidate_validation(
                 candidate["candidate_id"],
             ) or {}
             summary = _summarize_candidate(candidate, folds)
-            summary["current_regime_metrics"] = current_metrics
+            summary["validation_version"] = VALIDATION_VERSION
+            summary["validation_data_version"] = data_version
+            summary["validation_end"] = end.isoformat()
+            summary["current_regime_metrics"] = {
+                **(candidate.get("regime_metrics") or {}),
+                **current_metrics,
+            }
             if strategy in failed_strategies:
                 summary["eligible"] = False
                 summary["status"] = "validation_error"
@@ -414,6 +483,38 @@ def run_candidate_validation(
             "folds": MINIMUM_VALIDATION_FOLDS,
             "closed_trades": MINIMUM_VALIDATION_TRADES,
             "positive_fold_fraction": MINIMUM_POSITIVE_FOLD_FRACTION,
+        }
+        result["champion_updates"] = []
+        for candidate in candidates:
+            roles = candidate.get("validation_roles") or []
+            if "challenger" in roles:
+                record_validation_queue_result(
+                    archive_root, strategy, candidate["candidate_id"],
+                    status=candidate.get("status", "validation_error"),
+                    summary={
+                        key: candidate.get(key) for key in (
+                            "status", "fold_count", "closed_trade_count",
+                            "positive_fold_fraction", "median_fitness",
+                            "lower_quartile_fitness", "median_net_return_pct",
+                            "worst_fold_drawdown_pct",
+                        )
+                    },
+                    data_version=data_version, validation_end=end.isoformat(),
+                )
+            if candidate.get("status") == "passed":
+                result["champion_updates"].append(update_champion_if_better(
+                    archive_root, strategy, candidate, candidate,
+                ))
+            if "champion" in roles:
+                record_champion_validation_result(
+                    archive_root, strategy, candidate, candidate,
+                    data_version=data_version, validation_end=end.isoformat(),
+                )
+        result["validation_queue"] = {
+            "challengers_selected": result.get("queued_challengers_selected", 0),
+            "challengers_remaining": len(pending_validation_candidates(
+                archive_root, strategy, limit=10_000,
+            )),
         }
 
     return {

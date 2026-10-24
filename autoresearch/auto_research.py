@@ -48,7 +48,7 @@ from .settings import (
     RESEARCHABLE_STRATEGIES,
 )
 
-AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v22-multifactor-diagnostics-saturation-2026"
+AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v23-continuous-champion-queue-2026"
 logger = logging.getLogger(__name__)
 
 
@@ -230,6 +230,13 @@ def run_daily_research(args) -> dict:
             "verification_step_days": ADAPTIVE_VERIFICATION_STEP_DAYS,
             "verification_purge_sessions": ADAPTIVE_PURGE_SESSIONS,
             "multi_factor_min_universe_values": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
+            "continuous_improvement": {
+                "version": "validated-champion-queue-v1",
+                "persistent_champion_seeding": True,
+                "persistent_challenger_validation_queue": True,
+                "live_setting_in_exact_validation_cohort": True,
+                "max_queued_challengers_per_strategy_per_full_run": 2,
+            },
         },
         "strategies": list(RESEARCHABLE_STRATEGIES),
         "live_configuration_sha256": live_snapshot["sha256"],
@@ -385,12 +392,12 @@ def run_daily_research(args) -> dict:
                 "total_seconds": round(perf_counter() - total_started, 3),
             },
             "recommendation": {
-                "optimizer": "The next optimizer cycle re-scores archived candidates, mutates the strongest parents, and explores unseen settings on the available bars.",
-                "verification": "Run the full research cycle to evaluate archived and newly discovered candidates on rolling out-of-sample folds and apply promotion gates.",
+                "optimizer": "The optimizer seeds each strategy from its persistent exact-validated champion and top queued challengers, keeps exploring archive variants, and queues discovery winners for rolling verification.",
+                "verification": "The full cycle applies the same rolling gates to current live settings, champions, and up to two queued challengers per strategy before forward trials.",
                 "adaptive_parameter_promotion_requires_human_confirmation": False,
             },
             "limitations": [
-                "This cycle records research candidates only; it does not run rolling verification, portfolio replay, or forward promotion checks.",
+                "This cycle records discovery candidates in the persistent validation queue but does not run rolling verification, portfolio replay, or forward promotion checks.",
                 "Training fitness can vary across rolling windows and does not guarantee future performance.",
             ],
         }

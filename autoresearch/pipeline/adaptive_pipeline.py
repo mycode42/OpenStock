@@ -30,8 +30,8 @@ from ..settings import (
     STRATEGY_FLAVORS,
 )
 
-ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v18-saturation-aware-multifactor-recovery-2026"
-ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v13-rolling-current-cohort-2026"
+ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v19-validated-champion-seeding-2026"
+ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v14-champion-live-validation-2026"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": 5.0,
     "spread_bps": 3.0,

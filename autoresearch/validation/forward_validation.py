@@ -245,9 +245,14 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
         for candidate in validation.get("candidates") or []:
             if candidate.get("status") != "passed":
                 continue
-            if candidate.get("source_invocation_id") != discovery.get("invocation_id"):
+            roles = set(candidate.get("validation_roles") or [])
+            if "challenger" not in roles or roles.intersection({"live_setting", "champion"}):
                 continue
-            regime_metrics = (candidate.get("current_regime_metrics") or {}).get(regime) or {}
+            regime_metrics = (
+                (candidate.get("current_regime_metrics") or {}).get(regime)
+                or (candidate.get("regime_metrics") or {}).get(regime)
+                or {}
+            )
             if not regime_metrics.get("eligible"):
                 continue
             if not regime_metrics.get("planned_ablation") and not regime_metrics.get("improved_over_baseline"):

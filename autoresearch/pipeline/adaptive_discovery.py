@@ -13,8 +13,9 @@ from market.data import data_tier
 
 from ..artifacts.files import _atomic_json
 from ..artifacts.candidate_archive import (
-    archive_discoveries, candidate_id, evaluated_candidate_ids, logic_version,
-    model_family, parent_candidates,
+    archive_discoveries, candidate_id, champion_candidate,
+    evaluated_candidate_ids, logic_version, model_family,
+    parent_candidates, pending_validation_candidates,
 )
 from .adaptive_common import _prepare_args, _read_json_file, _write_report
 from strategies.multi_factor.features import aggregate_intraday_bars
@@ -226,6 +227,34 @@ def run_window_ladder_discovery(
     archived = archive_discoveries(
         archive_root, args.strategy, [item[1] for item in reports],
     )
+    selected_parameters = (detail.get("selected_candidate") or {}).get("parameters")
+    selected_id = (
+        candidate_id(args.strategy, selected_parameters)
+        if isinstance(selected_parameters, dict) else None
+    )
+    champion = champion_candidate(archive_root, args.strategy)
+    pending = pending_validation_candidates(
+        archive_root, args.strategy, limit=10_000,
+    )
+    detail["continuous_improvement"] = {
+        "champion_candidate_id": (champion or {}).get("candidate_id"),
+        "champion_currently_passes_gates": (champion or {}).get("currently_passes_gates"),
+        "champion_latest_validation_status": (
+            ((champion or {}).get("latest_validation") or {}).get("status")
+        ),
+        "champion_seeded_as_parent": bool(
+            (detail.get("parent_candidate") or {}).get("champion_seeded")
+        ),
+        "queued_parent_candidate_ids": (
+            (detail.get("parent_candidate") or {}).get("queued_candidate_ids_seeded") or []
+        ),
+        "selected_candidate_id": selected_id,
+        "selected_candidate_queued": any(
+            row.get("candidate_id") == selected_id for row in pending
+        ),
+        "validation_queue_pending_count": len(pending),
+        "queue_policy": "eligible positive-after-costs discovery improvements over baseline; strongest challengers validated first",
+    }
     baseline = next(
         (row for row in detail.get("candidates", []) if row.get("name") == "baseline"),
         None,

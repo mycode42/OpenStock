@@ -53,6 +53,8 @@ def _read(path: Path) -> dict:
             "run_counters": {},
             "candidates": {},
             "search_runs": {},
+            "champions": {},
+            "validation_queue": {},
         }
     try:
         value = json.loads(path.read_text())
@@ -63,13 +65,21 @@ def _read(path: Path) -> dict:
     value.setdefault("run_counters", {})
     value.setdefault("candidates", {})
     value.setdefault("search_runs", {})
+    value.setdefault("champions", {})
+    value.setdefault("validation_queue", {})
     if (
         not isinstance(value["run_counters"], dict)
         or not isinstance(value["candidates"], dict)
         or not isinstance(value["search_runs"], dict)
+        or not isinstance(value["champions"], dict)
+        or not isinstance(value["validation_queue"], dict)
         or any(
             not isinstance(runs, list) or any(not isinstance(run, dict) for run in runs)
             for runs in value["search_runs"].values()
+        )
+        or any(
+            not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+            for rows in value["validation_queue"].values()
         )
     ):
         raise ValueError("candidate archive counters or candidates are malformed")
@@ -125,6 +135,7 @@ def logic_version(strategy: str) -> str:
 def candidate_id(
     strategy: str, parameters: dict, regime: str | None = None, *,
     family: str | None = None, version: str | None = None,
+    regime_profiles: dict | None = None,
 ) -> str:
     payload = json.dumps(
         {
@@ -132,6 +143,7 @@ def candidate_id(
             "model_family": family or model_family(strategy, parameters),
             "logic_version": version or logic_version(strategy),
             "parameters": parameters,
+            **({"regime_profiles": regime_profiles} if regime_profiles else {}),
         },
         sort_keys=True, separators=(",", ":"), default=str,
     )
@@ -224,6 +236,7 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                 next((item for item in candidates if str(item.get("name", "")).endswith(":baseline")), {}),
             )
             baseline_fitness = baseline.get("fitness")
+            baseline_regimes = baseline.get("regime_metrics") or {}
             selected = detail.get("selected_candidate") or {}
             run_identity = "|".join((
                 strategy, str(data_version or "unknown"),
@@ -273,6 +286,24 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                 key = candidate_id(strategy, parameters)
                 if data_version:
                     seen_for_version.add(key)
+                candidate_name = str(item.get("name") or "candidate")
+                planned_ablation = candidate_name.startswith("ablation:") or ":ablation:" in candidate_name
+                regime_metrics = {}
+                for regime, result in (item.get("regime_metrics") or {}).items():
+                    if not isinstance(result, dict):
+                        continue
+                    baseline_result = baseline_regimes.get(regime) or {}
+                    baseline_sample_met = bool(baseline_result.get("minimum_sample_met"))
+                    regime_fitness = float(result.get("fitness") or 0.0)
+                    baseline_regime_fitness = float(baseline_result.get("fitness") or 0.0)
+                    regime_metrics[regime] = {
+                        **result,
+                        "baseline_fitness": baseline_regime_fitness,
+                        "improved_over_baseline": bool(
+                            baseline_sample_met and regime_fitness > baseline_regime_fitness + 1e-9
+                        ),
+                        "planned_ablation": planned_ablation,
+                    }
                 existing = rows.get(key) or {
                     "candidate_id": key,
                     "strategy": strategy,
@@ -287,7 +318,8 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                     "fitness": item.get("fitness"),
                     "metrics": item.get("metrics"),
                     "eligible": bool(item.get("eligible")),
-                    "regime_metrics": item.get("regime_metrics") or {},
+                    "regime_metrics": regime_metrics,
+                    "candidate_name": candidate_name,
                     "search_iteration": item.get("search_iteration"),
                     "model_family": item.get("model_family") or model_family(strategy, parameters),
                     "logic_version": item.get("logic_version") or logic_version(strategy),
@@ -356,6 +388,102 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
                 del history[32:]
                 rows[key] = existing
                 count += 1
+                baseline_value = float(baseline_fitness) if isinstance(baseline_fitness, (int, float)) else None
+                candidate_value = float(fitness) if isinstance(fitness, (int, float)) else None
+                if (
+                    item.get("name") != "baseline"
+                    and item.get("eligible")
+                    and item.get("minimum_trade_count_met")
+                    and item.get("positive_after_costs")
+                    and baseline_value is not None
+                    and candidate_value is not None
+                    and math.isfinite(baseline_value)
+                    and math.isfinite(candidate_value)
+                    and candidate_value > baseline_value + 1e-4
+                ):
+                    queue = archive.setdefault("validation_queue", {}).setdefault(strategy, [])
+                    queued = next((entry for entry in queue if entry.get("candidate_id") == key), None)
+                    if queued is None:
+                        queue.append({
+                            "candidate_id": key,
+                            "strategy": strategy,
+                            "parameters": parameters,
+                            "regime_profiles": {},
+                            "model_family": existing.get("model_family"),
+                            "logic_version": existing.get("logic_version"),
+                            "cost_model_version": existing.get("cost_model_version"),
+                            "parent_candidate_id": existing.get("parent_candidate_id"),
+                            "source_invocation_id": invocation_id,
+                            "source_invocation_ids": list(existing.get("source_invocation_ids") or []),
+                            "discovery_fitness": candidate_value,
+                            "baseline_discovery_fitness": baseline_value,
+                            "discovery_delta": candidate_value - baseline_value,
+                            "discovery_metrics": item.get("metrics") or {},
+                            "regime_metrics": regime_metrics,
+                            "data_version": data_version,
+                            "window": window,
+                            "status": "queued",
+                            "queued_at": timestamp,
+                            "last_attempt_data_version": None,
+                            "discovery_history": [{
+                                "data_version": data_version,
+                                "window": window,
+                                "fitness": candidate_value,
+                                "baseline_fitness": baseline_value,
+                                "fitness_delta": candidate_value - baseline_value,
+                                "invocation_id": invocation_id,
+                                "observed_at": timestamp,
+                            }],
+                        })
+                    else:
+                        discovery_history = queued.setdefault("discovery_history", [])
+                        observation = {
+                            "data_version": data_version,
+                            "window": window,
+                            "fitness": candidate_value,
+                            "baseline_fitness": baseline_value,
+                            "fitness_delta": candidate_value - baseline_value,
+                            "invocation_id": invocation_id,
+                            "observed_at": timestamp,
+                        }
+                        history_key = (data_version, window.get("start"), window.get("end"))
+                        prior_observation = next((entry for entry in discovery_history if (
+                            entry.get("data_version"),
+                            (entry.get("window") or {}).get("start"),
+                            (entry.get("window") or {}).get("end"),
+                        ) == history_key), None)
+                        if prior_observation is None:
+                            discovery_history.append(observation)
+                        else:
+                            prior_observation.update(observation)
+                        del discovery_history[:-32]
+                        if candidate_value - baseline_value >= float(queued.get("discovery_delta") or -math.inf):
+                            queued.update({
+                                "discovery_fitness": candidate_value,
+                                "baseline_discovery_fitness": baseline_value,
+                                "discovery_delta": candidate_value - baseline_value,
+                                "discovery_metrics": item.get("metrics") or {},
+                                "regime_metrics": regime_metrics,
+                                "data_version": data_version,
+                                "window": window,
+                            })
+                        queued["last_seen_eligible_at"] = timestamp
+                        if invocation_id:
+                            queued["source_invocation_id"] = invocation_id
+                            source_ids = queued.setdefault("source_invocation_ids", [])
+                            if invocation_id not in source_ids:
+                                source_ids.append(invocation_id)
+                                del source_ids[:-32]
+                        if queued.get("status") in {"failed", "insufficient_sample"} and (
+                            queued.get("validation_data_version") != data_version
+                        ):
+                            queued["status"] = "queued"
+                            queued["requeued_at"] = timestamp
+                    queue.sort(key=lambda entry: (
+                        -float(entry.get("discovery_delta") or 0.0),
+                        str(entry.get("queued_at") or ""),
+                        str(entry.get("candidate_id") or ""),
+                    ))
             if data_version:
                 evaluated[data_version] = {
                     "updated_at": timestamp,
@@ -534,6 +662,169 @@ def candidate_validation_candidates(
     return selected
 
 
+def archived_candidate(root: str | Path, strategy: str, identifier: str) -> dict | None:
+    """Return the full persistent record for one exact candidate identity."""
+    archive = _read(_archive_path(root))
+    row = ((archive.get("candidates") or {}).get(strategy) or {}).get(identifier)
+    return dict(row) if isinstance(row, dict) else None
+
+
+def pending_validation_candidates(
+    root: str | Path, strategy: str, *, limit: int = 2, data_version: str | None = None,
+) -> list[dict]:
+    """Return due queued challengers, strongest discovery improvement first."""
+    if limit < 1:
+        return []
+    archive = _read(_archive_path(root))
+    queue = (archive.get("validation_queue") or {}).get(strategy) or []
+    eligible = [
+        row for row in queue
+        if row.get("status") == "queued"
+        and (data_version is None or row.get("last_attempt_data_version") != data_version)
+        and row.get("logic_version") in (None, logic_version(strategy))
+        and isinstance(row.get("parameters"), dict)
+    ]
+    eligible.sort(key=lambda row: (
+        -float(row.get("discovery_delta") or 0.0),
+        str(row.get("queued_at") or ""),
+        str(row.get("candidate_id") or ""),
+    ))
+    return [dict(row) for row in eligible[:limit]]
+
+
+def record_validation_queue_result(
+    root: str | Path, strategy: str, identifier: str, *, status: str,
+    summary: dict, data_version: str, validation_end: str | None = None,
+) -> None:
+    """Persist challenger gate outcomes while leaving insufficient samples queued."""
+    if status not in {"passed", "failed", "insufficient_sample", "validation_error"}:
+        raise ValueError(f"unsupported validation queue status: {status}")
+    path = _archive_path(root)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with _locked(path):
+        archive = _read(path)
+        queue = archive.setdefault("validation_queue", {}).setdefault(strategy, [])
+        row = next((entry for entry in queue if entry.get("candidate_id") == identifier), None)
+        if row is None:
+            return
+        history = row.setdefault("validation_history", [])
+        history.append({
+            "status": status,
+            "data_version": data_version,
+            "validation_end": validation_end,
+            "validated_at": timestamp,
+            "summary": summary,
+        })
+        del history[:-16]
+        row.update({
+            "status": "queued" if status in {"insufficient_sample", "validation_error"} else status,
+            "last_validation_status": status,
+            "last_attempt_data_version": data_version,
+            "validation_data_version": data_version,
+            "validation_end": validation_end,
+            "last_validation_at": timestamp,
+            "validation_summary": summary,
+        })
+        archive["updated_at"] = timestamp
+        _atomic_json(path, archive)
+
+
+def champion_candidate(root: str | Path, strategy: str) -> dict | None:
+    """Return the strategy's durable research champion, if one has passed gates."""
+    archive = _read(_archive_path(root))
+    row = (archive.get("champions") or {}).get(strategy)
+    return dict(row) if isinstance(row, dict) else None
+
+
+def record_champion_validation_result(
+    root: str | Path, strategy: str, candidate: dict, summary: dict, *,
+    data_version: str, validation_end: str | None = None,
+) -> None:
+    """Track the champion's latest gate result without discarding its history."""
+    identifier = candidate.get("candidate_id")
+    if not identifier:
+        return
+    path = _archive_path(root)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with _locked(path):
+        archive = _read(path)
+        champion = (archive.get("champions") or {}).get(strategy)
+        if not isinstance(champion, dict) or champion.get("candidate_id") != identifier:
+            return
+        champion["latest_validation"] = {
+            "status": summary.get("status"),
+            "data_version": data_version,
+            "validation_end": validation_end,
+            "validated_at": timestamp,
+            "summary": summary,
+        }
+        champion["currently_passes_gates"] = summary.get("status") == "passed"
+        archive["updated_at"] = timestamp
+        _atomic_json(path, archive)
+
+
+def update_champion_if_better(
+    root: str | Path, strategy: str, candidate: dict, summary: dict,
+) -> dict:
+    """Keep the strongest exact-validated candidate as the persistent search seed."""
+    if summary.get("status") != "passed":
+        return {"updated": False, "reason": "candidate_did_not_pass_exact_validation"}
+    identifier = candidate.get("candidate_id")
+    parameters = candidate.get("parameters")
+    if not identifier or not isinstance(parameters, dict):
+        return {"updated": False, "reason": "candidate_identity_missing"}
+
+    def rank(value: dict) -> tuple[float, float, float, float]:
+        evidence = value.get("validation_summary") or value
+        def metric(name: str, default: float) -> float:
+            raw = evidence.get(name)
+            if not isinstance(raw, (int, float)) or not math.isfinite(float(raw)):
+                return default
+            return float(raw)
+        return (
+            metric("lower_quartile_fitness", -math.inf),
+            metric("median_fitness", -math.inf),
+            metric("positive_fold_fraction", 0.0),
+            metric("median_net_return_pct", -math.inf),
+        )
+
+    path = _archive_path(root)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    with _locked(path):
+        archive = _read(path)
+        champions = archive.setdefault("champions", {})
+        prior = champions.get(strategy)
+        proposed = {
+            "candidate_id": identifier,
+            "strategy": strategy,
+            "parameters": parameters,
+            "regime_profiles": candidate.get("regime_profiles") or {},
+            "model_family": candidate.get("model_family") or model_family(strategy, parameters),
+            "logic_version": candidate.get("logic_version") or logic_version(strategy),
+            "source": candidate.get("validation_role") or candidate.get("source") or "validated_candidate",
+            "validation_summary": summary,
+            "latest_validation": {
+                "status": "passed",
+                "data_version": summary.get("validation_data_version"),
+                "validation_end": summary.get("validation_end"),
+                "validated_at": timestamp,
+                "summary": summary,
+            },
+            "currently_passes_gates": True,
+            "selected_at": timestamp,
+        }
+        if prior and prior.get("candidate_id") != identifier and rank(prior) >= rank(proposed):
+            return {"updated": False, "reason": "existing_champion_has_stronger_validation", "candidate_id": prior.get("candidate_id")}
+        if prior and prior.get("candidate_id") == identifier:
+            proposed["first_selected_at"] = prior.get("first_selected_at") or prior.get("selected_at")
+        else:
+            proposed["first_selected_at"] = timestamp
+        champions[strategy] = proposed
+        archive["updated_at"] = timestamp
+        _atomic_json(path, archive)
+        return {"updated": True, "candidate_id": identifier, "previous_candidate_id": (prior or {}).get("candidate_id")}
+
+
 def record_candidate_validation_folds(
     root: str | Path, strategy: str, records: list[dict],
 ) -> int:
@@ -548,7 +839,9 @@ def record_candidate_validation_folds(
             parameters = record.get("parameters")
             if not isinstance(parameters, dict):
                 continue
-            key = candidate_id(strategy, parameters)
+            key = record.get("candidate_id") or candidate_id(
+                strategy, parameters, regime_profiles=record.get("regime_profiles"),
+            )
             row = rows.get(key) or {
                 "candidate_id": key, "strategy": strategy,
                 "parameters": parameters, "first_seen": timestamp,
@@ -557,7 +850,7 @@ def record_candidate_validation_folds(
             }
             for name in (
                 "model_family", "logic_version", "cost_model_version",
-                "parent_candidate_id", "last_invocation_id",
+                "parent_candidate_id", "last_invocation_id", "regime_profiles",
             ):
                 if record.get(name) is not None:
                     row[name] = record[name]
@@ -673,6 +966,8 @@ def parent_candidates(
     before: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Choose several high-quality, meaningfully different archive members."""
+    if limit < 1:
+        return [], {"used": False, "count": 0, "candidate_ids": []}
     path = _archive_path(root)
     archive = _read(path)
     rows = list((archive.get("candidates") or {}).get(strategy, {}).values())
@@ -689,7 +984,42 @@ def parent_candidates(
     ]
     rows.sort(key=_candidate_rank, reverse=True)
     selected = []
+    champion = (archive.get("champions") or {}).get(strategy)
+    champion_selected = False
+    queued_seed_ids = []
+    if (
+        isinstance(champion, dict)
+        and isinstance(champion.get("parameters"), dict)
+        and champion.get("logic_version") in (None, logic_version(strategy))
+    ):
+        champion_row = next(
+            (row for row in rows if row.get("candidate_id") == champion.get("candidate_id")),
+            champion,
+        )
+        selected.append(champion_row)
+        champion_selected = True
+    pending = [
+        row for row in ((archive.get("validation_queue") or {}).get(strategy) or [])
+        if row.get("status") == "queued"
+        and isinstance(row.get("parameters"), dict)
+        and row.get("logic_version") in (None, logic_version(strategy))
+    ]
+    pending.sort(key=lambda row: (
+        -float(row.get("discovery_delta") or 0.0),
+        str(row.get("queued_at") or ""),
+        str(row.get("candidate_id") or ""),
+    ))
+    max_queued_seeds = min(2, max(0, limit - len(selected)))
+    for row in pending:
+        if len(queued_seed_ids) >= max_queued_seeds:
+            break
+        if any(row.get("candidate_id") == parent.get("candidate_id") for parent in selected):
+            continue
+        selected.append(row)
+        queued_seed_ids.append(row.get("candidate_id"))
     for row in rows:
+        if len(selected) >= limit:
+            break
         if any(_parameter_distance(row["parameters"], parent["parameters"]) < 0.08 for parent in selected):
             continue
         selected.append(row)
@@ -700,6 +1030,10 @@ def parent_candidates(
         "archive": str(path.resolve()),
         "candidate_ids": [row["candidate_id"] for row in selected],
         "count": len(selected),
+        "champion_candidate_id": (champion or {}).get("candidate_id"),
+        "champion_seeded": champion_selected,
+        "queued_candidate_ids_seeded": queued_seed_ids,
+        "queued_candidates_seeded": len(queued_seed_ids),
     }
 
 
