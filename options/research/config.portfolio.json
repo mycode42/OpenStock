@@ -6,6 +6,6 @@
       "AAPL", "GOOGL", "META", "AMZN", "AMD", "JPM", "V", "UNH",
       "JNJ", "PG", "KO", "PLTR", "CRM", "PANW", "TSLA", "SPCX"
     ],
-    "data_path_template": "data/options/research/theta/{underlying}/chains.jsonl"
+    "data_path_template": "data/options/research/combined/{underlying}/chains.jsonl"
   }
 }

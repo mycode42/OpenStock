@@ -1,7 +1,7 @@
 {
   "underlying": "SPY",
   "data_mode": "auto",
-  "data_path": "data/options/research/theta/SPY/chains.jsonl",
+  "data_path": "data/options/research/combined/SPY/chains.jsonl",
   "output_dir": "data/options/research/runs",
   "automation": {
     "enabled": true,

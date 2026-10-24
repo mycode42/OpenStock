@@ -119,16 +119,39 @@ class OptionsPaperClient:
             raise ValueError(f"no valid underlying quote for {symbol}")
         return float(parsed["price"])
 
-    def stock_bars(self, symbol: str, *, start: date, end: date, limit: int = 100) -> list[dict]:
+    def stock_bars(
+        self, symbol: str, *, start: date, end: date,
+        limit: int = 100, adjustment: str = "raw",
+    ) -> list[dict]:
+        params = {
+            "timeframe": "1Day", "start": start.isoformat(), "end": end.isoformat(),
+            "limit": limit, "feed": "sip",
+        }
+        if adjustment != "raw":
+            params["adjustment"] = adjustment
         payload = self._get(
             DATA_BASE,
             f"v2/stocks/{symbol.upper()}/bars",
-            params={"timeframe": "1Day", "start": start.isoformat(), "end": end.isoformat(), "limit": limit, "feed": "sip"},
+            params=params,
         )
         bars = payload.get("bars", []) if isinstance(payload, dict) else payload
         if not isinstance(bars, list):
             raise ValueError("Alpaca stock bars response is malformed")
         return bars
+
+    def market_calendar(self, on_date: date) -> dict | None:
+        """Return the paper account's regular-session schedule for one date."""
+        rows = self._get(
+            PAPER_BASE, "calendar",
+            params={"start": on_date.isoformat(), "end": on_date.isoformat()},
+        )
+        if not isinstance(rows, list):
+            raise ValueError("Alpaca market calendar response is malformed")
+        if not rows:
+            return None
+        if len(rows) != 1 or str(rows[0].get("date")) != on_date.isoformat():
+            raise ValueError("Alpaca market calendar returned an unexpected session")
+        return rows[0]
 
     def positions(self) -> list[dict]:
         result = self._get(PAPER_BASE, "positions")

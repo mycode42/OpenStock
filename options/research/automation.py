@@ -13,6 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from autoresearch.cpu import available_cpu_count
+from options.research.archive import merge_symbol_dataset
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -177,6 +178,10 @@ def run_automated_options_research(
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
     enabled = bool(config.get("automation", {}).get("enabled", True))
     strategies_report: dict[str, dict] = {}
+    archive_merge = {
+        symbol: merge_symbol_dataset(symbol)
+        for symbol in underlyings
+    }
     data_available = any(path.is_file() for path in underlying_data_paths.values())
     data_mode = config.get("data_mode", "auto")
 
@@ -278,6 +283,13 @@ def run_automated_options_research(
         "dataset_path": str(underlying_data_paths.get(underlyings[0])) if len(underlyings) == 1 else None,
         "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()},
         "dataset_available": data_available,
+        "archive_merge": {
+            symbol: {
+                "updated": not bool(result.get("skipped")),
+                "combined_sessions": result.get("combined_sessions"),
+            }
+            for symbol, result in archive_merge.items()
+        },
         "data_mode": data_mode,
         "workers_requested": configured_workers,
         "workers_used": worker_count if enabled else 0,

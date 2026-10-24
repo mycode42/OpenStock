@@ -13,7 +13,7 @@ default underlying; use `--underlying` to select another ticker:
 ```sh
 poetry run python -m options.research --strategy vrp \
   --underlying NVDA \
-  --data data/options/research/theta/NVDA/chains.jsonl
+  --data data/options/research/combined/NVDA/chains.jsonl
 ```
 
 Use `--config` for a JSON override and `--output-dir` to change the artifact
@@ -35,7 +35,8 @@ The scheduled AutoResearch automation runs `autoresearch.nightly`, which starts
 the existing equity research command and an independent options job concurrently.
 The nightly job uses `config.portfolio.json` to run `vrp`, `event_driven`, and
 `long_volatility` against all 24 tickers in the Algo portfolio universe. Each
-ticker reads its own ThetaData archive through `automation.data_path_template`;
+ticker reads its merged ThetaData/Alpaca daily archive through
+`automation.data_path_template`;
 missing or not-yet-long-enough datasets are reported per ticker while available
 datasets continue through research. Edit `automation.strategies` in
 `config.portfolio.json` to select a different subset, including
@@ -74,10 +75,39 @@ official `THETADATA_API_KEY` name). To backfill a smaller set, repeat
 `--underlying`, for example `--underlying SPY --underlying NVDA`. The output is
 written under `data/options/research/theta/<SYMBOL>/`.
 
+The Theta files under `data/options/research/theta/<SYMBOL>/chains.jsonl` are
+the historical source archive. Their per-symbol manifest now distinguishes
+`research_ready` (at least 1,013 usable sessions) from `archive_complete` (all
+requested monthly EOD and open-interest files through the requested end date
+were fetched). `research_ready` alone does not mean the full backfill is done.
+
+## Daily Alpaca capture
+
+The `options-history-capture` OpenClaw automation runs at 16:15
+America/New_York on weekdays, after the regular close. It saves OPRA quotes from the current session and the
+session's underlying close for all 24 portfolio tickers. It captures options
+expiring within 60 days and up to 20 strikes on each side of spot per expiry.
+Snapshots with fewer than 20 valid same-session quotes are rejected and logged
+per ticker. The collector reads only the Alpaca options account credentials;
+it does not read or call ThetaData.
+
+Alpaca rows are stored under `data/options/research/alpaca/<SYMBOL>/`. The
+research input is the merged `data/options/research/combined/<SYMBOL>/chains.jsonl`:
+it keeps one row per New York session and prefers Alpaca when both providers
+have that date. Thus Theta remains the historical backfill source, while daily
+research advances from Alpaca. The capture can also be run manually with
+`poetry run python -m scripts.options.alpaca_daily_capture`.
+
+After every ticker's Theta manifest reports `archive_complete: true` for the
+same requested date range, and the Alpaca capture has successfully archived the
+latest session for the configured universe, the Theta subscription is no longer
+needed to extend the dataset. The Alpaca automation will continue adding current
+sessions to the combined research files.
+
 To narrow the nightly batch, set `automation.underlyings` in
 `config.portfolio.json`. The full list matches the Algo portfolio universe and
-uses `data/options/research/theta/{underlying}/chains.jsonl`; custom datasets can
-use `automation.data_path_template` or per-symbol `automation.data_paths`. The
+uses `data/options/research/combined/{underlying}/chains.jsonl`; custom datasets
+can use `automation.data_path_template` or per-symbol `automation.data_paths`. The
 automation keeps one result per strategy and underlying. Symbols remain in the
 report as `waiting_for_data` or `insufficient_history` until their own archive
 is ready, then start research automatically on a later run. One nightly run

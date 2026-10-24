@@ -17,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
+from options.research.archive import merge_symbol_dataset, session_labels as _classify_sessions
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -260,45 +261,7 @@ def _split_adjusted_history(
 
 def _session_labels(closes: dict[date, float]) -> dict[date, tuple[str, str]]:
     """Create point-in-time trend and volatility labels from adjusted closes."""
-    ordered = sorted(closes.items())
-    log_returns: list[float] = []
-    realized: list[float | None] = []
-    for index, (_, close) in enumerate(ordered):
-        if index:
-            previous = ordered[index - 1][1]
-            log_returns.append(math.log(close / previous))
-        else:
-            log_returns.append(0.0)
-        sample = log_returns[max(1, index - 19):index + 1]
-        if len(sample) >= 10:
-            mean = sum(sample) / len(sample)
-            variance = sum((value - mean) ** 2 for value in sample) / max(1, len(sample) - 1)
-            realized.append(math.sqrt(max(0.0, variance) * 252.0))
-        else:
-            realized.append(None)
-
-    labels = {}
-    for index, (day, close) in enumerate(ordered):
-        values = [value for _, value in ordered[max(0, index - 49):index + 1]]
-        mean_50 = sum(values) / len(values)
-        long_values = [value for _, value in ordered[max(0, index - 199):index + 1]]
-        mean_200 = sum(long_values) / len(long_values)
-        if len(long_values) >= 200 and close > mean_50 > mean_200:
-            regime = "trending_up"
-        elif len(long_values) >= 200 and close < mean_50 < mean_200:
-            regime = "trending_down"
-        else:
-            regime = "range_bound"
-
-        current_vol = realized[index]
-        prior_vols = [value for value in realized[max(0, index - 251):index + 1] if value is not None]
-        if current_vol is not None and len(prior_vols) >= 20:
-            threshold = sorted(prior_vols)[max(0, math.ceil(len(prior_vols) * 0.75) - 1)]
-            vol_state = "volatile" if current_vol >= threshold else "normal"
-        else:
-            vol_state = "normal"
-        labels[day] = (regime, vol_state)
-    return labels
+    return _classify_sessions(closes)
 
 
 def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
@@ -413,12 +376,30 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         stream.flush()
         os.fsync(stream.fileno())
     os.replace(temp, dataset_path)
+    combined = merge_symbol_dataset(symbol)
+    archive_chunks = list(_month_chunks(start_date, end_date))
+    archive_complete = all(
+        _archive_covers_through(eod_dir / f"{month_start:%Y-%m}.json.gz", month_end)
+        and _archive_covers_through(oi_dir / f"{month_start:%Y-%m}.json.gz", month_end)
+        for month_start, month_end in archive_chunks
+    )
     manifest = {
         "provider": "ThetaData",
         "data_type": "historical option EOD NBBO and open interest",
         "status": "research_ready" if len(rows) >= REQUIRED_RESEARCH_SESSIONS else "collecting",
+        "archive_complete": archive_complete,
+        "archive_start_date": start_date.isoformat(),
+        "archive_end_date": end_date.isoformat(),
+        "archive_months_complete": sum(
+            _archive_covers_through(eod_dir / f"{month_start:%Y-%m}.json.gz", month_end)
+            and _archive_covers_through(oi_dir / f"{month_start:%Y-%m}.json.gz", month_end)
+            for month_start, month_end in archive_chunks
+        ),
+        "archive_months_expected": len(archive_chunks),
         "underlying": symbol,
         "dataset_path": str(dataset_path),
+        "combined_dataset_path": combined["dataset_path"],
+        "combined_dataset_sessions": combined["combined_sessions"],
         "dataset_sessions": len(rows),
         "research_sessions_required": REQUIRED_RESEARCH_SESSIONS,
         "contracts_in_dataset": contracts_total,
@@ -587,6 +568,7 @@ def _run_symbols(symbols: list[str], start_date: date, end_date: date) -> int:
         "provider": "ThetaData",
         "underlyings": len(manifests),
         "research_ready": [row["underlying"] for row in manifests if row["status"] == "research_ready"],
+        "archive_complete": [row["underlying"] for row in manifests if row.get("archive_complete")],
         "collecting": [row["underlying"] for row in manifests if row["status"] != "research_ready"],
         "manifest_dir": str(RESEARCH_DIR),
     }, sort_keys=True))
