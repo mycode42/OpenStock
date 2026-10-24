@@ -356,8 +356,16 @@ export function createAlgoTrader({ request, charts }) {
         const visibleActivities = activities.slice(activityStart, activityStart + ACTIVITY_PAGE_SIZE);
         const latestSnapshot = history[history.length - 1];
         const snapshotDate = latestSnapshot?.date ? dateOnly(latestSnapshot.date) : 'no snapshots';
-        const entryStatus = account.entries_paused === true ? 'ENTRIES PAUSED' : account.entries_paused === false ? 'ENTRIES ENABLED' : 'ENTRY STATUS UNKNOWN';
-        const entryClass = account.entries_paused === true ? 'algo-state-pill paused' : account.entries_paused === false ? 'algo-state-pill' : 'algo-state-pill unknown';
+        const pauseReasons = Array.isArray(account.entry_pause_reasons) ? account.entry_pause_reasons : [];
+        const closedMarketQuotePause = String(account.market_state || '').toUpperCase() === 'CLOSED'
+            && pauseReasons.length === 1
+            && pauseReasons[0] === 'owned positions lack fresh protective quotes';
+        const entryStatus = closedMarketQuotePause ? 'MARKET CLOSED' : account.entries_paused === true ? 'ENTRIES PAUSED' : account.entries_paused === false ? 'ENTRIES ENABLED' : 'ENTRY STATUS UNKNOWN';
+        const entryClass = closedMarketQuotePause ? 'algo-state-pill market-closed' : account.entries_paused === true ? 'algo-state-pill paused' : account.entries_paused === false ? 'algo-state-pill' : 'algo-state-pill unknown';
+        const pauseNoticeTitle = closedMarketQuotePause ? 'Market closed' : 'New entries are paused';
+        const pauseNoticeDetail = closedMarketQuotePause
+            ? 'Protective quotes will be checked again when the market reopens. New entries remain paused until then.'
+            : pauseReasons.join(' · ');
 
         host.innerHTML = `<main class="algo-page">
             <header class="algo-page-header">
@@ -365,7 +373,7 @@ export function createAlgoTrader({ request, charts }) {
                 <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ALPACA ${isOptions ? 'OPTIONS ' : ''}PAPER</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
             </header>
 
-            ${account.entries_paused && account.entry_pause_reasons?.length ? `<section class="algo-paused-notice"><strong>New entries are paused</strong><span>${escapeHtml(account.entry_pause_reasons.join(' · '))}</span></section>` : ''}
+            ${account.entries_paused && pauseReasons.length ? `<section class="algo-paused-notice ${closedMarketQuotePause ? 'market-closed' : ''}"><strong>${pauseNoticeTitle}</strong><span>${escapeHtml(pauseNoticeDetail)}</span></section>` : ''}
 
             <section class="algo-kpi-grid" aria-label="Algo account KPIs">
                 <article class="algo-kpi algo-kpi-featured"><div class="algo-kpi-label">ACCOUNT EQUITY <span class="algo-kpi-period">${escapeHtml(snapshotDate)}</span></div><strong>${money(metrics.equity)}</strong><div class="algo-kpi-foot"><span>${isOptions ? 'Open positions' : 'Cash'} ${isOptions ? latestSnapshot?.position_count ?? '—' : money(latestSnapshot?.cash)}</span><span>${isOptions ? 'Options equity' : 'Invested'} ${isOptions ? money(metrics.equity) : money(latestSnapshot?.invested)}</span></div><div class="algo-kpi-spark"><svg viewBox="0 0 120 32" aria-hidden="true"><path d="${sparklinePath(history)}"/></svg></div></article>
@@ -384,7 +392,7 @@ export function createAlgoTrader({ request, charts }) {
                 </article>
 
                 <article class="card algo-panel algo-strategy-panel">
-                    <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(account.market_state || 'State unavailable')}</h2></div><span class="algo-state-pill ${account.entries_paused ? 'paused' : ''}"><i></i> ${escapeHtml(account.entries_paused ? 'PAUSED' : account.last_scan_status || 'UNKNOWN')}</span></div>
+                    <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(account.market_state || 'State unavailable')}</h2></div><span class="algo-state-pill ${closedMarketQuotePause ? 'market-closed' : account.entries_paused ? 'paused' : ''}"><i></i> ${escapeHtml(closedMarketQuotePause ? 'MARKET CLOSED' : account.entries_paused ? 'PAUSED' : account.last_scan_status || 'UNKNOWN')}</span></div>
                     <div class="algo-strategy-score"><div class="algo-score-ring"><span>${account.active_strategies?.length ?? 0}</span><small>/strats</small></div><div><strong>Active strategies</strong><span>${account.universe_count ?? 0} ${isOptions ? 'underlyings in recent scans' : 'tickers in configured universe'}</span></div></div>
                     <div class="algo-active-strategy-list">${(account.active_strategies || []).map(strategy => `<span>${escapeHtml(strategy)}</span>`).join('') || '<span class="algo-muted-text">No active strategies in the last scan</span>'}</div>
                     <div class="algo-strategy-list"><div><span>Last scan</span><strong>${escapeHtml(dateTime(account.last_scan_at))}</strong></div><div><span>Account mode</span><strong>Alpaca ${isOptions ? 'options ' : ''}paper</strong></div><div><span>Sharpe ratio</span><strong>${metrics.sharpe_ratio === null ? '—' : metrics.sharpe_ratio.toFixed(2)} <small>snapshot based</small></strong></div></div>
