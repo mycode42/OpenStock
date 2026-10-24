@@ -176,6 +176,30 @@ def _load_gzip_rows(path: Path) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
+def _archive_covers_through(path: Path, end_date: date) -> bool:
+    """Return whether an existing month archive was requested through end_date."""
+    if not path.is_file():
+        return False
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        archived_end = date.fromisoformat(str(payload.get("end_date", "")))
+    except (OSError, EOFError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return archived_end >= end_date
+
+
+def _symbol_has_archive_gaps(symbol: str, *, start_date: date, end_date: date) -> bool:
+    """Detect months missing either endpoint so reruns resume unfinished symbols first."""
+    archive = RESEARCH_DIR / symbol / "archive"
+    eod_dir, oi_dir = archive / "eod", archive / "open_interest"
+    return any(
+        not (eod_dir / f"{month_start:%Y-%m}.json.gz").is_file()
+        or not (oi_dir / f"{month_start:%Y-%m}.json.gz").is_file()
+        for month_start, _month_end in _month_chunks(start_date, end_date)
+    )
+
+
 def _contract_key(row: dict) -> tuple[str, float, str]:
     expiration = str(row.get("expiration") or row.get("expiration_date") or "")[:10]
     strike = _finite(row.get("strike")) or 0.0
@@ -437,8 +461,12 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
         # Completed months are immutable. Refresh only the active month so a
         # rerun extends the archive with recently completed sessions.
         refresh = month_end == end_date
-        if eod_path.is_file() and oi_path.is_file() and not refresh:
-            continue
+        if eod_path.is_file() and oi_path.is_file():
+            if not refresh or (
+                _archive_covers_through(eod_path, month_end)
+                and _archive_covers_through(oi_path, month_end)
+            ):
+                continue
         request = {
             "symbol": symbol,
             "start_date": month_start,
@@ -538,7 +566,15 @@ def _run_symbols(symbols: list[str], start_date: date, end_date: date) -> int:
     api_key = _read_api_key()
     client = _theta_client(api_key)
     manifests = []
-    for symbol in dict.fromkeys(symbols):
+    ordered_symbols = list(dict.fromkeys(symbols))
+    original_order = {symbol: index for index, symbol in enumerate(ordered_symbols)}
+    ordered_symbols.sort(key=lambda symbol: (
+        not _symbol_has_archive_gaps(symbol, start_date=start_date, end_date=end_date),
+        original_order[symbol],
+    ))
+    if ordered_symbols != list(dict.fromkeys(symbols)):
+        print(f"ThetaData resume order: {', '.join(ordered_symbols)}")
+    for symbol in ordered_symbols:
         try:
             manifests.append(_fetch_symbol(
                 client, symbol, start_date=start_date, end_date=end_date,
