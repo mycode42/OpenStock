@@ -147,10 +147,10 @@ def _run_adaptive_fold(payload: tuple[int, dict, argparse.Namespace]) -> tuple[i
         }
         del replay
     min_universe_sensitivity = None
-    if args.strategy == "multi_factor":
+    if args.strategy == "swing_multi_factor":
         min_universe_sensitivity = {}
         for min_universe in MULTI_FACTOR_MIN_UNIVERSE_VALUES:
-            parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["multi_factor"])
+            parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["swing_multi_factor"])
             parameters["min_universe"] = min_universe
             sensitivity_report = _run_replay(
                 strategy=args.strategy, parameters=parameters,
@@ -373,10 +373,10 @@ def run_adaptive_walk_forward(args) -> dict:
         seed=args.seed,
     )
     min_universe_sensitivity = None
-    if args.strategy == "multi_factor":
+    if args.strategy == "swing_multi_factor":
         min_universe_sensitivity = {
             "method": "paired rolling OOS replay using current default Multi Factor parameters; only min_universe varies",
-            "current_setting": ALGO_DEFAULT_PARAMETERS["multi_factor"]["min_universe"],
+            "current_setting": ALGO_DEFAULT_PARAMETERS["swing_multi_factor"]["min_universe"],
             "thresholds": {},
         }
         sensitivity_summaries = {}

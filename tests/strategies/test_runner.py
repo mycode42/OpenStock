@@ -130,14 +130,14 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
         runner, "rank_strategies",
         lambda bars, mode, **kwargs: {
             "regime": "trending_up", "reason": "test",
-            "ranked": [{"strategy": "momentum", "score": 0.8}],
-            "active": ["momentum"], "satellites": [],
+            "ranked": [{"strategy": "swing_momentum", "score": 0.8}],
+            "active": ["swing_momentum"],
         },
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
         runner, "generate_swing_momentum_signals",
-        lambda *args, **kwargs: ({"AAPL": Signal("AAPL", "buy", "momentum", "test entry", 0.8)}, {}),
+        lambda *args, **kwargs: ({"AAPL": Signal("AAPL", "buy", "swing_momentum", "test entry", 0.8)}, {}),
     )
 
     result = runner.scan(
@@ -177,11 +177,11 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
         runner, "_fetch_latest_quotes",
         lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(98)},
     )
-    states = {"trend_following": {"AAPL": {
+    states = {"swing_trend_following": {"AAPL": {
         "phase": "open", "stop_price": 97.95, "take_profit": 105.0,
         "last_signal_bar": None,
     }}}
-    owners = {"AAPL": "trend_following"}
+    owners = {"AAPL": "swing_trend_following"}
 
     result = runner.scan(
         mode="algo",
@@ -197,7 +197,7 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
     assert result["scan_errors"]
     assert result["trades"] == []
     assert result["signals"][0]["software_protection"] is True
-    intent = states["trend_following"]["AAPL"]["pending_exit_intent"]
+    intent = states["swing_trend_following"]["AAPL"]["pending_exit_intent"]
     assert intent["retryable"] is True
     assert intent["status"] == "deferred_until_regular_hours"
     assert intent["software_protection"] is True
@@ -218,18 +218,18 @@ def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(mon
         runner, "_fetch_latest_quotes",
         lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(98)},
     )
-    states = {"trend_following": {"AAPL": {
+    states = {"swing_trend_following": {"AAPL": {
         "phase": "open", "stop_price": 97.95, "take_profit": 105.0,
     }}}
     result = runner.scan(
         mode="algo", universe_result={"tickers": []},
-        position_owners={"AAPL": "trend_following"}, strategy_states=states,
+        position_owners={"AAPL": "swing_trend_following"}, strategy_states=states,
         session_name="overnight", trading_date="2026-10-08",
         extended_hours=True, data_feed="boats", quote_feed="overnight",
         overnight_tradable_tickers={"AAPL"},
     )
     assert result["trades"] == []
-    intent = states["trend_following"]["AAPL"]["pending_exit_intent"]
+    intent = states["swing_trend_following"]["AAPL"]["pending_exit_intent"]
     assert intent["status"] == "deferred_until_regular_hours"
     assert intent["retryable"] is True
     assert result["signals"][0]["software_protection"] is True
@@ -283,23 +283,23 @@ def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
         runner, "rank_strategies",
         lambda bars, mode, **kwargs: {
             "regime": "trending_up", "reason": "test",
-            "ranked": [{"strategy": "trend_following", "score": 0.8}],
-            "active": ["trend_following"], "satellites": [],
+            "ranked": [{"strategy": "swing_trend_following", "score": 0.8}],
+            "active": ["swing_trend_following"],
         },
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
         runner_signal_generation, "evaluate_rule_signal",
-        lambda *args, **kwargs: Signal("AAPL", "sell", "trend_following", "rule exit", strength=1.0),
+        lambda *args, **kwargs: Signal("AAPL", "sell", "swing_trend_following", "rule exit", strength=1.0),
     )
-    states = {"trend_following": {"AAPL": {
+    states = {"swing_trend_following": {"AAPL": {
         "phase": "open", "last_signal_bar": previous_signal_bar_time,
         "opened_at": "2026-10-07T14:00:00Z", "stop_price": 90, "take_profit": 120,
     }}}
 
     result = runner.scan(
         mode="algo", universe_result={"tickers": ["AAPL"]},
-        position_owners={"AAPL": "trend_following"}, strategy_states=states,
+        position_owners={"AAPL": "swing_trend_following"}, strategy_states=states,
         session_name=session_name, trading_date="2026-10-08",
         extended_hours=extended_hours,
         data_feed="boats" if extended_hours else "sip",
@@ -309,7 +309,7 @@ def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
 
     if extended_hours:
         assert result["trades"] == []
-        intent = states["trend_following"]["AAPL"]["pending_exit_intent"]
+        intent = states["swing_trend_following"]["AAPL"]["pending_exit_intent"]
         assert intent["status"] == "deferred_until_regular_hours"
         assert intent["retryable"] is True
         assert result["signals"][0]["suppressed_reason"] == (
@@ -343,13 +343,13 @@ def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):
         runner, "_fetch_latest_quotes",
         lambda symbols, *, mode, feed, errors=None, diagnostics=None: {"AAPL": _quote(98)},
     )
-    states = {"trend_following": {"AAPL": {
+    states = {"swing_trend_following": {"AAPL": {
         "phase": "open", "stop_price": 99.0, "take_profit": 105.0,
     }}}
 
     result = runner.scan(
         mode="algo", universe_result={"tickers": []},
-        position_owners={"AAPL": "trend_following"}, strategy_states=states,
+        position_owners={"AAPL": "swing_trend_following"}, strategy_states=states,
         session_name="regular", trading_date="2026-10-07",
         extended_hours=False, data_feed="sip", quote_feed="sip",
     )
@@ -380,15 +380,15 @@ def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
         runner, "rank_strategies",
         lambda bars, mode, **kwargs: {
             "regime": "trending_up", "reason": "test",
-            "ranked": [], "active": [], "satellites": [],
+            "ranked": [], "active": [],
         },
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
 
     result = runner.scan(
         mode="algo", universe_result={"tickers": []},
-        position_owners={"AAPL": "trend_following"},
-        strategy_states={"trend_following": {"AAPL": {"phase": "open", "stop_price": 95}}},
+        position_owners={"AAPL": "swing_trend_following"},
+        strategy_states={"swing_trend_following": {"AAPL": {"phase": "open", "stop_price": 95}}},
         session_name="overnight", trading_date="2026-10-08",
         extended_hours=True, data_feed="boats", quote_feed="boats",
         overnight_tradable_tickers=set(),
@@ -425,13 +425,13 @@ def test_overnight_swing_signal_bar_within_extended_window_does_not_pause(monkey
         runner, "rank_strategies",
         lambda bars, mode, **kwargs: {
             "regime": "trending_up", "reason": "test",
-            "ranked": [{"strategy": "momentum", "score": 0.9}], "active": ["momentum"],
+            "ranked": [{"strategy": "swing_momentum", "score": 0.9}], "active": ["swing_momentum"],
         },
     )
     monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
         runner_signal_generation, "evaluate_rule_signal",
-        lambda *args, **kwargs: Signal("AAPL", "buy", "momentum", "test", strength=1.0),
+        lambda *args, **kwargs: Signal("AAPL", "buy", "swing_momentum", "test", strength=1.0),
     )
 
     result = runner.scan(

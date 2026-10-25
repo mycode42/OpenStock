@@ -18,11 +18,64 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from runtime.atomic import atomic_write_json
-from strategies.catalog import STRATEGY_IDS
+from strategies.catalog import STRATEGY_IDS, canonical_strategy_id
 from strategies.state_machine import ACTIVE_PHASES, PHASES
 
 
 SCHEMA_VERSION = 1
+
+
+def _canonicalize_strategy_values(value):
+    if isinstance(value, dict):
+        return {
+            key: _canonicalize_strategy_values(canonical_strategy_id(item) if isinstance(item, str) else item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_canonicalize_strategy_values(item) for item in value]
+    if isinstance(value, str):
+        return canonical_strategy_id(value)
+    return value
+
+
+def _canonicalize_strategy_keyed_map(values: dict) -> dict:
+    normalized = {}
+    for key, value in values.items():
+        strategy = canonical_strategy_id(key) if isinstance(key, str) else key
+        if strategy in normalized and normalized[strategy] != value:
+            raise StateCorruptionError(f"Conflicting legacy and canonical strategy state for {strategy}")
+        normalized[strategy] = value
+    return normalized
+
+
+def _canonicalize_portfolio_strategy_ids(portfolio: dict) -> dict:
+    """Translate persisted pre-prefix IDs without changing position ownership."""
+    normalized = _canonicalize_strategy_values(portfolio)
+    states = portfolio.get("strategy_states") or {}
+    canonical_states = {}
+    for old_strategy, by_symbol in states.items():
+        strategy = canonical_strategy_id(old_strategy)
+        target = canonical_states.setdefault(strategy, {})
+        for ticker, state in by_symbol.items():
+            if ticker in target:
+                raise StateCorruptionError(
+                    f"Multiple stored strategy states normalize to {strategy}/{ticker}"
+                )
+            target[ticker] = state
+            target[ticker]["strategy"] = strategy
+            if target[ticker].get("owner"):
+                target[ticker]["owner"] = canonical_strategy_id(target[ticker]["owner"])
+    normalized["strategy_states"] = canonical_states
+    normalized["position_owners"] = {
+        ticker: canonical_strategy_id(strategy)
+        for ticker, strategy in (portfolio.get("position_owners") or {}).items()
+    }
+    regime = normalized.get("market_regime")
+    if isinstance(regime, dict):
+        for key in ("strategy_risk_multipliers", "strategy_weights"):
+            if isinstance(regime.get(key), dict):
+                regime[key] = _canonicalize_strategy_keyed_map(regime[key])
+    return normalized
 
 
 class StateStoreError(RuntimeError):
@@ -224,6 +277,7 @@ class AlgoStateStore:
             raise StateCorruptionError("Existing Algo JSON state has no strategy_portfolio")
         portfolio = empty_portfolio()
         portfolio.update(raw["strategy_portfolio"])
+        portfolio = _canonicalize_portfolio_strategy_ids(portfolio)
         portfolio["runtime_mode"] = "algo"
         portfolio["entries_paused"] = True
         portfolio["entry_pause_reasons"] = ["startup broker reconciliation is pending"]
@@ -281,6 +335,7 @@ class AlgoStateStore:
                     states.setdefault(item["strategy"], {})[item["ticker"]] = json.loads(item["state_json"])
                 portfolio["position_owners"] = owners
                 portfolio["strategy_states"] = states
+                portfolio = _canonicalize_portfolio_strategy_ids(portfolio)
                 validate_portfolio(portfolio)
                 for strategy, by_symbol in states.items():
                     for ticker, state in by_symbol.items():
@@ -290,7 +345,9 @@ class AlgoStateStore:
                         proven = connection.execute(
                             "SELECT ticker, strategy FROM entry_provenance WHERE order_id=?", (order_id,)
                         ).fetchone()
-                        if proven is None or (proven["ticker"], proven["strategy"]) != (ticker, strategy):
+                        if proven is None or (
+                            proven["ticker"], canonical_strategy_id(proven["strategy"])
+                        ) != (ticker, strategy):
                             raise StateCorruptionError(f"Missing immutable provenance for {strategy}/{ticker}")
                 return row["market_state"], portfolio
         except (sqlite3.DatabaseError, json.JSONDecodeError, TypeError) as exc:
@@ -339,7 +396,9 @@ class AlgoStateStore:
                                 "INSERT INTO entry_provenance (order_id, ticker, strategy, client_order_id, source, recorded_at) VALUES (?, ?, ?, ?, ?, ?)",
                                 (order_id, ticker, strategy, client_id, source, datetime.now(timezone.utc).isoformat()),
                             )
-                        elif (existing["ticker"], existing["strategy"]) != (ticker, strategy):
+                        elif (
+                            existing["ticker"], canonical_strategy_id(existing["strategy"])
+                        ) != (ticker, strategy):
                             raise StateCorruptionError(f"Conflicting immutable Algo provenance for order {order_id}")
             for ticker, strategy in portfolio["position_owners"].items():
                 connection.execute(

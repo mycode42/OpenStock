@@ -11,6 +11,8 @@ import math
 from pathlib import Path
 import statistics
 
+from strategies.catalog import STRATEGY_ID_ALIASES, canonical_strategy_id
+
 from .files import _atomic_json
 
 
@@ -20,13 +22,11 @@ MAX_DATA_VERSIONS_PER_STRATEGY = 32
 MAX_SEARCH_RUNS_PER_STRATEGY = 256
 
 STRATEGY_LOGIC_VERSIONS = {
-    "mean_reversion": "intraday-mr-2",
+    "intraday_mean_reversion": "intraday-mr-2",
     "swing_mean_reversion": "swing-mr-2",
-    "trend_following": "swing-trend-2",
     "swing_trend_following": "swing-trend-2",
-    "momentum": "swing-momentum-2",
     "swing_momentum": "swing-momentum-2",
-    "multi_factor": "multi-factor-rank-5-boosted-walk-forward",
+    "swing_multi_factor": "multi-factor-rank-5-boosted-walk-forward",
 }
 
 
@@ -35,6 +35,36 @@ def _archive_path(root: str | Path) -> Path:
     if path.name != "candidate-archive.json":
         path = path / "candidate-archive.json"
     return path
+
+
+def _canonicalize_strategy_maps(value: dict) -> None:
+    """Move old strategy namespaces into their renamed strategy entries."""
+    for section in (
+        "run_counters", "candidates", "search_runs", "champions",
+        "validation_queue", "evaluated_candidates_by_data_version",
+    ):
+        mapping = value.get(section)
+        if not isinstance(mapping, dict):
+            continue
+        for legacy, canonical in STRATEGY_ID_ALIASES.items():
+            if legacy not in mapping:
+                continue
+            old = mapping.pop(legacy)
+            current = mapping.get(canonical)
+            if section == "run_counters":
+                mapping[canonical] = max(int(old or 0), int(current or 0))
+            elif isinstance(old, list) and isinstance(current, list):
+                mapping[canonical] = old + current
+            elif isinstance(old, dict) and isinstance(current, dict):
+                mapping[canonical] = {**old, **current}
+            elif current is None:
+                mapping[canonical] = old
+        if section in {"candidates", "champions", "validation_queue", "search_runs"}:
+            for rows in mapping.values():
+                records = rows.values() if isinstance(rows, dict) else rows if isinstance(rows, list) else ()
+                for row in records:
+                    if isinstance(row, dict) and isinstance(row.get("strategy"), str):
+                        row["strategy"] = canonical_strategy_id(row["strategy"])
 
 
 @contextmanager
@@ -67,6 +97,7 @@ def _read(path: Path) -> dict:
     value.setdefault("search_runs", {})
     value.setdefault("champions", {})
     value.setdefault("validation_queue", {})
+    _canonicalize_strategy_maps(value)
     if (
         not isinstance(value["run_counters"], dict)
         or not isinstance(value["candidates"], dict)
@@ -88,8 +119,9 @@ def _read(path: Path) -> dict:
 
 def model_family(strategy: str, parameters: dict) -> str:
     """Stable family label used to group controlled research variants."""
+    strategy = canonical_strategy_id(strategy)
     values = parameters if isinstance(parameters, dict) else {}
-    if strategy == "mean_reversion":
+    if strategy == "intraday_mean_reversion":
         return ":".join((
             "intraday_mean_reversion", str(values.get("signal_model", "bollinger")),
             str(values.get("regime_filter", "none")), str(values.get("threshold_mode", "fixed")),
@@ -100,13 +132,13 @@ def model_family(strategy: str, parameters: dict) -> str:
             str(values.get("entry_distance_mode", "fixed_pct")),
             str(values.get("lookback_mode", "fixed")),
         ))
-    if strategy in {"trend_following", "swing_trend_following"}:
+    if strategy == "swing_trend_following":
         return f"swing_trend_following:{values.get('average_type', 'sma')}:{values.get('stop_mode', 'fixed_pct')}"
-    if strategy in {"momentum", "swing_momentum"}:
+    if strategy == "swing_momentum":
         lookbacks = values.get("lookbacks") or (5, 10, 20)
         horizons = "-".join(str(value) for value in lookbacks)
         return f"swing_momentum:{values.get('momentum_mode', 'cross_sectional')}:{horizons}"
-    if strategy == "multi_factor":
+    if strategy == "swing_multi_factor":
         weight_mode = str(values.get("factor_weight_mode", "static"))
         active_factors = "+".join(sorted(
             name for name, weight in (values.get("factor_weights") or {}).items()
@@ -121,7 +153,7 @@ def model_family(strategy: str, parameters: dict) -> str:
             "lightgbm_walk_forward", "xgboost_walk_forward",
         } else "linear_composite"
         return ":".join((
-            "multi_factor", weight_mode, combination, active_factors,
+            "swing_multi_factor", weight_mode, combination, active_factors,
             str(values.get("factor_neutralization", "none")), timing,
             str(values.get("portfolio_weight_method", "equal")),
         ))
@@ -129,7 +161,7 @@ def model_family(strategy: str, parameters: dict) -> str:
 
 
 def logic_version(strategy: str) -> str:
-    return STRATEGY_LOGIC_VERSIONS.get(strategy, "1")
+    return STRATEGY_LOGIC_VERSIONS.get(canonical_strategy_id(strategy), "1")
 
 
 def candidate_id(
@@ -137,6 +169,7 @@ def candidate_id(
     family: str | None = None, version: str | None = None,
     regime_profiles: dict | None = None,
 ) -> str:
+    strategy = canonical_strategy_id(strategy)
     payload = json.dumps(
         {
             "strategy": strategy, "regime": regime,
@@ -152,6 +185,7 @@ def candidate_id(
 
 def reserve_search_seed(root: str | Path, strategy: str, pipeline_version: str) -> tuple[int, int]:
     """Advance a persistent sequence so discovery varies independently of quote dates."""
+    strategy = canonical_strategy_id(strategy)
     path = _archive_path(root)
     with _locked(path):
         archive = _read(path)
@@ -169,6 +203,7 @@ def evaluated_candidate_ids(
     root: str | Path, strategy: str, data_version: str, *, window_end: str | None = None,
 ) -> set[str]:
     """Return parameter sets already evaluated against this exact quote snapshot."""
+    strategy = canonical_strategy_id(strategy)
     archive = _read(_archive_path(root))
     by_strategy = archive.get("evaluated_candidates_by_data_version") or {}
     by_version = by_strategy.get(strategy) or {}
@@ -216,6 +251,7 @@ def _parameter_distance(left: dict, right: dict) -> float:
 
 def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) -> int:
     """Merge every evaluated candidate and its regime outcomes into the archive."""
+    strategy = canonical_strategy_id(strategy)
     path = _archive_path(root)
     timestamp = datetime.now(timezone.utc).isoformat()
     count = 0
@@ -580,6 +616,7 @@ def candidate_validation_candidates(
     invocation_id: str | None = None,
 ) -> list[dict]:
     """Return a small, diverse archive cohort for exact rolling OOS checks."""
+    strategy = canonical_strategy_id(strategy)
     if limit < 1:
         return []
     archive = _read(_archive_path(root))
@@ -664,6 +701,7 @@ def candidate_validation_candidates(
 
 def archived_candidate(root: str | Path, strategy: str, identifier: str) -> dict | None:
     """Return the full persistent record for one exact candidate identity."""
+    strategy = canonical_strategy_id(strategy)
     archive = _read(_archive_path(root))
     row = ((archive.get("candidates") or {}).get(strategy) or {}).get(identifier)
     return dict(row) if isinstance(row, dict) else None
@@ -673,6 +711,7 @@ def pending_validation_candidates(
     root: str | Path, strategy: str, *, limit: int = 2, data_version: str | None = None,
 ) -> list[dict]:
     """Return due queued challengers, strongest discovery improvement first."""
+    strategy = canonical_strategy_id(strategy)
     if limit < 1:
         return []
     archive = _read(_archive_path(root))
@@ -697,6 +736,7 @@ def record_validation_queue_result(
     summary: dict, data_version: str, validation_end: str | None = None,
 ) -> None:
     """Persist challenger gate outcomes while leaving insufficient samples queued."""
+    strategy = canonical_strategy_id(strategy)
     if status not in {"passed", "failed", "insufficient_sample", "validation_error"}:
         raise ValueError(f"unsupported validation queue status: {status}")
     path = _archive_path(root)
@@ -731,6 +771,7 @@ def record_validation_queue_result(
 
 def champion_candidate(root: str | Path, strategy: str) -> dict | None:
     """Return the strategy's durable research champion, if one has passed gates."""
+    strategy = canonical_strategy_id(strategy)
     archive = _read(_archive_path(root))
     row = (archive.get("champions") or {}).get(strategy)
     return dict(row) if isinstance(row, dict) else None
@@ -741,6 +782,7 @@ def record_champion_validation_result(
     data_version: str, validation_end: str | None = None,
 ) -> None:
     """Track the champion's latest gate result without discarding its history."""
+    strategy = canonical_strategy_id(strategy)
     identifier = candidate.get("candidate_id")
     if not identifier:
         return
@@ -767,6 +809,7 @@ def update_champion_if_better(
     root: str | Path, strategy: str, candidate: dict, summary: dict,
 ) -> dict:
     """Keep the strongest exact-validated candidate as the persistent search seed."""
+    strategy = canonical_strategy_id(strategy)
     if summary.get("status") != "passed":
         return {"updated": False, "reason": "candidate_did_not_pass_exact_validation"}
     identifier = candidate.get("candidate_id")
@@ -829,6 +872,7 @@ def record_candidate_validation_folds(
     root: str | Path, strategy: str, records: list[dict],
 ) -> int:
     """Persist exact-parameter OOS folds, deduplicated by data and fold version."""
+    strategy = canonical_strategy_id(strategy)
     path = _archive_path(root)
     added = 0
     with _locked(path):
@@ -919,6 +963,7 @@ def record_candidate_validation_folds(
 
 def record_verification(root: str | Path, strategy: str, detail: dict) -> int:
     """Attach strictly chronological OOS evidence to the exact parameter sets."""
+    strategy = canonical_strategy_id(strategy)
     path = _archive_path(root)
     added = 0
     with _locked(path):
@@ -966,6 +1011,7 @@ def parent_candidates(
     before: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Choose several high-quality, meaningfully different archive members."""
+    strategy = canonical_strategy_id(strategy)
     if limit < 1:
         return [], {"used": False, "count": 0, "candidate_ids": []}
     path = _archive_path(root)
@@ -1039,6 +1085,7 @@ def parent_candidates(
 
 def next_regime_candidates(root: str | Path, strategy: str) -> list[dict]:
     """Return the strongest sample-qualified candidate for each known regime."""
+    strategy = canonical_strategy_id(strategy)
     path = _archive_path(root)
     archive = _read(path)
     rows = list((archive.get("candidates") or {}).get(strategy, {}).values())

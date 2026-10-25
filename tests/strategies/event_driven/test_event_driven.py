@@ -63,7 +63,7 @@ def test_daily_earnings_continuation_emits_risk_sized_long():
 
     assert signal is not None
     assert signal.action == "buy"
-    assert signal.strategy_group == "swing_satellite"
+    assert signal.strategy_group == "swing"
     assert signal.exit_mode == "follow_through"
     assert signal.maximum_holding_sessions == 2
     assert signal.target_weight == pytest.approx(0.04)
@@ -129,7 +129,7 @@ def test_event_calendar_records_cooldown_after_a_proposal():
 
 
 def test_event_config_keeps_holding_bounded_without_weekly_or_portfolio_throttles():
-    settings = validate_parameter_profile({"event_driven": {"enabled": True}})["event_driven"]
+    settings = validate_parameter_profile({"swing_event_driven": {"enabled": True}})["swing_event_driven"]
     assert settings["follow_through_sessions"] == 2
     assert settings["max_positions"] == 7
     for removed_setting in ("max_entries_per_week", "cooldown_hours_portfolio"):
@@ -142,7 +142,7 @@ def test_event_config_keeps_holding_bounded_without_weekly_or_portfolio_throttle
     ("gap", "move", "action"),
     [(0.03, 0.02, "buy"), (0.03, -0.025, "short")],
 )
-def test_event_satellite_alone_does_not_create_a_backtest_order(monkeypatch, gap, move, action):
+def test_inactive_event_strategy_does_not_create_a_backtest_order(monkeypatch, gap, move, action):
     event_day = date(2025, 9, 4)
     replay_day = date(2025, 9, 5)
     event = _event(event_day)
@@ -162,8 +162,7 @@ def test_event_satellite_alone_does_not_create_a_backtest_order(monkeypatch, gap
         "t": datetime.combine(event_day, time(15, 55), tzinfo=ET).isoformat(),
         **{key: event_daily[key] for key in ("o", "h", "l", "c", "v")},
     })
-    # Swing satellites are ineligible during the first 15 minutes; the event
-    # setup must still reach the coordinator and risk manager after that gate.
+    # The event candidate is absent from the regime's active strategy list.
     for minute, price in ((45, 103.5), (50, 104.0)):
         bars.append({
             "t": datetime.combine(replay_day, time(9, minute), tzinfo=ET).isoformat(),
@@ -176,8 +175,8 @@ def test_event_satellite_alone_does_not_create_a_backtest_order(monkeypatch, gap
     monkeypatch.setattr(
         backtest_module, "rank_strategies",
         lambda *_args, **_kwargs: {
-            "regime": "range_bound", "active": [], "satellites": ["event_driven"],
-            "ranked": [{"strategy": "event_driven", "score": 0.5}],
+            "regime": "range_bound", "active": [],
+            "ranked": [{"strategy": "swing_event_driven", "score": 0.5}],
         },
     )
     risk_calls = []
@@ -190,32 +189,31 @@ def test_event_satellite_alone_does_not_create_a_backtest_order(monkeypatch, gap
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={"AAPL": bars}, spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
-        data_adjustment="raw", profile={"event_driven": {"enabled": True}},
-        strategies=["event_driven"], event_calendar=EventCalendar([event]),
+        data_adjustment="raw", profile={"swing_event_driven": {"enabled": True}},
+        strategies=["swing_event_driven"], event_calendar=EventCalendar([event]),
     )
     report = replay.run()
 
-    assert report["entry_count_by_strategy"].get("event_driven", 0) == 0
+    assert report["entry_count_by_strategy"].get("swing_event_driven", 0) == 0
     assert report["open_positions"] == []
     assert risk_calls == []
 
 
-def test_event_confirmation_keeps_one_core_owned_order(monkeypatch):
+def test_event_strategy_can_own_an_order_as_a_peer(monkeypatch):
     monkeypatch.setitem(backtest_module.STRATEGY_CONFIG, "algo_event_driven_enabled", True)
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={"AAPL": []}, spy_daily_bars=[],
         start="2025-09-05", end="2025-09-05", feed="sip", data_adjustment="raw",
         profile={
-            "event_driven": {"enabled": True},
-            "satellite_overlay": {"event_driven_enabled": True},
+            "swing_event_driven": {"enabled": True},
         },
     )
     replay.day_key = "2025-09-05"
     replay._current_regime = {
-        "regime": "range_bound", "active": ["momentum"], "satellites": ["event_driven"],
+        "regime": "range_bound", "active": ["swing_event_driven"],
     }
     event_signal = EventSignal(
-        ticker="AAPL", action="buy", strategy="event_driven", reason="daily catalyst follow-through",
+        ticker="AAPL", action="buy", strategy="swing_event_driven", reason="daily catalyst follow-through",
         strength=0.8, stop_pct=0.06, target_weight=0.02, risk_multiplier=0.5,
         event_id="earnings-AAPL-test", exit_mode="follow_through", maximum_holding_sessions=3,
     )
@@ -224,9 +222,8 @@ def test_event_confirmation_keeps_one_core_owned_order(monkeypatch):
         record_proposal=lambda *args, **kwargs: None,
     )
     signal = replay._signal_for(
-        "AAPL", [], ["momentum"], {"momentum": 0.8},
+        "AAPL", [], ["swing_event_driven"], {"swing_event_driven": 0.8},
         datetime(2025, 9, 5, 10, 0, tzinfo=ET),
-        swing_momentum_signals={"AAPL": Signal("AAPL", "buy", "momentum", "daily rank", 0.8)},
     )
     risk_calls = []
     monkeypatch.setattr(
@@ -241,8 +238,6 @@ def test_event_confirmation_keeps_one_core_owned_order(monkeypatch):
 
     assert len(replay.pending_entries) == 1
     order = replay.pending_entries["AAPL"]
-    assert order["strategy"] == "momentum"
-    assert order["satellite_confirmations"] == ["event_driven"]
-    assert replay.entry_counts_by_strategy[("2025-09-05", "momentum")] == 1
-    assert replay.entry_counts_by_strategy[("2025-09-05", "event_driven")] == 0
-    assert risk_calls and risk_calls[0]["strategy"] == "momentum"
+    assert order["strategy"] == "swing_event_driven"
+    assert replay.entry_counts_by_strategy[("2025-09-05", "swing_event_driven")] == 1
+    assert risk_calls and risk_calls[0]["strategy"] == "swing_event_driven"

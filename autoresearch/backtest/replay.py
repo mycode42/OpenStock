@@ -65,7 +65,7 @@ class ReplayLoopMixin:
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
                 factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
-                momentum_strategy = "momentum"
+                momentum_strategy = "swing_momentum"
                 held_momentum = {
                     ticker: {
                         "qty": position.qty, "entry_at": position.entry_at,
@@ -287,11 +287,7 @@ class ReplayLoopMixin:
             })
         merged_profile = deepcopy(ALGO_DEFAULT_PARAMETERS)
         for strategy, values in self.profile.items():
-            if strategy == "satellite_overlay":
-                merged_profile[strategy] = values
-            else:
-                merged_profile[strategy].update(values)
-        merged_profile.setdefault("satellite_overlay", self.satellite_config.to_dict())
+            merged_profile[strategy].update(values)
         event_diagnostics = self.event_signal_generator.diagnostics(
             event_times[-1] + timedelta(minutes=BAR_MINUTES),
         )
@@ -368,12 +364,9 @@ class ReplayLoopMixin:
             "regime_diagnostics": self._regime_report(),
             "event_strategy_diagnostics": {
                 **event_diagnostics,
-                "enabled": self.event_satellite_enabled,
+                "enabled": self.event_strategy_enabled,
                 "configured_enabled": self.event_config.enabled,
-                "satellite_enabled": self.satellite_config.event_driven_enabled,
             },
-            "satellite_confirmation_candidates": dict(self.satellite_confirmation_candidates),
-            "satellite_confirmed_entries": dict(self.satellite_confirmed_entries),
             "average_holding_minutes": round(statistics.mean(closed_holds), 2) if closed_holds else None,
             "median_holding_minutes": round(statistics.median(closed_holds), 2) if closed_holds else None,
             "average_calendar_holding_hours": round(statistics.mean(

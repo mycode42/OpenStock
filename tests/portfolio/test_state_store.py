@@ -22,14 +22,14 @@ def _legacy(path: Path, portfolio: dict) -> bytes:
 
 def _owned_portfolio() -> dict:
     portfolio = empty_portfolio()
-    portfolio["position_owners"] = {"AAPL": "momentum"}
+    portfolio["position_owners"] = {"AAPL": "swing_momentum"}
     portfolio["strategy_states"] = {
-        "momentum": {
+        "swing_momentum": {
             "AAPL": {
                 "phase": OPEN,
-                "strategy": "momentum",
+                "strategy": "swing_momentum",
                 "ticker": "AAPL",
-                "owner": "momentum",
+                "owner": "swing_momentum",
                 "entry_order_id": "entry-1",
                 "entry_client_order_id": "rule-1",
                 "entry_source": "coordinator",
@@ -74,12 +74,12 @@ def test_owner_and_strategy_state_changes_commit_together_and_provenance_is_immu
     store.save("REGULAR", original)
 
     conflicting = empty_portfolio()
-    conflicting["position_owners"] = {"AAPL": "trend_following"}
+    conflicting["position_owners"] = {"AAPL": "swing_trend_following"}
     conflicting["strategy_states"] = {
-        "trend_following": {
+        "swing_trend_following": {
             "AAPL": {
-                "phase": OPEN, "strategy": "trend_following", "ticker": "AAPL",
-                "owner": "trend_following", "entry_order_id": "entry-1",
+                "phase": OPEN, "strategy": "swing_trend_following", "ticker": "AAPL",
+                "owner": "swing_trend_following", "entry_order_id": "entry-1",
             }
         }
     }
@@ -87,8 +87,8 @@ def test_owner_and_strategy_state_changes_commit_together_and_provenance_is_immu
         store.save("REGULAR", conflicting)
 
     _, unchanged = store.read()
-    assert unchanged["position_owners"] == {"AAPL": "momentum"}
-    assert unchanged["strategy_states"]["momentum"]["AAPL"]["entry_order_id"] == "entry-1"
+    assert unchanged["position_owners"] == {"AAPL": "swing_momentum"}
+    assert unchanged["strategy_states"]["swing_momentum"]["AAPL"]["entry_order_id"] == "entry-1"
     with sqlite3.connect(store.db_path) as connection:
         with pytest.raises(sqlite3.IntegrityError, match="immutable"):
             connection.execute("DELETE FROM entry_provenance WHERE order_id='entry-1'")
@@ -118,8 +118,8 @@ def _order(order_id, symbol, side, qty, when, price):
 def test_startup_recovers_only_the_current_flat_to_open_episode_and_bracket(tmp_path):
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text("\n".join(json.dumps(row) for row in [
-        {"trading_mode": "algo", "action": "buy", "ticker": "AVGO", "strategy": "momentum", "order_id": "old", "client_order_id": "client-old", "submission_status": "submitted"},
-        {"trading_mode": "algo", "action": "buy", "ticker": "AVGO", "strategy": "trend_following", "order_id": "current", "client_order_id": "client-current", "submission_status": "submitted"},
+        {"trading_mode": "algo", "action": "buy", "ticker": "AVGO", "strategy": "swing_momentum", "order_id": "old", "client_order_id": "client-old", "submission_status": "submitted"},
+        {"trading_mode": "algo", "action": "buy", "ticker": "AVGO", "strategy": "swing_trend_following", "order_id": "current", "client_order_id": "client-current", "submission_status": "submitted"},
     ]))
     orders = [
         _order("old", "AVGO", "buy", 13, "2026-10-07T14:00:00Z", 370),
@@ -144,11 +144,11 @@ def test_startup_recovers_only_the_current_flat_to_open_episode_and_bracket(tmp_
         all_orders=orders, nested_orders=nested, open_orders=[], journal_path=journal,
     )
 
-    assert portfolio["position_owners"] == {"AVGO": "trend_following"}
+    assert portfolio["position_owners"] == {"AVGO": "swing_trend_following"}
     assert report["recovered_owners"] == ["AVGO"]
     assert report["unowned_positions"] == ["ABNB"]
     assert report["entries_paused"] is True
-    state = portfolio["strategy_states"]["trend_following"]["AVGO"]
+    state = portfolio["strategy_states"]["swing_trend_following"]["AVGO"]
     assert state["entry_order_id"] == "current"
     assert state["stop_price"] == 369.33
     assert state["take_profit"] == 380.54
@@ -157,7 +157,7 @@ def test_capped_broker_history_uses_exact_persisted_entry_or_pauses(tmp_path):
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text(json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
-        "strategy": "momentum", "order_id": "entry-1", "client_order_id": "rule-1",
+        "strategy": "swing_momentum", "order_id": "entry-1", "client_order_id": "rule-1",
         "status": "pending_new",
     }))
     recent_orders = [
@@ -167,8 +167,8 @@ def test_capped_broker_history_uses_exact_persisted_entry_or_pauses(tmp_path):
     exact = _order("entry-1", "AAPL", "buy", 10, "2026-09-01T14:00:00Z", 100)
     exact["client_order_id"] = "rule-1"
     portfolio = _owned_portfolio()
-    portfolio["strategy_states"]["momentum"]["AAPL"]["last_known_qty"] = 10
-    portfolio["strategy_states"]["momentum"]["AAPL"]["stop_price"] = 95
+    portfolio["strategy_states"]["swing_momentum"]["AAPL"]["last_known_qty"] = 10
+    portfolio["strategy_states"]["swing_momentum"]["AAPL"]["stop_price"] = 95
 
     report = reconcile_startup(
         portfolio,
@@ -177,10 +177,10 @@ def test_capped_broker_history_uses_exact_persisted_entry_or_pauses(tmp_path):
         journal_path=journal, exact_entry_orders={"entry-1": exact},
     )
     assert report["status"] == "verified"
-    assert portfolio["position_owners"] == {"AAPL": "momentum"}
+    assert portfolio["position_owners"] == {"AAPL": "swing_momentum"}
 
     missing_exact = _owned_portfolio()
-    missing_exact["strategy_states"]["momentum"]["AAPL"]["last_known_qty"] = 10
+    missing_exact["strategy_states"]["swing_momentum"]["AAPL"]["last_known_qty"] = 10
     report = reconcile_startup(
         missing_exact,
         positions=[{"symbol": "AAPL", "qty": "10", "avg_entry_price": "100"}],
@@ -188,16 +188,16 @@ def test_capped_broker_history_uses_exact_persisted_entry_or_pauses(tmp_path):
     )
     assert report["status"] == "degraded"
     assert report["entries_paused"] is True
-    assert missing_exact["position_owners"] == {"AAPL": "momentum"}
+    assert missing_exact["position_owners"] == {"AAPL": "swing_momentum"}
 
 def test_pending_coordinator_entry_recovers_by_persisted_client_id_if_journal_write_was_lost(tmp_path):
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text("")
     portfolio = empty_portfolio()
-    portfolio["position_owners"] = {"AAPL": "momentum"}
-    portfolio["strategy_states"] = {"momentum": {"AAPL": {
-        "phase": ENTRY_PENDING, "strategy": "momentum", "ticker": "AAPL",
-        "owner": "momentum", "client_order_id": "client-entry-1",
+    portfolio["position_owners"] = {"AAPL": "swing_momentum"}
+    portfolio["strategy_states"] = {"swing_momentum": {"AAPL": {
+        "phase": ENTRY_PENDING, "strategy": "swing_momentum", "ticker": "AAPL",
+        "owner": "swing_momentum", "client_order_id": "client-entry-1",
         "entry_client_order_id": "client-entry-1", "stop_price": 95.0,
     }}}
     entry = _order("entry-1", "AAPL", "buy", 10, "2026-10-08T14:00:00Z", 100)
@@ -209,7 +209,7 @@ def test_pending_coordinator_entry_recovers_by_persisted_client_id_if_journal_wr
     )
 
     assert report["status"] == "verified"
-    state = portfolio["strategy_states"]["momentum"]["AAPL"]
+    state = portfolio["strategy_states"]["swing_momentum"]["AAPL"]
     assert state["phase"] == OPEN
     assert state["entry_order_id"] == "entry-1"
     assert state["entry_source"] == "persisted_pending_client_id"
@@ -218,7 +218,7 @@ def test_reconciliation_does_not_treat_old_software_stop_as_live_bracket_stop(tm
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text(json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
-        "strategy": "momentum", "order_id": "entry-1", "client_order_id": "rule-1",
+        "strategy": "swing_momentum", "order_id": "entry-1", "client_order_id": "rule-1",
         "submission_status": "submitted",
     }))
     entry = _order("entry-1", "AAPL", "buy", 10, "2026-10-08T14:00:00Z", 100)
@@ -240,7 +240,7 @@ def test_reconciliation_does_not_treat_old_software_stop_as_live_bracket_stop(tm
 
     assert report["status"] == "degraded"
     assert report["unprotected_positions"] == ["AAPL"]
-    assert portfolio["strategy_states"]["momentum"]["AAPL"]["stop_price"] == 95.0
+    assert portfolio["strategy_states"]["swing_momentum"]["AAPL"]["stop_price"] == 95.0
 
 @pytest.mark.parametrize("submission_status,client_id", [
     ("failed", "client-entry-1"),
@@ -250,7 +250,7 @@ def test_failed_or_mismatched_journal_buy_cannot_claim_broker_position(tmp_path,
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text(json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
-        "strategy": "momentum", "order_id": "entry-1", "client_order_id": client_id,
+        "strategy": "swing_momentum", "order_id": "entry-1", "client_order_id": client_id,
         "submission_status": submission_status, "status": submission_status,
     }))
     entry = _order("entry-1", "AAPL", "buy", 10, "2026-10-08T14:00:00Z", 100)
@@ -270,24 +270,24 @@ def test_protective_exit_uses_fresh_quote_even_on_the_last_signal_bar():
     states = {}
     owners = {}
     machine = RuleStrategyStateMachine(states, owners)
-    trade = {"ticker": "AAPL", "strategy": "momentum", "action": "buy", "signal_bar_time": "bar-1", "client_order_id": "client-1"}
+    trade = {"ticker": "AAPL", "strategy": "swing_momentum", "action": "buy", "signal_bar_time": "bar-1", "client_order_id": "client-1"}
     machine.prepare(trade)
     machine.resolve(trade, {"status": "submitted", "success": True, "order_id": "order-1"})
     machine.reconcile({"AAPL": {"qty": 10}}, [])
 
-    assert not machine.allows("momentum", "AAPL", "sell", "bar-1")
-    assert machine.allows_protective_exit("momentum", "AAPL")
+    assert not machine.allows("swing_momentum", "AAPL", "sell", "bar-1")
+    assert machine.allows_protective_exit("swing_momentum", "AAPL")
 
 def test_uncertain_broker_response_keeps_entry_pending():
     states = {}
     owners = {}
     machine = RuleStrategyStateMachine(states, owners)
-    trade = {"ticker": "AAPL", "strategy": "momentum", "action": "buy", "client_order_id": "client-1"}
+    trade = {"ticker": "AAPL", "strategy": "swing_momentum", "action": "buy", "client_order_id": "client-1"}
     machine.prepare(trade)
     machine.resolve(trade, {"status": "failed", "error": "Submission outcome unknown"})
 
-    assert states["momentum"]["AAPL"]["phase"] == ENTRY_PENDING
-    assert owners == {"AAPL": "momentum"}
+    assert states["swing_momentum"]["AAPL"]["phase"] == ENTRY_PENDING
+    assert owners == {"AAPL": "swing_momentum"}
 
 def test_daemon_degraded_bar_scan_pauses_buys_but_keeps_owned_exit(monkeypatch):
     portfolio = _owned_portfolio()
@@ -298,13 +298,13 @@ def test_daemon_degraded_bar_scan_pauses_buys_but_keeps_owned_exit(monkeypatch):
     def fake_scan(**kwargs):
         captured["feeds"] = (kwargs["data_feed"], kwargs["quote_feed"])
         return {
-            "market_regime": {"regime": "trending_up", "active": ["momentum"]},
+            "market_regime": {"regime": "trending_up", "active": ["swing_momentum"]},
             "signals": [], "scan_errors": ["BOATS historical bars unavailable"],
             "entries_paused": True, "entry_pause_reasons": ["bar fetch failed"],
             "unowned_positions": [], "data_status": {"historical_bars": "degraded"},
             "trades": [
-                {"ticker": "MSFT", "strategy": "momentum", "action": "buy", "client_order_id": "buy-msft"},
-                {"ticker": "AAPL", "strategy": "momentum", "action": "sell", "client_order_id": "sell-aapl"},
+                {"ticker": "MSFT", "strategy": "swing_momentum", "action": "buy", "client_order_id": "buy-msft"},
+                {"ticker": "AAPL", "strategy": "swing_momentum", "action": "sell", "client_order_id": "sell-aapl"},
             ],
         }
 
@@ -325,19 +325,19 @@ def test_daemon_degraded_bar_scan_pauses_buys_but_keeps_owned_exit(monkeypatch):
     assert [(trade["ticker"], trade["action"]) for trade in captured["trades"]] == [("AAPL", "sell")]
     assert portfolio["entries_paused"] is True
     assert portfolio["last_scan_status"] == "degraded"
-    assert portfolio["strategy_states"]["momentum"]["AAPL"]["phase"] == EXIT_PENDING
+    assert portfolio["strategy_states"]["swing_momentum"]["AAPL"]["phase"] == EXIT_PENDING
 
 def test_daemon_scan_returns_scan_report_after_order_submission(monkeypatch):
     portfolio = _owned_portfolio()
     portfolio["startup_reconciliation"] = {"status": "verified", "entries_paused": False}
     scan_report = {
         "universe": {"tickers": ["AAPL", "MSFT"]},
-        "market_regime": {"regime": "trending_up", "active": ["momentum"]},
+        "market_regime": {"regime": "trending_up", "active": ["swing_momentum"]},
         "signals": [], "scan_errors": [], "entries_paused": False,
         "entry_pause_reasons": [], "unowned_positions": [],
         "data_status": {"historical_bars": "ok"},
         "trades": [{
-            "ticker": "MSFT", "strategy": "momentum", "action": "buy",
+            "ticker": "MSFT", "strategy": "swing_momentum", "action": "buy",
             "qty": 1, "client_order_id": "buy-msft",
         }],
     }
@@ -368,13 +368,13 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
 
     def fake_scan(**_kwargs):
         return {
-            "market_regime": {"regime": "trending_up", "active": ["momentum"]},
+            "market_regime": {"regime": "trending_up", "active": ["swing_momentum"]},
             "signals": [], "scan_errors": [], "entries_paused": False,
             "entry_pause_reasons": [], "unowned_positions": [],
             "data_status": {"historical_bars": "ok"},
             "trades": [
-                {"ticker": "AAPL", "strategy": "momentum", "action": "sell", "client_order_id": "sell-aapl"},
-                {"ticker": "MSFT", "strategy": "momentum", "action": "buy", "client_order_id": "buy-msft"},
+                {"ticker": "AAPL", "strategy": "swing_momentum", "action": "sell", "client_order_id": "sell-aapl"},
+                {"ticker": "MSFT", "strategy": "swing_momentum", "action": "buy", "client_order_id": "buy-msft"},
             ],
         }
 
@@ -408,7 +408,7 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
 
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text(json.dumps({
-        "trading_mode": "algo", "action": "buy", "ticker": "AAPL", "strategy": "momentum",
+        "trading_mode": "algo", "action": "buy", "ticker": "AAPL", "strategy": "swing_momentum",
         "order_id": "entry-1", "client_order_id": "rule-1", "submission_status": "submitted",
     }))
     entry = _order("entry-1", "AAPL", "buy", 10, "2026-10-08T14:00:00Z", 100)
@@ -461,7 +461,7 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
     monkeypatch.setattr(daemon, "get_trading_window", lambda now, calendar: window)
     monkeypatch.setattr(daemon, "load_algo_universe", lambda: {"tickers": ["AAPL"]})
     monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **kwargs: {
-        "market_regime": {"regime": "trending_up", "active": ["momentum"]},
+        "market_regime": {"regime": "trending_up", "active": ["swing_momentum"]},
         "signals": [], "trades": [], "scan_errors": [], "entries_paused": False,
         "entry_pause_reasons": [], "unowned_positions": [],
         "data_status": {"historical_bars": "ok"},

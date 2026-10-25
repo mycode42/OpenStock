@@ -391,7 +391,7 @@ def test_off_hours_batch_is_blocked_before_order_cancellation_or_submission():
     )
 
     results, submitted, would_execute = execute_trade_batch(
-        trades=[{"ticker": "AAPL", "action": "sell", "qty": 1, "strategy": "momentum"}],
+        trades=[{"ticker": "AAPL", "action": "sell", "qty": 1, "strategy": "swing_momentum"}],
         decision_digest="test",
         args=SimpleNamespace(dry_run=False),
         mode="algo",
@@ -468,7 +468,7 @@ def test_strategy_exit_does_not_submit_while_bracket_cancellation_is_ambiguous(
     decision_file = tmp_path / "sell.json"
     decision_file.write_text(json.dumps({"trades": [{
         "ticker": "AAPL", "action": "sell", "qty": 2,
-        "entry_price": 100, "strategy": "trend_following",
+        "entry_price": 100, "strategy": "swing_trend_following",
         "client_order_id": "stable-rule-sell", "cancel_open_orders": True,
     }]}))
     account = {"id": "paper-account", "equity": "100000", "cash": "90000", "last_equity": "100000"}
@@ -516,7 +516,7 @@ def test_strategy_exit_submits_only_after_bracket_cancel_and_position_refresh(
     decision_file = tmp_path / "sell.json"
     decision_file.write_text(json.dumps({"trades": [{
         "ticker": "AAPL", "action": "sell", "qty": 2,
-        "entry_price": 100, "strategy": "trend_following",
+        "entry_price": 100, "strategy": "swing_trend_following",
         "client_order_id": "stable-rule-sell", "cancel_open_orders": True,
     }]}))
     account = {"id": "paper-account", "equity": "100000", "cash": "90000", "last_equity": "100000"}

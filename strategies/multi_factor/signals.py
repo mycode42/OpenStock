@@ -349,7 +349,7 @@ class SignalGenerator:
             else:
                 action, direction = "none", "flat"
             result.append(MultiFactorSignal(
-                ticker=symbol, strategy="multi_factor", action=action, direction=direction,
+                ticker=symbol, strategy="swing_multi_factor", action=action, direction=direction,
                 score=row["score"], rank=row["rank"],
                 target_weight=target_weights.get(symbol, 0.0),
                 as_of=as_of.isoformat(), rebalance_key=diagnostics["rebalance_key"],
@@ -372,7 +372,7 @@ class SignalGenerator:
                 action = "cover" if quantity < 0 else "sell"
                 direction = "flat"
             result.append(MultiFactorSignal(
-                ticker=symbol, strategy="multi_factor", action=action, direction=direction,
+                ticker=symbol, strategy="swing_multi_factor", action=action, direction=direction,
                 score=0.0, rank=len(ranked) + 1, target_weight=0.0,
                 as_of=as_of.isoformat(), rebalance_key=diagnostics["rebalance_key"],
                 factor_values={}, factor_zscores={},

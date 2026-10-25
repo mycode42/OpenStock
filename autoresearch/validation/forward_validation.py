@@ -126,8 +126,8 @@ def _current_regime(store, end: date) -> str | None:
     if not spy:
         return None
     result = rank_strategies(
-        spy, mode="algo", event_enabled=settings.algo_event_driven_enabled,
-        intraday_trend_enabled=settings.enable_intraday_trend,
+        spy, mode="algo", event_enabled=settings.swing_event_driven_enabled,
+        intraday_trend_enabled=settings.enable_intraday_trend_following,
         intraday_momentum_enabled=settings.enable_intraday_momentum,
     )
     regime = str(result.get("regime") or "unknown")

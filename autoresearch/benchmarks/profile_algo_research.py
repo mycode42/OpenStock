@@ -147,13 +147,13 @@ def _symbols(args) -> list[str]:
         ))
     else:
         universe = configured_universe("algo").get("tickers", [])
-        minimum = 20 if args.strategy == "multi_factor" else 7 if args.strategy == "momentum" else 1
+        minimum = 20 if args.strategy == "swing_multi_factor" else 7 if args.strategy == "swing_momentum" else 1
         count = max(args.symbol_count, minimum)
         selected = [str(symbol).upper() for symbol in universe if str(symbol).upper() in available_set][:count]
     missing = sorted(set(selected) - available_set)
     if missing:
         raise ValueError("No stored split-adjusted SIP intraday bars for: " + ", ".join(missing))
-    minimum = 20 if args.strategy == "multi_factor" else 7 if args.strategy == "momentum" else 1
+    minimum = 20 if args.strategy == "swing_multi_factor" else 7 if args.strategy == "swing_momentum" else 1
     if len(selected) < minimum:
         raise ValueError(
             f"{args.strategy} needs at least {minimum} benchmark symbols; received {len(selected)}"
@@ -473,9 +473,9 @@ def _run(args) -> dict:
             detail, verification["summary"], adaptive_output / "verification-coordinator",
         )
         portfolio_args = argparse.Namespace(
-            strategies=args.strategy, multi_factor_overlay=args.strategy == "multi_factor",
+            strategies=args.strategy,
             event_calendar=None, artifact_dir=str(coordinator_artifact.parent.parent),
-            enable_disabled_intraday=False, workers=args.workers,
+            workers=args.workers,
             output_dir=str(output_dir / "portfolio-replay"),
         )
         coordinator_fold_original = portfolio_simulation._run_coordinated_fold_group
@@ -552,7 +552,7 @@ def _run(args) -> dict:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=str(DEFAULT_DB))
-    parser.add_argument("--strategy", choices=STRATEGIES, default="momentum")
+    parser.add_argument("--strategy", choices=STRATEGIES, default="swing_momentum")
     parser.add_argument("--mode", choices=("optimizer", "full"), default="full",
                         help="profile one optimizer discovery job or include rolling verification and replay")
     parser.add_argument("--symbols", help="comma-separated research symbols; default is a small configured subset")

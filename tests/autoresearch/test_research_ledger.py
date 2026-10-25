@@ -9,7 +9,7 @@ from strategies.registry import ALGO_DEFAULT_PARAMETERS
 
 
 def test_regime_candidate_can_enter_forward_trial_when_strategy_gate_fails(tmp_path):
-    parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["momentum"])
+    parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["swing_momentum"])
     artifact = tmp_path / "discovery.json"
     artifact.write_text(json.dumps({
         "adaptive_regime_search": {
@@ -23,10 +23,10 @@ def test_regime_candidate_can_enter_forward_trial_when_strategy_gate_fails(tmp_p
             }],
         },
     }))
-    discovery = {"strategies": {"momentum": {
+    discovery = {"strategies": {"swing_momentum": {
         "status": "completed", "detail_artifact": str(artifact),
     }}}
-    verification = {"strategies": {"momentum": {
+    verification = {"strategies": {"swing_momentum": {
         "status": "completed",
         "summary": {
             "checks": {"overall_pass": False},
@@ -34,10 +34,10 @@ def test_regime_candidate_can_enter_forward_trial_when_strategy_gate_fails(tmp_p
             "stitched_oos": {"daily_sharpe_annualized": -0.4},
             "fold_count": 10,
         },
-    }}, "candidate_validation": {"strategies": {"momentum": {
+    }}, "candidate_validation": {"strategies": {"swing_momentum": {
         "status": "completed",
         "candidates": [{
-            "candidate_id": candidate_id("momentum", parameters),
+            "candidate_id": candidate_id("swing_momentum", parameters),
             "status": "passed",
         }],
     }}}}
@@ -45,7 +45,7 @@ def test_regime_candidate_can_enter_forward_trial_when_strategy_gate_fails(tmp_p
     result = _candidates(discovery, verification, "range_bound")
 
     assert len(result) == 1
-    assert result[0]["candidate_id"] == candidate_id("momentum", parameters, "range_bound")
+    assert result[0]["candidate_id"] == candidate_id("swing_momentum", parameters, "range_bound")
     assert result[0]["historical_verification"]["overall_pass"] is False
     assert result[0]["screening"]["improved_over_training_baseline"] is True
 
@@ -53,7 +53,7 @@ def test_regime_candidate_can_enter_forward_trial_when_strategy_gate_fails(tmp_p
 def test_ledger_links_candidate_discovery_trial_observation_and_promotion(tmp_path):
     output = tmp_path / "research"
     output.mkdir()
-    parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["momentum"])
+    parameters = deepcopy(ALGO_DEFAULT_PARAMETERS["swing_momentum"])
     artifact = output / "discovery.json"
     artifact.write_text(json.dumps({
         "window": {"start": "2026-01-01", "end": "2026-02-01", "sessions": 20},
@@ -73,14 +73,14 @@ def test_ledger_links_candidate_discovery_trial_observation_and_promotion(tmp_pa
     ledger.start_invocation(invocation_id)
     ledger.record_discovery_stage(
         invocation_id,
-        {"status": "completed", "strategies": {"momentum": {
+        {"status": "completed", "strategies": {"swing_momentum": {
             "status": "completed", "detail_artifact": str(artifact),
             "archive_sequence": 7, "search_seed": 42,
         }}},
         data_version="market-data-v1",
     )
 
-    cid = candidate_id("momentum", parameters, "range_bound")
+    cid = candidate_id("swing_momentum", parameters, "range_bound")
     trial_id = "trial-1"
     data_end = "2026-03-01"
     simulation = {
@@ -90,7 +90,7 @@ def test_ledger_links_candidate_discovery_trial_observation_and_promotion(tmp_pa
         "baseline_metrics": {"net_realized_pnl_after_simulated_costs": 400.0},
     }
     trial = {
-        "trial_id": trial_id, "candidate_id": cid, "strategy": "momentum",
+        "trial_id": trial_id, "candidate_id": cid, "strategy": "swing_momentum",
         "regime": "range_bound", "parameters": parameters,
         "origin_invocation_id": invocation_id, "status": "promoted",
         "staged_on": "2026-02-01", "staged_at": "2026-02-01T00:00:00+00:00",

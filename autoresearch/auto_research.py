@@ -44,8 +44,7 @@ from .settings import (
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
     REGIME_CONTEXT_WARMUP_DAYS, RESEARCH_START, RESEARCH_WARMUP_DAYS,
-    ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, LIVE_RESEARCH_STRATEGIES,
-    RESEARCHABLE_STRATEGIES,
+    ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, RESEARCHABLE_STRATEGIES,
 )
 
 AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v23-continuous-champion-queue-2026"
@@ -184,7 +183,7 @@ def run_daily_research(args) -> dict:
         "regime_macro_data_version": stable_hash(macro_series),
         "fundamentals_data_version": fundamentals_data_version,
     })
-    live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "multi_factor", "event_driven"])
+    live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "swing_multi_factor", "swing_event_driven"])
     context = {
         "pipeline_version": AUTO_RESEARCH_PIPELINE_VERSION,
         "cohort_id": None,
@@ -240,9 +239,9 @@ def run_daily_research(args) -> dict:
         },
         "strategies": list(RESEARCHABLE_STRATEGIES),
         "live_configuration_sha256": live_snapshot["sha256"],
-        "portfolio_strategies": list(LIVE_RESEARCH_STRATEGIES),
-        "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled,
-        "event_driven_enabled": runtime_settings.algo_event_driven_enabled,
+        "portfolio_strategies": list(RESEARCHABLE_STRATEGIES),
+        "swing_multi_factor_enabled": runtime_settings.swing_multi_factor_enabled,
+        "swing_event_driven_enabled": runtime_settings.swing_event_driven_enabled,
         "factor_only": bool(args.factor_only),
         "final_holdout_quarantine": False,
         "final_holdout_status": holdout_report.get("status"),
@@ -334,7 +333,7 @@ def run_daily_research(args) -> dict:
         "Adaptive discovery finished: %s in %.1fs",
         adaptive_discovery.get("status"), adaptive_discovery_seconds,
     )
-    multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("multi_factor", {})
+    multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("swing_multi_factor", {})
     if optimization_only:
         discovery_failed = adaptive_discovery.get("status") in {"error", "partial_error"}
         report = {
@@ -465,7 +464,7 @@ def run_daily_research(args) -> dict:
     adaptive_portfolio_ready = all(
         (verification_statuses.get(strategy) or {}).get("coordinator_artifact")
         and Path((verification_statuses.get(strategy) or {})["coordinator_artifact"]).is_file()
-        for strategy in LIVE_RESEARCH_STRATEGIES
+        for strategy in RESEARCHABLE_STRATEGIES
     )
     portfolio_source = "adaptive_short_window"
     if adaptive_portfolio_ready and not args.force and not args.factor_only:
@@ -666,15 +665,13 @@ def run_daily_research(args) -> dict:
             portfolio_reused = True
             logger.info("Portfolio replay: reusing cached result")
         else:
-            logger.info("Portfolio replay starting for %d active strategies", len(LIVE_RESEARCH_STRATEGIES))
+            logger.info("Portfolio replay starting for %d research strategies", len(RESEARCHABLE_STRATEGIES))
             from .validation.portfolio_simulation import run_coordinated_portfolio
 
             portfolio_args = SimpleNamespace(
-                strategies=",".join(LIVE_RESEARCH_STRATEGIES),
-                enable_disabled_intraday=False,
+                strategies=",".join(RESEARCHABLE_STRATEGIES),
                 artifact_dir=str(adaptive_coordinator_root),
                 event_calendar=None,
-                multi_factor_overlay=runtime_settings.algo_multi_factor_enabled,
                 factor_weight_timeline=factor_report.get("weight_timeline") or [],
                 workers=max(1, args.workers), output_dir=str(portfolio_path),
             )
@@ -772,7 +769,7 @@ def run_daily_research(args) -> dict:
                 if adaptive_portfolio_ready
                 else "Adaptive verification is incomplete; portfolio replay was skipped."
             ),
-            "multi_factor": (
+            "swing_multi_factor": (
                 "Multi Factor is active through the shared live coordinator; regime-specific candidates can update signal parameters after historical and forward simulation gates pass."
                 if factor_ic is not None and factor_ic > 0
                 else "Multi Factor is active through the shared live coordinator; latest factor diagnostics were not positive, and any regime-specific candidate still needs to pass historical and forward simulation gates."
@@ -787,7 +784,7 @@ def run_daily_research(args) -> dict:
         "limitations": [
             "Adaptive fitting, verification, and fold-aligned portfolio replay use 2020 onward; earlier bars are indicator warm-up only.",
             "The fixed current Algo universe is used across the 2020-onward research range; historical universe membership is not reconstructed.",
-            "The portfolio replay includes only strategies active in live config and available historical overlays.",
+            "The portfolio replay includes strategies enabled in live config with available historical data.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
             "Each immutable forward candidate version is scored only on sessions after its staging date and with modeled execution costs; results are not a performance forecast.",
             "Historical walk-forward results are reused across research cycles and are not a pristine independent holdout; all candidate trials remain in the archive and promotion requires forward evidence.",

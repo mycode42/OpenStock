@@ -215,7 +215,7 @@ def run_window_ladder_discovery(
         "fallback_used": len(attempts) > 1,
         "selection_rule": "require a sample-qualified positive-after-costs candidate with higher fitness than baseline",
     }
-    if args.strategy == "multi_factor":
+    if args.strategy == "swing_multi_factor":
         detail["adaptive_window_search"]["minimum_universe_values_searched"] = sorted({
             int((candidate.get("parameters") or {}).get("min_universe"))
             for candidate in detail.get("candidates", [])

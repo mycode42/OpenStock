@@ -27,7 +27,7 @@ DEFAULT_FITNESS_WEIGHTS = {
 ADAPTIVE_REGIMES = ("trending_up", "trending_down", "range_bound", "volatile")
 
 DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
-    "mean_reversion": {
+    "intraday_mean_reversion": {
         "signal_model": ["opening_dip", "bollinger"],
         "minimum_dip_pct": [0.010, 0.014, 0.020],
         "minimum_bounce_pct": [0.001, 0.002, 0.003],
@@ -39,12 +39,27 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
         "threshold_mode": ["fixed", "volatility_regime_adjusted"],
         "efficiency_ratio_max": [0.25, 0.35, 0.45], "adx_max": [16.0, 20.0, 24.0],
     },
-    "trend_following": {
+    "intraday_trend_following": {
+        "fast_period": [5, 7, 9, 12], "slow_period": [15, 21, 30, 40],
+        "confirmation_bars": [1, 2, 3],
+        "minimum_slope_pct": [0.0, 0.0005, 0.001, 0.002],
+        "allow_long": [True], "allow_short": [False, True],
+    },
+    "intraday_momentum": {
+        "lookback": [5, 10, 12, 16, 20],
+        "minimum_return": [0.005, 0.01, 0.015, 0.02],
+        "minimum_volume_ratio": [1.0, 1.2, 1.5, 2.0],
+        "minimum_short_return": [0.005, 0.01, 0.015, 0.02],
+        "minimum_short_volume_ratio": [1.0, 1.2, 1.5, 2.0],
+        "max_extension_pct": [0.0, 0.015, 0.025, 0.04],
+        "allow_long": [True], "allow_short": [False, True],
+    },
+    "swing_trend_following": {
         "average_type": ["sma", "ema", "kama"], "stop_mode": ["fixed_pct", "atr"],
         "atr_stop_multiple": [2.0, 2.5, 3.0], "fast_period": [10, 15, 20, 25, 30],
         "slow_period": [40, 50, 60, 70, 80], "minimum_slope_pct": [0.0, 0.001, 0.0025, 0.005],
     },
-    "momentum": {
+    "swing_momentum": {
         "momentum_mode": ["cross_sectional", "time_series"],
         "lookbacks": [
             [5, 10, 20], [10, 20, 40], [10, 20, 60],
@@ -62,7 +77,7 @@ DEFAULT_SEARCH_SPACES: dict[str, dict[str, list]] = {
         "lookback_mode": ["fixed", "volatility_adaptive"],
         "stretch_zscore": [1.25, 1.75, 2.25],
     },
-    "multi_factor": {
+    "swing_multi_factor": {
         "rebalance_frequency": ["daily", "weekly"], "top_n": [1, 2, 3, 4],
         "min_universe": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
         "factor_weight_mode": [

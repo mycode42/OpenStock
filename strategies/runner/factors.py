@@ -22,7 +22,7 @@ def _multi_factor_rebalance_signals(
     tradable_symbols: set[str] | None = None,
 ) -> tuple[dict[str, MultiFactorSignal], dict | None]:
     """Persist one point-in-time-safe factor rebalance per period."""
-    config_values = dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor") or {})
+    config_values = dict(ALGO_DEFAULT_PARAMETERS.get("swing_multi_factor") or {})
     if parameters:
         config_values.update(parameters)
     generator = SignalGenerator(MultiFactorConfig.from_dict(config_values))
@@ -45,10 +45,10 @@ def _multi_factor_rebalance_signals(
             "failure_types": {"feed": type(exc).__name__},
         }
     period = generator.rebalance_key(session)
-    by_symbol = strategy_states.setdefault("multi_factor", {})
+    by_symbol = strategy_states.setdefault("swing_multi_factor", {})
     owners_for_signals = dict(position_owners)
     positions_for_signals = dict(positions or {})
-    held = {ticker for ticker, owner in owners_for_signals.items() if owner == "multi_factor"}
+    held = {ticker for ticker, owner in owners_for_signals.items() if owner == "swing_multi_factor"}
     holdings = {
         ticker: {
             "qty": positions_for_signals.get(ticker, {}).get("qty", by_symbol.get(ticker, {}).get("last_known_qty", 1)),
@@ -117,13 +117,13 @@ def _multi_factor_current_targets(
     parameters: dict | None = None,
 ) -> dict[str, dict]:
     """Read this period's cached targets for the standalone core strategy."""
-    config_values = dict(ALGO_DEFAULT_PARAMETERS.get("multi_factor") or {})
+    config_values = dict(ALGO_DEFAULT_PARAMETERS.get("swing_multi_factor") or {})
     if parameters:
         config_values.update(parameters)
     config = MultiFactorConfig.from_dict(config_values)
     generator = SignalGenerator(config)
     period = generator.rebalance_key(session)
-    by_symbol = strategy_states.get("multi_factor", {})
+    by_symbol = strategy_states.get("swing_multi_factor", {})
     output = {}
     for ticker in selected_symbols:
         state = by_symbol.get(ticker, {})
@@ -134,7 +134,7 @@ def _multi_factor_current_targets(
         directional_score = abs(score) if direction == "short" else score
         output[ticker] = {
             "ticker": ticker,
-            "strategy": "multi_factor",
+            "strategy": "swing_multi_factor",
             "action": "buy" if direction == "long" else "short",
             "direction": direction,
             "rank": state.get("factor_rank"),
@@ -152,7 +152,7 @@ def _multi_factor_current_targets(
 def multi_factor_parameters_for_session() -> tuple[dict, dict]:
     """Return the configured live profile; research candidates require review."""
     baseline = validate_parameter_profile({
-        "multi_factor": ALGO_DEFAULT_PARAMETERS["multi_factor"],
-    })["multi_factor"]
+        "swing_multi_factor": ALGO_DEFAULT_PARAMETERS["swing_multi_factor"],
+    })["swing_multi_factor"]
     return baseline, {"source": "live_defaults"}
 

@@ -45,7 +45,7 @@ def _extend_space_from_archived_parents(
         if not isinstance(parent, dict):
             continue
         for name, values in extended.items():
-            if strategy == "multi_factor" and name == "min_universe":
+            if strategy == "swing_multi_factor" and name == "min_universe":
                 continue
             if name not in parent:
                 continue
@@ -157,7 +157,7 @@ def _make_parameters(strategy: str, values: dict) -> dict:
 
 def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str, dict]]:
     """Build a small, ordered cohort with one-feature and planned combined variants."""
-    if strategy == "mean_reversion":
+    if strategy == "intraday_mean_reversion":
         return [
             ("opening_dip_er_gate", {"signal_model": "opening_dip", "regime_filter": "er"}),
             ("opening_dip_adx_gate", {"signal_model": "opening_dip", "regime_filter": "adx"}),
@@ -189,13 +189,13 @@ def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str,
                 "lookback_mode": "volatility_adaptive",
             }),
         ]
-    if strategy in {"trend_following", "swing_trend_following"}:
+    if strategy == "swing_trend_following":
         return [
             ("kama_average", {"average_type": "kama"}),
             ("atr_stop", {"stop_mode": "atr"}),
             ("kama_atr", {"average_type": "kama", "stop_mode": "atr"}),
         ]
-    if strategy in {"momentum", "swing_momentum"}:
+    if strategy == "swing_momentum":
         return [
             ("cross_sectional_21_session", {
                 "momentum_mode": "cross_sectional", "lookbacks": [21],
@@ -216,7 +216,7 @@ def _planned_ablation_variants(strategy: str, baseline: dict) -> list[tuple[str,
                 "momentum_mode": "time_series", "lookbacks": [21, 63, 126, 252],
             }),
         ]
-    if strategy == "multi_factor":
+    if strategy == "swing_multi_factor":
         return [
             ("all_factors_equal_weights", {
                 "factor_weights": MULTI_FACTOR_EQUAL_ABLATION_WEIGHTS,
@@ -396,7 +396,7 @@ def _candidate_parameters(
             "parent_candidate_id": baseline_id,
         })
         ablations_added += 1
-    if strategy == "multi_factor" and len(output) < bayes_seed_limit:
+    if strategy == "swing_multi_factor" and len(output) < bayes_seed_limit:
         minimum_universe_limit = (
             max(1, count // 8) if method == "bayes" else count
         )

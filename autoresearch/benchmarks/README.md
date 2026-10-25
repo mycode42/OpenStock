@@ -11,7 +11,7 @@ is disabled, and it does not touch nightly artifacts or live settings.
 Run the default benchmark with:
 
 ```bash
-poetry run python -m autoresearch.benchmarks.profile_algo_research --strategy momentum --mode full
+poetry run python -m autoresearch.benchmarks.profile_algo_research --strategy swing_momentum --mode full
 ```
 
 The bounded workload uses eight symbols for the selected strategy, two

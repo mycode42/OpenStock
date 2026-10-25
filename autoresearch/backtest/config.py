@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from portfolio.config import get_mode_config
 from strategies.multi_factor.config import MultiFactorConfig
+from strategies.catalog import canonical_strategy_id
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
 from portfolio.config import ALGO_REGIME_WARMUP_CALENDAR_DAYS
 
@@ -32,18 +33,19 @@ RESEARCH_CONTROL_KEYS = {
 
 def multi_factor_warmup_days(profile: dict | None = None) -> int:
     """Calendar-day history needed for the longest configured daily factor."""
-    settings = (profile or {}).get("multi_factor") if isinstance(profile, dict) else None
+    settings = (profile or {}).get("swing_multi_factor") if isinstance(profile, dict) else None
     config = MultiFactorConfig.from_dict(settings)
     return max(FACTOR_WARMUP_DAYS, config.warmup_calendar_days())
 
 
 def strategy_warmup_days(strategy: str, profile: dict | None = None) -> int:
     """Calendar history needed before replaying strategy signals."""
-    if strategy in {"momentum", "swing_momentum"}:
+    strategy = canonical_strategy_id(strategy)
+    if strategy == "swing_momentum":
         # Research searches longer-horizon variants even when the live profile
         # is still using its short-horizon baseline.
         return MOMENTUM_WARMUP_DAYS
-    if strategy == "multi_factor":
+    if strategy == "swing_multi_factor":
         return max(DAILY_WARMUP_DAYS, multi_factor_warmup_days(profile))
     return DAILY_WARMUP_DAYS
 
@@ -52,11 +54,12 @@ def validate_strategy_filter(strategies: list[str] | None) -> list[str] | None:
         return None
     if not isinstance(strategies, list) or not strategies:
         raise ValueError("strategy filter must be a non-empty list")
-    if any(not isinstance(name, str) or name not in STRATEGY_NAMES for name in strategies):
+    if any(not isinstance(name, str) or canonical_strategy_id(name) not in STRATEGY_NAMES for name in strategies):
         raise ValueError("strategy filter contains an unknown strategy")
-    if len(set(strategies)) != len(strategies):
+    normalized = [canonical_strategy_id(name) for name in strategies]
+    if len(set(normalized)) != len(normalized):
         raise ValueError("strategy filter names must be unique")
-    return list(strategies)
+    return normalized
 
 def validate_research_controls(controls: dict | None) -> dict:
     if controls is None:
@@ -84,6 +87,7 @@ def validate_research_controls(controls: dict | None) -> dict:
     if not isinstance(per_strategy, dict):
         raise ValueError("max_entries_per_strategy_per_day must be an object")
     live_daily_caps = live_risk.get("max_entries_per_strategy_per_day", {})
+    per_strategy = {canonical_strategy_id(name): value for name, value in per_strategy.items()}
     for name, value in per_strategy.items():
         maximum = live_daily_caps.get(name, live_risk["max_trades_per_day"])
         if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= maximum:
@@ -92,6 +96,7 @@ def validate_research_controls(controls: dict | None) -> dict:
     cooldowns = normalized.get("cooldown_minutes_by_strategy", {})
     if not isinstance(cooldowns, dict):
         raise ValueError("cooldown_minutes_by_strategy must be an object")
+    cooldowns = {canonical_strategy_id(name): value for name, value in cooldowns.items()}
     for name, value in cooldowns.items():
         maximum = live_risk.get("cooldown_minutes_by_strategy", {}).get(name, 390)
         if name not in STRATEGY_NAMES or isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= maximum:

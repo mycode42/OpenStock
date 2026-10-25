@@ -18,7 +18,6 @@ class AlgoEntryLimits:
     max_intraday_entries: int = 4
     max_swing_entries: int = 6
     max_intraday_core_entries: int = 4
-    max_intraday_satellite_entries: int = 2
 
 
 ALGO_ENTRY_LIMITS = AlgoEntryLimits()
@@ -30,23 +29,23 @@ class AlgoRuntimeSettings:
     """Typed source of truth for settings specific to the Algo service."""
 
     overnight_entries_enabled: bool = True
-    enable_intraday_trend: bool = False
+    enable_intraday_trend_following: bool = False
     enable_intraday_momentum: bool = False
-    intraday_satellite_position_pct: float = 0.01
-    intraday_satellite_risk_multiplier: float = 0.25
-    algo_multi_factor_enabled: bool = True
-    algo_event_driven_enabled: bool = True
+    intraday_strategy_position_pct: float = 0.01
+    intraday_strategy_risk_multiplier: float = 0.25
+    swing_multi_factor_enabled: bool = True
+    swing_event_driven_enabled: bool = True
 
     def __post_init__(self) -> None:
         for name in (
-            "overnight_entries_enabled", "enable_intraday_trend",
-            "enable_intraday_momentum", "algo_multi_factor_enabled",
-            "algo_event_driven_enabled",
+            "overnight_entries_enabled", "enable_intraday_trend_following",
+            "enable_intraday_momentum", "swing_multi_factor_enabled",
+            "swing_event_driven_enabled",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
         for name in (
-            "intraday_satellite_position_pct", "intraday_satellite_risk_multiplier",
+            "intraday_strategy_position_pct", "intraday_strategy_risk_multiplier",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
@@ -55,6 +54,19 @@ class AlgoRuntimeSettings:
     def as_legacy_dict(self) -> dict:
         """Return the compatibility mapping consumed by older integrations."""
         return asdict(self)
+
+    @property
+    def enable_intraday_trend(self) -> bool:
+        """Compatibility alias for the horizon-explicit setting."""
+        return self.enable_intraday_trend_following
+
+    @property
+    def algo_multi_factor_enabled(self) -> bool:
+        return self.swing_multi_factor_enabled
+
+    @property
+    def algo_event_driven_enabled(self) -> bool:
+        return self.swing_event_driven_enabled
 
 
 ALGO_RUNTIME_SETTINGS = AlgoRuntimeSettings()
@@ -126,39 +138,33 @@ ALGO_MODE_CONFIG = {
         "stop_loss_pct": 0.05,
         "trailing_stop_pct": 0.04,
         "stop_loss_pct_by_strategy": {
-            "mean_reversion": 0.011,
-            "trend_following": 0.06,
-            "momentum": 0.06,
+            "intraday_mean_reversion": 0.011,
             "swing_trend_following": 0.06,
             "swing_momentum": 0.06,
-            "multi_factor": 0.06,
-            "event_driven": 0.04,
+            "swing_multi_factor": 0.06,
+            "swing_event_driven": 0.04,
             "swing_mean_reversion": 0.07,
-            "intraday_trend": 0.011,
+            "intraday_trend_following": 0.011,
             "intraday_momentum": 0.011,
         },
         "trailing_stop_pct_by_strategy": {
-            "mean_reversion": 0.008,
-            "trend_following": 0.045,
-            "momentum": 0.045,
+            "intraday_mean_reversion": 0.008,
             "swing_trend_following": 0.045,
             "swing_momentum": 0.045,
-            "multi_factor": 0.045,
-            "event_driven": 0.03,
+            "swing_multi_factor": 0.045,
+            "swing_event_driven": 0.03,
             "swing_mean_reversion": 0.05,
-            "intraday_trend": 0.008,
+            "intraday_trend_following": 0.008,
             "intraday_momentum": 0.008,
         },
         "trailing_activation_pct_by_strategy": {
-            "mean_reversion": 0.005,
-            "trend_following": 0.02,
-            "momentum": 0.02,
+            "intraday_mean_reversion": 0.005,
             "swing_trend_following": 0.02,
             "swing_momentum": 0.02,
-            "multi_factor": 0.02,
-            "event_driven": 0.02,
+            "swing_multi_factor": 0.02,
+            "swing_event_driven": 0.02,
             "swing_mean_reversion": 0.02,
-            "intraday_trend": 0.005,
+            "intraday_trend_following": 0.005,
             "intraday_momentum": 0.005,
         },
         "daily_loss_limit": 0.02,
@@ -168,48 +174,41 @@ ALGO_MODE_CONFIG = {
         "max_open_positions": 18,
         "max_positions_per_strategy": 7,
         "max_positions_per_strategy_by_strategy": {
-            "trend_following": 7, "momentum": 7, "swing_mean_reversion": 7,
-            "swing_trend_following": 7, "swing_momentum": 7,
-            "multi_factor": 7, "event_driven": 7, "mean_reversion": 7,
-            "intraday_trend": 7, "intraday_momentum": 7,
+            "swing_trend_following": 7, "swing_momentum": 7, "swing_mean_reversion": 7,
+            "swing_multi_factor": 7, "swing_event_driven": 7, "intraday_mean_reversion": 7,
+            "intraday_trend_following": 7, "intraday_momentum": 7,
         },
         "max_short_positions": 5,
         "max_short_exposure_pct": 0.20,
         "allow_short_positions": True,
         "range_regime_short_risk_multiplier": 0.75,
         "minimum_hold_minutes_by_strategy": {
-            "mean_reversion": 20,
-            "trend_following": 0,
-            "momentum": 0,
+            "intraday_mean_reversion": 20,
             "swing_trend_following": 0,
             "swing_momentum": 0,
             "swing_mean_reversion": 0,
-            "intraday_trend": 20,
+            "intraday_trend_following": 20,
             "intraday_momentum": 20,
-            "multi_factor": 0, "event_driven": 0,
+            "swing_multi_factor": 0, "swing_event_driven": 0,
         },
         "cooldown_minutes_by_strategy": {
-            "mean_reversion": 90,
-            "trend_following": 5 * 24 * 60,
-            "momentum": 5 * 24 * 60,
+            "intraday_mean_reversion": 90,
             "swing_trend_following": 5 * 24 * 60,
             "swing_momentum": 5 * 24 * 60,
             "swing_mean_reversion": 5 * 24 * 60,
-            "intraday_trend": 60,
+            "intraday_trend_following": 60,
             "intraday_momentum": 60,
-            "multi_factor": 5 * 24 * 60,
-            "event_driven": 5 * 24 * 60,
+            "swing_multi_factor": 5 * 24 * 60,
+            "swing_event_driven": 5 * 24 * 60,
         },
         "max_entries_per_strategy_per_day": {
-            "mean_reversion": 4,
-            "trend_following": 2,
-            "momentum": 2,
-            "swing_trend_following": 1,
-            "swing_momentum": 1,
-            "multi_factor": 2,
-            "event_driven": 5,
+            "intraday_mean_reversion": 4,
+            "swing_trend_following": 2,
+            "swing_momentum": 2,
+            "swing_multi_factor": 2,
+            "swing_event_driven": 5,
             "swing_mean_reversion": 2,
-            "intraday_trend": 1,
+            "intraday_trend_following": 1,
             "intraday_momentum": 1,
         },
         "strategy_group_limits": {
@@ -220,10 +219,6 @@ ALGO_MODE_CONFIG = {
             "intraday_core": {
                 "strategies": list(strategy_ids_for_group("intraday_core")),
                 "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
-            },
-            "intraday_satellites": {
-                "strategies": list(strategy_ids_for_group("intraday_satellites")),
-                "max_entries_per_day": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
             },
         },
         "min_cash_pct": ALGO_MIN_CASH_PCT,
@@ -304,6 +299,13 @@ def get_algo_research_controls() -> dict:
 
 # Runtime defaults shared by the live portfolio and research workflows.
 _ALGO_RUNTIME_DEFAULTS = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
+_ALGO_RUNTIME_LEGACY_ALIASES = {
+    "enable_intraday_trend": "enable_intraday_trend_following",
+    "intraday_satellite_position_pct": "intraday_strategy_position_pct",
+    "intraday_satellite_risk_multiplier": "intraday_strategy_risk_multiplier",
+    "algo_multi_factor_enabled": "swing_multi_factor_enabled",
+    "algo_event_driven_enabled": "swing_event_driven_enabled",
+}
 STRATEGY_CONFIG = {
     "portfolio_scan_seconds": 60,
     "universe_retry_seconds": 300,
@@ -323,10 +325,13 @@ def get_algo_runtime_settings() -> AlgoRuntimeSettings:
     """Return validated effective settings, including dashboard overrides."""
     values = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
     for config in (ALGO_RUNTIME_CONFIG, STRATEGY_CONFIG):
-        values.update({
-            key: config[key] for key, default in _ALGO_RUNTIME_DEFAULTS.items()
-            if key in config and config[key] != default
-        })
+        for key, value in config.items():
+            canonical_key = _ALGO_RUNTIME_LEGACY_ALIASES.get(key, key)
+            if (
+                canonical_key in _ALGO_RUNTIME_DEFAULTS
+                and value != _ALGO_RUNTIME_DEFAULTS[canonical_key]
+            ):
+                values[canonical_key] = value
     if ALGO_DASHBOARD_OVERRIDES_PATH.exists():
         try:
             overrides = json.loads(ALGO_DASHBOARD_OVERRIDES_PATH.read_text(encoding="utf-8"))
@@ -334,15 +339,21 @@ def get_algo_runtime_settings() -> AlgoRuntimeSettings:
             raise ValueError("Algo dashboard runtime overrides are unreadable") from exc
         if not isinstance(overrides, dict):
             raise ValueError("Algo dashboard runtime overrides must be an object")
+        normalized_overrides = {}
+        for key, value in overrides.items():
+            canonical_key = _ALGO_RUNTIME_LEGACY_ALIASES.get(key, key)
+            if canonical_key in normalized_overrides:
+                raise ValueError(f"Algo dashboard overrides contain conflicting settings for {canonical_key}")
+            normalized_overrides[canonical_key] = value
         allowed = set(_ALGO_RUNTIME_DEFAULTS)
-        if set(overrides) - allowed:
+        if set(normalized_overrides) - allowed:
             raise ValueError("Algo dashboard runtime overrides contain unsupported settings")
-        values.update(overrides)
+        values.update(normalized_overrides)
         settings = AlgoRuntimeSettings(**values)
-        if not 0.001 <= settings.intraday_satellite_position_pct <= 0.04:
-            raise ValueError("intraday_satellite_position_pct must be between 0.001 and 0.04")
-        if not 0.05 <= settings.intraday_satellite_risk_multiplier <= 1.0:
-            raise ValueError("intraday_satellite_risk_multiplier must be between 0.05 and 1.0")
+        if not 0.001 <= settings.intraday_strategy_position_pct <= 0.04:
+            raise ValueError("intraday_strategy_position_pct must be between 0.001 and 0.04")
+        if not 0.05 <= settings.intraday_strategy_risk_multiplier <= 1.0:
+            raise ValueError("intraday_strategy_risk_multiplier must be between 0.05 and 1.0")
         return settings
     return AlgoRuntimeSettings(**values)
 

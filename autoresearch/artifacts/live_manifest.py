@@ -31,7 +31,6 @@ def live_configuration_manifest(strategies: list[str] | tuple[str, ...]) -> dict
             "max_intraday_entries": ALGO_ENTRY_LIMITS.max_intraday_entries,
             "max_swing_entries": ALGO_ENTRY_LIMITS.max_swing_entries,
             "max_intraday_core_entries": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
-            "max_intraday_satellite_entries": ALGO_ENTRY_LIMITS.max_intraday_satellite_entries,
         },
         "runtime": get_algo_runtime_settings().as_legacy_dict(),
         "coordinator": deepcopy(ALGO_PORTFOLIO_COORDINATOR_CONFIG),

@@ -71,8 +71,8 @@ def portfolio(now=NOW):
         "last_scan_status": "ok",
         "entries_paused": False,
         "entry_pause_reasons": [],
-        "position_owners": {"AAPL": "momentum"},
-        "strategy_states": {"momentum": {"AAPL": {
+        "position_owners": {"AAPL": "swing_momentum"},
+        "strategy_states": {"swing_momentum": {"AAPL": {
             "phase": "open", "entry_order_id": "entry-1", "stop_price": 95,
         }}},
         "startup_reconciliation": {"status": "verified"},
@@ -333,7 +333,7 @@ def test_new_session_gets_scan_grace_but_inactive_service_still_alerts():
 
 def test_live_unowned_holding_and_unprotected_known_bracket_alert():
     state = portfolio()
-    state["strategy_states"]["momentum"]["AAPL"]["stop_price"] = None
+    state["strategy_states"]["swing_momentum"]["AAPL"]["stop_price"] = None
     broker = FakeBroker(
         positions=[{"symbol": "AAPL", "qty": "10"}, {"symbol": "TSLA", "qty": "2"}],
         orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "bracket", "legs": []}],
@@ -349,7 +349,7 @@ def test_live_unowned_holding_and_unprotected_known_bracket_alert():
 def test_overnight_simple_entry_relies_on_software_stop():
     now = datetime(2026, 10, 8, 0, 10, tzinfo=timezone.utc)  # 20:10 ET prior day
     state = portfolio(now)
-    state["strategy_states"]["momentum"]["AAPL"].update({"ticker": "AAPL", "take_profit": 105})
+    state["strategy_states"]["swing_momentum"]["AAPL"].update({"ticker": "AAPL", "take_profit": 105})
     broker = FakeBroker(
         positions=[{"symbol": "AAPL", "qty": "10"}],
         orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "simple", "legs": []}],
@@ -364,8 +364,8 @@ def test_overnight_simple_entry_relies_on_software_stop():
 
 def test_canceled_bracket_stops_and_pending_cancel_profit_legs_alert_even_with_software_stops():
     state = portfolio()
-    state["position_owners"] = {"CRM": "momentum", "EEM": "momentum"}
-    state["strategy_states"] = {"momentum": {
+    state["position_owners"] = {"CRM": "swing_momentum", "EEM": "swing_momentum"}
+    state["strategy_states"] = {"swing_momentum": {
         "CRM": {"phase": "open", "entry_order_id": "crm-entry", "stop_price": 195},
         "EEM": {"phase": "open", "entry_order_id": "eem-entry", "stop_price": 51},
     }}

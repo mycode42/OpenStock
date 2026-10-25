@@ -38,7 +38,7 @@ def activity(activity_id, order_id, side, qty, price, minute, symbol="AAPL"):
     }
 
 
-def journal(order_id, action, *, strategy="momentum", mode="algo", ticker="AAPL"):
+def journal(order_id, action, *, strategy="swing_momentum", mode="algo", ticker="AAPL"):
     return {
         "order_id": order_id,
         "action": action,
@@ -107,9 +107,9 @@ def test_partial_fills_use_decimal_fifo_across_entry_lots():
     assert report["realized_pnl_complete"]
     assert report["position_reconciliation"] == "matched"
     assert money(report["realized_pnl"]) == Decimal("27.5")
-    assert money(report["strategy_pnl"]["momentum"]) == Decimal("27.5")
-    assert money(report["strategy_basis"]["momentum"]) == Decimal("205")
-    assert report["realized_fills"][0]["strategy_qty"]["momentum"] == "1.75"
+    assert money(report["strategy_pnl"]["swing_momentum"]) == Decimal("27.5")
+    assert money(report["strategy_basis"]["swing_momentum"]) == Decimal("205")
+    assert report["realized_fills"][0]["strategy_qty"]["swing_momentum"] == "1.75"
     assert report["strategy_attribution_complete"]
 
 
@@ -142,7 +142,7 @@ def test_short_open_and_cover_fills_use_fifo_and_attribute_realized_pnl():
     assert report["realized_pnl_complete"]
     assert report["position_reconciliation"] == "matched"
     assert money(report["realized_pnl"]) == Decimal("40")
-    assert money(report["strategy_pnl"]["momentum"]) == Decimal("40")
+    assert money(report["strategy_pnl"]["swing_momentum"]) == Decimal("40")
     assert report["sell_fill_count"] == 0
     assert report["closing_fill_count"] == 1
     assert report["realized_fills"][0]["side"] == "buy_to_cover"
@@ -231,7 +231,7 @@ def test_bracket_child_attribution_requires_parent_link_and_exact_journal_id():
         activity("buy", "parent", "buy", 1, 100, 0),
         activity("sell", "child", "sell", 1, 110, 1),
     ]
-    rows = [journal("parent", "buy", strategy="trend_following")]
+    rows = [journal("parent", "buy", strategy="swing_trend_following")]
 
     linked = fill_analytics.calculate_realized_pnl(
         fills, rows, mode="algo", current_positions=[],
@@ -241,7 +241,7 @@ def test_bracket_child_attribution_requires_parent_link_and_exact_journal_id():
         fills, rows, mode="algo", current_positions=[],
     )
 
-    assert money(linked["strategy_pnl"]["trend_following"]) == Decimal("10")
+    assert money(linked["strategy_pnl"]["swing_trend_following"]) == Decimal("10")
     assert linked["strategy_attribution_complete"]
     assert unlinked["strategy_pnl"] == {}
     assert money(unlinked["realized_pnl"]) == Decimal("10")
@@ -260,8 +260,8 @@ def test_other_account_mode_or_conflicting_journal_id_cannot_attribute():
     )
     conflict = fill_analytics.calculate_realized_pnl(
         fills, [
-            journal("entry", "buy", strategy="momentum"),
-            journal("entry", "buy", strategy="mean_reversion"),
+            journal("entry", "buy", strategy="swing_momentum"),
+            journal("entry", "buy", strategy="intraday_mean_reversion"),
             journal("exit", "sell"),
         ],
         mode="algo", current_positions=[],
@@ -392,12 +392,12 @@ def test_account_report_verifies_account_and_reads_only_broker_gets(monkeypatch)
         raise AssertionError(f"Unexpected GET {url}")
 
     report = fill_analytics.get_account_fill_report(
-        "algo", [journal("parent", "buy", strategy="trend_following")],
+        "algo", [journal("parent", "buy", strategy="swing_trend_following")],
         http_get=get,
     )
 
     assert money(report["realized_pnl"]) == Decimal("10")
-    assert money(report["strategy_pnl"]["trend_following"]) == Decimal("10")
+    assert money(report["strategy_pnl"]["swing_trend_following"]) == Decimal("10")
     assert report["source"] == "Alpaca paper account FILL activities"
     assert all(url.startswith(ACCOUNT.base_url) for url in calls)
 
@@ -425,12 +425,12 @@ def test_account_report_links_short_bracket_cover_to_journaled_entry(monkeypatch
         raise AssertionError(f"Unexpected GET {url}")
 
     report = fill_analytics.get_account_fill_report(
-        "algo", [journal("parent", "short", strategy="trend_following")],
+        "algo", [journal("parent", "short", strategy="swing_trend_following")],
         http_get=get,
     )
 
     assert money(report["realized_pnl"]) == Decimal("10")
-    assert money(report["strategy_pnl"]["trend_following"]) == Decimal("10")
+    assert money(report["strategy_pnl"]["swing_trend_following"]) == Decimal("10")
     assert report["strategy_attribution_complete"]
 
 

@@ -75,37 +75,37 @@ def _legacy_rank(
     return_20d = values[-1] / values[-21] - 1
     if volatility >= 0.025:
         regime = "volatile"
-        weights = {"event_driven": 0.56} if event_enabled and not event_disable_in_volatile else {}
+        weights = {"swing_event_driven": 0.56} if event_enabled and not event_disable_in_volatile else {}
         reason = f"20-day daily volatility {volatility:.1%} exceeds 2.5%"
     elif sma20 and values[-1] > sma20 and return_20d >= 0.01:
         regime = "trending_up"
-        weights = {"trend_following": 1.0, "momentum": 0.9, "multi_factor": 0.8, "event_driven": 0.58, "mean_reversion": 0.25, "swing_mean_reversion": 0.15}
+        weights = {"swing_trend_following": 1.0, "swing_momentum": 0.9, "swing_multi_factor": 0.8, "swing_event_driven": 0.58, "intraday_mean_reversion": 0.25, "swing_mean_reversion": 0.15}
         reason = f"SPY above 20-day average with {return_20d:.1%} 20-day return"
     elif sma20 and values[-1] < sma20 and return_20d <= -0.01:
         regime = "trending_down"
-        weights = {"trend_following": 0.72, "momentum": 0.65, "multi_factor": 0.62, "event_driven": 0.56, "mean_reversion": 0.58, "swing_mean_reversion": 0.15}
+        weights = {"swing_trend_following": 0.72, "swing_momentum": 0.65, "swing_multi_factor": 0.62, "swing_event_driven": 0.56, "intraday_mean_reversion": 0.58, "swing_mean_reversion": 0.15}
         reason = f"SPY below 20-day average with {return_20d:.1%} 20-day return"
     else:
         regime = "range_bound"
-        weights = {"mean_reversion": 1.0, "swing_mean_reversion": 0.78, "multi_factor": 0.65, "event_driven": 0.58, "trend_following": 0.4, "momentum": 0.4}
+        weights = {"intraday_mean_reversion": 1.0, "swing_mean_reversion": 0.78, "swing_multi_factor": 0.65, "swing_event_driven": 0.58, "swing_trend_following": 0.4, "swing_momentum": 0.4}
         reason = f"SPY 20-day return {return_20d:.1%}; no directional trend"
 
-    available = {"trend_following", "momentum", "mean_reversion"}
+    available = {"swing_trend_following", "swing_momentum", "intraday_mean_reversion"}
     if mode == "algo":
-        available.update({"multi_factor", "swing_mean_reversion"})
+        available.update({"swing_multi_factor", "swing_mean_reversion"})
         if event_enabled:
-            available.add("event_driven")
+            available.add("swing_event_driven")
         if intraday_trend_enabled:
-            weights["intraday_trend"] = 0.3 if regime == "range_bound" else 0.58
-            available.add("intraday_trend")
+            weights["intraday_trend_following"] = 0.3 if regime == "range_bound" else 0.58
+            available.add("intraday_trend_following")
         if intraday_momentum_enabled:
             weights["intraday_momentum"] = 0.3 if regime == "range_bound" else 0.56
             available.add("intraday_momentum")
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
     active = [
         name for name, score in ranked if name in available
-        and (regime != "volatile" or name == "event_driven")
-        and (name != "event_driven" or score >= 0.55)
+        and (regime != "volatile" or name == "swing_event_driven")
+        and (name != "swing_event_driven" or score >= 0.55)
     ]
     return {
         "regime": regime, "reason": reason,
@@ -115,7 +115,7 @@ def _legacy_rank(
             {"strategy": name, "score": score, "available": name in available}
             for name, score in ranked
         ],
-        "active": active, "satellites": [],
+        "active": active,
     }
 
 
@@ -216,20 +216,20 @@ def _strategy_weights(
     event_disable_in_volatile: bool,
 ) -> dict[str, float]:
     trend = {
-        "trend_following": 1.0, "momentum": 0.9, "multi_factor": 0.75,
-        "event_driven": 0.58,
+        "swing_trend_following": 1.0, "swing_momentum": 0.9, "swing_multi_factor": 0.75,
+        "swing_event_driven": 0.58,
     }
     if strategy_policy == "legacy":
         return {}
     if regime in {"trending_up", "trending_down"}:
         return trend
     if regime == "range_bound" and strategy_policy == "structural":
-        return {"mean_reversion": 1.0, "swing_mean_reversion": 0.9}
+        return {"intraday_mean_reversion": 1.0, "swing_mean_reversion": 0.9}
     if regime == "volatile":
         if strategy_policy == "high_vol_mean_reversion":
-            return {"mean_reversion": 1.0, "swing_mean_reversion": 0.9}
+            return {"intraday_mean_reversion": 1.0, "swing_mean_reversion": 0.9}
         if event_enabled and not event_disable_in_volatile:
-            return {"event_driven": 0.56}
+            return {"swing_event_driven": 0.56}
     return {}
 
 
@@ -237,13 +237,13 @@ def _available_strategies(
     weights: dict[str, float], mode: str, *, event_enabled: bool,
     intraday_trend_enabled: bool, intraday_momentum_enabled: bool,
 ) -> set[str]:
-    available = {"trend_following", "momentum", "mean_reversion"}
+    available = {"swing_trend_following", "swing_momentum", "intraday_mean_reversion"}
     if mode == "algo":
-        available.update({"multi_factor", "swing_mean_reversion"})
+        available.update({"swing_multi_factor", "swing_mean_reversion"})
         if event_enabled:
-            available.add("event_driven")
+            available.add("swing_event_driven")
         if intraday_trend_enabled:
-            available.add("intraday_trend")
+            available.add("intraday_trend_following")
         if intraday_momentum_enabled:
             available.add("intraday_momentum")
     return available
@@ -371,7 +371,7 @@ def rank_strategies(
     )
     if mode == "algo" and not use_legacy_weights:
         if intraday_trend_enabled and selected in {"trending_up", "trending_down"}:
-            weights["intraday_trend"] = 0.60
+            weights["intraday_trend_following"] = 0.60
         if intraday_momentum_enabled and selected in {"trending_up", "trending_down"}:
             weights["intraday_momentum"] = 0.55
         available = _available_strategies(
@@ -380,7 +380,7 @@ def rank_strategies(
             intraday_momentum_enabled=intraday_momentum_enabled,
         )
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    active = [name for name, score in ranked if name in available and (name != "event_driven" or score >= 0.55)]
+    active = [name for name, score in ranked if name in available and (name != "swing_event_driven" or score >= 0.55)]
 
     risk_scale = 1.0
     if volatility_state == "elevated":
@@ -413,7 +413,6 @@ def rank_strategies(
         "regime_shadow": model_shadow,
         "ranked": rank_items,
         "active": active,
-        "satellites": [],
         "strategy_risk_multipliers": risk_multipliers,
         "risk_budget_multiplier": risk_scale,
     }

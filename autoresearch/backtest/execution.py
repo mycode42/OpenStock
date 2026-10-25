@@ -236,7 +236,6 @@ class ReplayExecutionMixin:
                 6,
             ),
             "holding_minutes": max(BAR_MINUTES, position.bars_held * BAR_MINUTES),
-            "satellite_confirmations": list(position.satellite_confirmations),
         })
 
     def _check_brackets(self, ticker: str, bar: dict, timestamp: datetime) -> None:
@@ -313,7 +312,6 @@ class ReplayExecutionMixin:
                 entry_price=fill_price, entry_at=timestamp.isoformat(),
                 stop_price=order["stop_price"], take_profit=order["take_profit"],
                 signal_at=order["signal_at"], bars_held=0,
-                satellite_confirmations=list(order.get("satellite_confirmations", [])),
                 trailing_stop_pct=order.get("trailing_stop_pct"),
                 trailing_activation_pct=order.get("trailing_activation_pct"),
                 favorable_extreme=fill_price,

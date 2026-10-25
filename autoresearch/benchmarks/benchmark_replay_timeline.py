@@ -106,7 +106,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=str(DEFAULT_DB))
     parser.add_argument("--symbols", help="comma-separated symbols; default is the Algo universe")
-    parser.add_argument("--strategy", default="trend_following")
+    parser.add_argument("--strategy", default="swing_trend_following")
     parser.add_argument("--start")
     parser.add_argument("--end")
     parser.add_argument("--days", type=int, default=365)

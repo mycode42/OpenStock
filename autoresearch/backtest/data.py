@@ -104,7 +104,7 @@ def _read_research_controls(args) -> dict:
         if key is not None:
             controls[key] = value
         else:
-            controls["max_entries_per_strategy_per_day"] = {"momentum": value}
+            controls["max_entries_per_strategy_per_day"] = {"swing_momentum": value}
     return validate_research_controls(controls)
 
 def fetch_dataset(args) -> dict:
@@ -117,8 +117,8 @@ def fetch_dataset(args) -> dict:
     tier = data_tier()
     store = SQLiteBarStore(args.db)
     selected_strategies = _read_strategy_filter(getattr(args, "strategies", None))
-    needs_factor_warmup = selected_strategies is None or "multi_factor" in selected_strategies
-    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "event_driven" in selected_strategies
+    needs_factor_warmup = selected_strategies is None or "swing_multi_factor" in selected_strategies
+    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "swing_event_driven" in selected_strategies
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     warmup_days = multi_factor_warmup_days(_read_profile(getattr(args, "profile", None))) if needs_factor_warmup else 0
     context_symbols = list(dict.fromkeys(
@@ -167,8 +167,8 @@ def run_backtest(args) -> dict:
     feed = args.feed or regular_feed()
     store = SQLiteBarStore(args.db)
     selected_strategies = _read_strategy_filter(getattr(args, "strategies", None))
-    needs_factor_warmup = selected_strategies is None or "multi_factor" in selected_strategies
-    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "event_driven" in selected_strategies
+    needs_factor_warmup = selected_strategies is None or "swing_multi_factor" in selected_strategies
+    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "swing_event_driven" in selected_strategies
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     profile = _read_profile(args.profile)
     warmup_days = multi_factor_warmup_days(profile) if needs_factor_warmup else 0

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass
 class Position:
@@ -15,7 +15,6 @@ class Position:
     take_profit: float
     signal_at: str
     bars_held: int = 0
-    satellite_confirmations: list[str] = field(default_factory=list)
     trailing_stop_pct: float | None = None
     trailing_activation_pct: float | None = None
     favorable_extreme: float | None = None

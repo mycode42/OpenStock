@@ -395,13 +395,6 @@ def validate_trade(
 
     action = action.lower()
 
-    if action in {"buy", "short"} and strategy == "event_driven":
-        return ValidationResult(
-            False,
-            "Event Driven is confirmation-only and cannot own entries.",
-            "satellite_confirmation_only",
-        )
-
     if action == "hold":
         return ValidationResult(approved=True, reason="Hold — no order to validate")
 

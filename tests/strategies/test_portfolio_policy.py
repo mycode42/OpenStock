@@ -77,15 +77,15 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 6
     assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 4
-    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["multi_factor"] == 7
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["multi_factor"] == 2
-    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["event_driven"] == 7
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["event_driven"] == 5
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["mean_reversion"] == 4
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_multi_factor"] == 7
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_multi_factor"] == 2
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_event_driven"] == 7
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_event_driven"] == 5
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 4
     assert STRATEGY_CONFIG["overnight_entries_enabled"] is True
-    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["trend_following"] > 0.05
-    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["mean_reversion"] <= 0.012
-    assert STRATEGY_CONFIG["enable_intraday_trend"] is False
+    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["swing_trend_following"] > 0.05
+    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["intraday_mean_reversion"] <= 0.012
+    assert STRATEGY_CONFIG["enable_intraday_trend_following"] is False
     assert STRATEGY_CONFIG["enable_intraday_momentum"] is False
     assert STRATEGY_CONFIG["extended_hours_max_spread_pct"] == 0.02
     with pytest.raises(ValueError, match="Only the algo account route"):
@@ -95,11 +95,11 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
 def test_algo_stop_sizing_uses_horizon_specific_config():
     risk = ALGO_MODE_CONFIG["risk"]
     intraday = _make_trade({
-        "ticker": "AAPL", "action": "buy", "strategy": "mean_reversion",
+        "ticker": "AAPL", "action": "buy", "strategy": "intraday_mean_reversion",
         "reason": "intraday setup", "risk_multiplier": 1.0,
     }, 100, 100_000, {}, risk)
     swing = _make_trade({
-        "ticker": "AAPL", "action": "buy", "strategy": "trend_following",
+        "ticker": "AAPL", "action": "buy", "strategy": "swing_trend_following",
         "reason": "swing setup", "risk_multiplier": 1.0, "stop_pct": 0.01,
     }, 100, 100_000, {}, risk)
 
@@ -111,7 +111,7 @@ def test_algo_stop_sizing_uses_horizon_specific_config():
 def test_algo_trade_sizing_respects_ticker_universe_cap():
     risk = ALGO_MODE_CONFIG["risk"]
     trade = _make_trade({
-        "ticker": "PLTR", "action": "buy", "strategy": "trend_following",
+        "ticker": "PLTR", "action": "buy", "strategy": "swing_trend_following",
         "reason": "swing setup", "risk_multiplier": 1.0,
     }, 200, 100_000, {}, risk, mode_universe=ALGO_MODE_CONFIG["universe"])
 
@@ -140,11 +140,11 @@ def test_algo_software_trails_tighten_for_both_directions():
     short_state = {"stop_price": 106.0}
 
     long_stop = _update_trailing_stop(
-        long_state, strategy="trend_following", qty=10, entry_price=100,
+        long_state, strategy="swing_trend_following", qty=10, entry_price=100,
         current_price=104, mode_risk=risk,
     )
     short_stop = _update_trailing_stop(
-        short_state, strategy="trend_following", qty=-10, entry_price=100,
+        short_state, strategy="swing_trend_following", qty=-10, entry_price=100,
         current_price=96, mode_risk=risk,
     )
 
@@ -265,18 +265,22 @@ def test_algo_risk_validator_blocks_the_tenth_shared_daily_entry():
 
 
 @pytest.mark.parametrize("action", ["buy", "short"])
-def test_risk_validator_rejects_event_driven_satellite_position_ownership(action):
+def test_risk_validator_allows_event_driven_to_own_a_position(action):
+    state = _portfolio_state(
+        shortability_available=True,
+        easy_to_borrow_symbols=["AAPL"],
+        account_shorting_enabled=True,
+    )
     result = risk_validator.validate_trade(
-        "AAPL", action, 1, 100, _portfolio_state(), mode="algo", strategy="event_driven",
+        "AAPL", action, 1, 100, state, mode="algo", strategy="swing_event_driven",
     )
 
-    assert not result.approved
-    assert result.rule == "satellite_confirmation_only"
+    assert result.approved
 
 
 def test_risk_validator_allows_multi_factor_to_own_a_core_entry():
     result = risk_validator.validate_trade(
-        "AAPL", "buy", 1, 100, _portfolio_state(), mode="algo", strategy="multi_factor",
+        "AAPL", "buy", 1, 100, _portfolio_state(), mode="algo", strategy="swing_multi_factor",
     )
 
     assert result.approved
@@ -350,7 +354,7 @@ def test_algo_opening_rip_short_uses_mirrored_patient_filters():
     ]
 
     signal = evaluate_rule_signal(
-        "mean_reversion", "AAPL", bars,
+        "intraday_mean_reversion", "AAPL", bars,
     )
 
     assert signal is not None
@@ -384,15 +388,15 @@ def test_regime_filter_prefers_trend_strategies_in_a_rising_market():
     regime = rank_strategies(_bars(prices), mode="algo")
 
     assert regime["regime"] == "trending_up"
-    assert regime["active"][0] == "trend_following"
+    assert regime["active"][0] == "swing_trend_following"
 
 
 @pytest.mark.parametrize(
     ("name", "flag"),
-    [("intraday_trend", "enable_intraday_trend"),
+    [("intraday_trend_following", "enable_intraday_trend_following"),
      ("intraday_momentum", "enable_intraday_momentum")],
 )
-def test_legacy_five_minute_satellites_are_opt_in_and_smaller(name, flag, monkeypatch, tmp_path):
+def test_intraday_strategies_are_opt_in_with_horizon_risk_limits(name, flag, monkeypatch, tmp_path):
     monkeypatch.setattr(
         portfolio_config, "ALGO_DASHBOARD_OVERRIDES_PATH",
         tmp_path / "runtime-overrides.json",
@@ -409,7 +413,7 @@ def test_legacy_five_minute_satellites_are_opt_in_and_smaller(name, flag, monkey
 
     assert signal is not None
     assert signal.strategy == name
-    assert signal.strategy_group == "intraday_satellite"
+    assert signal.strategy_group == "intraday_core"
     assert signal.target_weight == pytest.approx(0.01)
     assert signal.risk_multiplier == pytest.approx(0.25)
 
@@ -418,10 +422,10 @@ def test_state_machine_owns_pending_and_open_positions_until_reconciled():
     states = {}
     owners = {}
     machine = RuleStrategyStateMachine(
-        states, owners, minimum_hold_minutes={"momentum": 20},
+        states, owners, minimum_hold_minutes={"swing_momentum": 20},
     )
     trade = {
-        "strategy": "momentum",
+        "strategy": "swing_momentum",
         "ticker": "aapl",
         "action": "buy",
         "client_order_id": "momentum-aapl-1",
@@ -429,18 +433,18 @@ def test_state_machine_owns_pending_and_open_positions_until_reconciled():
     }
 
     machine.prepare(trade)
-    assert states["momentum"]["AAPL"]["phase"] == ENTRY_PENDING
-    assert not machine.allows("mean_reversion", "AAPL", "buy", "2026-10-07T14:01:00Z")
+    assert states["swing_momentum"]["AAPL"]["phase"] == ENTRY_PENDING
+    assert not machine.allows("intraday_mean_reversion", "AAPL", "buy", "2026-10-07T14:01:00Z")
 
     machine.reconcile({"AAPL": {"qty": 10}}, [])
 
-    assert states["momentum"]["AAPL"]["phase"] == OPEN
-    assert owners["AAPL"] == "momentum"
-    assert not machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:05:00Z")
-    assert machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:25:00Z")
+    assert states["swing_momentum"]["AAPL"]["phase"] == OPEN
+    assert owners["AAPL"] == "swing_momentum"
+    assert not machine.allows("swing_momentum", "AAPL", "sell", "2026-10-07T14:05:00Z")
+    assert machine.allows("swing_momentum", "AAPL", "sell", "2026-10-07T14:25:00Z")
 
     machine.reconcile({}, [])
-    assert states["momentum"]["AAPL"]["phase"] in {COOLDOWN, OPEN}
+    assert states["swing_momentum"]["AAPL"]["phase"] in {COOLDOWN, OPEN}
     assert "AAPL" not in owners
 
 
@@ -448,10 +452,10 @@ def test_state_machine_reconciles_short_direction_and_enforces_minimum_hold():
     states = {}
     owners = {}
     machine = RuleStrategyStateMachine(
-        states, owners, minimum_hold_minutes={"momentum": 20},
+        states, owners, minimum_hold_minutes={"swing_momentum": 20},
     )
     trade = {
-        "strategy": "momentum", "ticker": "AAPL", "action": "short",
+        "strategy": "swing_momentum", "ticker": "AAPL", "action": "short",
         "client_order_id": "momentum-aapl-short-1",
         "signal_bar_time": "2026-10-07T14:00:00Z",
         "stop_price": 101.0, "take_profit": 98.0,
@@ -460,14 +464,14 @@ def test_state_machine_reconciles_short_direction_and_enforces_minimum_hold():
     machine.prepare(trade)
     machine.reconcile({"AAPL": {"qty": -10}}, [])
 
-    assert states["momentum"]["AAPL"]["phase"] == OPEN
-    assert owners["AAPL"] == "momentum"
-    assert not machine.allows("momentum", "AAPL", "cover", "2026-10-07T14:20:00Z")
-    assert machine.allows("momentum", "AAPL", "cover", "2026-10-07T14:25:00Z")
-    assert not machine.allows("momentum", "AAPL", "sell", "2026-10-07T14:25:00Z")
+    assert states["swing_momentum"]["AAPL"]["phase"] == OPEN
+    assert owners["AAPL"] == "swing_momentum"
+    assert not machine.allows("swing_momentum", "AAPL", "cover", "2026-10-07T14:20:00Z")
+    assert machine.allows("swing_momentum", "AAPL", "cover", "2026-10-07T14:25:00Z")
+    assert not machine.allows("swing_momentum", "AAPL", "sell", "2026-10-07T14:25:00Z")
 
     machine.prepare({**trade, "action": "cover", "signal_bar_time": "2026-10-07T14:25:00Z"})
-    assert states["momentum"]["AAPL"]["phase"] == "exit_pending"
+    assert states["swing_momentum"]["AAPL"]["phase"] == "exit_pending"
 
 
 def test_strategy_state_machine_persists_software_stop_and_target():
@@ -475,7 +479,7 @@ def test_strategy_state_machine_persists_software_stop_and_target():
     owners = {}
     machine = RuleStrategyStateMachine(states, owners)
     trade = {
-        "strategy": "mean_reversion",
+        "strategy": "intraday_mean_reversion",
         "ticker": "AAPL",
         "action": "buy",
         "client_order_id": "mean-reversion-aapl-1",
@@ -486,5 +490,5 @@ def test_strategy_state_machine_persists_software_stop_and_target():
 
     machine.prepare(trade)
 
-    assert states["mean_reversion"]["AAPL"]["stop_price"] == 98.0
-    assert states["mean_reversion"]["AAPL"]["take_profit"] == 104.0
+    assert states["intraday_mean_reversion"]["AAPL"]["stop_price"] == 98.0
+    assert states["intraday_mean_reversion"]["AAPL"]["take_profit"] == 104.0

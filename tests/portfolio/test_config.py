@@ -26,7 +26,6 @@ def test_algo_daily_entry_budgets_are_shared_by_live_and_research():
     assert ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_swing_entries"] == ALGO_ENTRY_LIMITS.max_swing_entries
     assert groups["swing"]["max_entries_per_day"] == ALGO_ENTRY_LIMITS.max_swing_entries
     assert groups["intraday_core"]["max_entries_per_day"] == ALGO_ENTRY_LIMITS.max_intraday_core_entries
-    assert groups["intraday_satellites"]["max_entries_per_day"] == ALGO_ENTRY_LIMITS.max_intraday_satellite_entries
     assert coordinator.max_daily_entries == ALGO_ENTRY_LIMITS.max_daily_entries
     assert coordinator.max_intraday_entries == ALGO_ENTRY_LIMITS.max_intraday_entries
     assert coordinator.max_swing_entries == ALGO_ENTRY_LIMITS.max_swing_entries
@@ -35,26 +34,23 @@ def test_algo_daily_entry_budgets_are_shared_by_live_and_research():
 
 def test_research_controls_are_detached_from_live_risk_config():
     controls = get_algo_research_controls()
-    controls["max_entries_per_strategy_per_day"]["momentum"] = 99
+    controls["max_entries_per_strategy_per_day"]["swing_momentum"] = 99
 
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["momentum"] == 2
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_momentum"] == 2
 
 
 def test_catalog_groups_preserve_risk_and_coordinator_membership():
     groups = ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]
 
     assert groups["swing"]["strategies"] == [
-        "trend_following", "momentum", "swing_mean_reversion",
-        "swing_trend_following", "swing_momentum", "multi_factor", "event_driven",
+        "swing_trend_following", "swing_momentum", "swing_mean_reversion",
+        "swing_multi_factor", "swing_event_driven",
     ]
     assert groups["intraday_core"]["strategies"] == [
-        "mean_reversion",
-    ]
-    assert groups["intraday_satellites"]["strategies"] == [
-        "intraday_trend", "intraday_momentum",
+        "intraday_mean_reversion", "intraday_trend_following", "intraday_momentum",
     ]
     assert set(PortfolioCoordinatorConfig().swing_core_strategy_ids) == {
-        "trend_following", "momentum", "swing_mean_reversion", "multi_factor", "event_driven",
+        "swing_trend_following", "swing_momentum", "swing_mean_reversion", "swing_multi_factor", "swing_event_driven",
     }
 
 

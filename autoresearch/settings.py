@@ -37,7 +37,7 @@ REGIME_CONTEXT_WARMUP_DAYS = 450
 INTRADAY_STRATEGIES = strategy_ids_for_research_workflow("nightly_intraday")
 SWING_STRATEGIES = strategy_ids_for_research_workflow("nightly_swing")
 RESEARCHABLE_STRATEGIES = (*SWING_STRATEGIES, *INTRADAY_STRATEGIES)
-OVERLAY_STRATEGIES = strategy_ids_for_research_workflow("overlay")
+EVENT_RESEARCH_STRATEGIES = strategy_ids_for_research_workflow("event_research")
 LIVE_RESEARCH_STRATEGIES = tuple(
     strategy for strategy in RESEARCHABLE_STRATEGIES
     if (
@@ -47,12 +47,8 @@ LIVE_RESEARCH_STRATEGIES = tuple(
 )
 
 STRATEGY_FLAVORS = {
-    strategy: (
-        "confirmation_overlay"
-        if STRATEGY_CATALOG[strategy].role == "satellite"
-        else STRATEGY_CATALOG[strategy].horizon
-    )
-    for strategy in (*INTRADAY_STRATEGIES, *SWING_STRATEGIES, *OVERLAY_STRATEGIES)
+    strategy: STRATEGY_CATALOG[strategy].horizon
+    for strategy in (*INTRADAY_STRATEGIES, *SWING_STRATEGIES, *EVENT_RESEARCH_STRATEGIES)
 }
 
 CORE_RESEARCH_CONTROLS = get_algo_research_controls()

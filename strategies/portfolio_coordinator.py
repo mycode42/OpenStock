@@ -11,8 +11,7 @@ from zoneinfo import ZoneInfo
 
 from portfolio.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
 from strategies.catalog import (
-    INTRADAY_STRATEGIES,
-    SATELLITE_STRATEGIES, SWING_CORE_STRATEGIES, SWING_STRATEGIES,
+    CORE_STRATEGIES, INTRADAY_STRATEGIES, SWING_CORE_STRATEGIES, SWING_STRATEGIES,
 )
 from portfolio.config import get_algo_runtime_settings, get_mode_config
 
@@ -41,7 +40,7 @@ class PortfolioCoordinatorConfig:
     intraday_strategy_ids: tuple[str, ...] = tuple(INTRADAY_STRATEGIES)
     swing_strategy_ids: tuple[str, ...] = tuple(SWING_STRATEGIES)
     swing_core_strategy_ids: tuple[str, ...] = tuple(SWING_CORE_STRATEGIES)
-    swing_trend_strategy_ids: tuple[str, ...] = ("trend_following",)
+    swing_trend_strategy_ids: tuple[str, ...] = ("swing_trend_following",)
 
     @classmethod
     def from_dict(cls, values: Mapping | None = None) -> "PortfolioCoordinatorConfig":
@@ -115,14 +114,10 @@ class CoordinationDecision:
 def strategy_priority(
     strategy: str,
 ) -> int:
-    """Lower numbers have precedence when proposals compete for shared capacity."""
-    if strategy in SWING_CORE_STRATEGIES:
+    """Treat catalog strategies as peers; score and strength break ties."""
+    if strategy in CORE_STRATEGIES:
         return 0
-    if strategy in INTRADAY_STRATEGIES:
-        return 1
-    if strategy in SATELLITE_STRATEGIES:
-        return 2
-    return 3
+    return 1
 
 
 def choose_priority(proposals: list[dict]) -> tuple[dict, list[dict]]:
@@ -271,8 +266,6 @@ class CoordinatorBook:
             return CoordinationDecision(True, dict(proposal))
         ticker = str(proposal.get("ticker", "")).upper()
         strategy = str(proposal.get("strategy", ""))
-        if strategy in SATELLITE_STRATEGIES:
-            return self._reject(proposal, f"{strategy} is confirmation-only")
         qty = proposal.get("qty")
         price = proposal.get("entry_price")
         if not ticker or isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
@@ -380,7 +373,7 @@ class CoordinatorBook:
             self.swing_entries_today += 1
         if strategy == "swing_mean_reversion" and regime in {"trending_up", "trending_down"}:
             approved["coordinator_regime_throttle"] = "half_size_in_strong_trend"
-        elif strategy == "trend_following" and regime == "range_bound":
+        elif strategy == "swing_trend_following" and regime == "range_bound":
             approved["coordinator_regime_throttle"] = "half_size_in_range"
         return CoordinationDecision(True, approved, reduced_from_qty=qty if allowed_qty < qty else None)
 

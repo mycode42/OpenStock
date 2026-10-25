@@ -754,7 +754,7 @@ def train_factor_model(
         "regime_factor_weights": {},
         "portfolio_weight_method": "equal",
     }).to_dict()
-    parent_candidate_id = archive_candidate_id("multi_factor", legacy_baseline_parameters)
+    parent_candidate_id = archive_candidate_id("swing_multi_factor", legacy_baseline_parameters)
     candidate_payload["parent_candidate_id"] = parent_candidate_id
     candidate_id = hashlib.sha256(
         json.dumps(candidate_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

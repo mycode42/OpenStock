@@ -36,17 +36,17 @@ def test_market_store_upserts_plus_sip_bars(tmp_path):
 
 
 def test_profile_can_change_rule_parameters_but_not_portfolio_risk():
-    momentum = validate_parameter_profile({"momentum": {"lookbacks": [5, 10]}})
-    assert momentum["momentum"]["lookbacks"] == [5, 10]
+    momentum = validate_parameter_profile({"swing_momentum": {"lookbacks": [5, 10]}})
+    assert momentum["swing_momentum"]["lookbacks"] == [5, 10]
     assert validate_parameter_profile({
-        "mean_reversion": {"signal_model": "opening_dip", "minimum_dip_pct": 0.01},
-    })["mean_reversion"]["signal_model"] == "opening_dip"
+        "intraday_mean_reversion": {"signal_model": "opening_dip", "minimum_dip_pct": 0.01},
+    })["intraday_mean_reversion"]["signal_model"] == "opening_dip"
     with pytest.raises(ValueError, match="Unknown or malformed strategy"):
         validate_parameter_profile({"risk": {"risk_per_trade_pct": 0.5}})
     with pytest.raises(ValueError, match="fast_period"):
-        validate_parameter_profile({"trend_following": {"fast_period": 21, "slow_period": 9}})
+        validate_parameter_profile({"swing_trend_following": {"fast_period": 21, "slow_period": 9}})
     with pytest.raises(ValueError, match="signal_model"):
-        validate_parameter_profile({"mean_reversion": {"signal_model": "llm"}})
+        validate_parameter_profile({"intraday_mean_reversion": {"signal_model": "llm"}})
 
 
 def test_rolling_verification_windows_are_chronological_and_non_overlapping():
@@ -114,7 +114,7 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
     ]
 
     def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
-        if strategy == "mean_reversion" and len(history) == 1:
+        if strategy == "intraday_mean_reversion" and len(history) == 1:
             return Signal(ticker, "buy", strategy, "test trigger", 1.0)
         return None
 
@@ -129,8 +129,8 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
         },
     )
     replay._regime_ranker = lambda *args, **kwargs: {
-        "regime": "range_bound", "active": ["mean_reversion"], "satellites": [],
-        "ranked": [{"strategy": "mean_reversion", "score": 1.0, "available": True}],
+        "regime": "range_bound", "active": ["intraday_mean_reversion"],
+        "ranked": [{"strategy": "intraday_mean_reversion", "score": 1.0, "available": True}],
     }
 
     report = replay.run()
@@ -170,7 +170,7 @@ def test_portfolio_replay_models_short_entry_cover_and_entry_relative_return(mon
     ]
 
     def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
-        if strategy != "mean_reversion":
+        if strategy != "intraday_mean_reversion":
             return None
         if position_qty == 0 and len(history) == 1:
             return Signal(ticker, "short", strategy, "test short trigger", 1.0)
@@ -213,16 +213,16 @@ def test_opening_dip_research_rule_requires_window_dip_bounce_and_volume():
         "minimum_bounce_pct": 0.001, "higher_low_bars": 1,
     }
 
-    signal = evaluate_rule_signal("mean_reversion", "AAPL", bars, parameters)
+    signal = evaluate_rule_signal("intraday_mean_reversion", "AAPL", bars, parameters)
 
     assert signal is not None
     assert signal.action == "buy"
     assert evaluate_rule_signal(
-        "mean_reversion", "AAPL", bars,
+        "intraday_mean_reversion", "AAPL", bars,
         {**parameters, "minimum_dip_pct": 0.02},
     ) is None
     assert evaluate_rule_signal(
-        "mean_reversion", "AAPL", bars,
+        "intraday_mean_reversion", "AAPL", bars,
         {**parameters, "entry_window_minutes": 5},
     ) is None
 
@@ -245,7 +245,7 @@ def test_research_controls_cannot_exceed_live_algo_ceilings():
             symbols=["AAPL"], intraday_bars={}, spy_daily_bars=[],
             start="2026-10-05", end="2026-10-05", feed="sip",
             data_adjustment="raw",
-            research_controls={"max_entries_per_strategy_per_day": {"momentum": 3}},
+            research_controls={"max_entries_per_strategy_per_day": {"swing_momentum": 3}},
         )
 
 
@@ -268,7 +268,7 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
     ]
 
     def deterministic_signal(strategy, ticker, history, parameters=None, position_qty=0, **kwargs):
-        return Signal(ticker, "buy", strategy, "test trigger", 0.9) if strategy == "mean_reversion" else None
+        return Signal(ticker, "buy", strategy, "test trigger", 0.9) if strategy == "intraday_mean_reversion" else None
 
     monkeypatch.setattr(backtest_module, "evaluate_rule_signal", deterministic_signal)
     replay = AlgoPortfolioBacktest(
@@ -277,11 +277,11 @@ def test_research_daily_entry_cap_limits_combined_signals(monkeypatch):
         spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
         data_adjustment="raw", research_controls={"max_entries_per_day": 1},
-        strategies=["mean_reversion"],
+        strategies=["intraday_mean_reversion"],
     )
     replay._regime_ranker = lambda *args, **kwargs: {
-        "regime": "range_bound", "active": ["mean_reversion"], "satellites": [],
-        "ranked": [{"strategy": "mean_reversion", "score": 1.0, "available": True}],
+        "regime": "range_bound", "active": ["intraday_mean_reversion"],
+        "ranked": [{"strategy": "intraday_mean_reversion", "score": 1.0, "available": True}],
     }
 
     report = replay.run()
@@ -300,23 +300,23 @@ def test_strategy_specific_cooldown_only_blocks_the_exited_strategy(monkeypatch)
     replay = AlgoPortfolioBacktest(
         symbols=["AAPL"], intraday_bars={}, spy_daily_bars=spy_daily,
         start=replay_day.isoformat(), end=replay_day.isoformat(), feed="sip",
-        data_adjustment="raw", strategies=["mean_reversion", "trend_following"],
-        research_controls={"cooldown_minutes_by_strategy": {"mean_reversion": 60}},
+        data_adjustment="raw", strategies=["intraday_mean_reversion", "swing_trend_following"],
+        research_controls={"cooldown_minutes_by_strategy": {"intraday_mean_reversion": 60}},
     )
     replay.day_key = replay_day.isoformat()
     replay._current_regime = {"regime": "range_bound"}
     timestamp = datetime(2026, 10, 5, 14, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(backtest_module, "validate_trade", lambda **_: SimpleNamespace(approved=True))
 
-    replay.last_exit_at_by_strategy[("AAPL", "mean_reversion")] = timestamp - timedelta(minutes=30)
+    replay.last_exit_at_by_strategy[("AAPL", "intraday_mean_reversion")] = timestamp - timedelta(minutes=30)
     replay._queue_signal(
-        "AAPL", {"ticker": "AAPL", "action": "buy", "strategy": "mean_reversion", "reason": "test"},
+        "AAPL", {"ticker": "AAPL", "action": "buy", "strategy": "intraday_mean_reversion", "reason": "test"},
         {"c": 100}, timestamp,
     )
     assert replay.rejections["research_ticker_cooldown"] == 1
 
     replay._queue_signal(
-        "AAPL", {"ticker": "AAPL", "action": "buy", "strategy": "trend_following", "reason": "test"},
+        "AAPL", {"ticker": "AAPL", "action": "buy", "strategy": "swing_trend_following", "reason": "test"},
         {"c": 100}, timestamp,
     )
-    assert replay.pending_entries["AAPL"]["strategy"] == "trend_following"
+    assert replay.pending_entries["AAPL"]["strategy"] == "swing_trend_following"

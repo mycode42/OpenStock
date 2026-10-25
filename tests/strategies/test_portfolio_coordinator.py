@@ -12,7 +12,7 @@ from strategies.portfolio_coordinator import (
 ET = ZoneInfo("America/New_York")
 
 
-def _proposal(strategy="trend_following", ticker="NVDA", action="buy", qty=100, price=100):
+def _proposal(strategy="swing_trend_following", ticker="NVDA", action="buy", qty=100, price=100):
     return {
         "strategy": strategy, "ticker": ticker, "action": action,
         "qty": qty, "entry_price": price,
@@ -24,10 +24,10 @@ def test_blocks_opposite_direction_against_existing_book_position():
     book = coordinator.new_book(
         equity=100_000,
         positions={"NVDA": {"qty": 50, "market_value": 5_000}},
-        position_owners={"NVDA": "trend_following"},
+        position_owners={"NVDA": "swing_trend_following"},
     )
     result = book.review(
-        _proposal(strategy="momentum", action="short"),
+        _proposal(strategy="swing_momentum", action="short"),
         session="regular", timestamp=datetime(2026, 10, 9, 10, 0, tzinfo=ET),
         regime="trending_down",
     )
@@ -40,10 +40,10 @@ def test_blocks_second_strategy_on_an_already_owned_name():
     book = coordinator.new_book(
         equity=100_000,
         positions={"NVDA": {"qty": 50, "market_value": 5_000}},
-        position_owners={"NVDA": "trend_following"},
+        position_owners={"NVDA": "swing_trend_following"},
     )
     result = book.review(
-        _proposal(strategy="momentum", action="buy"),
+        _proposal(strategy="swing_momentum", action="buy"),
         session="regular", timestamp=datetime(2026, 10, 9, 10, 0, tzinfo=ET),
         regime="trending_up",
     )
@@ -56,10 +56,10 @@ def test_same_strategy_add_is_shrunk_to_the_ten_percent_name_cap():
     book = coordinator.new_book(
         equity=100_000,
         positions={"NVDA": {"qty": 70, "market_value": 7_000}},
-        position_owners={"NVDA": "trend_following"},
+        position_owners={"NVDA": "swing_trend_following"},
     )
     result = book.review(
-        _proposal(strategy="trend_following", action="buy", qty=100),
+        _proposal(strategy="swing_trend_following", action="buy", qty=100),
         session="regular", timestamp=datetime(2026, 10, 9, 10, 0, tzinfo=ET),
         regime="trending_up",
     )
@@ -70,11 +70,11 @@ def test_same_strategy_add_is_shrunk_to_the_ten_percent_name_cap():
 
 def test_multi_factor_and_trend_are_both_core_in_name_priority_resolution():
     winner, rejected = choose_priority([
-        {**_proposal(strategy="multi_factor", ticker="NVDA", action="buy"), "rank_score": 0.5},
-        {**_proposal(strategy="trend_following", ticker="NVDA", action="short"), "rank_score": 1.0},
+        {**_proposal(strategy="swing_multi_factor", ticker="NVDA", action="buy"), "rank_score": 0.5},
+        {**_proposal(strategy="swing_trend_following", ticker="NVDA", action="short"), "rank_score": 1.0},
     ])
-    assert strategy_priority("multi_factor") == strategy_priority("trend_following")
-    assert winner["strategy"] == "trend_following"
+    assert strategy_priority("swing_multi_factor") == strategy_priority("swing_trend_following")
+    assert winner["strategy"] == "swing_trend_following"
     assert winner["action"] == "short"
     assert rejected[0]["suppressed_reason"].startswith("portfolio coordinator:")
 
@@ -85,11 +85,11 @@ def test_shared_intraday_budget_rejects_next_entry():
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
     accepted = book.review(
-        _proposal(strategy="mean_reversion", ticker="NVDA", qty=10),
+        _proposal(strategy="intraday_mean_reversion", ticker="NVDA", qty=10),
         session="regular", timestamp=stamp,
     )
     rejected = book.review(
-        _proposal(strategy="intraday_trend", ticker="SPY", qty=10),
+        _proposal(strategy="intraday_trend_following", ticker="SPY", qty=10),
         session="regular", timestamp=stamp,
     )
     assert accepted.approved
@@ -101,7 +101,7 @@ def test_shared_daily_budget_is_ten_and_logs_rejection(caplog):
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000, entries_today=10)
     result = book.review(
-        _proposal(strategy="trend_following"), session="regular",
+        _proposal(strategy="swing_trend_following"), session="regular",
         timestamp=datetime(2026, 10, 9, 10, 0, tzinfo=ET), regime="trending_up",
     )
 
@@ -117,13 +117,13 @@ def test_shared_swing_slice_allows_only_six_entries_per_day():
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
     accepted = [
         book.review(
-            _proposal(strategy="trend_following", ticker=ticker, qty=1),
+            _proposal(strategy="swing_trend_following", ticker=ticker, qty=1),
             session="regular", timestamp=stamp, regime="trending_up",
         )
         for ticker in ("NVDA", "AAPL", "JPM", "SPY", "QQQ", "GLD")
     ]
     rejected = book.review(
-        _proposal(strategy="momentum", ticker="TLT", qty=1),
+        _proposal(strategy="swing_momentum", ticker="TLT", qty=1),
         session="regular", timestamp=stamp, regime="trending_up",
     )
 
@@ -141,10 +141,10 @@ def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_enabled(monkey
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
     factor_core = book.review(
-        _proposal(strategy="multi_factor"), session="regular", timestamp=stamp,
+        _proposal(strategy="swing_multi_factor"), session="regular", timestamp=stamp,
     )
     overnight = book.review(
-        _proposal(strategy="trend_following", ticker="AAPL"), session="overnight",
+        _proposal(strategy="swing_trend_following", ticker="AAPL"), session="overnight",
         timestamp=datetime(2026, 10, 9, 21, 0, tzinfo=ET), regime="trending_up",
     )
 
@@ -167,7 +167,7 @@ def test_swing_opening_delay_and_regime_throttle():
     assert adjusted["risk_multiplier"] == 0.4
     assert "halved" in note
     sized, note = throttle_signal(
-        {**_proposal(strategy="mean_reversion"), "risk_multiplier": 0.8},
+        {**_proposal(strategy="intraday_mean_reversion"), "risk_multiplier": 0.8},
         "volatile", coordinator.config, risk_multiplier=0.25,
     )
     assert sized["risk_multiplier"] == 0.2
@@ -194,16 +194,16 @@ def test_backtest_reports_correlated_and_overlapping_strategy_pairs():
     days = ["2026-10-01", "2026-10-02", "2026-10-03"]
     replay.daily_curve = [{"date": day, "equity": 100_000} for day in days]
     replay.daily_strategy_pnl = [
-        {"date": day, "pnl_by_strategy": {"trend_following": value, "momentum": value}}
+        {"date": day, "pnl_by_strategy": {"swing_trend_following": value, "swing_momentum": value}}
         for day, value in zip(days, (1, 2, 3))
     ]
     for day in days[:2]:
-        replay.holdings_by_day[day]["trend_following"].add(("AAPL", "long"))
-        replay.holdings_by_day[day]["momentum"].add(("AAPL", "long"))
+        replay.holdings_by_day[day]["swing_trend_following"].add(("AAPL", "long"))
+        replay.holdings_by_day[day]["swing_momentum"].add(("AAPL", "long"))
     report = replay._correlation_report()
     flagged = [
         row for row in report["flags"]
-        if {row["strategy_a"], row["strategy_b"]} == {"trend_following", "momentum"}
+        if {row["strategy_a"], row["strategy_b"]} == {"swing_trend_following", "swing_momentum"}
     ]
     assert len(flagged) == 1
     assert flagged[0]["daily_pnl_correlation"] == 1.0

@@ -31,7 +31,7 @@ from .robustness import (
     simulate_ewma_allocation_shadow,
 )
 from ..settings import (
-    LIVE_RESEARCH_STRATEGIES, RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT,
+    RESEARCHABLE_STRATEGIES, FEED, ADJUSTMENT,
     ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS, ROBUSTNESS_BOOTSTRAP_ITERATIONS,
     ROBUSTNESS_COST_MULTIPLIERS, REGIME_CONTEXT_WARMUP_DAYS,
 )
@@ -44,11 +44,6 @@ def run_coordinated_portfolio(args) -> dict:
     """Combine each strategy's training-selected profile, then replay its shared OOS folds."""
     runtime_settings = get_algo_runtime_settings()
     strategies = _parse_strategies(args.strategies)
-    if args.multi_factor_overlay:
-        if "multi_factor" not in strategies:
-            strategies.append("multi_factor")
-    else:
-        strategies = [strategy for strategy in strategies if strategy != "multi_factor"]
     if not strategies:
         raise ValueError("At least one strategy must remain enabled for the portfolio replay")
     disabled_intraday = [
@@ -58,12 +53,8 @@ def run_coordinated_portfolio(args) -> dict:
             and not getattr(runtime_settings, runtime_setting)
         )
     ]
-    if disabled_intraday and not args.enable_disabled_intraday:
-        raise ValueError(
-            "Selected intraday strategy is disabled by live config: "
-            + ", ".join(disabled_intraday)
-            + ". Pass --enable-disabled-intraday to evaluate it in this research replay only."
-        )
+    # Research evaluates opted-out intraday strategies under temporary replay
+    # overrides; this never changes their live runtime settings.
     runtime_overrides = {strategy: True for strategy in disabled_intraday}
     artifact_root = Path(args.artifact_dir)
     artifacts = {}
@@ -83,7 +74,7 @@ def run_coordinated_portfolio(args) -> dict:
     if not Path(db).is_file():
         raise ValueError(f"Market database recorded by artifacts does not exist: {db}")
 
-    event_requested = runtime_settings.algo_event_driven_enabled
+    event_requested = runtime_settings.swing_event_driven_enabled
     event_report = {"status": "disabled_by_live_config"}
     event_path = None
     if args.event_calendar:
@@ -93,9 +84,8 @@ def run_coordinated_portfolio(args) -> dict:
         event_calendar = EventCalendar.from_csv(event_path)
         event_report = {"status": "loaded_from_argument", **event_calendar.diagnostics()}
     elif event_requested:
-        # The runtime config enables Event Driven by default. Build a point-in-
-        # time historical calendar for the same interval instead of silently
-        # dropping that live confirmation layer from the portfolio twin.
+        # Build a point-in-time calendar for the same interval so Event Driven
+        # participates as an independent swing strategy in the portfolio replay.
         from ..data import _prepare_event_calendar
 
         event_calendar, event_report = _prepare_event_calendar(
@@ -108,7 +98,7 @@ def run_coordinated_portfolio(args) -> dict:
     event_enabled = event_requested and bool(event_path)
     enabled_strategies = list(strategies)
     if event_enabled:
-        enabled_strategies.append("event_driven")
+        enabled_strategies.append("swing_event_driven")
 
     fold_profiles = []
     for index in range(len(folds)):
@@ -130,11 +120,8 @@ def run_coordinated_portfolio(args) -> dict:
                 raise ValueError("Strategy artifacts have different portfolio research controls")
             selected_profiles[strategy] = selected.get("selected_profile")
 
-        parameters["satellite_overlay"] = {
-            "multi_factor_enabled": bool(args.multi_factor_overlay),
-            "event_driven_enabled": event_enabled,
-        }
-        parameters["event_driven"] = {"enabled": event_enabled}
+        if event_enabled:
+            parameters["swing_event_driven"] = {"enabled": True}
         fold_profiles.append({
             "index": index,
             "window": {key: folds[index][key] for key in (
@@ -166,7 +153,7 @@ def run_coordinated_portfolio(args) -> dict:
     jobs = [
         (
             item, symbols, db, event_path, enabled_strategies,
-            bool(args.multi_factor_overlay), cost_model, borrow_path, runtime_overrides,
+            cost_model, borrow_path, runtime_overrides,
             0, True, factor_weight_timeline,
         )
         for item in fold_profiles
@@ -192,7 +179,7 @@ def run_coordinated_portfolio(args) -> dict:
             "jobs": [
                 (
                     item, symbols, db, event_path, enabled_strategies,
-                    bool(args.multi_factor_overlay), scenario_cost, borrow_path,
+                    scenario_cost, borrow_path,
                     runtime_overrides, 0, False, factor_weight_timeline,
                 )
                 for item in fold_profiles
@@ -222,7 +209,7 @@ def run_coordinated_portfolio(args) -> dict:
         "jobs": [
             (
                 item, symbols, db, event_path, enabled_strategies,
-                bool(args.multi_factor_overlay), latency_cost, borrow_path,
+                latency_cost, borrow_path,
                 runtime_overrides, 1, False, factor_weight_timeline,
             )
             for item in fold_profiles
@@ -329,7 +316,8 @@ def run_coordinated_portfolio(args) -> dict:
             "out_of_sample_range": common.get("out_of_sample_range"),
             "symbols": symbols,
         },
-        "strategies": strategies,
+        "strategies": enabled_strategies,
+        "optimized_strategies": strategies,
         "strategy_artifacts": {
             strategy: {
                 "path": artifact["artifact_path"],
@@ -341,18 +329,15 @@ def run_coordinated_portfolio(args) -> dict:
             for strategy, artifact in artifacts.items()
         },
         "selection_policy": (
-            "For each shared fold, each strategy contributes only the profile selected on that strategy's "
-            "training window. The combined portfolio coordinator is evaluated on the following "
-            "shared test window."
+            "Each adaptive strategy contributes its training-window profile on the shared test fold. "
+            "When enabled, Event Driven contributes its configured daily event rules and point-in-time "
+            "calendar as an independent swing strategy."
         ),
-        "satellite_overlays": {
-            "multi_factor_enabled": bool(args.multi_factor_overlay),
-            "event_driven_enabled": event_enabled,
+        "event_strategy": {
+            "enabled": event_enabled,
             "event_calendar": event_path,
             "event_calendar_report": event_report,
-            "note": "Multi Factor is a core strategy in this replay; Event Driven remains a confirmation overlay.",
         },
-        "core_strategies": {"multi_factor_enabled": bool(args.multi_factor_overlay)},
         "live_configuration": live_configuration_manifest(enabled_strategies),
         "research_runtime_overrides": runtime_overrides,
         "factor_weight_timeline": {
@@ -399,16 +384,15 @@ def run_coordinated_portfolio(args) -> dict:
 
 def _prepare_coordinated_fold_inputs(job: tuple) -> dict:
     (
-        item, symbols, db, event_path, strategies, factor_enabled, _,
-        borrow_path, _,
-    ) = job[:9]
+        item, symbols, db, event_path, strategies, _, borrow_path, _,
+    ) = job[:8]
     fold = item["window"]
     start = date.fromisoformat(fold["test_start"])
     end = date.fromisoformat(fold["test_end"])
     warmup_days = max(
         REGIME_CONTEXT_WARMUP_DAYS, DAILY_WARMUP_DAYS,
         *(strategy_warmup_days(strategy, item["profile"]) for strategy in strategies),
-        multi_factor_warmup_days(item["profile"]) if factor_enabled else 0,
+        multi_factor_warmup_days(item["profile"]) if "swing_multi_factor" in strategies else 0,
     )
     bars_start = (start - timedelta(days=warmup_days)).isoformat()
     store = SQLiteBarStore(db)
@@ -461,12 +445,12 @@ def _run_coordinated_fold(
     regime_cache: dict[date, dict] | None = None,
 ) -> tuple[int, dict]:
     (
-        item, symbols, db, event_path, strategies, factor_enabled, cost_model,
+        item, symbols, db, event_path, strategies, cost_model,
         borrow_path, runtime_overrides,
-    ) = job[:9]
-    execution_delay_bars = job[9] if len(job) > 9 else 0
-    include_curves = job[10] if len(job) > 10 else True
-    factor_weight_timeline = job[11] if len(job) > 11 else []
+    ) = job[:8]
+    execution_delay_bars = job[8] if len(job) > 8 else 0
+    include_curves = job[9] if len(job) > 9 else True
+    factor_weight_timeline = job[10] if len(job) > 10 else []
     prepared_inputs = prepared_inputs or _prepare_coordinated_fold_inputs(job)
     start = prepared_inputs["start"]
     end = prepared_inputs["end"]
@@ -508,7 +492,6 @@ def _run_coordinated_fold(
         "open_position_count", "entry_count", "average_entries_per_session",
         "benchmark_net_return_pct", "excess_return_vs_buy_hold_pct_points",
         "entry_count_by_strategy", "signal_event_count_by_strategy",
-        "satellite_confirmation_candidates", "satellite_confirmed_entries",
         "portfolio_coordinator", "strategy_correlation_report",
         "daily_equity", "daily_strategy_pnl",
         "closed_trades",
@@ -678,7 +661,7 @@ def _validate_artifacts(artifacts: dict[str, dict]) -> dict:
 
 def _parse_strategies(value: str | None) -> list[str]:
     strategies = (
-        list(LIVE_RESEARCH_STRATEGIES) if not value
+        list(RESEARCHABLE_STRATEGIES) if not value
         else list(dict.fromkeys(item.strip() for item in value.split(",") if item.strip()))
     )
     if not strategies or any(strategy not in RESEARCHABLE_STRATEGIES for strategy in strategies):

@@ -75,12 +75,14 @@ Standalone commands are available for adaptive search, adaptive rolling
 verification, and coordinator replay:
 
 ```bash
-python -m autoresearch adaptive-search --strategy momentum --end 2026-10-09
-python -m autoresearch adaptive-search --strategy momentum \
+python -m autoresearch adaptive-search --strategy swing_momentum --end 2026-10-09
+python -m autoresearch adaptive-search --strategy swing_momentum \
   --end 2026-10-09 --search-iterations 5
-python -m autoresearch adaptive-walk-forward --strategy momentum \
+python -m autoresearch adaptive-walk-forward --strategy intraday_momentum \
   --start 2020-01-01 --end 2026-10-09 \
   --train-window-options 10 20 30 --test-days 63 --step-days 63
+python -m autoresearch adaptive-search --strategy intraday_trend_following \
+  --end 2026-10-09
 python -m autoresearch portfolio --workers 8
 ```
 

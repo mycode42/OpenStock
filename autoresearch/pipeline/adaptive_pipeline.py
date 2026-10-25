@@ -473,7 +473,7 @@ def _adaptive_verification_is_reusable(
             for fold in detail.get("folds", [])
         )
         and (
-            strategy != "multi_factor"
+            strategy != "swing_multi_factor"
             or (search.get("search_space") or {}).get("min_universe")
             == list(MULTI_FACTOR_MIN_UNIVERSE_VALUES)
         )

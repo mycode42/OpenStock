@@ -12,6 +12,7 @@ import tempfile
 
 
 from runtime.paths import ROOT
+from strategies.catalog import canonical_strategy_id
 
 REPOSITORY_ROOT = ROOT
 DEFAULT_AI_SIGNAL_FILE = REPOSITORY_ROOT / "data" / "algo" / "event_driven" / "signals.json"
@@ -66,7 +67,7 @@ class AIEventSignalBook:
                 or payload.get("schema_version") != 1
             ):
                 raise ValueError("unsupported AI signal snapshot schema")
-            if payload.get("strategy") != "event_driven":
+            if canonical_strategy_id(str(payload.get("strategy") or "")) != "swing_event_driven":
                 raise ValueError("AI signal snapshot has the wrong strategy")
             run_id = payload.get("run_id")
             if not isinstance(run_id, str) or not run_id.strip():

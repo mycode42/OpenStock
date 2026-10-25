@@ -12,12 +12,12 @@ from strategies.swing_common import SwingSignal, clean_daily_bars
 
 
 class EventSignal(SwingSignal):
-    """A risk-sized satellite signal carrying its chosen exit horizon."""
+    """A risk-sized swing signal carrying its chosen exit horizon."""
 
     def __init__(self, *args, exit_mode: str, maximum_holding_sessions: int, **kwargs) -> None:
         if exit_mode not in {"reaction", "follow_through"}:
             raise ValueError("event exit_mode must be reaction or follow_through")
-        super().__init__(*args, strategy_group="swing_satellite", **kwargs)
+        super().__init__(*args, strategy_group="swing", **kwargs)
         object.__setattr__(self, "exit_mode", exit_mode)
         object.__setattr__(self, "maximum_holding_sessions", maximum_holding_sessions)
 
@@ -100,7 +100,7 @@ def daily_event_reaction(
     strength = min(0.9, 0.62 + abs(close / opened - 1))
     return EventSignal(
         ticker=ticker.upper(), action="buy" if direction == "long" else "short",
-        strategy="event_driven", reason=f"{reason}; daily volume {volume / prior_volume:.2f}x",
+        strategy="swing_event_driven", reason=f"{reason}; daily volume {volume / prior_volume:.2f}x",
         strength=strength,
         stop_pct=config.reaction_stop_pct if exit_mode == "reaction" else config.stop_pct,
         target_weight=config.risk_limited_weight, risk_multiplier=config.risk_multiplier,

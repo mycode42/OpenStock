@@ -79,7 +79,7 @@ def test_fit_window_ladder_tries_neighbor_when_primary_has_no_improvement(monkey
 
     sessions = [datetime.date(2026, 1, day) for day in range(1, 31)]
     fitted = _fit_window_ladder(
-        strategy="momentum", method="random", count=2, seed=1, space={"value": [0, 1]},
+        strategy="swing_momentum", method="random", count=2, seed=1, space={"value": [0, 1]},
         symbols=["SPY"], bars={}, spy_daily=[], train_sessions=sessions,
         args=object(), weights={"return": 1.0}, min_trades=1,
         window_options=[10, 20, 30],
@@ -119,7 +119,7 @@ def test_fit_window_ladder_tries_every_length_and_retains_best_baseline(monkeypa
 
     sessions = [datetime.date(2026, 1, day) for day in range(1, 31)]
     fitted = _fit_window_ladder(
-        strategy="momentum", method="random", count=2, seed=2, space={"value": [0, 1]},
+        strategy="swing_momentum", method="random", count=2, seed=2, space={"value": [0, 1]},
         symbols=["SPY"], bars={}, spy_daily=[], train_sessions=sessions,
         args=object(), weights={"return": 1.0}, min_trades=1,
         window_options=[10, 20, 30],
@@ -139,7 +139,7 @@ def test_adaptive_improvement_requires_sample_qualified_positive_candidate():
 
 
 def test_verified_adaptive_artifact_matches_portfolio_coordinator_schema(tmp_path):
-    strategy = "momentum"
+    strategy = "swing_momentum"
     detail = {
         "strategy": strategy,
         "data": {

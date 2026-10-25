@@ -8,6 +8,7 @@ import logging
 import math
 
 from autoresearch.backtest import AlgoPortfolioBacktest, strategy_warmup_days
+from strategies.catalog import STRATEGY_CATALOG
 from autoresearch.backtest.config import REGIME_WARMUP_DAYS
 from market.store import SQLiteBarStore
 from ..artifacts.candidate_archive import logic_version, model_family
@@ -93,9 +94,9 @@ def _load_forward_window_data(
 
 def _profile_for(strategy: str, parameters: dict) -> dict:
     controls = deepcopy(CORE_RESEARCH_CONTROLS)
-    if strategy == "multi_factor":
+    if strategy == "swing_multi_factor":
         per_strategy = controls.setdefault("max_entries_per_strategy_per_day", {})
-        per_strategy["multi_factor"] = min(int(per_strategy.get("multi_factor", 2)), 2)
+        per_strategy["swing_multi_factor"] = min(int(per_strategy.get("swing_multi_factor", 2)), 2)
     return {
         "name": "adaptive_candidate", "parameters": {strategy: parameters},
         "strategies": [strategy], "controls": controls,
@@ -113,6 +114,8 @@ def _run_replay(
     regime_cache: dict | None = None,
 ) -> dict:
     profile = _profile_for(strategy, parameters)
+    strategy_spec = STRATEGY_CATALOG[strategy]
+    runtime_overrides = {strategy: True} if strategy_spec.runtime_setting else {}
     replay = AlgoPortfolioBacktest(
         symbols=symbols, intraday_bars=bars, spy_daily_bars=spy_daily,
         start=start.isoformat(), end=end.isoformat(), feed=FEED,
@@ -128,6 +131,7 @@ def _run_replay(
         profile=profile["parameters"], strategies=profile["strategies"],
         research_controls=profile["controls"], force_close_at_end=force_close_at_end,
         regime_profiles=regime_profiles,
+        research_runtime_overrides=runtime_overrides,
         preaggregated_daily_bars=preaggregated_daily_bars,
         precomputed_timeline=precomputed_timeline,
         include_extended_hours=include_extended_hours,
@@ -164,7 +168,7 @@ def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
     factor_evidence = None
     factor_net_ic = None
     factor_net_return = None
-    if context["strategy"] == "multi_factor":
+    if context["strategy"] == "swing_multi_factor":
         diagnostics = report.get("multi_factor_diagnostics") or {}
         net_ic = diagnostics.get("net_of_costs_ic_forward_21_sessions") or {}
         net_return = diagnostics.get("after_cost_target_portfolio_forward_21_session_return") or {}
@@ -198,11 +202,11 @@ def _evaluate_search_candidate(candidate: dict, context: dict) -> dict:
     regime_metrics = _metrics_by_regime(
         report, capital=context["args"].capital,
         weights=context["weights"], min_trades=context["min_trades"],
-        multi_factor_diagnostics=(report.get("multi_factor_diagnostics") if context["strategy"] == "multi_factor" else None),
+        multi_factor_diagnostics=(report.get("multi_factor_diagnostics") if context["strategy"] == "swing_multi_factor" else None),
     )
     enough_trades = int(metrics.get("closed_trade_count") or 0) >= context["min_trades"]
     positive_after_costs = float(metrics.get("net_return_pct") or 0) > 0
-    if context["strategy"] == "multi_factor":
+    if context["strategy"] == "swing_multi_factor":
         positive_after_costs = positive_after_costs and bool(factor_net_return and factor_net_return > 0)
     del report
     return {
@@ -227,7 +231,7 @@ def _evaluate_candidate_in_worker(candidate: dict) -> dict:
 
 def _apply_multi_factor_ic_improvement_gate(candidates: list[dict], strategy: str) -> None:
     """Require changed factor signals to beat baseline net IC by a margin."""
-    if strategy != "multi_factor":
+    if strategy != "swing_multi_factor":
         return
     baseline = next((row for row in candidates if row.get("name") == "baseline"), None)
     baseline_oos = ((baseline or {}).get("metrics") or {}).get("multi_factor_oos") or {}

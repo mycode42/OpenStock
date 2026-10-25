@@ -18,7 +18,6 @@ from strategies.catalog import (
 )
 from strategies.multi_factor.diagnostics import information_coefficient, turnover
 from strategies.portfolio_coordinator import throttle_signal
-from strategies.satellite_overlay import apply_satellite_confirmations
 from strategies.runner.sizing import _make_trade
 from strategies.swing_common import CachedDailyBarHistory
 
@@ -28,7 +27,7 @@ class ReplaySignalsMixin:
         if not self.multi_factor_enabled:
             return {}, None
         regime_name = str((self._current_regime or {}).get("regime", "unknown"))
-        parameters = self.parameters_for_regime("multi_factor", regime_name)
+        parameters = self.parameters_for_regime("swing_multi_factor", regime_name)
         if parameters != self.multi_factor_config_key:
             self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(parameters))
             self.multi_factor_config_key = parameters
@@ -89,7 +88,7 @@ class ReplaySignalsMixin:
                 "entry_price": position.entry_price,
             }
             for ticker, position in self.positions.items()
-            if position.strategy == "multi_factor"
+            if position.strategy == "swing_multi_factor"
         }
         signals, diagnostics = self.multi_factor_generator.generate(
             self.daily_stock_bars,
@@ -149,7 +148,7 @@ class ReplaySignalsMixin:
             if item.action not in {"buy", "sell", "cover", "short"}:
                 continue
             day_key = session.isoformat()
-            self.signal_events_by_strategy[(day_key, "multi_factor")] += 1
+            self.signal_events_by_strategy[(day_key, "swing_multi_factor")] += 1
         return {
             item.ticker: item.to_dict() for item in signals
             if item.action in {"buy", "sell", "cover", "short"}
@@ -230,7 +229,7 @@ class ReplaySignalsMixin:
 
         realized_trades = [
             trade for trade in self.closed_trades
-            if trade.get("strategy") == "multi_factor"
+            if trade.get("strategy") == "swing_multi_factor"
         ]
         factor_model_rows = [
             row.get("factor_model") or {}
@@ -348,10 +347,10 @@ class ReplaySignalsMixin:
         result = self._regime_ranker(
             completed,
             mode="algo",
-            event_enabled=self.event_satellite_enabled,
+            event_enabled=self.event_strategy_enabled,
             event_disable_in_volatile=self.event_config.disable_in_volatile,
             intraday_trend_enabled=bool(self.research_runtime_overrides.get(
-                "intraday_trend", self.runtime_settings.enable_intraday_trend,
+                "intraday_trend_following", self.runtime_settings.enable_intraday_trend_following,
             )),
             intraday_momentum_enabled=bool(self.research_runtime_overrides.get(
                 "intraday_momentum", self.runtime_settings.enable_intraday_momentum,
@@ -427,7 +426,7 @@ class ReplaySignalsMixin:
                 continue
             # Multi Factor has a dedicated rebalance generator below; it is a
             # core strategy, but it has no rule-pipeline evaluator.
-            if strategy == "multi_factor":
+            if strategy == "swing_multi_factor":
                 continue
             runtime_setting = strategy_spec.runtime_setting if strategy_spec else None
             if runtime_setting and not self.research_runtime_overrides.get(
@@ -435,7 +434,7 @@ class ReplaySignalsMixin:
             ):
                 continue
             try:
-                if strategy in {"momentum", "swing_momentum"}:
+                if strategy == "swing_momentum":
                     signal = (swing_momentum_signals or {}).get(ticker)
                     if signal is not None:
                         signal = replace(signal, strategy=strategy)
@@ -478,22 +477,21 @@ class ReplaySignalsMixin:
             item["timeframe"] = "1Day" if daily_timeframe else "5Min"
             options.append(item)
 
-        allowed_satellites = set(self._current_regime.get("satellites", []))
         if (
             not position_qty and factor_signal is not None
             and factor_signal.get("action") in {"buy", "short"}
-            and "multi_factor" in self._current_regime.get("active", [])
+            and "swing_multi_factor" in self._current_regime.get("active", [])
             and self.multi_factor_enabled
-            and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
+            and (self.strategy_filter is None or "swing_multi_factor" in self.strategy_filter)
         ):
             item = dict(factor_signal)
-            item["rank_score"] = -float(item.get("rank") or 1)
+            item["rank_score"] = ranked.get("swing_multi_factor", 0)
             item["timeframe"] = "1Day"
             options.append(item)
         if (
             factor_signal is not None
-            and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
-            and position_qty and held is not None and held.strategy == "multi_factor"
+            and (self.strategy_filter is None or "swing_multi_factor" in self.strategy_filter)
+            and position_qty and held is not None and held.strategy == "swing_multi_factor"
             and factor_signal.get("action") in {"sell", "cover"}
         ):
             # Multi Factor is a core swing strategy and owns its exits.
@@ -503,13 +501,13 @@ class ReplaySignalsMixin:
 
         event_signal = None
         if (
-            (self.event_satellite_enabled or (held is not None and held.strategy == "event_driven"))
+            (self.event_strategy_enabled or (held is not None and held.strategy == "swing_event_driven"))
+            and (self.strategy_filter is None or "swing_event_driven" in self.strategy_filter)
+            and (held is None or held.strategy == "swing_event_driven")
             and (
-                "event_driven" in allowed_satellites
-                or (held is not None and held.strategy == "event_driven")
+                (held is not None and held.strategy == "swing_event_driven")
+                or "swing_event_driven" in active
             )
-            and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
-            and (held is None or held.strategy == "event_driven")
         ):
             try:
                 signal_as_of = timestamp + timedelta(minutes=BAR_MINUTES)
@@ -520,32 +518,34 @@ class ReplaySignalsMixin:
                     universe=set(self.symbols),
                     regime=str(self._current_regime.get("regime", "unknown")),
                     strategy_state=self.event_strategy_state,
-                    position_qty=position_qty if held and held.strategy == "event_driven" else 0,
-                    entry_at=held.entry_at if held and held.strategy == "event_driven" else None,
-                    entry_price=held.entry_price if held and held.strategy == "event_driven" else None,
+                    position_qty=position_qty if held and held.strategy == "swing_event_driven" else 0,
+                    entry_at=held.entry_at if held and held.strategy == "swing_event_driven" else None,
+                    entry_price=held.entry_price if held and held.strategy == "swing_event_driven" else None,
                 )
             except Exception as exc:
                 self.rejections[f"signal_error:event_driven:{type(exc).__name__}"] += 1
         if event_signal is not None:
             event_evidence = event_signal.to_dict()
-            self.signal_events_by_strategy[(self.day_key or "", "event_driven")] += 1
-            if (
-                position_qty and held is not None and held.strategy == "event_driven"
+            self.signal_events_by_strategy[(self.day_key or "", "swing_event_driven")] += 1
+            if not position_qty and event_signal.action in {"buy", "short"}:
+                options.append({
+                    **event_evidence,
+                    "rank_score": ranked.get("swing_event_driven", 0),
+                    "timeframe": "1Day",
+                })
+            elif (
+                position_qty and held is not None and held.strategy == "swing_event_driven"
                 and event_signal.action in {"sell", "cover"}
             ):
-                options.append({**event_evidence, "rank_score": -1.0, "timeframe": "1Day"})
+                options.append({
+                    **event_evidence,
+                    "rank_score": ranked.get("swing_event_driven", 0),
+                    "timeframe": "1Day",
+                })
 
         if not options:
             return None
         chosen = max(options, key=lambda item: (item["rank_score"], item["strength"]))
-        chosen = apply_satellite_confirmations(
-            chosen,
-            factor_signal=(factor_signal if "multi_factor" in allowed_satellites else None),
-            event_signal=event_evidence if "event_driven" in allowed_satellites else None,
-            config=self.satellite_config,
-        )
-        for satellite in chosen.get("satellite_confirmations", []):
-            self.satellite_confirmation_candidates[satellite] += 1
         return chosen
 
     def _queue_signal(self, ticker: str, signal: dict, bar: dict, timestamp: datetime) -> None:
@@ -557,9 +557,6 @@ class ReplaySignalsMixin:
             return
         action = str(signal["action"])
         strategy = str(signal["strategy"])
-        if strategy == "event_driven":
-            self.rejections["event_driven_disabled"] += 1
-            return
         controls = self.research_controls
         entries_today = self.entry_counts[self.day_key]
         if entries_today >= controls.get("max_entries_per_day", self.risk["max_trades_per_day"]):
@@ -697,16 +694,8 @@ class ReplaySignalsMixin:
             "trailing_activation_pct": sized.get("trailing_activation_pct"),
             "signal_at": signal_at,
             "delay_bars_remaining": int(getattr(self, "execution_delay_bars", 0)),
-            "satellite_confirmations": list(signal.get("satellite_confirmations", [])),
         }
-        for satellite in signal.get("satellite_confirmations", []):
-            self.satellite_confirmed_entries[satellite] += 1
-        if signal.get("event_confirmation"):
-            self.event_signal_generator.record_proposal(
-                signal["event_confirmation"], as_of=timestamp + timedelta(minutes=BAR_MINUTES),
-                strategy_state=self.event_strategy_state,
-            )
-        elif strategy == "event_driven":
+        if strategy == "swing_event_driven":
             self.event_signal_generator.record_proposal(
                 signal, as_of=timestamp + timedelta(minutes=BAR_MINUTES),
                 strategy_state=self.event_strategy_state,

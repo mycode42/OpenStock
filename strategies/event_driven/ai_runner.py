@@ -255,7 +255,7 @@ def run_analysis(
 
         snapshot = {
             "schema_version": 1,
-            "strategy": "event_driven",
+            "strategy": "swing_event_driven",
             "run_id": run_id,
             "generated_at": now.isoformat(),
             "expires_at": expires.isoformat(),

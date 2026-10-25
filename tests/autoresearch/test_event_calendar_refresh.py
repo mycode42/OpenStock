@@ -32,9 +32,9 @@ def test_unspecified_earnings_timing_is_not_guessed():
     assert event is None
 
 
-def test_algo_event_satellite_is_enabled_but_standalone_default_is_off():
+def test_algo_event_strategy_is_enabled_but_standalone_default_is_off():
     assert EventStrategyConfig().enabled is False
-    assert ALGO_DEFAULT_PARAMETERS["event_driven"]["enabled"] is True
+    assert ALGO_DEFAULT_PARAMETERS["swing_event_driven"]["enabled"] is True
 
 
 def test_published_macro_events_are_point_in_time_visible_and_spy_targeted():

@@ -180,7 +180,7 @@ def test_live_ridge_weights_require_current_logic_and_purged_fit(tmp_path):
     assert future_diagnostics["status"] == "unavailable"
 
 
-def test_regime_dependent_factor_satellite_confirms_weakest_names_bearishly():
+def test_regime_dependent_factor_strategy_selects_weakest_names_bearishly():
     config = MultiFactorConfig(
         top_n=1,
         min_universe=3,
@@ -215,11 +215,11 @@ def test_multi_factor_is_active_as_a_core_strategy_in_a_bearish_regime():
     regime = rank_strategies(spy, mode="algo")
 
     assert regime["regime"] == "trending_down"
-    assert "multi_factor" in regime["active"]
-    assert "multi_factor" not in regime["satellites"]
+    assert "swing_multi_factor" in regime["active"]
+    assert regime["active"].count("swing_multi_factor") == 1
 
 
-def test_factor_satellite_direction_modes_are_explicit():
+def test_factor_direction_modes_are_explicit():
     assert MultiFactorConfig(direction_mode="long_only").direction_mode == "long_only"
     assert MultiFactorConfig(direction_mode="long_short").direction_mode == "long_short"
     with pytest.raises(ValueError, match="direction_mode"):
@@ -229,7 +229,7 @@ def test_factor_satellite_direction_modes_are_explicit():
 def test_intraday_tilt_only_scales_an_existing_daily_factor_target():
     generator = SignalGenerator(MultiFactorConfig(enable_intraday_tilt=True))
     daily_target = MultiFactorSignal(
-        ticker="AAPL", strategy="multi_factor", action="buy", direction="long",
+        ticker="AAPL", strategy="swing_multi_factor", action="buy", direction="long",
         score=1.2, rank=1, target_weight=0.02, as_of="2026-10-01",
         rebalance_key="2026-W40", factor_values={}, factor_zscores={}, reason="daily rank",
     )
@@ -248,7 +248,7 @@ def test_intraday_tilt_only_scales_an_existing_daily_factor_target():
 @pytest.mark.parametrize("action", ["buy", "short"])
 def test_generated_trade_proposal_still_passes_through_risk_validator(action):
     signal = {
-        "ticker": "AAPL", "action": action, "strategy": "multi_factor",
+        "ticker": "AAPL", "action": action, "strategy": "swing_multi_factor",
         "reason": "weekly factor rank 1", "target_weight": 0.2,
     }
     risk = get_mode_config("algo")["risk"]
@@ -299,16 +299,16 @@ def test_value_factor_uses_only_fundamentals_available_by_as_of_date():
 
 
 def test_multi_factor_profile_is_validated_with_the_algo_registry():
-    profile = validate_parameter_profile({"multi_factor": {"top_n": 3}})
-    assert profile["multi_factor"]["top_n"] == 3
-    short_profile = validate_parameter_profile({"multi_factor": {"direction_mode": "long_short"}})
-    assert short_profile["multi_factor"]["direction_mode"] == "long_short"
+    profile = validate_parameter_profile({"swing_multi_factor": {"top_n": 3}})
+    assert profile["swing_multi_factor"]["top_n"] == 3
+    short_profile = validate_parameter_profile({"swing_multi_factor": {"direction_mode": "long_short"}})
+    assert short_profile["swing_multi_factor"]["direction_mode"] == "long_short"
 
 
 def test_warmup_covers_the_longest_configured_momentum_horizon():
     assert multi_factor_warmup_days() == 260
     assert multi_factor_warmup_days({
-        "multi_factor": {
+        "swing_multi_factor": {
             "momentum_lookbacks": {"momentum_6m": 252},
             "factor_weights": {"momentum_6m": 1},
         },
@@ -318,11 +318,11 @@ def test_warmup_covers_the_longest_configured_momentum_horizon():
 def test_multi_factor_position_can_be_persisted_as_a_strategy_owner():
     validate_portfolio({
         "strategy_states": {
-            "multi_factor": {
-                "AAPL": {"phase": "open", "strategy": "multi_factor", "ticker": "AAPL"},
+            "swing_multi_factor": {
+                "AAPL": {"phase": "open", "strategy": "swing_multi_factor", "ticker": "AAPL"},
             },
         },
-        "position_owners": {"AAPL": "multi_factor"},
+        "position_owners": {"AAPL": "swing_multi_factor"},
     })
 
 
@@ -357,7 +357,7 @@ def test_live_rebalance_ranks_cross_sectional_input_and_persists_weekly_key():
     assert diagnostics["minimum_universe_met"] is True
     assert sum(signal.action == "buy" for signal in signals.values()) == 3
     assert all(
-        states["multi_factor"][symbol]["last_rebalance_period"] == diagnostics["rebalance_key"]
+        states["swing_multi_factor"][symbol]["last_rebalance_period"] == diagnostics["rebalance_key"]
         for symbol in symbols
     )
     assert repeated == {}

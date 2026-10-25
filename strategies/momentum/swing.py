@@ -192,7 +192,7 @@ def generate_signals(
             else:
                 continue
         signals[ticker] = SwingSignal(
-            ticker, action, "momentum", f"{reason}; {held} sessions held",
+            ticker, action, "swing_momentum", f"{reason}; {held} sessions held",
             stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
             risk_multiplier=config.risk_multiplier,
         )
@@ -203,7 +203,7 @@ def generate_signals(
                 continue
             rank = sorted(scores, key=lambda name: (-scores[name], name)).index(ticker) + 1
             signals[ticker] = SwingSignal(
-                ticker, "buy", "momentum",
+                ticker, "buy", "swing_momentum",
                 f"daily {config.momentum_mode.replace('_', ' ')} momentum long rank {rank}/{len(scores)}; blended return {scores[ticker]:+.1%}; top-bottom spread {spread:.1%}",
                 stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
                 risk_multiplier=config.risk_multiplier,
@@ -213,7 +213,7 @@ def generate_signals(
                 continue
             rank = sorted(scores, key=lambda name: (scores[name], name)).index(ticker) + 1
             signals[ticker] = SwingSignal(
-                ticker, "short", "momentum",
+                ticker, "short", "swing_momentum",
                 f"daily {config.momentum_mode.replace('_', ' ')} momentum short rank {rank}/{len(scores)}; blended return {scores[ticker]:+.1%}; top-bottom spread {spread:.1%}",
                 stop_pct=config.hard_stop_pct, target_weight=config.max_position_pct,
                 risk_multiplier=config.risk_multiplier,

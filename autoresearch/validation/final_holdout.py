@@ -211,7 +211,10 @@ def advance_final_holdout(
         "scored_at": datetime.now(timezone.utc).isoformat(),
         "frozen_profile_sha256": state["frozen_profile"]["profile_sha256"],
         "frozen_replay_sha256": state["frozen_profile"]["frozen_replay_sha256"],
-        "event_driven_overlay_included": state["frozen_profile"]["event_driven_overlay_included"],
+        "event_strategy_included": state["frozen_profile"].get(
+            "event_strategy_included",
+            state["frozen_profile"].get("event_driven_overlay_included", False),
+        ),
         "holdout_range": {"start": min(holdout_dates), "end": latest_end.isoformat()},
         "qualification": qualification,
         "replay_regime_session_counts": replay_regimes,
@@ -308,13 +311,6 @@ def initialize_final_holdout(
             return {"status": "incompatible_cost_models", "research_only": True}
 
     runtime = get_algo_runtime_settings()
-    multi_factor_enabled = bool(runtime.algo_multi_factor_enabled and "multi_factor" in strategies)
-    profile["satellite_overlay"] = {
-        "multi_factor_enabled": multi_factor_enabled,
-        # This first frozen holdout excludes the sparse, separately managed event overlay.
-        "event_driven_enabled": False,
-    }
-    profile["event_driven"] = {"enabled": False}
     live_manifest = live_configuration_manifest(strategies)
     manifest_snapshot = live_manifest["snapshot"]
     profile_digest = hashlib.sha256(
@@ -351,7 +347,7 @@ def initialize_final_holdout(
         "source_artifact_sha256": artifact_hashes,
         "selection_source": "latest_training_selection_per_strategy",
         "selection_cutoff": frozen_data_end.isoformat(),
-        "event_driven_overlay_included": False,
+        "event_strategy_included": False,
     }
     frozen_profile["frozen_replay_sha256"] = _hash(frozen_profile)
     state = {
@@ -378,7 +374,7 @@ def _run_frozen_replay(*, store: SQLiteBarStore, state: dict, start: str, end: d
     warmup_days = max(
         REGIME_CONTEXT_WARMUP_DAYS, DAILY_WARMUP_DAYS,
         *(strategy_warmup_days(strategy, frozen["profile"]) for strategy in frozen["strategies"]),
-        multi_factor_warmup_days(frozen["profile"]) if "multi_factor" in frozen["strategies"] else 0,
+        multi_factor_warmup_days(frozen["profile"]) if "swing_multi_factor" in frozen["strategies"] else 0,
     )
     bars_start = (start_day - timedelta(days=warmup_days)).isoformat()
     replay_symbols = list(dict.fromkeys([
@@ -486,9 +482,14 @@ def _public_status(state: dict) -> dict:
             for key in (
                 "strategies", "symbols", "profile_sha256", "frozen_replay_sha256",
                 "factor_weight_timeline_sha256", "source_artifact_sha256",
-                "event_driven_overlay_included",
             )
         } if state.get("frozen_profile") else None,
+        "event_strategy_included": (
+            (state.get("frozen_profile") or {}).get(
+                "event_strategy_included",
+                (state.get("frozen_profile") or {}).get("event_driven_overlay_included", False),
+            )
+        ),
         "manifest_path": state.get("manifest_path"),
         "invalidation_reason": state.get("invalidation_reason"),
     }

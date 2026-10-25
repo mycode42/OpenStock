@@ -120,7 +120,7 @@ class EventSignalGenerator:
             ):
                 self.counts["ai_signals"] += 1
                 return Signal(
-                    ticker=ticker.upper(), action="sell", strategy="event_driven",
+                    ticker=ticker.upper(), action="sell", strategy="swing_event_driven",
                     reason=recommendation.reason,
                     strength=recommendation.confidence / 100,
                     stop_pct=self.config.stop_pct,
@@ -146,7 +146,7 @@ class EventSignalGenerator:
 
         self.counts["ai_signals"] += 1
         return Signal(
-            ticker=ticker.upper(), action="buy", strategy="event_driven",
+            ticker=ticker.upper(), action="buy", strategy="swing_event_driven",
             reason=recommendation.reason,
             strength=recommendation.confidence / 100,
             stop_pct=self.config.stop_pct,
@@ -180,7 +180,7 @@ class EventSignalGenerator:
             return None
         return EventSignal(
             ticker=ticker.upper(), action="cover" if is_short else "sell",
-            strategy="event_driven", reason=reason, strength=0.8,
+            strategy="swing_event_driven", reason=reason, strength=0.8,
             stop_pct=self.config.stop_pct, target_weight=self.config.risk_limited_weight,
             risk_multiplier=self.config.risk_multiplier,
             exit_mode=exit_mode, maximum_holding_sessions=maximum,

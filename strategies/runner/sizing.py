@@ -129,7 +129,7 @@ def _make_trade(
         "strategy": signal["strategy"],
         "timeframe": signal.get("timeframe"),
         "direction": "long" if action == "buy" else "short",
-        "strategy_group": signal.get("strategy_group", "swing" if signal["strategy"] in {"trend_following", "momentum", "swing_mean_reversion"} else "intraday"),
+        "strategy_group": signal.get("strategy_group", "swing" if signal["strategy"] in {"swing_trend_following", "swing_momentum", "swing_mean_reversion"} else "intraday"),
     }
 
 

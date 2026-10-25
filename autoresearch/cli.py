@@ -11,12 +11,10 @@ import sys
 import requests
 
 from autoresearch.cpu import available_cpu_count
-from portfolio.config import get_algo_runtime_settings
-
 from .pipeline.cli import add_cli_commands as _add_adaptive_commands
 from .artifacts.files import _atomic_json
 from .validation.portfolio_simulation import run_coordinated_portfolio
-from .settings import DEFAULT_OUTPUT_DIR, LIVE_RESEARCH_STRATEGIES
+from .settings import DEFAULT_OUTPUT_DIR, RESEARCHABLE_STRATEGIES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,15 +31,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_OUTPUT_DIR / "adaptive" / "verification-coordinator"),
     )
     portfolio.add_argument(
-        "--strategies", default=",".join(LIVE_RESEARCH_STRATEGIES),
-        help="comma-separated active strategy ids",
+        "--strategies", default=",".join(RESEARCHABLE_STRATEGIES),
+        help="comma-separated strategy ids to compare in the research replay",
     )
     portfolio.add_argument("--event-calendar", help="point-in-time historical event calendar CSV")
-    portfolio.add_argument(
-        "--multi-factor-overlay", action=argparse.BooleanOptionalAction,
-        default=get_algo_runtime_settings().algo_multi_factor_enabled,
-        help="include the Multi Factor core strategy in this replay",
-    )
     portfolio.add_argument(
         "--workers", type=int, default=min(8, available_cpu_count()),
     )

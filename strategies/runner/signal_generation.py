@@ -21,10 +21,6 @@ from strategies.runner.sizing import (
     _positive_price_level,
     _update_trailing_stop,
 )
-from strategies.satellite_overlay import (
-    SATELLITE_STRATEGIES,
-    apply_satellite_confirmations,
-)
 
 
 @dataclass
@@ -42,9 +38,7 @@ class SignalGenerationContext:
     regular_close: datetime | None
     session_name: str | None
     regime: dict
-    factor_confirmation_signals: dict[str, Any]
-    satellite_config: Any
-    allowed_satellites: set[str]
+    multi_factor_target_signals: dict[str, Any]
     event_generator: Any
     event_strategy_enabled: bool
     strategy_states: dict
@@ -69,16 +63,15 @@ class SignalGenerationContext:
 
 def generate_strategy_signals(
     context: SignalGenerationContext,
-) -> tuple[list[dict], dict[str, int]]:
-    """Build one candidate per eligible symbol and report satellite counts."""
+) -> list[dict]:
+    """Build one peer strategy candidate per eligible symbol."""
     generated: list[dict] = []
-    satellite_confirmation_counts = {"multi_factor": 0, "event_driven": 0}
 
     for ticker in context.strategy_symbols:
         symbol_signals = _generate_symbol_signals(context, ticker)
         generated.extend(symbol_signals)
 
-    return generated, satellite_confirmation_counts
+    return generated
 
 
 def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> list[dict]:
@@ -116,7 +109,6 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
         if option is not None:
             options.append(option)
 
-    options = _apply_satellite_confirmations(context, ticker, options, event_signal)
     if not options:
         return []
 
@@ -200,28 +192,14 @@ def _strategy_candidates(
     owner: str | None,
     position_qty: float,
 ) -> list[str]:
-    if owner and owner not in SATELLITE_STRATEGIES:
+    if owner:
         return [owner]
 
     candidates = [
         name for name in context.regime.get("active", [])
-        if name in CORE_STRATEGIES or name in {"intraday_trend", "intraday_momentum"}
+        if name in CORE_STRATEGIES
     ]
-    factor_target = context.factor_confirmation_signals.get(ticker)
-    if (
-        context.mode == "algo"
-        and owner is None
-        and position_qty == 0
-        and context.satellite_config.multi_factor_enabled
-        and "multi_factor" in context.allowed_satellites
-        and factor_target is not None
-    ):
-        candidates.append("multi_factor")
-
-    # Existing satellite holdings can be managed for exits, never entered fresh.
-    if owner in SATELLITE_STRATEGIES:
-        return [owner] if position_qty != 0 else []
-    return candidates
+    return list(dict.fromkeys(candidates))
 
 
 def _event_signal(
@@ -235,14 +213,14 @@ def _event_signal(
     if not (
         context.mode == "algo"
         and context.event_generator is not None
-        and (context.event_strategy_enabled or owner == "event_driven")
+        and (context.event_strategy_enabled or owner == "swing_event_driven")
         and context.session_name in {None, "regular"}
-        and "event_driven" in candidates
+        and "swing_event_driven" in candidates
     ):
         return None
 
     try:
-        event_state = context.strategy_states.setdefault("event_driven", {})
+        event_state = context.strategy_states.setdefault("swing_event_driven", {})
         return context.event_generator.generate(
             ticker,
             context.daily_bars.get(ticker, []),
@@ -250,12 +228,12 @@ def _event_signal(
             universe=set(context.selected_symbols) | ({"SPY"} if ticker == "SPY" else set()),
             regime=str(context.regime.get("regime", "unknown")),
             strategy_state=event_state,
-            position_qty=position_qty if owner == "event_driven" else 0,
+            position_qty=position_qty if owner == "swing_event_driven" else 0,
             entry_at=(
                 event_state.get(ticker, {}).get("opened_at")
-                if owner == "event_driven" else None
+                if owner == "swing_event_driven" else None
             ),
-            entry_price=(position.get("avg_entry_price") if owner == "event_driven" else None),
+            entry_price=(position.get("avg_entry_price") if owner == "swing_event_driven" else None),
         )
     except (KeyError, TypeError, ValueError) as exc:
         context.scan_errors.append(
@@ -333,7 +311,7 @@ def _strategy_option(
     symbol_bars: list[dict],
     event_signal: Any | None,
 ) -> dict | None:
-    if strategy_name == "event_driven" and (
+    if strategy_name == "swing_event_driven" and (
         context.mode != "algo" or context.session_name not in {None, "regular"}
     ):
         return None
@@ -356,7 +334,7 @@ def _strategy_option(
     if signal is None and (strategy_name in RULE_MODULES or strategy_name in ALGO_RULE_MODULES):
         try:
             if context.mode == "algo":
-                if strategy_name == "momentum":
+                if strategy_name == "swing_momentum":
                     return None
                 if (
                     strategy_spec is not None
@@ -401,11 +379,7 @@ def _strategy_option(
         return None
 
     item = dict(signal) if isinstance(signal, dict) else signal.to_dict()
-    item["rank_score"] = (
-        -float(item.get("rank") or 1) if strategy_name == "multi_factor"
-        else -1.0 if strategy_name == "event_driven"
-        else context.rank_score.get(strategy_name, 0)
-    )
+    item["rank_score"] = context.rank_score.get(strategy_name, 0)
     item["signal_bar_time"] = signal_bar_time
     item["timeframe"] = strategy_spec.bar_interval if strategy_spec else "5Min"
     if context.lifecycle and not context.lifecycle.allows(
@@ -423,47 +397,20 @@ def _provided_signal(
     position_qty: float,
     event_signal: Any | None,
 ) -> Any | None:
-    if strategy_name == "multi_factor":
+    if strategy_name == "swing_multi_factor":
         signal = context.multi_factor_signals.get(ticker)
         if signal is None and owner is None and position_qty == 0:
-            signal = context.factor_confirmation_signals.get(ticker)
+            signal = context.multi_factor_target_signals.get(ticker)
         signal_action = (
             signal.get("action") if isinstance(signal, dict)
             else getattr(signal, "action", None)
         )
         return signal if signal is not None and signal_action in {"buy", "short", "sell", "cover"} else None
-    if strategy_name == "event_driven":
+    if strategy_name == "swing_event_driven":
         return event_signal
-    if strategy_name == "momentum":
+    if strategy_name == "swing_momentum":
         return context.momentum_signals.get(ticker)
     return None
-
-
-def _apply_satellite_confirmations(
-    context: SignalGenerationContext,
-    ticker: str,
-    options: list[dict],
-    event_signal: Any | None,
-) -> list[dict]:
-    if context.mode != "algo" or not options:
-        return options
-    factor_confirmation = (
-        context.factor_confirmation_signals.get(ticker)
-        if "multi_factor" in context.allowed_satellites else None
-    )
-    event_confirmation = event_signal.to_dict() if event_signal is not None else None
-    return [
-        apply_satellite_confirmations(
-            item,
-            factor_signal=factor_confirmation,
-            event_signal=(
-                event_confirmation
-                if "event_driven" in context.allowed_satellites else None
-            ),
-            config=context.satellite_config,
-        )
-        for item in options
-    ]
 
 
 def _choose_option(context: SignalGenerationContext, options: list[dict]) -> tuple[dict, list[dict]]:

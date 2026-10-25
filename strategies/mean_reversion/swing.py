@@ -1,6 +1,6 @@
 """Patient, daily-bar cyclical mean reversion for the Algo portfolio.
 
-This is intentionally separate from ``mean_reversion``'s intraday open-dip
+This is intentionally separate from ``intraday_mean_reversion``'s intraday open-dip
 rule. It needs a persistent multi-day stretch and a daily reversal cue, so an
 opening print or a single intraday move cannot trigger it.
 """

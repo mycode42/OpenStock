@@ -58,7 +58,7 @@ def test_submitted_order_is_not_counted_as_filled_until_broker_confirms(monkeypa
         "results": [{
             "ticker": "AAPL", "action": "buy", "qty": 2,
             "status": "pending_new", "success": True,
-            "order_id": "order-1", "strategy": "momentum",
+            "order_id": "order-1", "strategy": "swing_momentum",
         }],
     })
     assert logged == 1
@@ -75,18 +75,18 @@ def test_submitted_order_is_not_counted_as_filled_until_broker_confirms(monkeypa
     enriched, health = tracker.reconcile_trade_orders([row], "algo")
     assert health["matched"] == 1
     assert trade_journal.compute_stats(enriched)["filled"] == 1
-    assert tracker.compute_strategy_stats(enriched)["momentum"]["filled"] == 1
+    assert tracker.compute_strategy_stats(enriched)["swing_momentum"]["filled"] == 1
 
 
 def test_replayed_client_id_enriches_order_without_double_counting(monkeypatch, tmp_path):
     monkeypatch.setattr(trade_journal, "JOURNAL_PATH", tmp_path / "journal.jsonl")
     first = {"trading_mode": "algo", "mode": "live", "results": [{
         "ticker": "AAPL", "action": "buy", "qty": 2, "status": "submitted",
-        "client_order_id": "stable-1", "strategy": "momentum",
+        "client_order_id": "stable-1", "strategy": "swing_momentum",
     }]}
     second = {"trading_mode": "algo", "mode": "live", "results": [{
         "ticker": "AAPL", "action": "buy", "qty": 2, "status": "submitted",
-        "client_order_id": "stable-1", "order_id": "broker-1", "strategy": "momentum",
+        "client_order_id": "stable-1", "order_id": "broker-1", "strategy": "swing_momentum",
     }]}
     assert trade_journal.append_trades(first) == 1
     assert trade_journal.append_trades(second) == 1
@@ -110,7 +110,7 @@ def test_account_reset_keeps_old_journal_and_snapshots_out_of_current_report(mon
             "results": [{
                 "ticker": "AAPL", "action": "buy", "qty": 1,
                 "status": "submitted", "client_order_id": "same-id",
-                "order_id": f"{account_id}-order", "strategy": "momentum",
+                "order_id": f"{account_id}-order", "strategy": "swing_momentum",
             }],
         }
         assert trade_journal.append_trades(payload) == 1

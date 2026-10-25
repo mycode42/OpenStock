@@ -1,9 +1,9 @@
 # Event Driven AI strategy
 
-`event_driven` is an active, long-horizon Algo strategy. On weekdays, its
+`swing_event_driven` is an active, long-horizon Algo strategy. On weekdays, its
 scheduled briefing runs the shared analyst graph three times per day and
 publishes short-lived Buy, Sell, or Watch recommendations for the fixed Algo
-universe. The strategy name and identity remain `event_driven`; its live
+universe. The strategy name and identity remain `swing_event_driven`; its live
 signals enter the same sizing, portfolio coordination, lifecycle, and paper
 execution path as the other Algo strategies.
 
@@ -11,7 +11,7 @@ The scheduled analysis is advice, not an order submission. It discards model
 share quantities and publishes only an action, confidence, evidence-based
 reason, and run ID. `AIEventSignalBook` accepts only a valid, unexpired snapshot
 for known Algo tickers. A Buy requires confidence of at least 70 and opens a
-long position. A Sell signal can close a long position owned by `event_driven`;
+long position. A Sell signal can close a long position owned by `swing_event_driven`;
 it cannot take over or close a position owned by another strategy. Watch and
 low-confidence recommendations produce no trade signal. Short selling is
 disabled. New entries are also blocked by the default volatile-regime brake.
@@ -149,12 +149,12 @@ adjusted 5-minute SIP bars and run:
 ```bash
 poetry run python -m autoresearch.backtest fetch \
   --symbols AAPL,SPY --start 2025-07-31 --end 2025-09-17 \
-  --strategies event_driven --adjustment split
+  --strategies swing_event_driven --adjustment split
 
 poetry run python -m autoresearch.backtest run \
   --symbols AAPL,SPY \
   --start 2025-07-31 --end 2025-09-17 \
-  --strategies event_driven \
+  --strategies swing_event_driven \
   --adjustment split \
   --profile examples/event_strategy_profile.json \
   --event-calendar examples/event_calendar_2025.csv \
@@ -164,7 +164,7 @@ poetry run python -m autoresearch.backtest run \
 The minimal profile is:
 
 ```json
-{"event_driven": {"enabled": true}}
+{"swing_event_driven": {"enabled": true}}
 ```
 
 The example is an interface demonstration, not a performance claim. It needs

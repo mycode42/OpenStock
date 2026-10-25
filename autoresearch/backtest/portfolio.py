@@ -38,7 +38,6 @@ from strategies.regime import _cached_feature_history, rank_strategies
 from portfolio.config import ALGO_REGIME_CONFIG
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
 from strategies.rule_pipeline import evaluate_rule_signal
-from strategies.satellite_overlay import SatelliteOverlayConfig
 from strategies.swing_common import CachedDailyBarHistory
 from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings, get_mode_config
 from execution.risk import _get_universe_maps, validate_trade
@@ -158,7 +157,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.risk = deepcopy(get_mode_config("algo")["risk"])
         self.research_runtime_overrides = dict(research_runtime_overrides or {})
         unknown_runtime_overrides = set(self.research_runtime_overrides) - {
-            "intraday_trend", "intraday_momentum",
+            "intraday_trend_following", "intraday_momentum",
         }
         if unknown_runtime_overrides or any(
             not isinstance(value, bool) for value in self.research_runtime_overrides.values()
@@ -166,29 +165,21 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             raise ValueError("research runtime overrides must be boolean intraday strategy enable flags")
         runtime_settings = get_algo_runtime_settings()
         self.runtime_settings = runtime_settings
-        profile_satellites = self.profile.get("satellite_overlay", {})
-        self.satellite_config = SatelliteOverlayConfig.from_dict({
-            **profile_satellites,
-            "multi_factor_enabled": runtime_settings.algo_multi_factor_enabled
-            and bool(profile_satellites.get("multi_factor_enabled", True)),
-            "event_driven_enabled": runtime_settings.algo_event_driven_enabled
-            and bool(profile_satellites.get("event_driven_enabled", True)),
-        })
         self.research_controls = validate_research_controls(research_controls)
         self.event_calendar = event_calendar or EventCalendar()
-        self.event_config = EventStrategyConfig.from_dict(self.profile.get("event_driven"))
-        self.event_satellite_enabled = (
-            self.event_config.enabled and self.satellite_config.event_driven_enabled
-            and (self.strategy_filter is None or "event_driven" in self.strategy_filter)
+        self.event_config = EventStrategyConfig.from_dict(self.profile.get("swing_event_driven"))
+        self.event_strategy_enabled = (
+            self.event_config.enabled and runtime_settings.swing_event_driven_enabled
+            and (self.strategy_filter is None or "swing_event_driven" in self.strategy_filter)
         )
         self.event_signal_generator = EventSignalGenerator(self.event_calendar, self.event_config)
         self.event_strategy_state: dict = {}
         self.multi_factor_enabled = (
-            self.satellite_config.multi_factor_enabled
-            and (self.strategy_filter is None or "multi_factor" in self.strategy_filter)
+            runtime_settings.swing_multi_factor_enabled
+            and (self.strategy_filter is None or "swing_multi_factor" in self.strategy_filter)
         )
         self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(
-            self.parameters_for_regime("multi_factor", "unknown")
+            self.parameters_for_regime("swing_multi_factor", "unknown")
         ))
         self.multi_factor_config_key = self.multi_factor_generator.config.to_dict()
         self.multi_factor_fundamentals_cache: dict[str, tuple[dict, dict]] = {}
@@ -244,8 +235,6 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.multi_factor_snapshots: list[dict] = []
         self.multi_factor_rebalance_diagnostics: list[dict] = []
         self.latest_multi_factor_signals: dict[str, dict] = {}
-        self.satellite_confirmation_candidates: Counter[str] = Counter()
-        self.satellite_confirmed_entries: Counter[str] = Counter()
         self.positions: dict[str, Position] = {}
         self.pending_entries: dict[str, dict] = {}
         self.pending_exits: dict[str, dict] = {}

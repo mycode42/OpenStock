@@ -178,7 +178,7 @@ def _signal_uncached(
                 reason = f"maximum {config.maximum_holding_sessions}-session trend hold reached"
             else:
                 return None
-        return SwingSignal(ticker, action, "trend_following", reason, stop_pct=stop_pct,
+        return SwingSignal(ticker, action, "swing_trend_following", reason, stop_pct=stop_pct,
                            target_weight=config.max_position_pct, risk_multiplier=config.risk_multiplier,
                            stop_model_override=config.stop_mode == "atr")
 
@@ -188,7 +188,7 @@ def _signal_uncached(
         bullish = False
     if bullish:
         return SwingSignal(
-            ticker, "buy", "trend_following",
+            ticker, "buy", "swing_trend_following",
             f"daily {config.average_type.upper()} {config.fast_period}/{config.slow_period} bullish; slow-average slope {slope:+.2%}",
             stop_pct=stop_pct, target_weight=config.max_position_pct,
             risk_multiplier=config.risk_multiplier,
@@ -196,7 +196,7 @@ def _signal_uncached(
         )
     if bearish:
         return SwingSignal(
-            ticker, "short", "trend_following",
+            ticker, "short", "swing_trend_following",
             f"daily {config.average_type.upper()} {config.fast_period}/{config.slow_period} bearish; slow-average slope {slope:+.2%}",
             stop_pct=stop_pct, target_weight=config.max_position_pct,
             risk_multiplier=config.risk_multiplier,
@@ -211,7 +211,7 @@ def signal(
     entry_price: float | None = None,
 ) -> SwingSignal | None:
     config = parameters if isinstance(parameters, SwingTrendConfig) else SwingTrendConfig.from_dict(parameters)
-    cache_key = ("trend_following", ticker, config, position_qty, entry_at, entry_price)
+    cache_key = ("swing_trend_following", ticker, config, position_qty, entry_at, entry_price)
     cached_history = bars if isinstance(bars, CachedDailyBarHistory) else None
     if cached_history is not None:
         try:

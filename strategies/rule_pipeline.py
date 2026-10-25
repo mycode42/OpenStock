@@ -6,7 +6,7 @@ from datetime import datetime
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
-from strategies.catalog import STRATEGY_CATALOG
+from strategies.catalog import STRATEGY_CATALOG, canonical_strategy_id
 from strategies.indicators import adx, closes, efficiency_ratio, moving_average
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from strategies.signals import Signal
@@ -19,14 +19,12 @@ from strategies.trend_following.swing import SwingTrendConfig
 
 ET = ZoneInfo("America/New_York")
 RULE_PARAMETERS = {
-    "trend_following": set(SwingTrendConfig.__dataclass_fields__),
-    "momentum": set(SwingMomentumConfig.__dataclass_fields__),
     "swing_trend_following": set(SwingTrendConfig.__dataclass_fields__),
     "swing_momentum": set(SwingMomentumConfig.__dataclass_fields__),
-    "intraday_trend": {"enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "allow_long", "allow_short"},
+    "intraday_trend_following": {"enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "allow_long", "allow_short"},
     "intraday_momentum": {"enabled", "lookback", "minimum_return", "minimum_volume_ratio", "minimum_short_return",
                            "minimum_short_volume_ratio", "max_extension_pct", "allow_long", "allow_short"},
-    "mean_reversion": {
+    "intraday_mean_reversion": {
         "window", "band_width", "entry_rsi", "exit_rsi", "short_entry_rsi",
         "short_exit_rsi", "allow_long", "allow_short", "regime_filter",
         "efficiency_ratio_period", "efficiency_ratio_max", "adx_period", "adx_max",
@@ -59,15 +57,15 @@ def _trend_config(parameters: dict) -> SwingTrendConfig:
     return _cached_trend_config(items)
 
 
-def _intraday_satellite(signal: Signal | None, name: str) -> SwingSignal | None:
+def _intraday_strategy_signal(signal: Signal | None, name: str) -> SwingSignal | None:
     if signal is None:
         return None
     runtime_settings = get_algo_runtime_settings()
     return SwingSignal(
         signal.ticker, signal.action, name, signal.reason, signal.strength,
-        stop_pct=0.01, strategy_group="intraday_satellite",
-        target_weight=runtime_settings.intraday_satellite_position_pct,
-        risk_multiplier=runtime_settings.intraday_satellite_risk_multiplier,
+        stop_pct=0.01, strategy_group="intraday_core",
+        target_weight=runtime_settings.intraday_strategy_position_pct,
+        risk_multiplier=runtime_settings.intraday_strategy_risk_multiplier,
     )
 
 
@@ -96,9 +94,9 @@ def _opening_dip(
         return None
 
     if position_qty > 0 and close >= opened:
-        return Signal(ticker, "sell", "mean_reversion", "opening dip recovered to the session open", 0.7)
+        return Signal(ticker, "sell", "intraday_mean_reversion", "opening dip recovered to the session open", 0.7)
     if position_qty < 0 and close <= opened:
-        return Signal(ticker, "cover", "mean_reversion", "opening rip faded to the session open", 0.7)
+        return Signal(ticker, "cover", "intraday_mean_reversion", "opening rip faded to the session open", 0.7)
     if position_qty != 0:
         return None
 
@@ -148,7 +146,7 @@ def _opening_dip(
         return None
     direction, move_pct, reaction_pct, confirmation = action
     return Signal(
-        ticker, direction, "mean_reversion",
+        ticker, direction, "intraday_mean_reversion",
         f"opening {'dip' if direction == 'buy' else 'rip'} {move_pct:.1%}; "
         f"{confirmation} confirmation {reaction_pct:.1%}; volume {volume_ratio:.2f}x",
         min(0.95, 0.6 + move_pct),
@@ -194,7 +192,7 @@ def _confirmed_trend(
         if (direction == "long" and slope_pct < minimum_slope) or (direction == "short" and slope_pct > -minimum_slope):
             continue
         return Signal(
-            ticker, action, "trend_following",
+            ticker, action, "swing_trend_following",
             f"{fast}/{slow} {direction} crossover held for {confirmation_bars} bars; slope {slope_pct:.2%}",
             0.8,
         )
@@ -208,10 +206,11 @@ def evaluate_rule_signal(
     runtime_enabled_override: bool | None = None,
 ) -> Signal | None:
     """Apply configured rule filters, then delegate to the production signal module."""
+    name = canonical_strategy_id(name)
     if name not in RULE_PARAMETERS:
         return None
     runtime_enabled = None
-    if name in {"intraday_trend", "intraday_momentum"}:
+    if name in {"intraday_trend_following", "intraday_momentum"}:
         runtime_enabled = runtime_enabled_override
         runtime_setting = STRATEGY_CATALOG[name].runtime_setting
         if runtime_enabled is None and runtime_setting:
@@ -239,7 +238,7 @@ def evaluate_rule_signal(
             entry_at=entry_at, entry_price=entry_price, position_target=position_target,
         )
 
-    if name in {"trend_following", "swing_trend_following"}:
+    if name == "swing_trend_following":
         from strategies.trend_following.swing import signal as swing_trend_signal
         config = _trend_config(rule_params)
         return swing_trend_signal(
@@ -247,11 +246,11 @@ def evaluate_rule_signal(
             entry_at=entry_at, entry_price=entry_price,
         )
 
-    if name in {"momentum", "swing_momentum"}:
+    if name == "swing_momentum":
         # The swing momentum implementation ranks the full universe in one pass.
         return None
 
-    if name == "mean_reversion" and params.get("signal_model", "bollinger") == "opening_dip":
+    if name == "intraday_mean_reversion" and params.get("signal_model", "bollinger") == "opening_dip":
         if not position_qty:
             regime_filter = params.get("regime_filter", "none")
             values = closes(bars)
@@ -265,7 +264,7 @@ def evaluate_rule_signal(
                     return None
         return _opening_dip(ticker, bars, params, position_qty=position_qty)
 
-    if name == "intraday_trend":
+    if name == "intraday_trend_following":
         confirmation = int(params.get("confirmation_bars", 1))
         if confirmation > 1 or params.get("minimum_slope_pct", 0) > 0:
             # The five-minute rule remains explicitly opt-in at both config
@@ -274,13 +273,13 @@ def evaluate_rule_signal(
                 return None
             legacy_params = {key: value for key, value in params.items() if key != "enabled"}
             signal = _confirmed_trend(ticker, bars, legacy_params, confirmation)
-            return _intraday_satellite(signal, name)
+            return _intraday_strategy_signal(signal, name)
 
     evaluation_kwargs = {"parameters": rule_params}
     if runtime_enabled is not None:
         evaluation_kwargs["runtime_enabled_override"] = runtime_enabled
     signal = evaluate_strategy(name, "algo", ticker, bars, position_qty, **evaluation_kwargs)
-    if signal is None or name not in {"intraday_trend", "intraday_momentum"}:
+    if signal is None or name not in {"intraday_trend_following", "intraday_momentum"}:
         return signal
     if not params.get("enabled", False):
         return None
@@ -291,4 +290,4 @@ def evaluate_rule_signal(
         extension = values[-1] / average - 1 if average else None
         if extension is None or abs(extension) > max_extension:
             return None
-    return _intraday_satellite(signal, name)
+    return _intraday_strategy_signal(signal, name)
