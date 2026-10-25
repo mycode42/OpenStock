@@ -105,7 +105,7 @@ function renderChart(history, range, charts) {
         secondary: '',
         price: money(point.value),
     }));
-    const chartGrid = `<defs><linearGradient id="algo-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#c8ff00" stop-opacity=".08"/><stop offset="100%" stop-color="#c8ff00" stop-opacity="0"/></linearGradient></defs><path class="algo-chart-area" d="${area}"/>${grid}${labels}`;
+    const chartGrid = `<defs><linearGradient id="algo-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="var(--os-accent, #c8ff00)" stop-opacity=".08"/><stop offset="100%" stop-color="var(--os-accent, #c8ff00)" stop-opacity="0"/></linearGradient></defs><path class="algo-chart-area" d="${area}"/>${grid}${labels}`;
     return charts.interactiveChartSvg({
         className: 'algo-performance-chart',
         width,

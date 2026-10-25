@@ -1,0 +1,1742 @@
+html[data-theme="openstock"] {
+  --os-page: #000000;
+  --os-nav: #0a0a0a;
+  --os-surface: #0a0a0a;
+  --os-raised: #111111;
+  --os-text: #f8fafc;
+  --os-muted: #94a3b8;
+  --os-border: #252a2e;
+  --os-accent: #c8ff00;
+  --os-accent-ink: #000000;
+  --os-soft-accent: rgba(200, 255, 0, .1);
+  --os-browser: #000000;
+}
+
+html[data-theme="claw"] {
+  --os-page: #07100c;
+  --os-nav: #0b1711;
+  --os-surface: #0e1b14;
+  --os-raised: #13241a;
+  --os-text: #e7f4ea;
+  --os-muted: #9db5a2;
+  --os-border: #254332;
+  --os-accent: #b7f76b;
+  --os-accent-ink: #14210a;
+  --os-soft-accent: rgba(183, 247, 107, .12);
+  --os-browser: #07100c;
+}
+
+html[data-theme="knot"] {
+  --os-page: #07080b;
+  --os-nav: #090a0d;
+  --os-surface: #111217;
+  --os-raised: #1a1b21;
+  --os-text: #f7f7fa;
+  --os-muted: #c2c5ce;
+  --os-border: #474a54;
+  --os-accent: #e22643;
+  --os-accent-ink: #ffffff;
+  --os-soft-accent: rgba(226, 38, 67, .18);
+  --os-browser: #07080b;
+}
+
+html[data-theme="dash"] {
+  --os-page: #11100e;
+  --os-nav: #191816;
+  --os-surface: #242321;
+  --os-raised: #302e2a;
+  --os-text: #f4eee4;
+  --os-muted: #c0b6a5;
+  --os-border: #50483c;
+  --os-accent: #e0a35f;
+  --os-accent-ink: #24170a;
+  --os-soft-accent: rgba(224, 163, 95, .15);
+  --os-browser: #11100e;
+}
+
+html[data-theme="absolutely"] {
+  --os-page: #0b0c0e;
+  --os-nav: #111316;
+  --os-surface: #191b1f;
+  --os-raised: #24272c;
+  --os-text: #ffffff;
+  --os-muted: #bdc2cb;
+  --os-border: #484d56;
+  --os-accent: #ff815e;
+  --os-accent-ink: #2a1009;
+  --os-soft-accent: rgba(255, 129, 94, .14);
+  --os-browser: #0b0c0e;
+}
+
+html[data-theme="tide"] {
+  --os-page: #07121b;
+  --os-nav: #0b1a25;
+  --os-surface: #102431;
+  --os-raised: #16313d;
+  --os-text: #e4f6f6;
+  --os-muted: #9dbcc2;
+  --os-border: #28505a;
+  --os-accent: #56d9d1;
+  --os-accent-ink: #062327;
+  --os-soft-accent: rgba(86, 217, 209, .12);
+  --os-browser: #07121b;
+}
+
+html[data-theme="beacon"] {
+  --os-page: #11100d;
+  --os-nav: #191710;
+  --os-surface: #211c14;
+  --os-raised: #2a2419;
+  --os-text: #f5eee0;
+  --os-muted: #b8ad96;
+  --os-border: #51442d;
+  --os-accent: #f4bd58;
+  --os-accent-ink: #2b1e08;
+  --os-soft-accent: rgba(244, 189, 88, .13);
+  --os-browser: #11100d;
+}
+
+html[data-theme="phosphor"] {
+  --os-page: #050b08;
+  --os-nav: #08120c;
+  --os-surface: #0b1711;
+  --os-raised: #102019;
+  --os-text: #dcfce7;
+  --os-muted: #8eb59b;
+  --os-border: #1c4630;
+  --os-accent: #4ade80;
+  --os-accent-ink: #062012;
+  --os-soft-accent: rgba(74, 222, 128, .13);
+  --os-browser: #050b08;
+}
+
+html[data-theme="crt"] {
+  --os-page: #030303;
+  --os-nav: #050505;
+  --os-surface: #0c0c0c;
+  --os-raised: #151515;
+  --os-text: #ffffff;
+  --os-muted: #d0d0d0;
+  --os-border: #666666;
+  --os-accent: #ffd166;
+  --os-accent-ink: #17120a;
+  --os-soft-accent: rgba(255, 209, 102, .16);
+  --os-browser: #030303;
+}
+
+html[data-theme="miami"] {
+  --os-page: #100c24;
+  --os-nav: #17112e;
+  --os-surface: #1b1534;
+  --os-raised: #251b43;
+  --os-text: #f6efff;
+  --os-muted: #b9acd3;
+  --os-border: #483567;
+  --os-accent: #58e1ff;
+  --os-accent-ink: #071b27;
+  --os-soft-accent: rgba(88, 225, 255, .13);
+  --os-browser: #100c24;
+}
+
+html[data-theme="manuscript"] {
+  --os-page: #f4eedf;
+  --os-nav: #e8dfcb;
+  --os-surface: #fff9eb;
+  --os-raised: #f8f0dd;
+  --os-text: #33271e;
+  --os-muted: #75685a;
+  --os-border: #d5c7ac;
+  --os-accent: #3459a1;
+  --os-accent-ink: #ffffff;
+  --os-soft-accent: rgba(52, 89, 161, .1);
+  --os-browser: #f4eedf;
+}
+
+html[data-theme="rose"] {
+  --os-page: #160f18;
+  --os-nav: #1d1420;
+  --os-surface: #281925;
+  --os-raised: #352231;
+  --os-text: #f8eaf0;
+  --os-muted: #c9aebd;
+  --os-border: #594052;
+  --os-accent: #ed82b0;
+  --os-accent-ink: #30101e;
+  --os-soft-accent: rgba(237, 130, 176, .14);
+  --os-browser: #160f18;
+}
+
+html[data-theme="openstock"][data-theme-mode="light"] {
+  --os-page: #f2f4f2;
+  --os-nav: #ffffff;
+  --os-surface: #ffffff;
+  --os-raised: #f5f7f5;
+  --os-text: #19211c;
+  --os-muted: #526057;
+  --os-border: #cbd4ce;
+  --os-accent: #55780d;
+  --os-accent-ink: #ffffff;
+  --os-soft-accent: rgba(85, 120, 13, .12);
+  --os-browser: #f2f4f2;
+}
+
+html[data-theme="claw"][data-theme-mode="light"] {
+  --os-page: #eef4ee; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #f3f8f1;
+  --os-text: #17251a; --os-muted: #506452; --os-border: #c7d7c7; --os-accent: #527d26;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(82, 125, 38, .12); --os-browser: #eef4ee;
+}
+
+html[data-theme="knot"][data-theme-mode="light"] {
+  --os-page: #f1f2f5; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #f7f7f9;
+  --os-text: #111319; --os-muted: #50545f; --os-border: #bfc2ca; --os-accent: #bd1f38;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(189, 31, 56, .12); --os-browser: #f1f2f5;
+}
+
+html[data-theme="dash"][data-theme-mode="light"] {
+  --os-page: #f5f1e9; --os-nav: #ffffff; --os-surface: #fffdf8; --os-raised: #f3eee4;
+  --os-text: #2c241b; --os-muted: #625746; --os-border: #d4c9b9; --os-accent: #915a20;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(145, 90, 32, .12); --os-browser: #f5f1e9;
+}
+
+html[data-theme="absolutely"][data-theme-mode="light"] {
+  --os-page: #f3f4f5; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #f2f3f4;
+  --os-text: #17191d; --os-muted: #50545a; --os-border: #c6c9ce; --os-accent: #bd4428;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(189, 68, 40, .12); --os-browser: #f3f4f5;
+}
+
+html[data-theme="tide"][data-theme-mode="light"] {
+  --os-page: #eef6f8; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #f2f8fa;
+  --os-text: #122832; --os-muted: #4d6972; --os-border: #c5d9dd; --os-accent: #147b84;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(20, 123, 132, .12); --os-browser: #eef6f8;
+}
+
+html[data-theme="beacon"][data-theme-mode="light"] {
+  --os-page: #fbf6e9; --os-nav: #ffffff; --os-surface: #fffdf7; --os-raised: #f4eedf;
+  --os-text: #292317; --os-muted: #61583e; --os-border: #d7ceb6; --os-accent: #795400;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(121, 84, 0, .12); --os-browser: #fbf6e9;
+}
+
+html[data-theme="phosphor"][data-theme-mode="light"] {
+  --os-page: #eff7f1; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #f3f8f4;
+  --os-text: #13251a; --os-muted: #4d6655; --os-border: #c5d8ca; --os-accent: #13713d;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(19, 113, 61, .12); --os-browser: #eff7f1;
+}
+
+html[data-theme="crt"][data-theme-mode="light"] {
+  --os-page: #f5f5f5; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #eeeeee;
+  --os-text: #090909; --os-muted: #3d3d3d; --os-border: #777777; --os-accent: #805900;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(128, 89, 0, .12); --os-browser: #f5f5f5;
+}
+
+html[data-theme="miami"][data-theme-mode="light"] {
+  --os-page: #f2f1fb; --os-nav: #ffffff; --os-surface: #ffffff; --os-raised: #f6f4fc;
+  --os-text: #211934; --os-muted: #625877; --os-border: #d0c9e4; --os-accent: #006c89;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(0, 108, 137, .12); --os-browser: #f2f1fb;
+}
+
+html[data-theme="manuscript"][data-theme-mode="dark"] {
+  --os-page: #211a16; --os-nav: #2b211a; --os-surface: #342820; --os-raised: #403126;
+  --os-text: #f2e5cf; --os-muted: #c7b59b; --os-border: #66513a; --os-accent: #a9bff0;
+  --os-accent-ink: #17264b; --os-soft-accent: rgba(169, 191, 240, .15); --os-browser: #211a16;
+}
+
+html[data-theme="rose"][data-theme-mode="light"] {
+  --os-page: #f8eff3; --os-nav: #ffffff; --os-surface: #fffafd; --os-raised: #f6eaf0;
+  --os-text: #2d1722; --os-muted: #684b5a; --os-border: #e0c7d2; --os-accent: #9a315e;
+  --os-accent-ink: #ffffff; --os-soft-accent: rgba(154, 49, 94, .12); --os-browser: #f8eff3;
+}
+
+html[data-theme]:not([data-theme="openstock"]) body {
+  background: var(--os-page);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) nav {
+  background: var(--os-nav);
+  border-color: var(--os-border);
+}
+
+html[data-theme]:not([data-theme="openstock"]) nav a {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) nav a:hover,
+html[data-theme]:not([data-theme="openstock"]) nav a.active {
+  background: var(--os-accent);
+  color: var(--os-accent-ink);
+}
+
+nav .settings-nav-button {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  margin-left: auto;
+  border: 1px solid #29303b;
+  background: rgba(255, 255, 255, .025);
+  font-size: .84rem;
+}
+
+nav .settings-nav-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+html[data-theme]:not([data-theme="openstock"]) nav .settings-nav-button {
+  border-color: var(--os-border);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .card,
+html[data-theme]:not([data-theme="openstock"]) .summary-card,
+html[data-theme]:not([data-theme="openstock"]) .stock-card,
+html[data-theme]:not([data-theme="openstock"]) .config-stock-card,
+html[data-theme]:not([data-theme="openstock"]) .config-alert-editor,
+html[data-theme]:not([data-theme="openstock"]) .config-alert-row,
+html[data-theme]:not([data-theme="openstock"]) .config-alert-add,
+html[data-theme]:not([data-theme="openstock"]) .algo-kpi,
+html[data-theme]:not([data-theme="openstock"]) .algo-panel,
+html[data-theme]:not([data-theme="openstock"]) .algo-run-detail,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-strategy,
+html[data-theme]:not([data-theme="openstock"]) .algo-options-config-section,
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle,
+html[data-theme]:not([data-theme="openstock"]) .journal-kpi,
+html[data-theme]:not([data-theme="openstock"]) .trading-account-summary span {
+  background: var(--os-surface);
+  border-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .stock-card {
+  background: var(--os-raised);
+  border-left-color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .stock-symbol,
+html[data-theme]:not([data-theme="openstock"]) .config-stock-identity strong,
+html[data-theme]:not([data-theme="openstock"]) h1,
+html[data-theme]:not([data-theme="openstock"]) h2,
+html[data-theme]:not([data-theme="openstock"]) h3,
+html[data-theme]:not([data-theme="openstock"]) .section-title,
+html[data-theme]:not([data-theme="openstock"]) .journal-table td,
+html[data-theme]:not([data-theme="openstock"]) .algo-kpi > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-strategy-score strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-strategy-list strong {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .subtitle,
+html[data-theme]:not([data-theme="openstock"]) .stock-name,
+html[data-theme]:not([data-theme="openstock"]) .position-summary,
+html[data-theme]:not([data-theme="openstock"]) .position-source,
+html[data-theme]:not([data-theme="openstock"]) .config-stock-identity span,
+html[data-theme]:not([data-theme="openstock"]) .config-stock-identity small,
+html[data-theme]:not([data-theme="openstock"]) .config-alert-heading p,
+html[data-theme]:not([data-theme="openstock"]) .journal-help,
+html[data-theme]:not([data-theme="openstock"]) .journal-small,
+html[data-theme]:not([data-theme="openstock"]) .algo-section-heading p,
+html[data-theme]:not([data-theme="openstock"]) .algo-strategy-score > div:last-child span,
+html[data-theme]:not([data-theme="openstock"]) .algo-strategy-list > div,
+html[data-theme]:not([data-theme="openstock"]) .algo-strategy-list small,
+html[data-theme]:not([data-theme="openstock"]) .algo-config-field label,
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle small,
+html[data-theme]:not([data-theme="openstock"]) .algo-options-config-section summary,
+html[data-theme]:not([data-theme="openstock"]) .config-level-empty,
+html[data-theme]:not([data-theme="openstock"]) .config-retired-title,
+html[data-theme]:not([data-theme="openstock"]) .config-retired-row,
+html[data-theme]:not([data-theme="openstock"]) .config-position,
+html[data-theme]:not([data-theme="openstock"]) .config-switch,
+html[data-theme]:not([data-theme="openstock"]) .config-price-input span,
+html[data-theme]:not([data-theme="openstock"]) .settings-page p {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle strong,
+html[data-theme]:not([data-theme="openstock"]) .config-archive summary {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .config-editor-card,
+html[data-theme]:not([data-theme="openstock"]) .config-stock-card.is-expanded {
+  border-color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .config-retired,
+html[data-theme]:not([data-theme="openstock"]) .config-retired-count,
+html[data-theme]:not([data-theme="openstock"]) .config-archived-list > div,
+html[data-theme]:not([data-theme="openstock"]) .algo-options-config-fields,
+html[data-theme]:not([data-theme="openstock"]) .algo-config-actions {
+  border-color: var(--os-border);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .config-overview span {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .config-overview strong {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) input,
+html[data-theme]:not([data-theme="openstock"]) select,
+html[data-theme]:not([data-theme="openstock"]) textarea,
+html[data-theme]:not([data-theme="openstock"]) .history-range,
+html[data-theme]:not([data-theme="openstock"]) .config-price-input {
+  background-color: var(--os-raised);
+  border-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) input::placeholder,
+html[data-theme]:not([data-theme="openstock"]) textarea::placeholder {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .btn-primary,
+html[data-theme]:not([data-theme="openstock"]) .algo-save-button,
+html[data-theme]:not([data-theme="openstock"]) .history-range.active,
+html[data-theme]:not([data-theme="openstock"]) .algo-range-btn.active,
+html[data-theme]:not([data-theme="openstock"]) .algo-account-switch button.active,
+html[data-theme]:not([data-theme="openstock"]) .badge.enabled {
+  border-color: var(--os-accent);
+  background: var(--os-accent);
+  color: var(--os-accent-ink);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle input:checked + span + i {
+  border-color: var(--os-accent);
+  background: var(--os-soft-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle input:checked + span + i::after {
+  background: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle > i {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle > i::after {
+  background: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-chart-line,
+html[data-theme]:not([data-theme="openstock"]) .history-line.up {
+  stroke: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-chart-point,
+html[data-theme]:not([data-theme="openstock"]) .chart-hover-dot {
+  fill: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-text-link,
+html[data-theme]:not([data-theme="openstock"]) .algo-open-history,
+html[data-theme]:not([data-theme="openstock"]) .history-change.up {
+  color: var(--os-accent);
+}
+
+html[data-theme-mode="light"] body {
+  background: var(--os-page);
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] nav {
+  background: var(--os-nav);
+  border-color: var(--os-border);
+}
+
+html[data-theme-mode="light"] nav a {
+  color: var(--os-muted);
+}
+
+html[data-theme-mode="light"] nav a:hover,
+html[data-theme-mode="light"] nav a.active {
+  background: var(--os-accent);
+  color: var(--os-accent-ink);
+}
+
+html[data-theme-mode="light"] nav .settings-nav-button {
+  border-color: var(--os-border);
+}
+
+html[data-theme-mode="light"] .card,
+html[data-theme-mode="light"] .summary-card,
+html[data-theme-mode="light"] .stock-card,
+html[data-theme-mode="light"] .config-stock-card,
+html[data-theme-mode="light"] .config-overview span,
+html[data-theme-mode="light"] .config-alert-editor,
+html[data-theme-mode="light"] .config-alert-row,
+html[data-theme-mode="light"] .config-alert-add,
+html[data-theme-mode="light"] .algo-kpi,
+html[data-theme-mode="light"] .algo-panel,
+html[data-theme-mode="light"] .algo-run-detail,
+html[data-theme-mode="light"] .algo-optimizer-run-list,
+html[data-theme-mode="light"] .algo-optimizer-detail-pane,
+html[data-theme-mode="light"] .algo-optimizer-summary > div,
+html[data-theme-mode="light"] .algo-optimizer-strategy,
+html[data-theme-mode="light"] .algo-history-filters,
+html[data-theme-mode="light"] .algo-options-config-section,
+html[data-theme-mode="light"] .algo-config-toggle,
+html[data-theme-mode="light"] .journal-kpi,
+html[data-theme-mode="light"] .trading-account-summary span,
+html[data-theme-mode="light"] .history-popover,
+html[data-theme-mode="light"] .settings-theme-option,
+html[data-theme-mode="light"] .settings-appearance-panel {
+  background: var(--os-surface);
+  border-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] .stock-card {
+  background: var(--os-raised);
+  border-left-color: var(--os-accent);
+}
+
+html[data-theme-mode="light"] .stock-symbol,
+html[data-theme-mode="light"] .config-stock-identity strong,
+html[data-theme-mode="light"] h1,
+html[data-theme-mode="light"] h2,
+html[data-theme-mode="light"] h3,
+html[data-theme-mode="light"] .section-title,
+html[data-theme-mode="light"] .journal-table td,
+html[data-theme-mode="light"] .algo-kpi > strong,
+html[data-theme-mode="light"] .algo-strategy-score strong,
+html[data-theme-mode="light"] .algo-strategy-list strong,
+html[data-theme-mode="light"] .algo-optimizer-summary strong,
+html[data-theme-mode="light"] .algo-optimizer-strategy-head > div > strong,
+html[data-theme-mode="light"] .algo-optimizer-search-grid > div > strong,
+html[data-theme-mode="light"] .algo-optimizer-selection strong {
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] .subtitle,
+html[data-theme-mode="light"] .stock-name,
+html[data-theme-mode="light"] .position-summary,
+html[data-theme-mode="light"] .position-source,
+html[data-theme-mode="light"] .config-stock-identity span,
+html[data-theme-mode="light"] .config-stock-identity small,
+html[data-theme-mode="light"] .config-alert-heading p,
+html[data-theme-mode="light"] .journal-help,
+html[data-theme-mode="light"] .journal-small,
+html[data-theme-mode="light"] .algo-section-heading p,
+html[data-theme-mode="light"] .algo-strategy-score > div:last-child span,
+html[data-theme-mode="light"] .algo-strategy-list > div,
+html[data-theme-mode="light"] .algo-strategy-list small,
+html[data-theme-mode="light"] .algo-config-field label,
+html[data-theme-mode="light"] .algo-config-toggle small,
+html[data-theme-mode="light"] .algo-options-config-section summary,
+html[data-theme-mode="light"] .config-level-empty,
+html[data-theme-mode="light"] .config-retired-title,
+html[data-theme-mode="light"] .config-retired-row,
+html[data-theme-mode="light"] .config-position,
+html[data-theme-mode="light"] .config-switch,
+html[data-theme-mode="light"] .config-price-input span,
+html[data-theme-mode="light"] .algo-optimizer-run-meta,
+html[data-theme-mode="light"] .algo-optimizer-summary span,
+html[data-theme-mode="light"] .algo-optimizer-strategy-head > div > span,
+html[data-theme-mode="light"] .algo-optimizer-search-grid > div > span,
+html[data-theme-mode="light"] .algo-optimizer-selection,
+html[data-theme-mode="light"] .algo-optimizer-note,
+html[data-theme-mode="light"] .algo-optimizer-run-row small,
+html[data-theme-mode="light"] .settings-page p {
+  color: var(--os-muted);
+}
+
+html[data-theme-mode="light"] .algo-config-toggle strong,
+html[data-theme-mode="light"] .config-archive summary {
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] .config-editor-card,
+html[data-theme-mode="light"] .config-stock-card.is-expanded {
+  border-color: var(--os-accent);
+}
+
+html[data-theme-mode="light"] .config-retired,
+html[data-theme-mode="light"] .config-retired-count,
+html[data-theme-mode="light"] .config-archived-list > div,
+html[data-theme-mode="light"] .algo-options-config-fields,
+html[data-theme-mode="light"] .algo-config-actions {
+  border-color: var(--os-border);
+}
+
+html[data-theme-mode="light"] .config-overview span {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme-mode="light"] .config-overview strong {
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] .algo-optimizer-run-list,
+html[data-theme-mode="light"] .algo-optimizer-detail-pane,
+html[data-theme-mode="light"] .algo-optimizer-summary > div,
+html[data-theme-mode="light"] .algo-optimizer-strategy {
+  border-color: var(--os-border);
+}
+
+html[data-theme-mode="light"] .algo-optimizer-run-row {
+  border-bottom-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] .algo-optimizer-run-row > span:not(.algo-status-pill) {
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] .algo-optimizer-run-row:hover,
+html[data-theme-mode="light"] .algo-optimizer-run-row.selected {
+  background: var(--os-soft-accent);
+}
+
+html[data-theme-mode="light"] .algo-optimizer-search-grid {
+  border-color: var(--os-border);
+}
+
+html[data-theme-mode="light"] input,
+html[data-theme-mode="light"] select,
+html[data-theme-mode="light"] textarea,
+html[data-theme-mode="light"] .history-range,
+html[data-theme-mode="light"] .config-price-input {
+  background-color: var(--os-raised);
+  border-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme-mode="light"] input::placeholder,
+html[data-theme-mode="light"] textarea::placeholder {
+  color: var(--os-muted);
+}
+
+html[data-theme-mode="light"] .btn-primary,
+html[data-theme-mode="light"] .algo-save-button,
+html[data-theme-mode="light"] .history-range.active,
+html[data-theme-mode="light"] .algo-range-btn.active,
+html[data-theme-mode="light"] .algo-account-switch button.active,
+html[data-theme-mode="light"] .badge.enabled {
+  border-color: var(--os-accent);
+  background: var(--os-accent);
+  color: var(--os-accent-ink);
+}
+
+html[data-theme-mode="light"] .algo-config-toggle input:checked + span + i {
+  border-color: var(--os-accent);
+  background: var(--os-soft-accent);
+}
+
+html[data-theme-mode="light"] .algo-config-toggle input:checked + span + i::after {
+  background: var(--os-accent);
+}
+
+html[data-theme-mode="light"] .algo-config-toggle > i {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+}
+
+html[data-theme-mode="light"] .algo-config-toggle > i::after {
+  background: var(--os-muted);
+}
+
+html[data-theme-mode="light"] .algo-chart-line,
+html[data-theme-mode="light"] .history-line.up {
+  stroke: var(--os-accent);
+}
+
+html[data-theme-mode="light"] .algo-chart-point,
+html[data-theme-mode="light"] .chart-hover-dot {
+  fill: var(--os-accent);
+}
+
+html[data-theme-mode="light"] .algo-text-link,
+html[data-theme-mode="light"] .algo-open-history,
+html[data-theme-mode="light"] .history-change.up {
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-list,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-detail-pane,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-summary > div,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-strategy {
+  border-color: var(--os-border);
+  background: var(--os-surface);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-row {
+  border-bottom-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-row > span:not(.algo-status-pill),
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-summary strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-strategy-head > div > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-search-grid > div > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-selection strong {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-row small,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-meta,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-summary span,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-strategy-head > div > span,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-search-grid > div > span,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-selection,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-note {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-search-grid {
+  border-color: var(--os-border);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-row:hover,
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-row.selected {
+  background: var(--os-soft-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-run-row.selected {
+  box-shadow: inset 2px 0 var(--os-accent);
+}
+
+/* Keep the Algo Trader dashboard in step with the selected appearance. */
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-panel,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-detail,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-history-filters,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-options-config-section,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-optimizer-run-list,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-optimizer-detail-pane,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-optimizer-summary > div,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-optimizer-strategy,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-empty,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-panel,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-detail,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-history-filters,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-options-config-section,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-optimizer-run-list,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-optimizer-detail-pane,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-optimizer-summary > div,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-optimizer-strategy,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-empty {
+  border-color: var(--os-border);
+  background: var(--os-surface);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi {
+  background: var(--os-raised);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-featured,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-featured {
+  border-top-color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-badge,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-period,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-switch,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-badge,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-period {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch button,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-switch button {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch button:hover,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-switch button:hover {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch button.active,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-switch button.active {
+  border-color: var(--os-accent);
+  background: var(--os-soft-accent);
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-active-strategy-list span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-active-strategy-list span {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-active-strategy-list .algo-muted-text,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-active-strategy-list .algo-muted-text {
+  border-color: transparent;
+  background: transparent;
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-icon,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-icon.research,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-icon.signal,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-icon.trade,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-icon.risk,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-icon,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-icon.research,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-icon.signal,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-icon.trade,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-icon.risk {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-title strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-latest-run strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-name > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-activity > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-value > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-title,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-grid > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-grid > span:first-child,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-title strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-latest-run strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-name > strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-activity > strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-value > strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-title,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-grid > strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-grid > span:first-child {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-breadcrumb,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-label,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-foot,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-section-heading p,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-legend,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-score > div:last-child span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-list > div,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-list small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-title time,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-content p,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-tag,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-tag.research,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-tag.signal,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-tag.trade,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-tag.risk,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-view-more,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-latest-run span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-latest-result span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-research-recommendation p,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-history-filters button,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-version small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-name small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-return small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-research-note,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-metrics span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-empty,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field label,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-field-help,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-save-notice,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-meta,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-activity small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-value small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-note,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-header,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-value:nth-of-type(3)::before,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-value:nth-of-type(4)::before,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-title span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-header,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-breadcrumb,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-label,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-foot,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-section-heading p,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-legend,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-score > div:last-child span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-list > div,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-list small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-title time,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-content p,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-tag,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-tag.research,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-tag.signal,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-tag.trade,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-tag.risk,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-view-more,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-latest-run span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-latest-result span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-research-recommendation p,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-history-filters button,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-version small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-name small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-return small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-research-note,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-metrics span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-empty,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field label,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-field-help,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-save-notice,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-meta,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-activity small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-value small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-note,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-header,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-value:nth-of-type(3)::before,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-value:nth-of-type(4)::before,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-title span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-header {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-score,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-list > div,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-text-link,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-activity-item,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-latest-run,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-actions,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-grid,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-header,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-row,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-empty,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-score,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-list > div,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-text-link,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-activity-item,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-latest-run,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-actions,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-grid,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-header,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-row,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-empty {
+  border-color: var(--os-border);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-eyebrow,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-text-link,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-view-more span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-open-history span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown),
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-featured > strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-summary strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-history-filters button.active,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-line,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-spark path,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-legend i,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-eyebrow,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-text-link,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-view-more span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-open-history span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown),
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-featured > strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-summary strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-history-filters button.active,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-line,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-spark path,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-legend i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill i {
+  color: var(--os-accent);
+  stroke: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-point,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-point {
+  fill: var(--os-accent);
+  stroke: var(--os-surface);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-legend i,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) i,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-loading-mark,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-legend i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-loading-mark {
+  background: var(--os-accent);
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-grid,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-y-label,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-x-label,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-grid,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-y-label,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-x-label {
+  stroke: var(--os-border);
+  fill: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-status-pill,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-status-pill {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-status-pill.promising,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-status-pill.promising {
+  border-color: rgba(46, 145, 82, .4);
+  background: rgba(46, 145, 82, .1);
+  color: #25804a;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-status-pill.rejected,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-status-pill.paused,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-status-pill.rejected,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-status-pill.paused {
+  border-color: rgba(190, 55, 67, .38);
+  background: rgba(190, 55, 67, .09);
+  color: #b42332;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field input,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field select,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field textarea,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field input,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field select,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field textarea {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field input:focus,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field select:focus,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-field textarea:focus,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field input:focus,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field select:focus,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-field textarea:focus {
+  border-color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle > i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle > i {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle > i::after,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle > i::after {
+  background: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle input:checked + span + i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle input:checked + span + i {
+  border-color: var(--os-accent);
+  background: var(--os-soft-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle input:checked + span + i::after,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle input:checked + span + i::after {
+  background: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle input:focus-visible + span + i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle input:focus-visible + span + i {
+  outline-color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-row,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-row {
+  border-bottom-color: var(--os-border);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-row:hover,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-row.selected,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-row:hover,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-row.selected {
+  background: var(--os-soft-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-row.selected,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-row.selected {
+  box-shadow: inset 2px 0 var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-icon,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-icon {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-paused-notice.market-closed,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-paused-notice.market-closed {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-paused-notice.market-closed span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-paused-notice.market-closed span {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-demo-tag,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-feed-label,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-local-save,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-demo-tag,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-feed-label,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-local-save {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-demo-tag i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-demo-tag i {
+  background: var(--os-accent);
+  box-shadow: 0 0 8px var(--os-soft-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-engine-state,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-engine-state {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-breadcrumb span,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-help,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-score-ring small,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-chevron,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-breadcrumb span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-help,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-score-ring small,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-chevron {
+  border-color: var(--os-border);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-list strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-return,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-section-heading h2,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi > strong:not(.algo-kpi-negative),
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-research-detail-head h3,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-optimizer-detail > .algo-section-heading h3,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-run-metrics strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-config-toggle strong,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-research-recommendation strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-list strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-return,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-section-heading h2,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi > strong:not(.algo-kpi-negative),
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-research-detail-head h3,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-optimizer-detail > .algo-section-heading h3,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-run-metrics strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-config-toggle strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-research-recommendation strong {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-score-ring,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-score-ring {
+  border-color: var(--os-border);
+  border-right-color: var(--os-accent);
+  border-top-color: var(--os-accent);
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-research-recommendation,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-research-recommendation {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-recommendation-mark,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-recommendation-mark {
+  background: var(--os-soft-accent);
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-legend span:first-child,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-legend span:first-child {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-row,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-fitness-grid,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-row,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-fitness-grid {
+  border-bottom-color: var(--os-border);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-row:hover,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-row:hover {
+  background: var(--os-soft-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-badge:not(.review),
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-badge:not(.review) {
+  border-color: var(--os-border);
+  background: var(--os-soft-accent);
+  color: var(--os-accent);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-strategy-pnl-badge.review,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-strategy-pnl-badge.review {
+  border-color: rgba(190, 55, 67, .38);
+  background: rgba(190, 55, 67, .09);
+  color: #b42332;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill.market-closed,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill.market-closed {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill.market-closed i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill.market-closed i {
+  background: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-empty,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-detail-time,
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-connection-card p,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-empty,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-detail-time,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-connection-card p {
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-connection-card,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-connection-card {
+  border-color: var(--os-border);
+  background: var(--os-surface);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-connection-card strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-connection-card strong {
+  color: var(--os-text);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill.unknown,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill.unknown {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill.unknown i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill.unknown i {
+  background: var(--os-muted);
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill.paused,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill.paused {
+  border-color: rgba(190, 55, 67, .38);
+  background: rgba(190, 55, 67, .09);
+  color: #b42332;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill.paused i,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill.paused i {
+  background: #b42332;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-paused-notice:not(.market-closed),
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-paused-notice:not(.market-closed) {
+  border-color: rgba(190, 55, 67, .38);
+  background: rgba(190, 55, 67, .09);
+  color: #b42332;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-paused-notice:not(.market-closed) span,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-paused-notice:not(.market-closed) span {
+  color: #96313b;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-live-notice,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-live-notice {
+  border-color: rgba(46, 145, 82, .32);
+  background: rgba(46, 145, 82, .08);
+  color: #25804a;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-live-notice strong,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-live-notice strong {
+  color: #1d683c;
+}
+
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-live-notice .algo-notice-mark,
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-live-notice .algo-notice-mark {
+  border-color: rgba(46, 145, 82, .5);
+  color: #25804a;
+}
+
+.settings-page {
+  color: var(--os-text, #f8fafc);
+  padding-bottom: 1.5rem;
+}
+
+.settings-page-heading {
+  margin: .15rem 0 1.2rem;
+}
+
+.settings-eyebrow {
+  color: var(--os-muted, #94a3b8);
+  font-size: .65rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+
+.settings-page-heading h1 {
+  margin: .3rem 0 .35rem;
+  color: var(--os-text, #f8fafc);
+}
+
+.settings-page-heading p,
+.settings-panel-heading p {
+  color: var(--os-muted, #94a3b8);
+  font-size: .85rem;
+  line-height: 1.5;
+}
+
+.settings-appearance-panel {
+  padding: 1.25rem;
+  background: var(--os-surface, #0a0a0a);
+  border-color: var(--os-border, #252a2e);
+}
+
+.settings-panel-heading {
+  margin-bottom: 1rem;
+}
+
+.settings-color-mode {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--os-border, #252a2e);
+}
+
+.settings-color-mode > div:first-child {
+  display: grid;
+  gap: .22rem;
+}
+
+.settings-color-mode strong {
+  color: var(--os-text, #f8fafc);
+  font-size: .95rem;
+}
+
+.settings-color-mode p {
+  color: var(--os-muted, #94a3b8);
+  font-size: .75rem;
+}
+
+.settings-mode-switch {
+  display: inline-flex;
+  gap: .15rem;
+  padding: .2rem;
+  border: 1px solid var(--os-border, #252a2e);
+  border-radius: .6rem;
+  background: var(--os-raised, #111);
+}
+
+.settings-mode-switch button {
+  min-width: 66px;
+  padding: .55rem .75rem;
+  border: 1px solid transparent;
+  border-radius: .42rem;
+  background: transparent;
+  color: var(--os-muted, #94a3b8);
+  font: inherit;
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.settings-mode-switch button:hover {
+  color: var(--os-text, #f8fafc);
+}
+
+.settings-mode-switch button.selected {
+  border-color: var(--os-border, #252a2e);
+  background: var(--os-surface, #0a0a0a);
+  color: var(--os-text, #f8fafc);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+}
+
+.settings-panel-heading h2 {
+  margin: .2rem 0 .28rem;
+  color: var(--os-text, #f8fafc);
+  font-size: 1.1rem;
+}
+
+.settings-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+  gap: .75rem;
+}
+
+.settings-theme-option {
+  display: grid;
+  gap: .7rem;
+  min-width: 0;
+  padding: .75rem;
+  border: 1px solid var(--os-border, #252a2e);
+  border-radius: .65rem;
+  background: var(--os-raised, #111);
+  color: var(--os-text, #f8fafc);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, transform .15s ease, background-color .15s ease;
+}
+
+.settings-theme-option:hover {
+  border-color: var(--os-accent, #c8ff00);
+  transform: translateY(-1px);
+}
+
+.settings-theme-option:focus-visible {
+  outline: 2px solid var(--os-accent, #c8ff00);
+  outline-offset: 2px;
+}
+
+.settings-theme-option.selected {
+  border-color: var(--os-accent, #c8ff00);
+  box-shadow: 0 0 0 1px var(--os-accent, #c8ff00);
+}
+
+.settings-theme-preview {
+  display: grid;
+  gap: .55rem;
+  height: 104px;
+  padding: .55rem;
+  overflow: hidden;
+  border: 1px solid var(--preview-border, #334155);
+  border-radius: .45rem;
+  background: var(--preview-bg, #080a0b);
+}
+
+.settings-preview-top {
+  display: flex;
+  gap: .22rem;
+  height: 9px;
+  align-items: center;
+  padding-bottom: .4rem;
+  border-bottom: 1px solid var(--preview-border, #334155);
+}
+
+.settings-preview-top i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--preview-muted, #64748b);
+}
+
+.settings-preview-top i:first-child {
+  background: var(--preview-accent, #c8ff00);
+}
+
+.settings-preview-content {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: .55rem;
+  min-height: 0;
+}
+
+.settings-preview-content > i {
+  border-radius: .2rem;
+  background: var(--preview-raised, #171a1b);
+}
+
+.settings-preview-content > span {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .35rem;
+}
+
+.settings-preview-content > span i {
+  min-height: 14px;
+  border: 1px solid var(--preview-border, #334155);
+  border-radius: .2rem;
+  background: var(--preview-surface, #111516);
+}
+
+.settings-preview-content > span i:first-child {
+  border-color: var(--preview-accent, #c8ff00);
+  background: var(--preview-accent, #c8ff00);
+}
+
+.settings-theme-preview[data-preview-theme="openstock"] { --preview-bg: #050606; --preview-surface: #111514; --preview-raised: #202725; --preview-border: #343b24; --preview-accent: #c8ff00; --preview-muted: #94a3b8; }
+.settings-theme-preview[data-preview-theme="claw"] { --preview-bg: #07100c; --preview-surface: #0e1b14; --preview-raised: #18301f; --preview-border: #254332; --preview-accent: #b7f76b; --preview-muted: #9db5a2; }
+.settings-theme-preview[data-preview-theme="knot"] { --preview-bg: #07080b; --preview-surface: #111217; --preview-raised: #1a1b21; --preview-border: #474a54; --preview-accent: #e22643; --preview-muted: #c2c5ce; }
+.settings-theme-preview[data-preview-theme="dash"] { --preview-bg: #11100e; --preview-surface: #242321; --preview-raised: #302e2a; --preview-border: #50483c; --preview-accent: #e0a35f; --preview-muted: #c0b6a5; }
+.settings-theme-preview[data-preview-theme="absolutely"] { --preview-bg: #0b0c0e; --preview-surface: #191b1f; --preview-raised: #24272c; --preview-border: #484d56; --preview-accent: #ff815e; --preview-muted: #bdc2cb; }
+.settings-theme-preview[data-preview-theme="tide"] { --preview-bg: #07121b; --preview-surface: #102431; --preview-raised: #16313d; --preview-border: #28505a; --preview-accent: #56d9d1; --preview-muted: #9dbcc2; }
+.settings-theme-preview[data-preview-theme="beacon"] { --preview-bg: #11100d; --preview-surface: #211c14; --preview-raised: #352a18; --preview-border: #51442d; --preview-accent: #f4bd58; --preview-muted: #b8ad96; }
+.settings-theme-preview[data-preview-theme="phosphor"] { --preview-bg: #050b08; --preview-surface: #0b1711; --preview-raised: #102019; --preview-border: #1c4630; --preview-accent: #4ade80; --preview-muted: #8eb59b; }
+.settings-theme-preview[data-preview-theme="crt"] { --preview-bg: #030303; --preview-surface: #0c0c0c; --preview-raised: #151515; --preview-border: #666666; --preview-accent: #ffd166; --preview-muted: #d0d0d0; }
+.settings-theme-preview[data-preview-theme="miami"] { --preview-bg: #100c24; --preview-surface: #1b1534; --preview-raised: #30204c; --preview-border: #483567; --preview-accent: #58e1ff; --preview-muted: #b9acd3; }
+.settings-theme-preview[data-preview-theme="manuscript"] { --preview-bg: #f4eedf; --preview-surface: #fff9eb; --preview-raised: #e8dfcb; --preview-border: #d5c7ac; --preview-accent: #3459a1; --preview-muted: #75685a; }
+.settings-theme-preview[data-preview-theme="rose"] { --preview-bg: #160f18; --preview-surface: #281925; --preview-raised: #352231; --preview-border: #594052; --preview-accent: #ed82b0; --preview-muted: #c9aebd; }
+
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="openstock"] { --preview-bg: #f2f4f2; --preview-surface: #ffffff; --preview-raised: #e6ebe7; --preview-border: #cbd4ce; --preview-accent: #55780d; --preview-muted: #526057; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="claw"] { --preview-bg: #eef4ee; --preview-surface: #ffffff; --preview-raised: #e0eadf; --preview-border: #c7d7c7; --preview-accent: #527d26; --preview-muted: #506452; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="knot"] { --preview-bg: #f1f2f5; --preview-surface: #ffffff; --preview-raised: #e3e5ea; --preview-border: #bfc2ca; --preview-accent: #bd1f38; --preview-muted: #50545f; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="dash"] { --preview-bg: #f5f1e9; --preview-surface: #fffdf8; --preview-raised: #e9e2d5; --preview-border: #d4c9b9; --preview-accent: #915a20; --preview-muted: #625746; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="absolutely"] { --preview-bg: #f3f4f5; --preview-surface: #ffffff; --preview-raised: #e7e9eb; --preview-border: #c6c9ce; --preview-accent: #bd4428; --preview-muted: #50545a; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="tide"] { --preview-bg: #eef6f8; --preview-surface: #ffffff; --preview-raised: #e1edef; --preview-border: #c5d9dd; --preview-accent: #147b84; --preview-muted: #4d6972; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="beacon"] { --preview-bg: #fbf6e9; --preview-surface: #fffdf7; --preview-raised: #eee6d1; --preview-border: #d7ceb6; --preview-accent: #795400; --preview-muted: #61583e; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="phosphor"] { --preview-bg: #eff7f1; --preview-surface: #ffffff; --preview-raised: #e2eee5; --preview-border: #c5d8ca; --preview-accent: #13713d; --preview-muted: #4d6655; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="crt"] { --preview-bg: #f5f5f5; --preview-surface: #ffffff; --preview-raised: #e6e6e6; --preview-border: #777777; --preview-accent: #805900; --preview-muted: #3d3d3d; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="miami"] { --preview-bg: #f2f1fb; --preview-surface: #ffffff; --preview-raised: #e7e4f4; --preview-border: #d0c9e4; --preview-accent: #006c89; --preview-muted: #625877; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="manuscript"] { --preview-bg: #f4eedf; --preview-surface: #fff9eb; --preview-raised: #e8dfcb; --preview-border: #d5c7ac; --preview-accent: #3459a1; --preview-muted: #75685a; }
+html[data-theme-mode="light"] .settings-theme-preview[data-preview-theme="rose"] { --preview-bg: #f8eff3; --preview-surface: #fffafd; --preview-raised: #f0dfe7; --preview-border: #e0c7d2; --preview-accent: #9a315e; --preview-muted: #684b5a; }
+
+.settings-theme-copy {
+  display: grid;
+  gap: .25rem;
+}
+
+.settings-theme-copy > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+}
+
+.settings-theme-copy strong {
+  color: var(--os-text, #f8fafc);
+  font-size: .85rem;
+}
+
+.settings-theme-copy > small {
+  color: var(--os-muted, #94a3b8);
+  font-size: .69rem;
+  line-height: 1.4;
+}
+
+.settings-theme-current {
+  padding: .16rem .35rem;
+  border-radius: 999px;
+  background: var(--os-soft-accent, rgba(200, 255, 0, .1));
+  color: var(--os-accent, #c8ff00);
+  font-size: .58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.settings-theme-swatches {
+  display: flex;
+  gap: .3rem;
+}
+
+.settings-theme-swatches i {
+  width: 15px;
+  height: 15px;
+  border: 1px solid rgba(127, 127, 127, .25);
+  border-radius: 50%;
+  background: var(--swatch);
+}
+
+html[data-theme="manuscript"] .settings-appearance-panel,
+html[data-theme="manuscript"] .settings-theme-option {
+  background: var(--os-surface);
+  border-color: var(--os-border);
+}
+
+html[data-theme="manuscript"] .settings-theme-option.selected {
+  border-color: var(--os-accent);
+}
+
+html[data-theme="knot"] .card,
+html[data-theme="knot"] .stock-card,
+html[data-theme="knot"] .algo-kpi,
+html[data-theme="knot"] .algo-panel,
+html[data-theme="knot"] .settings-theme-option {
+  border-width: 1.5px;
+}
+
+html[data-theme="crt"] body,
+html[data-theme="crt"] button,
+html[data-theme="crt"] input,
+html[data-theme="crt"] select,
+html[data-theme="crt"] textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+html[data-theme="crt"] .card,
+html[data-theme="crt"] .stock-card,
+html[data-theme="crt"] .algo-kpi,
+html[data-theme="crt"] .algo-panel,
+html[data-theme="crt"] .settings-theme-option,
+html[data-theme="crt"] .algo-config-toggle {
+  border-radius: .2rem;
+}
+
+@media (max-width: 640px) {
+  nav .settings-nav-button {
+    margin-left: auto;
+  }
+
+  .settings-appearance-panel {
+    padding: .9rem;
+  }
+
+  .settings-theme-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-color-mode {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-mode-switch {
+    width: 100%;
+  }
+
+  .settings-mode-switch button {
+    flex: 1;
+  }
+}
+
+/* Journal text and summary surfaces need the same contrast as the active theme. */
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-collapsible > summary,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-heading,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-overview strong,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-metric strong,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-kpi strong:not(.positive):not(.negative),
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-table td,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-events span,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-chart-value {
+  color: var(--os-text);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-collapsible > summary small,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-heading span,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-overview span,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-metric > span,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-metric small,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-compounding-note,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-kpi-head > div,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-kpi-visual-note,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-kpi-visual-empty,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-kpi-ring-wrap,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-metrics dt,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-small,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-pagination,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-page-ellipsis,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-empty,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-help,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-chart-meta,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-chart-detail,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-trade-details {
+  color: var(--os-muted);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-eyebrow,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-collapsible > summary::after {
+  color: var(--os-accent);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-card,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-overview > div,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-metric,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-trade-fill-list,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-events span {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-section,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-table,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .table th,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .table td {
+  border-color: var(--os-border);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .table th {
+  color: var(--os-muted);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-compounding-note {
+  border-left-color: var(--os-accent);
+  background: var(--os-soft-accent);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-equity-y-labels,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-equity-x-labels {
+  color: var(--os-muted);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .equity-grid-line,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .equity-axis-tick,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .equity-axis-baseline,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-equity-curve .performance-zero-line {
+  stroke: var(--os-border);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-chart-controls .history-range.active,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-chart-controls .history-range:hover {
+  border-color: var(--os-accent);
+  background: var(--os-soft-accent);
+  color: var(--os-accent);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-card .chart-hover-text {
+  fill: var(--os-text);
+  stroke: var(--os-page);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-card .chart-hover-secondary,
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-card .chart-hover-tertiary {
+  fill: var(--os-muted);
+}
+
+:is(html[data-theme-mode="light"], html[data-theme="manuscript"]) #page-journal .positive {
+  color: #19713d !important;
+}
+
+:is(html[data-theme-mode="light"], html[data-theme="manuscript"]) #page-journal .negative {
+  color: #b42332 !important;
+}
+
+/* KPI stripe colors are category cues; keep the original palette in every theme. */
+html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(1),
+html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child(1) {
+  border-top-color: rgba(200, 255, 0, .45);
+}
+
+html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(2),
+html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child(2) {
+  border-top-color: rgba(56, 189, 248, .45);
+}
+
+html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(3),
+html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child(3) {
+  border-top-color: rgba(167, 139, 250, .5);
+}
+
+html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(4),
+html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child(4) {
+  border-top-color: rgba(74, 222, 128, .45);
+}
+
+html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(5) {
+  border-top-color: rgba(234, 184, 90, .45);
+}

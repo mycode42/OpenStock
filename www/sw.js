@@ -1,9 +1,10 @@
-const CACHE_NAME = 'openstock-v1.4.3-strategy-pnl-1';
+const CACHE_NAME = 'openstock-v1.4.3-appearance-7';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1.4.3&pull-refresh=1&algo-account-switch=1&strategy-pnl=1',
-  './app.js?v=1.4.3&pull-refresh=1&strategy-pnl=1',
+  './styles.css?v=1.4.3&pull-refresh=1&algo-account-switch=1&strategy-pnl=1&appearance=1',
+  './themes.css?v=1.4.3&appearance=7',
+  './app.js?v=1.4.3&pull-refresh=1&strategy-pnl=1&appearance=2',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',
@@ -12,7 +13,8 @@ const REQUIRED_ASSETS = [
   './modules/dashboard.js',
   './modules/config.js',
   './modules/journal.js',
-  './modules/algo-trader.js?v=1.4.3&options-api-guard=1&strategy-pnl=1',
+  './modules/algo-trader.js?v=1.4.3&options-api-guard=1&strategy-pnl=1&appearance=1',
+  './modules/settings.js',
   './modules/dashboard-utils.js',
   './site.webmanifest',
   './favicon-16.png',
