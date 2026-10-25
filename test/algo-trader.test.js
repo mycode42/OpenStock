@@ -116,7 +116,7 @@ test('options paper account payload reads its own account journal and research',
   assert.equal(res.body.account.mode, 'paper');
   assert.equal(res.body.performance.metrics.equity, 11000);
   assert.equal(res.body.performance.metrics.daily_pnl, 1000);
-  assert.deepEqual(res.body.account.active_strategies, ['vrp']);
+  assert.deepEqual(res.body.account.active_strategies, ['Event Driven', 'Volatility Risk Premium']);
   assert.equal(res.body.research.latest.promoted, 1);
   assert.ok(res.body.activity.some(item => item.title.includes('SPY')));
   assert.equal(Object.hasOwn(res.body.account, 'account_id'), false);

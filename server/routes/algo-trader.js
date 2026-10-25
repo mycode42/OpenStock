@@ -3,28 +3,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
 
-const DEFAULT_SETTINGS = Object.freeze({
-    overnight_entries_enabled: true,
-    enable_intraday_trend: false,
-    enable_intraday_momentum: false,
-    intraday_satellite_position_pct: 0.01,
-    intraday_satellite_risk_multiplier: 0.25,
-    algo_multi_factor_enabled: true,
-    algo_event_driven_enabled: true,
-});
-
-const BOOLEAN_SETTINGS = new Set([
-    'overnight_entries_enabled',
-    'enable_intraday_trend',
-    'enable_intraday_momentum',
-    'algo_multi_factor_enabled',
-    'algo_event_driven_enabled',
-]);
-
-const NUMERIC_LIMITS = Object.freeze({
-    intraday_satellite_position_pct: { min: 0.001, max: 0.04 },
-    intraday_satellite_risk_multiplier: { min: 0.05, max: 1 },
-});
+const FALLBACK_DEFAULT_SETTINGS = require('../algo-strategy-config.default.json');
 const researchSummaryCache = new Map();
 const strategyPnlCache = new Map();
 let usdEurRateCache = null;
@@ -632,32 +611,129 @@ async function readJson(filePath, { optional = false } = {}) {
     }
 }
 
-function validateSettings(value) {
-    const settings = { ...DEFAULT_SETTINGS, ...safeObject(value) };
-    const unknown = Object.keys(safeObject(value)).filter(key => !Object.hasOwn(DEFAULT_SETTINGS, key));
-    if (unknown.length) throw new Error(`Unsupported setting: ${unknown[0]}`);
-    for (const key of BOOLEAN_SETTINGS) {
-        if (typeof settings[key] !== 'boolean') throw new Error(`${key} must be boolean`);
+function validateSettings(value, defaults = FALLBACK_DEFAULT_SETTINGS) {
+    const settings = mergeConfig(defaults, safeObject(value));
+    validateConfigShape(settings, defaults);
+    const pctPaths = [
+        'general.risk_per_trade_pct', 'portfolio.max_name_pct', 'portfolio.max_position_pct',
+        'portfolio.max_strategy_position_pct', 'portfolio.max_gross_pct', 'portfolio.max_net_long_pct',
+        'portfolio.max_net_short_pct', 'portfolio.max_short_exposure_pct', 'portfolio.min_cash_pct',
+        'portfolio.daily_loss_limit_pct', 'portfolio.weekly_loss_limit_pct', 'portfolio.no_buy_if_down_pct',
+        'portfolio.max_tactical_pct',
+    ];
+    for (const pathName of pctPaths) {
+        const percent = Number(pathName.split('.').reduce((value, key) => value?.[key], settings));
+        if (!Number.isFinite(percent) || percent < 0 || percent > 1) throw new Error(pathName + ' must be between 0 and 1');
     }
-    for (const [key, { min, max }] of Object.entries(NUMERIC_LIMITS)) {
-        const number = finite(settings[key]);
-        if (number === null || number < min || number > max) {
-            throw new Error(`${key} must be between ${min} and ${max}`);
+    const portfolio = settings.portfolio;
+    if (portfolio.max_gross_pct > 1 - portfolio.min_cash_pct) {
+        throw new Error('portfolio.max_gross_pct cannot exceed the configured cash floor');
+    }
+    if (portfolio.max_position_pct > portfolio.max_strategy_position_pct
+        || portfolio.max_net_long_pct > portfolio.max_gross_pct
+        || portfolio.max_net_short_pct > portfolio.max_gross_pct
+        || portfolio.max_tactical_pct > portfolio.max_gross_pct) {
+        throw new Error('portfolio position and net exposure limits must fit within the configured gross cap');
+    }
+    if (portfolio.max_intraday_entries + portfolio.max_swing_entries > portfolio.max_daily_entries) {
+        throw new Error('portfolio intraday and swing entry limits cannot exceed the daily entry limit');
+    }
+    if (settings.general.model_min_confidence < 0 || settings.general.model_min_confidence > 1) {
+        throw new Error('general.model_min_confidence must be between 0 and 1');
+    }
+    if (settings.general.model_training_window < 252) {
+        throw new Error('general.model_training_window must be at least 252');
+    }
+    if (settings.general.risk_per_trade_pct <= 0 || settings.general.risk_per_trade_pct > 0.02) {
+        throw new Error('general.risk_per_trade_pct must be between 0 and 0.02');
+    }
+    if (settings.general.take_profit_r_multiple <= 0 || settings.general.take_profit_r_multiple > 10) {
+        throw new Error('general.take_profit_r_multiple must be between 0 and 10');
+    }
+    if (settings.general.volatile_policy_risk_multiplier <= 0 || settings.general.volatile_policy_risk_multiplier > 1.5) {
+        throw new Error('general.volatile_policy_risk_multiplier must be between 0 and 1.5');
+    }
+    if (!['rule', 'hmm', 'gmm'].includes(settings.general.regime_engine)) {
+        throw new Error('general.regime_engine must be rule, hmm, or gmm');
+    }
+    if (!['core', 'technical', 'macro', 'marketwide'].includes(settings.general.regime_feature_set)) {
+        throw new Error('general.regime_feature_set is unsupported');
+    }
+    for (const [key, value] of Object.entries(settings.general.volatility_risk_scales)) {
+        if (!Number.isFinite(value) || value < 0 || value > 1.5) {
+            throw new Error('general.volatility_risk_scales.' + key + ' must be between 0 and 1.5');
         }
-        settings[key] = number;
+    }
+    const integerPaths = [
+        'general.model_training_window',
+        'portfolio.max_daily_entries', 'portfolio.max_intraday_entries', 'portfolio.max_swing_entries',
+        'portfolio.max_intraday_core_entries', 'portfolio.max_open_positions',
+        'portfolio.max_positions_per_strategy', 'portfolio.max_short_positions', 'portfolio.max_tactical_positions',
+        'portfolio.swing_open_delay_minutes', 'portfolio.intraday_close_cutoff_minutes',
+    ];
+    for (const pathName of integerPaths) {
+        const value = Number(pathName.split('.').reduce((item, key) => item?.[key], settings));
+        if (!Number.isInteger(value) || value < 0) throw new Error(pathName + ' must be a non-negative integer');
+    }
+    for (const key of ['max_name_pct', 'max_position_pct', 'max_strategy_position_pct', 'max_gross_pct', 'max_net_long_pct', 'max_net_short_pct']) {
+        if (portfolio[key] <= 0) throw new Error('portfolio.' + key + ' must be positive');
+    }
+    for (const [strategy, config] of Object.entries(settings.strategies)) {
+        if (config.horizon !== defaults.strategies[strategy].horizon
+            || config.bar_interval !== defaults.strategies[strategy].bar_interval) {
+            throw new Error('Strategy horizon and bar interval are fixed by the catalog');
+        }
+        if (config.max_position_pct <= 0 || config.max_position_pct > portfolio.max_strategy_position_pct) {
+            throw new Error('strategies.' + strategy + '.max_position_pct must be positive and within the portfolio strategy cap');
+        }
+        if (config.risk_multiplier <= 0 || config.risk_multiplier > 1.5) {
+            throw new Error('strategies.' + strategy + '.risk_multiplier must be between 0 and 1.5');
+        }
+        if (config.hard_stop_pct <= 0 || config.hard_stop_pct > 0.5
+            || config.trailing_stop_pct <= 0 || config.trailing_stop_pct > 0.5
+            || config.trailing_activation_pct <= 0 || config.trailing_activation_pct > 0.5) {
+            throw new Error('strategies.' + strategy + ' stop settings must be between 0 and 0.5');
+        }
+        for (const key of ['max_entries_per_day', 'max_positions', 'minimum_hold_minutes', 'cooldown_minutes']) {
+            if (!Number.isInteger(config[key]) || config[key] < 0) {
+                throw new Error('strategies.' + strategy + '.' + key + ' must be a non-negative integer');
+            }
+        }
+        for (const [regime, weight] of Object.entries(config.regime_weights)) {
+            if (!Number.isFinite(weight) || weight < 0 || weight > 1.5) {
+                throw new Error('strategies.' + strategy + '.regime_weights.' + regime + ' must be between 0 and 1.5');
+            }
+        }
+    }
+    for (const [name, value] of Object.entries(settings.portfolio.regime_gross_caps)) {
+        if (!Number.isFinite(value) || value <= 0 || value > portfolio.max_gross_pct) {
+            throw new Error('portfolio.regime_gross_caps.' + name + ' must be within the gross exposure cap');
+        }
+    }
+    for (const [name, value] of Object.entries(settings.portfolio.sector_caps)) {
+        if (!Number.isFinite(value) || value <= 0 || value > portfolio.max_gross_pct) {
+            throw new Error('portfolio.sector_caps.' + name + ' must be within the gross exposure cap');
+        }
     }
     return settings;
 }
 
-async function loadSettings(dataDir) {
-    const overrides = await readJson(path.join(dataDir, 'dashboard-runtime-overrides.json'), { optional: true });
-    return validateSettings(overrides || {});
+async function loadSettings(root) {
+    let defaults = FALLBACK_DEFAULT_SETTINGS;
+    try {
+        defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    const overrides = await readJson(path.join(root, 'data', 'algo-strategy-config.json'), { optional: true });
+    return validateSettings(overrides || {}, defaults);
 }
 
-async function writeSettings(dataDir, settings) {
+async function writeSettings(root, settings) {
+    const dataDir = path.join(root, 'data');
     await fs.mkdir(dataDir, { recursive: true });
-    const destination = path.join(dataDir, 'dashboard-runtime-overrides.json');
-    const temporary = path.join(dataDir, `.dashboard-runtime-overrides.${process.pid}.${randomUUID()}.tmp`);
+    const destination = path.join(dataDir, 'algo-strategy-config.json');
+    const temporary = path.join(dataDir, `.algo-strategy-config.${process.pid}.${randomUUID()}.tmp`);
     try {
         const handle = await fs.open(temporary, 'wx', 0o600);
         try {
@@ -1044,7 +1120,7 @@ async function buildPayload(root) {
     const state = await readJson(path.join(dataDir, 'algo_state.json'));
     if (!state.strategy_portfolio || typeof state.strategy_portfolio !== 'object') throw new Error('Algo coordinator state is incomplete');
     const portfolio = safeObject(state.strategy_portfolio);
-    const settings = await loadSettings(dataDir);
+    const settings = await loadSettings(root);
     const fillReport = cachedEquityFillReport(root, portfolio.account_id);
     const [history, journal, research] = await Promise.all([
         readSnapshotHistory(dataDir, portfolio.account_id),
@@ -1484,11 +1560,15 @@ module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALG
                 res.json({ settings: await loadOptionsSettings(root), applied: 'next options paper scan' });
                 return;
             }
-            const current = await loadSettings(path.join(root, 'data'));
+            const current = await loadSettings(root);
             const body = safeObject(req.body);
             if (!req.body || !req.body.settings || typeof req.body.settings !== 'object' || Array.isArray(req.body.settings)) throw new Error('settings must be an object');
-            const settings = validateSettings({ ...current, ...body.settings });
-            await writeSettings(path.join(root, 'data'), settings);
+            const defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json')).catch(error => {
+                if (error.code !== 'ENOENT') throw error;
+                return FALLBACK_DEFAULT_SETTINGS;
+            });
+            const settings = validateSettings(mergeConfig(current, body.settings), defaults);
+            await writeSettings(root, settings);
             res.json({ settings, applied: 'next portfolio scan' });
         } catch (error) {
             const isValidationError = /must be|Unsupported setting|Unsupported Algo Trader account|inverted|positive|between/.test(error.message);

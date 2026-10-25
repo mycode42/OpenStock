@@ -2,14 +2,6 @@ import { escapeHtml } from './escape.js';
 
 const RANGES = ['1W', '1M', '3M', 'ALL'];
 const ACTIVITY_PAGE_SIZE = 10;
-const SETTING_FIELDS = [
-    { key: 'overnight_entries_enabled', title: 'Overnight entries', detail: 'Allow new positions during overnight sessions.' },
-    { key: 'enable_intraday_trend', title: 'Intraday trend', detail: 'Include the intraday trend strategy in scans.' },
-    { key: 'enable_intraday_momentum', title: 'Intraday momentum', detail: 'Include the intraday momentum strategy in scans.' },
-    { key: 'algo_multi_factor_enabled', title: 'Multi Factor', detail: 'Include the Multi Factor strategy in the active portfolio.' },
-    { key: 'algo_event_driven_enabled', title: 'Event driven', detail: 'Allow event driven signals in the active portfolio.' },
-];
-
 function numberOrNull(value) {
     const number = Number(value);
     return value !== null && value !== undefined && value !== '' && Number.isFinite(number) ? number : null;
@@ -261,24 +253,47 @@ function optionsSettingFields(settings, readonlyFields = []) {
 }
 
 function equitySettingSections(settings) {
-    const renderToggle = field => `<label class="algo-config-toggle"><input type="checkbox" name="${field.key}" ${settings[field.key] ? 'checked' : ''}><span><strong>${escapeHtml(field.title)}</strong><small>${escapeHtml(field.detail)}</small></span><i></i></label>`;
-    const sizePct = (Number(settings.intraday_satellite_position_pct) * 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    const fractionPath = path => path.endsWith('_pct');
+    const humanize = path => path.includes('.regime_weights.')
+        ? path.split('.').at(-1).replaceAll('_', ' ') + ' route and risk weight'
+        : path.split('.').at(-1).replaceAll('_', ' ');
+    const valueInput = (path, value) => {
+        const label = humanize(path);
+        if (typeof value === 'boolean') {
+            return '<label class="algo-config-toggle"><input type="checkbox" data-setting-path="' + escapeHtml(path) + '"' + (value ? ' checked' : '') + '><span><strong>' + escapeHtml(label) + '</strong></span><i></i></label>';
+        }
+        if (Array.isArray(value) || (value && typeof value === 'object')) {
+            return '<div class="algo-config-field"><label>' + escapeHtml(label) + '</label><textarea data-setting-path="' + escapeHtml(path) + '" rows="2">' + escapeHtml(JSON.stringify(value)) + '</textarea></div>';
+        }
+        if (typeof value === 'number') {
+            const percentage = fractionPath(path);
+            const display = percentage ? value * 100 : value;
+            return '<div class="algo-config-field"><label>' + escapeHtml(label) + (percentage ? ' · %' : '') + '</label><input data-setting-path="' + escapeHtml(path) + '" type="number" step="any"' + (percentage ? ' data-percent="true"' : '') + ' value="' + escapeHtml(display) + '"></div>';
+        }
+        const choices = path === 'general.regime_engine'
+            ? ['rule', 'hmm', 'gmm']
+            : path === 'general.regime_feature_set'
+                ? ['core', 'technical', 'macro', 'marketwide']
+                : null;
+        if (choices) {
+            return '<div class="algo-config-field"><label>' + escapeHtml(label) + '</label><select data-setting-path="' + escapeHtml(path) + '">' + choices.map(choice => '<option value="' + choice + '"' + (choice === value ? ' selected' : '') + '>' + escapeHtml(choice) + '</option>').join('') + '</select></div>';
+        }
+        const structural = path.endsWith('.horizon') || path.endsWith('.bar_interval');
+        return '<div class="algo-config-field"><label>' + escapeHtml(label) + '</label><input data-setting-path="' + escapeHtml(path) + '" type="text" value="' + escapeHtml(value) + '"' + (structural ? ' disabled' : '') + '></div>';
+    };
+    const fields = (value, prefix) => Object.entries(value || {}).map(([key, child]) => {
+        const path = prefix ? prefix + '.' + key : key;
+        return child && typeof child === 'object' && !Array.isArray(child)
+            ? fields(child, path)
+            : valueInput(path, child);
+    }).join('');
     const sections = [
-        {
-            title: 'General',
-            content: SETTING_FIELDS.filter(field => field.key === 'overnight_entries_enabled').map(renderToggle).join(''),
-        },
-        {
-            title: 'Strategy selection',
-            content: SETTING_FIELDS.filter(field => field.key !== 'overnight_entries_enabled').map(renderToggle).join(''),
-        },
-        {
-            title: 'Position sizing',
-            content: `<div class="algo-config-field"><label for="algo-satellite-size">Intraday satellite size <small>% of equity</small></label><input id="algo-satellite-size" type="number" name="intraday_satellite_position_pct" min="0.1" max="4" step="0.1" value="${escapeHtml(sizePct)}"><small class="algo-field-help">Configured cap for each satellite position.</small></div>
-                <div class="algo-config-field"><label for="algo-satellite-risk">Satellite risk multiplier</label><input id="algo-satellite-risk" type="number" name="intraday_satellite_risk_multiplier" min="0.05" max="1" step="0.05" value="${escapeHtml(settings.intraday_satellite_risk_multiplier)}"><small class="algo-field-help">Scales risk for intraday satellite strategies.</small></div>`,
-        },
-    ];
-    return sections.map(section => `<details class="algo-options-config-section"><summary>${escapeHtml(section.title)}</summary><div class="algo-options-config-fields">${section.content}</div></details>`).join('');
+        ['general', settings.general || {}],
+        ['portfolio', settings.portfolio || {}],
+    ].map(([name, value]) => '<details class="algo-options-config-section"><summary>' + escapeHtml(name) + '</summary><div class="algo-options-config-fields">' + fields(value, name) + '</div></details>');
+    const strategies = Object.entries(settings.strategies || {}).map(([name, value]) => '<details class="algo-options-config-section"><summary>' + escapeHtml(name.replaceAll('_', ' ')) + '</summary><div class="algo-options-config-fields">' + fields(value, 'strategies.' + name) + '</div></details>').join('');
+    sections.push('<details class="algo-options-config-section"><summary>Strategies</summary><div class="algo-options-config">' + strategies + '</div></details>');
+    return sections.join('');
 }
 
 export function createAlgoTrader({ request, charts }) {
@@ -336,8 +351,9 @@ export function createAlgoTrader({ request, charts }) {
             </form>`;
         }
         return `<form id="algo-config-form" class="algo-config-form" data-account="equity">
+            <p class="algo-field-help">A regime weight of zero disables that route; a positive weight enables it and scales its risk. Position percentages are ceilings, further limited by global exposure, sector, cash, and trade risk rules.</p>
             <div class="algo-options-config">${equitySettingSections(settings)}</div>
-            <div class="algo-config-actions"><p class="algo-save-notice" aria-live="polite">${escapeHtml(notice)}</p><button type="submit" class="btn btn-primary algo-save-button" ${saving ? 'disabled' : ''}>${saving ? 'Saving…' : 'Save runtime settings'} <span>→</span></button></div>
+            <div class="algo-config-actions"><p class="algo-save-notice" aria-live="polite">${escapeHtml(notice)}</p><button type="submit" class="btn btn-primary algo-save-button" ${saving ? 'disabled' : ''}>${saving ? 'Saving…' : 'Save strategy configuration'} <span>→</span></button></div>
         </form>`;
     }
 
@@ -472,19 +488,16 @@ export function createAlgoTrader({ request, charts }) {
     }
 
     function readSettingsFromForm(form, mode = accountMode) {
-        if (mode === 'equity') {
-            const settings = {};
-            for (const field of SETTING_FIELDS) settings[field.key] = form.elements[field.key].checked;
-            settings.intraday_satellite_position_pct = Number(form.elements.intraday_satellite_position_pct.value) / 100;
-            settings.intraday_satellite_risk_multiplier = Number(form.elements.intraday_satellite_risk_multiplier.value);
-            return settings;
-        }
-        const settings = JSON.parse(JSON.stringify(snapshots.options?.settings || {}));
+        const source = mode === 'equity' ? snapshots.equity?.settings : snapshots.options?.settings;
+        const settings = JSON.parse(JSON.stringify(source || {}));
         for (const input of form.querySelectorAll('[data-setting-path]')) {
             let value;
             if (input.type === 'checkbox') value = input.checked;
             else if (input.tagName === 'TEXTAREA') value = JSON.parse(input.value);
-            else if (input.type === 'number') value = input.dataset.nullable === 'true' && input.value.trim() === '' ? null : Number(input.value);
+            else if (input.type === 'number') {
+                value = input.dataset.nullable === 'true' && input.value.trim() === '' ? null : Number(input.value);
+                if (input.dataset.percent === 'true' && value !== null) value /= 100;
+            }
             else value = input.value;
             setPath(settings, input.dataset.settingPath, value);
         }
