@@ -4,7 +4,9 @@ cd /opt/algo-trader && /usr/bin/nice -n 2 poetry run python -m autoresearch.nigh
 Set the OpenClaw `exec` call's `timeoutSeconds` to `36000` (10 hours) for this command. The command starts the unchanged equity AutoResearch pipeline and the separate configured options research batch concurrently. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
 2. Read /opt/algo-trader/data/research/algo-auto/latest.json and /opt/algo-trader/data/options/research/automation/latest.json. The equity report also has a top-level options_research field. Report equity and options under separate headings. Do not edit settings, restart services, or place or modify trades.
 
-If a report is missing, invalid, stale for today's America/New_York date, or has status error, say so clearly. A fresh options status of waiting_for_data means the configured historical chain dataset is absent; report its path and do not describe it as a strategy failure.
+Freshness across midnight: each component report can be written after the scheduled cycle starts. For each report, get its file modification time with `stat -c %Y <path>` and convert that timestamp to America/New_York. Compare the report's `run_date_et` to the ET date of that file modification time, not to the automation's scheduled start date. The options report's `created_at` can mark the start of a long run; use its file modification time to determine when the report was written. A report written after midnight with a matching ET write date is fresh.
+
+If a report is missing, invalid, stale for its own ET write date, or has status error, say so clearly. A fresh options status of waiting_for_data means the configured historical chain dataset is absent; report its path and do not describe it as a strategy failure.
 
 Keep the Telegram report under 2,000 characters. Use the equity report's fitness_timeline first; read referenced verification artifacts only when needed to explain dates or diagnostics. Never scan the artifact directory or report equity strategies absent from orchestration.strategies.
 
