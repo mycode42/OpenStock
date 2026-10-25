@@ -29,6 +29,7 @@ REQUIRED_RESEARCH_SESSIONS = 1013
 MAX_RESEARCH_DTE = 60
 STRIKE_RANGE = 20
 ET = ZoneInfo("America/New_York")
+META_TICKER_CHANGE_DATE = date(2022, 6, 9)
 
 
 def _read_api_key() -> str:
@@ -188,6 +189,36 @@ def _archive_covers_through(path: Path, end_date: date) -> bool:
     except (OSError, EOFError, json.JSONDecodeError, TypeError, ValueError):
         return False
     return archived_end >= end_date
+
+
+def _source_symbol_ranges(symbol: str, start_date: date, end_date: date) -> list[tuple[str, date, date]]:
+    """Map canonical underlyings to the symbols ThetaData used at the time."""
+    if symbol != "META":
+        return [(symbol, start_date, end_date)]
+    if end_date < META_TICKER_CHANGE_DATE:
+        return [("FB", start_date, end_date)]
+    if start_date >= META_TICKER_CHANGE_DATE:
+        return [("META", start_date, end_date)]
+    return [
+        ("FB", start_date, META_TICKER_CHANGE_DATE - timedelta(days=1)),
+        ("META", META_TICKER_CHANGE_DATE, end_date),
+    ]
+
+
+def _archive_matches_source_ranges(path: Path, source_ranges: list[tuple[str, date, date]]) -> bool:
+    """Check whether a historical META month was fetched with its correct ticker."""
+    if not path.is_file():
+        return False
+    expected = [
+        {"symbol": symbol, "start_date": start.isoformat(), "end_date": end.isoformat()}
+        for symbol, start, end in source_ranges
+    ]
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            payload = json.load(stream)
+    except (OSError, EOFError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("source_symbol_ranges") == expected
 
 
 def _symbol_has_archive_gaps(symbol: str, *, start_date: date, end_date: date) -> bool:
@@ -439,30 +470,45 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
     for index, (month_start, month_end) in enumerate(chunks, start=1):
         month_key = month_start.strftime("%Y-%m")
         eod_path, oi_path = eod_dir / f"{month_key}.json.gz", oi_dir / f"{month_key}.json.gz"
+        source_ranges = _source_symbol_ranges(symbol, month_start, month_end)
         # Completed months are immutable. Refresh only the active month so a
         # rerun extends the archive with recently completed sessions.
         refresh = month_end == end_date
         if eod_path.is_file() and oi_path.is_file():
-            if not refresh or (
+            # META's June 2022 archive crosses the FB -> META ticker change.
+            # Re-fetch older META months that lack provenance so pre-change
+            # quotes are not silently omitted or requested under the wrong ticker.
+            needs_alias_repair = (
+                symbol == "META"
+                and month_start < META_TICKER_CHANGE_DATE
+                and (
+                    not _archive_matches_source_ranges(eod_path, source_ranges)
+                    or not _archive_matches_source_ranges(oi_path, source_ranges)
+                )
+            )
+            archive_covers_month = (
                 _archive_covers_through(eod_path, month_end)
                 and _archive_covers_through(oi_path, month_end)
-            ):
+            )
+            if not needs_alias_repair and (not refresh or archive_covers_month):
                 continue
-        request = {
-            "symbol": symbol,
-            "start_date": month_start,
-            "end_date": month_end,
-            "expiration": "*",
-            "max_dte": MAX_RESEARCH_DTE,
-            "strike_range": STRIKE_RANGE,
-        }
-        # Value permits two account-wide requests. Fetch EOD quotes and OI
-        # together to use that entitlement without queuing larger batches.
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            eod_future = pool.submit(client.option_history_eod, **request)
-            oi_future = pool.submit(client.option_history_open_interest, **request)
-            eod = _records(eod_future.result())
-            oi = _records(oi_future.result())
+        eod, oi = [], []
+        for source_symbol, source_start, source_end in source_ranges:
+            request = {
+                "symbol": source_symbol,
+                "start_date": source_start,
+                "end_date": source_end,
+                "expiration": "*",
+                "max_dte": MAX_RESEARCH_DTE,
+                "strike_range": STRIKE_RANGE,
+            }
+            # Value permits two account-wide requests. Fetch EOD quotes and OI
+            # together to use that entitlement without queuing larger batches.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                eod_future = pool.submit(client.option_history_eod, **request)
+                oi_future = pool.submit(client.option_history_open_interest, **request)
+                eod.extend(_records(eod_future.result()))
+                oi.extend(_records(oi_future.result()))
         for path, endpoint, rows in (
             (eod_path, "option_history_eod", eod),
             (oi_path, "option_history_open_interest", oi),
@@ -472,6 +518,10 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
                 "underlying": symbol,
                 "start_date": month_start.isoformat(),
                 "end_date": month_end.isoformat(),
+                "source_symbol_ranges": [
+                    {"symbol": ticker, "start_date": start.isoformat(), "end_date": end.isoformat()}
+                    for ticker, start, end in source_ranges
+                ],
                 "retrieved_at": datetime.now(ET).isoformat(),
                 "rows": rows,
             })
