@@ -93,13 +93,13 @@ black = "^26.3.1"
 isort = "^5.12.0"
 flake8 = "^6.1.0"
 cython = ">=3.0.11,<4.0.0"
-setuptools = ">=83,<84"
+setuptools = ">=84.1,<85"
 
 [tool.poetry.build]
 script = "scripts/build-extension.py"
 
 [build-system]
-requires = ["poetry-core", "cython>=3.0.11,<4.0.0", "setuptools>=83,<84"]
+requires = ["poetry-core", "cython>=3.0.11,<4.0.0", "setuptools>=84.1,<85"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.black]
