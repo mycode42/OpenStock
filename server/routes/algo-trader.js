@@ -653,8 +653,8 @@ function validateSettings(value, defaults = FALLBACK_DEFAULT_SETTINGS) {
     if (settings.general.volatile_policy_risk_multiplier <= 0 || settings.general.volatile_policy_risk_multiplier > 1.5) {
         throw new Error('general.volatile_policy_risk_multiplier must be between 0 and 1.5');
     }
-    if (!['rule', 'hmm', 'gmm'].includes(settings.general.regime_engine)) {
-        throw new Error('general.regime_engine must be rule, hmm, or gmm');
+    if (!['committee', 'rule', 'hmm', 'gmm'].includes(settings.general.regime_engine)) {
+        throw new Error('general.regime_engine must be committee, rule, hmm, or gmm');
     }
     if (!['core', 'technical', 'macro', 'marketwide'].includes(settings.general.regime_feature_set)) {
         throw new Error('general.regime_feature_set is unsupported');
@@ -704,6 +704,10 @@ function validateSettings(value, defaults = FALLBACK_DEFAULT_SETTINGS) {
                 throw new Error('strategies.' + strategy + '.regime_weights.' + regime + ' must be between 0 and 1.5');
             }
         }
+    }
+    const eventConfidence = settings.strategies.swing_event_driven.minimum_confidence;
+    if (!Number.isInteger(eventConfidence) || eventConfidence < 0 || eventConfidence > 100) {
+        throw new Error('strategies.swing_event_driven.minimum_confidence must be an integer between 0 and 100');
     }
     for (const [name, value] of Object.entries(settings.portfolio.regime_gross_caps)) {
         if (!Number.isFinite(value) || value <= 0 || value > portfolio.max_gross_pct) {

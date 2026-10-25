@@ -1,7 +1,7 @@
 {
   "general": {
     "overnight_entries_enabled": false,
-    "regime_engine": "rule",
+    "regime_engine": "committee",
     "regime_feature_set": "marketwide",
     "model_diagnostics_enabled": true,
     "model_min_confidence": 0.5,
@@ -226,6 +226,7 @@
     },
     "swing_event_driven": {
       "enabled": true,
+      "minimum_confidence": 75,
       "regime_weights": {
         "trending_up": 0.58,
         "trending_down": 0.58,

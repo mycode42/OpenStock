@@ -256,9 +256,12 @@ function equitySettingSections(settings) {
     const fractionPath = path => path.endsWith('_pct');
     const humanize = path => path.includes('.regime_weights.')
         ? path.split('.').at(-1).replaceAll('_', ' ') + ' route and risk weight'
+        : path === 'strategies.swing_event_driven.minimum_confidence'
+            ? 'minimum event confidence'
         : path.split('.').at(-1).replaceAll('_', ' ');
     const valueInput = (path, value) => {
         const label = humanize(path);
+        const eventConfidence = path === 'strategies.swing_event_driven.minimum_confidence';
         if (typeof value === 'boolean') {
             return '<label class="algo-config-toggle"><input type="checkbox" data-setting-path="' + escapeHtml(path) + '"' + (value ? ' checked' : '') + '><span><strong>' + escapeHtml(label) + '</strong></span><i></i></label>';
         }
@@ -268,15 +271,15 @@ function equitySettingSections(settings) {
         if (typeof value === 'number') {
             const percentage = fractionPath(path);
             const display = percentage ? value * 100 : value;
-            return '<div class="algo-config-field"><label>' + escapeHtml(label) + (percentage ? ' · %' : '') + '</label><input data-setting-path="' + escapeHtml(path) + '" type="number" step="any"' + (percentage ? ' data-percent="true"' : '') + ' value="' + escapeHtml(display) + '"></div>';
+            return '<div class="algo-config-field"><label>' + escapeHtml(label) + (percentage || eventConfidence ? ' · %' : '') + '</label><input data-setting-path="' + escapeHtml(path) + '" type="number" step="' + (eventConfidence ? '1' : 'any') + '"' + (percentage ? ' data-percent="true"' : '') + ' value="' + escapeHtml(display) + '"></div>';
         }
         const choices = path === 'general.regime_engine'
-            ? ['rule', 'hmm', 'gmm']
+            ? ['committee', 'rule', 'hmm', 'gmm']
             : path === 'general.regime_feature_set'
                 ? ['core', 'technical', 'macro', 'marketwide']
                 : null;
         if (choices) {
-            return '<div class="algo-config-field"><label>' + escapeHtml(label) + '</label><select data-setting-path="' + escapeHtml(path) + '">' + choices.map(choice => '<option value="' + choice + '"' + (choice === value ? ' selected' : '') + '>' + escapeHtml(choice) + '</option>').join('') + '</select></div>';
+            return '<div class="algo-config-field"><label>' + escapeHtml(label) + '</label><select data-setting-path="' + escapeHtml(path) + '">' + choices.map(choice => '<option value="' + choice + '"' + (choice === value ? ' selected' : '') + '>' + escapeHtml(choice === 'committee' ? 'committee · rule + HMM + GMM' : choice) + '</option>').join('') + '</select></div>';
         }
         const structural = path.endsWith('.horizon') || path.endsWith('.bar_interval');
         return '<div class="algo-config-field"><label>' + escapeHtml(label) + '</label><input data-setting-path="' + escapeHtml(path) + '" type="text" value="' + escapeHtml(value) + '"' + (structural ? ' disabled' : '') + '></div>';
