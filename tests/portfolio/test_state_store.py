@@ -57,6 +57,37 @@ def test_sqlite_migration_preserves_legacy_snapshot_and_all_strategy_states(tmp_
     with sqlite3.connect(store.db_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM entry_provenance").fetchone()[0] == 1
 
+def test_read_normalizes_legacy_strategy_ids_before_provenance_validation(tmp_path):
+    store = AlgoStateStore(tmp_path / "algo_state.json")
+    store.load()
+    store.save("REGULAR", _owned_portfolio())
+
+    with sqlite3.connect(store.db_path) as connection:
+        state = json.loads(connection.execute(
+            "SELECT state_json FROM strategy_state WHERE strategy='swing_momentum' AND ticker='AAPL'",
+        ).fetchone()[0])
+        state["strategy"] = "momentum"
+        state["owner"] = "momentum"
+        connection.execute(
+            "UPDATE strategy_state SET strategy='momentum', state_json=? "
+            "WHERE strategy='swing_momentum' AND ticker='AAPL'",
+            (json.dumps(state),),
+        )
+        connection.execute(
+            "UPDATE position_owner SET strategy='momentum' WHERE ticker='AAPL'",
+        )
+        # Existing provenance is immutable in production. Drop the guard only
+        # in this fixture to represent a database written before the ID rename.
+        connection.execute("DROP TRIGGER entry_provenance_immutable_update")
+        connection.execute(
+            "UPDATE entry_provenance SET strategy='momentum' WHERE order_id='entry-1'",
+        )
+
+    _, loaded = store.read()
+
+    assert loaded["position_owners"] == {"AAPL": "swing_momentum"}
+    assert loaded["strategy_states"]["swing_momentum"]["AAPL"]["owner"] == "swing_momentum"
+
 def test_corrupt_legacy_state_fails_closed_without_creating_sqlite(tmp_path):
     snapshot = tmp_path / "algo_state.json"
     snapshot.write_text("{not valid json")

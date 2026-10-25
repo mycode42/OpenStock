@@ -337,7 +337,10 @@ class AlgoStateStore:
                 portfolio["strategy_states"] = states
                 portfolio = _canonicalize_portfolio_strategy_ids(portfolio)
                 validate_portfolio(portfolio)
-                for strategy, by_symbol in states.items():
+                # Validate immutable order provenance against the normalized
+                # strategy IDs exposed by this read. Persisted SQLite rows may
+                # still use pre-prefix IDs until the next successful save.
+                for strategy, by_symbol in portfolio["strategy_states"].items():
                     for ticker, state in by_symbol.items():
                         order_id = state.get("entry_order_id")
                         if not order_id:
