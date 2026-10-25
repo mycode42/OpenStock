@@ -191,10 +191,13 @@ class LongVolatilitySleeve:
 
     def _activation(self, context: OptionsStrategyContext) -> tuple[bool, float, str]:
         regime = str(context.regime or "unknown").lower()
+        volatility_state = str(context.volatility_state or "unknown").lower()
         allowed = {str(value).lower() for value in self.config.get("allowed_regimes", ["volatile"])}
-        if regime == "volatile" and "volatile" in allowed:
-            weight = regime_risk_multiplier(self.config, regime)
-            return weight > 0, weight, f"volatile regime {regime}"
+        if "volatile" in allowed and "volatile" in {regime, volatility_state}:
+            weight = regime_risk_multiplier(self.config, "volatile")
+            return weight > 0, weight, (
+                f"volatile market state (regime {regime}, volatility {volatility_state})"
+            )
         if str(self.config.get("activation_mode", "regime_only")) == "regime_or_realized_vol":
             try:
                 lookback = int(self.config.get("realized_lookback_sessions", 20))
@@ -263,6 +266,13 @@ class LongVolatilitySleeve:
             data_quality={
                 "entry_reason": reason,
                 "regime_at_entry": str(context.regime or "unknown"),
+                "volatility_state_at_entry": str(context.volatility_state or "unknown"),
+                "activation_state": (
+                    "volatile"
+                    if str(context.regime or "").lower() == "volatile"
+                    or str(context.volatility_state or "").lower() == "volatile"
+                    else "realized_volatility"
+                ),
                 "iv_percentile": iv_percentile,
                 "iv_percentile_samples": iv_sample_count,
                 "iv_percentile_source": context.iv_percentile_source,

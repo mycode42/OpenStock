@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -9,11 +10,13 @@ import fcntl
 import hashlib
 import json
 import math
+import multiprocessing as mp
 from pathlib import Path
 import random
 import statistics
 from typing import Any
 
+from autoresearch.cpu import available_cpu_count
 from options.research.dataset import load_options_research_dataset
 from options.research.reporting import write_research_report
 from options.research.search import Candidate, add_plateau_scores, candidate_pool, evaluate_candidates
@@ -25,6 +28,7 @@ from runtime.paths import ROOT
 
 
 RESEARCH_DEFAULTS_PATH = Path(__file__).with_name("config.default.json")
+_FOLD_EVALUATION_CONTEXT: dict[str, Any] = {}
 
 
 def _merge(base: dict, override: dict) -> dict:
@@ -54,6 +58,14 @@ def _digest_files(paths: list[Path]) -> str:
     for path in sorted(paths, key=lambda value: str(value)):
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
         digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _digest_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(block)
     return digest.hexdigest()
 
 
@@ -282,6 +294,55 @@ def _write_trades_csv(path: Path, rows: list[dict]) -> None:
             writer.writerow({**row, "assignment_events": json.dumps(row.get("assignment_events", []), sort_keys=True)})
 
 
+def _evaluate_fold_index(fold_index: int) -> dict:
+    """Evaluate one independent fold using its process's inherited dataset."""
+    context = _FOLD_EVALUATION_CONTEXT
+    dataset = context["dataset"]
+    folds = context["folds"]
+    strategy = context["strategy"]
+    research_config = context["research_config"]
+    base_config = context["base_config"]
+    fold = folds[fold_index]
+    train = dataset.observations[fold.train_start:fold.train_end]
+    oos = dataset.observations[fold.oos_start:fold.oos_end]
+
+    def evaluate(candidate):
+        run = simulate_options_strategy(
+            dataset, train, strategy_name=strategy, candidate=candidate,
+            config=research_config, base_config=base_config, force_close=True,
+        )
+        return {
+            "risk_adjusted_score": run["risk_adjusted_score"],
+            "metrics": run["metrics"],
+            "regime_breakdown": run["regime_breakdown"],
+            "volatility_breakdown": run["volatility_breakdown"],
+            "equity_curve_summary": _equity_summary(run),
+        }
+
+    candidate_rows = evaluate_candidates(strategy, research_config, base_config, evaluate)
+    candidate_rows = add_plateau_scores(
+        candidate_rows,
+        min_profitable_neighbour_fraction=float(
+            research_config.get("search", {}).get("minimum_profitable_neighbour_fraction", 0.5)
+        ),
+        neighbour_count=int(research_config.get("search", {}).get("plateau_neighbours", 4)),
+    )
+    chosen = candidate_rows[0]
+    chosen_obj = next(
+        item for item in candidate_pool(strategy, research_config, base_config)
+        if item.candidate_id == chosen["candidate"]["candidate_id"]
+    )
+    oos_run = simulate_options_strategy(
+        dataset, oos, strategy_name=strategy, candidate=chosen_obj,
+        config=research_config, base_config=base_config, force_close=True,
+    )
+    return {
+        "candidate_rows": candidate_rows,
+        "chosen": chosen,
+        "oos_run": oos_run,
+    }
+
+
 def run_research(
     strategy: str,
     *,
@@ -289,6 +350,7 @@ def run_research(
     config_path: str | Path | None = None,
     output_dir: str | Path | None = None,
     underlying: str | None = None,
+    parallel_workers: int | None = None,
 ) -> dict:
     """Research one options expression module; it never reads credentials or submits orders."""
     strategy = str(strategy).strip().lower()
@@ -297,6 +359,13 @@ def run_research(
         raise ValueError(f"strategy must be one of {', '.join(sorted(supported))}")
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
     research_config = _merge(_read_json(RESEARCH_DEFAULTS_PATH), _read_json(config_path_resolved)) if config_path_resolved != RESEARCH_DEFAULTS_PATH else _read_json(RESEARCH_DEFAULTS_PATH)
+    configured_parallel_workers = research_config.get("search", {}).get("parallel_workers", 1)
+    if isinstance(configured_parallel_workers, bool) or not isinstance(configured_parallel_workers, int) or configured_parallel_workers < 1:
+        raise ValueError("search.parallel_workers must be a positive integer")
+    effective_parallel_workers = configured_parallel_workers if parallel_workers is None else parallel_workers
+    if isinstance(effective_parallel_workers, bool) or not isinstance(effective_parallel_workers, int) or effective_parallel_workers < 1:
+        raise ValueError("parallel_workers must be a positive integer")
+    loader_worker_count = min(effective_parallel_workers, available_cpu_count())
     selected_data_path = _project_path(data_path or research_config.get("data_path", "data/options/research/chains.jsonl"))
     output_root = _project_path(output_dir or research_config.get("output_dir", "data/options/research/runs"))
     underlying = str(underlying or research_config.get("underlying", "SPY")).strip().upper()
@@ -331,7 +400,7 @@ def run_research(
         "selected_underlying": underlying,
     }, sort_keys=True).encode("utf-8")).hexdigest()
     timestamp = datetime.now(timezone.utc)
-    source_digest = hashlib.sha256(selected_data_path.read_bytes()).hexdigest() if selected_data_path.is_file() else "missing"
+    source_digest = _digest_path(selected_data_path) if selected_data_path.is_file() else "missing"
     run_id = f"{strategy}-{underlying.lower()}-{timestamp:%Y%m%dT%H%M%S%fZ}-{source_digest[:10]}-{config_digest[:8]}"
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -346,12 +415,26 @@ def run_research(
                       indent=2, sort_keys=True, allow_nan=False)
     _append_run_log(output_root / "research_runs.jsonl", run_start)
     try:
+        print(
+            f"Options research {strategy}/{underlying}: loading {selected_data_path.name} "
+            f"with {loader_worker_count} worker(s)",
+            flush=True,
+        )
         dataset = load_options_research_dataset(
             selected_data_path, underlying=underlying,
             rate=float(research_config.get("execution", {}).get("risk_free_rate", 0.04)),
             dividend_yield=float(research_config.get("execution", {}).get("dividend_yield", 0.015)),
             data_mode=str(research_config.get("data_mode", "auto")),
             model_surface_config=research_config.get("model_surface", {}),
+            workers=loader_worker_count,
+        )
+        print(
+            f"Options research {strategy}/{underlying}: loading complete in "
+            f"{dataset.loading_parallelism.get('elapsed_seconds', 0)}s total; "
+            f"JSONL parse/normalize {dataset.loading_parallelism.get('jsonl_parse_and_normalize_elapsed_seconds', 0)}s, "
+            f"chain preparation {dataset.loading_parallelism.get('chain_preparation_elapsed_seconds', 0)}s "
+            f"({dataset.loading_parallelism.get('chain_workers_used', 1)} workers)",
+            flush=True,
         )
         try:
             folds, holdout, split = make_purged_walk_forward(
@@ -390,6 +473,17 @@ def run_research(
                     "dataset_observations": len(dataset.observations),
                     "dataset_chain_errors": sum(item.chain is None for item in dataset.observations),
                     "data_mode": dataset.data_mode,
+                    "parallelism": {
+                        "loader_workers_requested": loader_worker_count,
+                        "loader_workers_used": dataset.loading_parallelism.get("workers_used", 1),
+                        "chain_workers_used": dataset.loading_parallelism.get("chain_workers_used", 1),
+                        "loader_elapsed_seconds": dataset.loading_parallelism.get("elapsed_seconds"),
+                        "jsonl_parse_and_normalize_elapsed_seconds": dataset.loading_parallelism.get("jsonl_parse_and_normalize_elapsed_seconds"),
+                        "chain_preparation_elapsed_seconds": dataset.loading_parallelism.get("chain_preparation_elapsed_seconds"),
+                        "fold_workers_requested": effective_parallel_workers,
+                        "fold_workers_used": 0,
+                        "dataset_sharing": "not_applicable_exploratory_replay",
+                    },
                     "research_config_path": str(config_path_resolved),
                     "research_config_sha256": config_digest,
                     "live_base_config_sha256": base_config_digest,
@@ -445,6 +539,7 @@ def run_research(
                     "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
                     "created_at": timestamp.isoformat(), "status": "exploratory_only",
                     "validation": report["validation"],
+                    "parallelism": report["parallelism"],
                 }, indent=2, sort_keys=True, allow_nan=False)
                 _append_run_log(output_root / "research_runs.jsonl", {
                     "run_id": run_id, "created_at": timestamp.isoformat(), "strategy": strategy,
@@ -453,6 +548,7 @@ def run_research(
                     "live_base_config_sha256": base_config_digest, "code_sha256": code_digest,
                     "run_dir": str(run_dir), "status": "exploratory_only",
                     "validation": report["validation"],
+                    "parallelism": report["parallelism"],
                 })
                 return report
             raise
@@ -469,40 +565,43 @@ def run_research(
     starting_equity = float(research_config.get("starting_equity", 100000))
     gamma_vega_threshold = float(research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60))
 
+    requested_fold_workers = configured_parallel_workers
+    fold_worker_count = min(effective_parallel_workers, available_cpu_count(), len(folds))
+    fork_available = "fork" in mp.get_all_start_methods()
+    if fold_worker_count > 1 and not fork_available:
+        fold_worker_count = 1
+
+    global _FOLD_EVALUATION_CONTEXT
+    _FOLD_EVALUATION_CONTEXT = {
+        "dataset": dataset,
+        "folds": folds,
+        "strategy": strategy,
+        "research_config": research_config,
+        "base_config": base_config,
+    }
+    try:
+        if fold_worker_count > 1:
+            # Fork only the independent fold jobs. Their large point-in-time
+            # dataset stays read-only and shared copy-on-write; task payloads
+            # are fold indexes instead of serialized multi-gigabyte datasets.
+            with ProcessPoolExecutor(
+                max_workers=fold_worker_count,
+                mp_context=mp.get_context("fork"),
+            ) as executor:
+                fold_results = list(executor.map(_evaluate_fold_index, range(len(folds)), chunksize=1))
+        else:
+            fold_results = [_evaluate_fold_index(index) for index in range(len(folds))]
+    finally:
+        _FOLD_EVALUATION_CONTEXT = {}
+
     fold_records = []
     candidate_ledger: dict[str, dict] = {}
     selected_rows = []
     selected_oos_runs = []
-    for fold in folds:
-        train = dataset.observations[fold.train_start:fold.train_end]
-        oos = dataset.observations[fold.oos_start:fold.oos_end]
-
-        def evaluate(candidate):
-            run = simulate_options_strategy(
-                dataset, train, strategy_name=strategy, candidate=candidate,
-                config=research_config, base_config=base_config, force_close=True,
-            )
-            return {
-                "risk_adjusted_score": run["risk_adjusted_score"],
-                "metrics": run["metrics"],
-                "regime_breakdown": run["regime_breakdown"],
-                "volatility_breakdown": run["volatility_breakdown"],
-                "equity_curve_summary": _equity_summary(run),
-            }
-
-        candidate_rows = evaluate_candidates(strategy, research_config, base_config, evaluate)
-        candidate_rows = add_plateau_scores(
-            candidate_rows,
-            min_profitable_neighbour_fraction=float(research_config.get("search", {}).get("minimum_profitable_neighbour_fraction", 0.5)),
-            neighbour_count=int(research_config.get("search", {}).get("plateau_neighbours", 4)),
-        )
-        chosen = candidate_rows[0]
-        chosen_obj = next(item for item in candidate_pool(strategy, research_config, base_config)
-                          if item.candidate_id == chosen["candidate"]["candidate_id"])
-        oos_run = simulate_options_strategy(
-            dataset, oos, strategy_name=strategy, candidate=chosen_obj,
-            config=research_config, base_config=base_config, force_close=True,
-        )
+    for fold, fold_result in zip(folds, fold_results):
+        candidate_rows = fold_result["candidate_rows"]
+        chosen = fold_result["chosen"]
+        oos_run = fold_result["oos_run"]
         selected_oos_runs.append(oos_run)
         selected_entry = {"candidate": chosen["candidate"], "plateau": chosen["plateau"],
                           "is_metrics": chosen.get("metrics", {}), "oos_metrics": oos_run["metrics"],
@@ -706,6 +805,17 @@ def run_research(
         "live_base_config_sha256": base_config_digest,
         "code_sha256": code_digest,
         "random_seed": int(research_config.get("random_seed", 1)),
+        "parallelism": {
+            "loader_workers_requested": loader_worker_count,
+            "loader_workers_used": dataset.loading_parallelism.get("workers_used", 1),
+            "chain_workers_used": dataset.loading_parallelism.get("chain_workers_used", 1),
+            "loader_elapsed_seconds": dataset.loading_parallelism.get("elapsed_seconds"),
+            "jsonl_parse_and_normalize_elapsed_seconds": dataset.loading_parallelism.get("jsonl_parse_and_normalize_elapsed_seconds"),
+            "chain_preparation_elapsed_seconds": dataset.loading_parallelism.get("chain_preparation_elapsed_seconds"),
+            "fold_workers_requested": effective_parallel_workers,
+            "fold_workers_used": fold_worker_count,
+            "dataset_sharing": "fork_copy_on_write" if fold_worker_count > 1 else "single_process",
+        },
         "split": split,
         "folds": fold_records,
         "candidate_leaderboard": leaderboard,
@@ -767,6 +877,7 @@ def run_research(
         "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
         "created_at": timestamp.isoformat(), "validation": validation, "status": "completed",
         "final_candidate_id": final_id,
+        "parallelism": report["parallelism"],
     }, indent=2, sort_keys=True, allow_nan=False)
     if validation["approved"]:
         atomic_write_json(run_dir / "approved-options-config.json", exported, indent=2, sort_keys=True, allow_nan=False)
@@ -778,6 +889,7 @@ def run_research(
         "research_config_sha256": config_digest, "validation": validation,
         "live_base_config_sha256": base_config_digest, "code_sha256": code_digest,
         "run_dir": str(run_dir), "status": "completed",
+        "parallelism": report["parallelism"],
     })
     return report
 

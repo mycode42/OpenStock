@@ -5,7 +5,11 @@
   "output_dir": "data/options/research/runs",
   "automation": {
     "enabled": true,
-    "strategies": ["vrp", "event_driven", "long_volatility"]
+    "strategies": ["vrp", "long_volatility"],
+    "excluded_strategies": {
+      "event_driven": "Historical chain archives do not contain point-in-time event_recommendations.",
+      "directional_overlay": "Historical chain archives do not contain point-in-time equity_signals."
+    }
   },
   "model_surface": {
     "strike_steps": 15,

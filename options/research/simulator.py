@@ -24,6 +24,10 @@ from strategies.options.long_volatility import historical_iv_percentile
 from options.research.strategy_factory import make_strategy
 
 
+_LONG_VOL_IV_HISTORY_CACHE: dict[tuple, dict] = {}
+_LONG_VOL_IV_HISTORY_CACHE_LIMIT = 32
+
+
 @dataclass
 class _LegPosition:
     contract: object
@@ -188,29 +192,50 @@ def simulate_options_strategy(
     iv_history_by_underlying: dict[str, tuple[list[datetime], list[float]]] = {}
     if strategy_name == "long_volatility":
         from strategies.options.long_volatility import atm_implied_volatility
-        histories: dict[str, list[tuple[datetime, float]]] = {}
-        for historical in dataset.observations:
-            if historical.chain is None:
-                continue
-            snapshot_index = date_to_index.get(historical.chain.as_of)
-            observation_index = date_to_index.get(historical.as_of)
-            if (
-                snapshot_index is None or observation_index is None
-                or snapshot_index > observation_index
-                or observation_index - snapshot_index > int(market.get("maximum_snapshot_age_sessions", 1))
-            ):
-                continue
-            sample = atm_implied_volatility(historical.chain, strategy_section)
-            if sample is not None:
-                histories.setdefault(historical.underlying.upper(), []).append((historical.as_of, sample))
-        iv_history_by_underlying = {
-            symbol: (
-                [stamp for stamp, _value in ordered],
-                [value for _stamp, value in ordered],
+        iv_settings = tuple(
+            (key, strategy_section.get(key))
+            for key in (
+                "min_dte", "max_dte", "target_dte", "max_spread_pct",
+                "min_open_interest", "atm_delta_tolerance",
             )
-            for symbol, values in histories.items()
-            for ordered in [sorted(values)]
-        }
+        )
+        cache_key = (
+            dataset.source_sha256,
+            dataset.observations[0].underlying.upper() if dataset.observations else "",
+            iv_settings,
+            int(market.get("maximum_snapshot_age_sessions", 1)),
+            float(config.get("execution", {}).get("risk_free_rate", 0.04)),
+            float(config.get("execution", {}).get("dividend_yield", 0.015)),
+        )
+        cached_history = _LONG_VOL_IV_HISTORY_CACHE.get(cache_key)
+        if cached_history is None:
+            histories: dict[str, list[tuple[datetime, float]]] = {}
+            for historical in dataset.observations:
+                if historical.chain is None:
+                    continue
+                snapshot_index = date_to_index.get(historical.chain.as_of)
+                observation_index = date_to_index.get(historical.as_of)
+                if (
+                    snapshot_index is None or observation_index is None
+                    or snapshot_index > observation_index
+                    or observation_index - snapshot_index > int(market.get("maximum_snapshot_age_sessions", 1))
+                ):
+                    continue
+                sample = atm_implied_volatility(historical.chain, strategy_section)
+                if sample is not None:
+                    histories.setdefault(historical.underlying.upper(), []).append((historical.as_of, sample))
+            cached_history = {
+                symbol: (
+                    [stamp for stamp, _value in ordered],
+                    [value for _stamp, value in ordered],
+                )
+                for symbol, values in histories.items()
+                for ordered in [sorted(values)]
+            }
+            if len(_LONG_VOL_IV_HISTORY_CACHE) >= _LONG_VOL_IV_HISTORY_CACHE_LIMIT:
+                _LONG_VOL_IV_HISTORY_CACHE.pop(next(iter(_LONG_VOL_IV_HISTORY_CACHE)))
+            _LONG_VOL_IV_HISTORY_CACHE[cache_key] = cached_history
+        iv_history_by_underlying = cached_history
     initial_equity = float(config.get("starting_equity", 100000))
     if initial_equity <= 0 or not math.isfinite(initial_equity):
         raise ValueError("starting_equity must be positive and finite")
@@ -548,8 +573,11 @@ def simulate_options_strategy(
                         current_value=package_value,
                         held_days=held_days,
                         days_to_expiry=min(open_dtes, default=0),
-                        regime=observation.regime,
-                        entry_regime=trade.entry_regime,
+                        regime=observation.volatility_state,
+                        entry_regime=str(
+                            trade.signal.data_quality.get("activation_state")
+                            or trade.entry_regime
+                        ),
                         config=strategy_section,
                     )
                 expired = all(state.contract.expiration <= observation.as_of.date() for state in trade.legs.values() if state.signed_contracts)

@@ -43,6 +43,7 @@ def _strategy_summary(strategy: str, report: dict) -> dict:
         "walk_forward": (report.get("walk_forward") or {}).get("oos_metrics", {}),
         "holdout": report.get("holdout", {}).get("metrics", {}),
         "final_parameters": report.get("final_parameters", {}),
+        "parallelism": report.get("parallelism", {}),
         "exploratory_replay": report.get("exploratory_replay"),
         "data_mode": report.get("data_mode"),
         "underlying": report.get("underlying"),
@@ -90,9 +91,13 @@ def _error_summary(
     }
 
 
-def _run_research_job(strategy: str, config_path: Path, data_path: Path, underlying: str) -> dict:
+def _run_research_job(
+    strategy: str, config_path: Path, data_path: Path, underlying: str,
+    parallel_workers: int,
+) -> dict:
     report = run_research(
         strategy, config_path=config_path, data_path=data_path, underlying=underlying,
+        parallel_workers=parallel_workers,
     )
     return _strategy_summary(strategy, report)
 
@@ -112,6 +117,27 @@ def _render_markdown(report: dict) -> str:
         "This report is a separate research sleeve alongside equity AutoResearch. Options candidates remain research-only; exported parameters are not applied to paper or live settings.",
         "",
     ]
+    excluded = report.get("excluded_strategies", {})
+    if excluded:
+        lines.extend(["## Not researched", ""])
+        lines.extend(f"- **{name}:** {reason}" for name, reason in excluded.items())
+        lines.append("")
+    matrix = report.get("underlyings_by_strategy", {})
+    if matrix:
+        lines.extend(["## Research matrix", ""])
+        for strategy, symbols in matrix.items():
+            lines.append(f"- **{strategy}:** {', '.join(symbols)}")
+        lines.append("")
+    worker_map = report.get("workers_used_by_strategy", {})
+    if worker_map:
+        lines.extend(["## Parallelism", ""])
+        for strategy, count in worker_map.items():
+            fold_count = report.get("fold_workers_used_by_strategy", {}).get(strategy, 1)
+            lines.append(
+                f"- **{strategy}:** {count} concurrent ticker job(s), "
+                f"up to {fold_count} dataset-loading and fold worker(s) per job"
+            )
+        lines.append("")
     for strategy, result in report.get("strategies", {}).items():
         by_underlying = result.get("underlyings") or {result.get("underlying", "configured"): result}
         lines.extend([f"## {strategy}", "", f"Status: **{result.get('status')}**"])
@@ -159,12 +185,27 @@ def run_automated_options_research(
     if not strategies or any(item not in SUPPORTED_STRATEGIES for item in strategies):
         raise ValueError(f"automation strategies must be selected from {', '.join(SUPPORTED_STRATEGIES)}")
     automation_config = config.get("automation", {})
-    underlyings = [str(item).strip().upper() for item in automation_config.get(
+    default_underlyings = [str(item).strip().upper() for item in automation_config.get(
         "underlyings", [config.get("underlying", "SPY")],
     )]
-    if not underlyings or any(not item or not item.replace(".", "").isalnum() for item in underlyings):
+    if not default_underlyings or any(not item or not item.replace(".", "").isalnum() for item in default_underlyings):
         raise ValueError("automation underlyings must be non-empty ticker symbols")
-    underlyings = list(dict.fromkeys(underlyings))
+    default_underlyings = list(dict.fromkeys(default_underlyings))
+    configured_by_strategy = automation_config.get("underlyings_by_strategy", {})
+    if not isinstance(configured_by_strategy, dict):
+        raise ValueError("automation underlyings_by_strategy must be an object")
+    underlyings_by_strategy = {}
+    for strategy in strategies:
+        configured = configured_by_strategy.get(strategy, default_underlyings)
+        if not isinstance(configured, list):
+            raise ValueError(f"automation underlyings_by_strategy.{strategy} must be a list")
+        symbols = [str(item).strip().upper() for item in configured]
+        if not symbols or any(not item or not item.replace(".", "").isalnum() for item in symbols):
+            raise ValueError(f"automation underlyings for {strategy} must be non-empty ticker symbols")
+        underlyings_by_strategy[strategy] = list(dict.fromkeys(symbols))
+    underlyings = list(dict.fromkeys(
+        symbol for strategy in strategies for symbol in underlyings_by_strategy[strategy]
+    ))
     base_data_path = config.get("data_path", "data/options/research/chains.jsonl")
     data_paths = automation_config.get("data_paths", {})
     path_template = automation_config.get("data_path_template")
@@ -178,7 +219,34 @@ def run_automated_options_research(
     configured_workers = automation_config.get("workers", 1) if workers is None else workers
     if isinstance(configured_workers, bool) or not isinstance(configured_workers, int) or configured_workers < 1:
         raise ValueError("automation workers must be a positive integer")
-    worker_count = min(configured_workers, available_cpu_count(), len(strategies) * len(underlyings))
+    configured_workers_by_strategy = automation_config.get("workers_by_strategy", {})
+    if not isinstance(configured_workers_by_strategy, dict):
+        raise ValueError("automation workers_by_strategy must be an object")
+    available_cpus = available_cpu_count()
+    configured_fold_workers = config.get("search", {}).get("parallel_workers", 1)
+    if isinstance(configured_fold_workers, bool) or not isinstance(configured_fold_workers, int) or configured_fold_workers < 1:
+        raise ValueError("search.parallel_workers must be a positive integer")
+    fold_worker_budget = min(configured_fold_workers, available_cpus)
+    workers_requested_by_strategy = {}
+    workers_used_by_strategy = {}
+    fold_workers_used_by_strategy = {}
+    for strategy, symbols in underlyings_by_strategy.items():
+        strategy_limit = configured_workers_by_strategy.get(strategy, configured_workers)
+        if isinstance(strategy_limit, bool) or not isinstance(strategy_limit, int) or strategy_limit < 1:
+            raise ValueError(f"automation workers_by_strategy.{strategy} must be a positive integer")
+        if workers is not None:
+            strategy_limit = min(strategy_limit, workers)
+        workers_requested_by_strategy[strategy] = strategy_limit
+        # Each ticker job may itself use several fold processes over a shared
+        # copy-on-write dataset. Bound outer ticker concurrency so nested pools
+        # cannot oversubscribe the cores or multiply dataset memory.
+        outer_limit = max(1, available_cpus // fold_worker_budget)
+        workers_used_by_strategy[strategy] = min(strategy_limit, outer_limit, len(symbols))
+        fold_workers_used_by_strategy[strategy] = min(
+            fold_worker_budget,
+            max(1, available_cpus // workers_used_by_strategy[strategy]),
+        )
+    worker_count = max(workers_used_by_strategy.values(), default=0)
     output_root = _project_path(config.get("output_dir", "data/options/research/runs"))
     automation_dir = output_root.parent / "automation"
     automation_dir.mkdir(parents=True, exist_ok=True)
@@ -186,6 +254,10 @@ def run_automated_options_research(
     run_log = output_root / "research_runs.jsonl"
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
     enabled = bool(config.get("automation", {}).get("enabled", True))
+    configured_exclusions = automation_config.get("excluded_strategies", {})
+    if not isinstance(configured_exclusions, dict):
+        raise ValueError("automation excluded_strategies must be an object")
+    excluded_strategies = {str(name): str(reason) for name, reason in configured_exclusions.items()}
     strategies_report: dict[str, dict] = {}
     archive_merge = {
         symbol: merge_symbol_dataset(symbol)
@@ -198,51 +270,70 @@ def run_automated_options_research(
         status = "disabled"
         strategies_report = {strategy: {"status": "disabled"} for strategy in strategies}
     else:
-        jobs = [(strategy, underlying) for strategy in strategies for underlying in underlyings]
+        jobs = [
+            (strategy, underlying)
+            for strategy in strategies
+            for underlying in underlyings_by_strategy[strategy]
+        ]
         job_results: dict[tuple[str, str], tuple[datetime, dict]] = {}
         print(
             f"Options research: {len(jobs)} strategy/ticker jobs, "
-            f"{worker_count} workers (requested {configured_workers})",
+            f"ticker workers {workers_used_by_strategy}; "
+            f"fold workers {fold_workers_used_by_strategy} "
+            f"(maximum requested {configured_workers}, CPUs available {available_cpus})",
             flush=True,
         )
 
-        if worker_count == 1:
-            for strategy, underlying in jobs:
-                started = datetime.now(timezone.utc)
-                try:
-                    job_results[(strategy, underlying)] = (
-                        started,
-                        {"summary": _run_research_job(
-                            strategy, config_path_resolved,
-                            underlying_data_paths[underlying], underlying,
-                        )},
-                    )
-                except Exception as exc:
-                    job_results[(strategy, underlying)] = (started, {"error": exc})
-        else:
+        # Strategy groups have separate pools. This lets broad, lighter VRP jobs
+        # occupy all available cores while keeping the memory-heavy long-vol
+        # replay at its lower configured concurrency. Pools close between
+        # groups so idle worker processes do not retain historical datasets.
+        for strategy in strategies:
+            strategy_jobs = [
+                (strategy, underlying) for underlying in underlyings_by_strategy[strategy]
+            ]
+            strategy_workers = workers_used_by_strategy[strategy]
+            if strategy_workers == 1:
+                for job_strategy, underlying in strategy_jobs:
+                    started = datetime.now(timezone.utc)
+                    try:
+                        job_results[(job_strategy, underlying)] = (
+                            started,
+                            {"summary": _run_research_job(
+                                job_strategy, config_path_resolved,
+                                underlying_data_paths[underlying], underlying,
+                                fold_workers_used_by_strategy[strategy],
+                            )},
+                        )
+                    except Exception as exc:
+                        job_results[(job_strategy, underlying)] = (started, {"error": exc})
+                continue
+
             with ProcessPoolExecutor(
-                max_workers=worker_count,
+                max_workers=strategy_workers,
                 mp_context=mp.get_context("spawn"),
             ) as executor:
                 futures = {}
-                for strategy, underlying in jobs:
+                for job_strategy, underlying in strategy_jobs:
                     started = datetime.now(timezone.utc)
                     future = executor.submit(
-                        _run_research_job, strategy, config_path_resolved,
+                        _run_research_job, job_strategy, config_path_resolved,
                         underlying_data_paths[underlying], underlying,
+                        fold_workers_used_by_strategy[strategy],
                     )
-                    futures[future] = (strategy, underlying, started)
+                    futures[future] = (job_strategy, underlying, started)
                 for future in as_completed(futures):
-                    strategy, underlying, started = futures[future]
+                    job_strategy, underlying, started = futures[future]
                     try:
                         result = {"summary": future.result()}
                     except Exception as exc:
                         result = {"error": exc}
-                    job_results[(strategy, underlying)] = (started, result)
+                    job_results[(job_strategy, underlying)] = (started, result)
 
         for strategy in strategies:
             by_underlying = {}
-            for underlying in underlyings:
+            strategy_underlyings = underlyings_by_strategy[strategy]
+            for underlying in strategy_underlyings:
                 strategy_started, job_result = job_results[(strategy, underlying)]
                 if "error" in job_result:
                     by_underlying[underlying] = _error_summary(
@@ -251,8 +342,8 @@ def run_automated_options_research(
                     )
                 else:
                     by_underlying[underlying] = job_result["summary"]
-            if len(underlyings) == 1:
-                strategies_report[strategy] = by_underlying[underlyings[0]]
+            if len(strategy_underlyings) == 1:
+                strategies_report[strategy] = by_underlying[strategy_underlyings[0]]
             else:
                 child_statuses = {item.get("status") for item in by_underlying.values()}
                 strategy_status = (
@@ -292,6 +383,8 @@ def run_automated_options_research(
         "dataset_path": str(underlying_data_paths.get(underlyings[0])) if len(underlyings) == 1 else None,
         "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()},
         "dataset_available": data_available,
+        "underlyings_by_strategy": underlyings_by_strategy,
+        "excluded_strategies": excluded_strategies,
         "archive_merge": {
             symbol: {
                 "updated": not bool(result.get("skipped")),
@@ -302,6 +395,10 @@ def run_automated_options_research(
         "data_mode": data_mode,
         "workers_requested": configured_workers,
         "workers_used": worker_count if enabled else 0,
+        "workers_requested_by_strategy": workers_requested_by_strategy,
+        "workers_used_by_strategy": workers_used_by_strategy if enabled else {},
+        "fold_workers_requested": configured_fold_workers,
+        "fold_workers_used_by_strategy": fold_workers_used_by_strategy if enabled else {},
         "strategies": strategies_report,
         "research_only": True,
         "trade_or_order_actions": 0,
@@ -317,6 +414,11 @@ def run_automated_options_research(
         "status": status, "config_sha256": config_hash,
         "workers_requested": configured_workers,
         "workers_used": worker_count if enabled else 0,
+        "workers_requested_by_strategy": workers_requested_by_strategy,
+        "workers_used_by_strategy": workers_used_by_strategy if enabled else {},
+        "fold_workers_requested": configured_fold_workers,
+        "fold_workers_used_by_strategy": fold_workers_used_by_strategy if enabled else {},
+        "underlyings_by_strategy": underlyings_by_strategy,
         "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()}, "dataset_available": data_available,
         "strategies": {
             name: (

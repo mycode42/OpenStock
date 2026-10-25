@@ -505,7 +505,7 @@ def _long_volatility_exit_plans(
     positions: list[dict],
     position_audit: list[dict],
     now: datetime,
-    regime: str,
+    volatility_state: str,
     config: dict,
     slippage_per_contract: float,
 ) -> list[dict]:
@@ -614,8 +614,12 @@ def _long_volatility_exit_plans(
             current_value=current_value,
             held_days=held_days,
             days_to_expiry=(expirations[0] - market_date).days,
-            regime=regime,
-            entry_regime=str(signal.get("regime") or "unknown"),
+            regime=volatility_state,
+            entry_regime=str(
+                (signal.get("data_quality") or {}).get("activation_state")
+                or signal.get("regime")
+                or "unknown"
+            ),
             config=config,
         )
         close_legs = [
@@ -1283,7 +1287,7 @@ def run_paper_cycle(
         positions=option_positions_all,
         position_audit=position_audit,
         now=now,
-        regime=regime,
+        volatility_state=volatility_state,
         config=long_volatility_config,
         slippage_per_contract=float(config.get("costs", {}).get("slippage_per_contract_usd", 5.0)),
     )

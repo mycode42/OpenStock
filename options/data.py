@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import math
@@ -270,22 +271,33 @@ class HistoricalChainSnapshotProvider:
         dividend_yield: float = 0.015,
     ) -> None:
         self.snapshots = tuple(snapshots)
+        indexed: dict[str, list[tuple[datetime, dict]]] = {}
+        for row in self.snapshots:
+            symbol = str(row.get("underlying", "")).upper()
+            stamp = datetime.fromisoformat(str(row["as_of"]).replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                continue
+            indexed.setdefault(symbol, []).append((stamp, row))
+        self._snapshots_by_underlying = {
+            symbol: sorted(rows, key=lambda item: item[0])
+            for symbol, rows in indexed.items()
+        }
+        self._snapshot_times = {
+            symbol: [stamp for stamp, _ in rows]
+            for symbol, rows in self._snapshots_by_underlying.items()
+        }
         self.underlying_history = {key.upper(): tuple(value) for key, value in (underlying_history or {}).items()}
         self.rate = float(rate)
         self.dividend_yield = float(dividend_yield)
 
     def get_chain(self, underlying: str, *, as_of: datetime, min_dte: int, max_dte: int) -> OptionChain:
-        candidates = []
-        for row in self.snapshots:
-            if str(row.get("underlying", "")).upper() != underlying.upper():
-                continue
-            stamp = datetime.fromisoformat(str(row["as_of"]).replace("Z", "+00:00"))
-            if stamp.tzinfo is None or stamp > as_of:
-                continue
-            candidates.append((stamp, row))
-        if not candidates:
+        symbol = underlying.upper()
+        snapshots = self._snapshots_by_underlying.get(symbol, ())
+        times = self._snapshot_times.get(symbol, ())
+        index = bisect_right(times, as_of) - 1
+        if index < 0:
             raise ValueError(f"no historical option-chain snapshot at or before {as_of.isoformat()}")
-        stamp, snapshot = max(candidates, key=lambda item: item[0])
+        stamp, snapshot = snapshots[index]
         contracts = []
         quote_map = {}
         for row in snapshot.get("contracts", []):

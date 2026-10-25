@@ -1,11 +1,28 @@
 {
   "automation": {
     "workers": 8,
+    "workers_by_strategy": {
+      "vrp": 8,
+      "long_volatility": 8
+    },
     "underlyings": [
       "SPY", "QQQ", "GLD", "TLT", "NVDA", "AVGO", "TSM", "MSFT",
       "AAPL", "GOOGL", "META", "AMZN", "AMD", "JPM", "V", "UNH",
       "JNJ", "PG", "KO", "PLTR", "CRM", "PANW", "TSLA", "SPCX"
     ],
+    "underlyings_by_strategy": {
+      "vrp": [
+        "SPY", "QQQ", "GLD", "TLT", "NVDA", "AVGO", "TSM", "MSFT",
+        "AAPL", "GOOGL", "META", "AMZN", "AMD", "JPM", "V", "UNH",
+        "JNJ", "PG", "KO", "PLTR", "CRM", "PANW", "TSLA", "SPCX"
+      ],
+      "long_volatility": [
+        "SPY", "QQQ", "GLD", "TLT", "SPCX"
+      ]
+    },
     "data_path_template": "data/options/research/combined/{underlying}/chains.jsonl"
+  },
+  "search": {
+    "parallel_workers": 8
   }
 }
