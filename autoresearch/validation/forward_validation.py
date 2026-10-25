@@ -115,17 +115,26 @@ def _forward_session_data_version(database: str, base_version: str, symbols: lis
 
 def _current_regime(store, end: date) -> str | None:
     from strategies.regime import rank_strategies
-    from portfolio.config import get_algo_regime_config, get_algo_runtime_settings
+    from market.regime import load_fred_regime_series
+    from portfolio.config import (
+        ALGO_PORTFOLIO_UNIVERSE, get_algo_regime_config, get_algo_runtime_settings,
+    )
 
     settings = get_algo_runtime_settings()
     regime_config = get_algo_regime_config()
-    spy = store.bars(
-        ["SPY"], feed=FEED, timeframe="1Day",
+    context_symbols = list(dict.fromkeys(
+        [ticker for bucket in ALGO_PORTFOLIO_UNIVERSE.values() for ticker in bucket["tickers"]]
+        + ["SPY", "HYG", "LQD"]
+    ))
+    context_bars = store.bars(
+        context_symbols, feed=FEED, timeframe="1Day",
         start=(end - timedelta(days=RESEARCH_WARMUP_DAYS)).isoformat(),
         end=end.isoformat(), adjustment=ADJUSTMENT,
-    ).get("SPY", [])
+    )
+    spy = context_bars.get("SPY", [])
     if not spy:
         return None
+    macro_series, _ = load_fred_regime_series(store)
     result = rank_strategies(
         spy, mode="algo", event_enabled=settings.swing_event_driven_enabled,
         intraday_trend_enabled=settings.enable_intraday_trend_following,
@@ -133,6 +142,8 @@ def _current_regime(store, end: date) -> str | None:
         feature_set=regime_config["feature_set"],
         engine=regime_config["engine"],
         strategy_policy=regime_config["strategy_policy"],
+        context_bars=context_bars,
+        macro_series=macro_series,
         include_models=regime_config["include_models"],
         model_training_window=regime_config["model_training_window"],
         model_min_confidence=regime_config["min_model_confidence"],

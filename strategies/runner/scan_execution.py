@@ -204,6 +204,18 @@ def execute_scan_candidates(
             configured_risk = strategy_risks.get(strategy)
             if isinstance(configured_risk, (int, float)) and configured_risk > 0:
                 sizing_signal["risk_multiplier"] = float(configured_risk)
+            uncertainty_multiplier = float(
+                market.regime.get("regime_uncertainty_risk_multiplier", 1.0)
+            )
+            sizing_signal["risk_multiplier"] = float(
+                sizing_signal.get("risk_multiplier", 1.0)
+            ) * uncertainty_multiplier
+            if uncertainty_multiplier < 1.0:
+                base_weight = sizing_signal.get("target_weight")
+                if not isinstance(base_weight, (int, float)) or base_weight <= 0:
+                    base_weight = configured_cap or scope.risk_config.get("max_position_pct")
+                if isinstance(base_weight, (int, float)) and base_weight > 0:
+                    sizing_signal["target_weight"] = float(base_weight) * uncertainty_multiplier
             if action == "short" and str(market.regime.get("regime", "unknown")) == "range_bound":
                 sizing_signal["risk_multiplier"] *= float(
                     scope.risk_config.get("range_regime_short_risk_multiplier", 0.75)

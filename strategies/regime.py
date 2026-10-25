@@ -13,7 +13,13 @@ from strategies.regime_features import (
 from strategies.regime_models import infer_regime_model
 
 
-REGIME_ENGINE_VERSION = "2"
+REGIME_ENGINE_VERSION = "3"
+# The rule detector anchors the initial committee while the two model votes can
+# collectively overrule it; walk-forward evidence should guide future weights.
+REGIME_LABELS = (
+    "trending_up", "trending_down", "range_bound", "volatile", "ambiguous", "unknown",
+)
+COMMITTEE_VOTER_WEIGHTS = {"rule": 0.40, "hmm": 0.30, "gmm": 0.30}
 _FEATURE_CACHE_LOCK = RLock()
 _FEATURE_CACHE_KEY = None
 _FEATURE_CACHE_VALUE: list[dict] | None = None
@@ -126,6 +132,140 @@ def _selected_model(
     return infer_regime_model(
         features, engine=engine, feature_names=tuple(keys), training_window=training_window,
     )
+
+
+def _committee_consensus(
+    *, raw_rule_regime: str, smoothed_rule_regime: str,
+    model_results: dict[str, dict], model_min_confidence: float,
+) -> dict:
+    """Combine the deterministic rule vote with available HMM/GMM posteriors."""
+    rule_state = smoothed_rule_regime if smoothed_rule_regime in REGIME_LABELS else "unknown"
+    raw_state = raw_rule_regime if raw_rule_regime in REGIME_LABELS else "unknown"
+    rule_transition = raw_state != rule_state
+    rule_probabilities = {rule_state: 1.0}
+    if rule_transition:
+        rule_probabilities = {rule_state: 0.65, raw_state: 0.35}
+
+    voters = [{
+        "name": "rule",
+        "weight": COMMITTEE_VOTER_WEIGHTS["rule"],
+        "regime": rule_state,
+        "probabilities": rule_probabilities,
+        "confidence": max(rule_probabilities.values()),
+        "converged": True,
+    }]
+    model_details = {}
+    for name in ("hmm", "gmm"):
+        result = model_results.get(name, {})
+        raw_probabilities = result.get("probabilities")
+        probabilities = {}
+        if result.get("status") == "ok" and isinstance(raw_probabilities, dict):
+            for regime, probability in raw_probabilities.items():
+                if regime not in REGIME_LABELS:
+                    continue
+                if isinstance(probability, bool) or not isinstance(probability, (int, float)):
+                    continue
+                if not math.isfinite(probability) or probability < 0:
+                    continue
+                probabilities[regime] = float(probability)
+        total_probability = sum(probabilities.values())
+        if total_probability > 0:
+            probabilities = {
+                regime: probability / total_probability
+                for regime, probability in probabilities.items()
+            }
+            model_regime = max(
+                probabilities,
+                key=lambda regime: (probabilities[regime], regime == result.get("regime")),
+            )
+            model_confidence = probabilities[model_regime]
+            voters.append({
+                "name": name,
+                "weight": COMMITTEE_VOTER_WEIGHTS[name],
+                "regime": model_regime,
+                "probabilities": probabilities,
+                "confidence": model_confidence,
+                "converged": bool(result.get("converged", True)),
+            })
+        else:
+            model_regime = result.get("regime")
+            model_confidence = result.get("confidence")
+        model_details[name] = {
+            "status": result.get("status", "unavailable"),
+            "regime": model_regime,
+            "confidence": model_confidence,
+            "converged": result.get("converged"),
+            "used": total_probability > 0,
+        }
+
+    total_weight = sum(voter["weight"] for voter in voters)
+    distribution = {
+        regime: sum(
+            voter["weight"] * voter["probabilities"].get(regime, 0.0)
+            for voter in voters
+        ) / total_weight
+        for regime in REGIME_LABELS
+    }
+    distribution = {regime: value for regime, value in distribution.items() if value > 0}
+    leaders = [
+        regime for regime, value in distribution.items()
+        if math.isclose(value, max(distribution.values()), rel_tol=0.0, abs_tol=1e-12)
+    ]
+    selected = rule_state if rule_state in leaders else sorted(leaders)[0]
+    confidence = distribution[selected]
+    agreement_weight = sum(
+        voter["weight"] for voter in voters if voter["regime"] == selected
+    )
+    agreement = agreement_weight / total_weight
+    complete = len(voters) == len(COMMITTEE_VOTER_WEIGHTS)
+    models_confident = all(
+        voter["confidence"] >= model_min_confidence
+        for voter in voters if voter["name"] in {"hmm", "gmm"}
+    )
+    models_converged = all(voter["converged"] for voter in voters)
+
+    if selected in {"ambiguous", "unknown"}:
+        uncertainty_multiplier = 0.25
+    elif confidence >= 0.75 and agreement >= 0.90 and models_confident and models_converged:
+        uncertainty_multiplier = 1.0
+    elif confidence >= 0.55 and agreement >= 0.66:
+        uncertainty_multiplier = 0.70
+    else:
+        uncertainty_multiplier = 0.40
+    if not complete:
+        uncertainty_multiplier = min(uncertainty_multiplier, 0.60)
+    if rule_transition:
+        uncertainty_multiplier = min(uncertainty_multiplier, 0.60)
+    if not models_confident or not models_converged:
+        uncertainty_multiplier = min(uncertainty_multiplier, 0.70)
+
+    detector_details = {
+        "rule": {
+            "status": "ok",
+            "regime": rule_state,
+            "raw_regime": raw_state,
+            "confidence": max(rule_probabilities.values()),
+            "transition_pending": rule_transition,
+            "used": True,
+        },
+        **model_details,
+    }
+    return {
+        "regime": selected,
+        "consensus_score": round(confidence, 6),
+        "agreement": round(agreement, 6),
+        "complete": complete,
+        "uncertainty_risk_multiplier": round(uncertainty_multiplier, 4),
+        "applied_weights": {
+            voter["name"]: round(voter["weight"] / total_weight, 6)
+            for voter in voters
+        },
+        "weighted_support": {
+            regime: round(value, 6)
+            for regime, value in sorted(distribution.items())
+        },
+        "detectors": detector_details,
+    }
 
 
 def _raw_rule_states(feature_rows: list[dict], feature_set: str) -> tuple[list[str], list[str]]:
@@ -270,7 +410,7 @@ def rank_strategies(
     """
     if feature_set not in {"legacy", *FEATURE_SETS}:
         raise ValueError(f"Unknown regime feature set: {feature_set}")
-    if engine not in {"legacy", "rule", "hmm", "gmm"}:
+    if engine not in {"legacy", "rule", "hmm", "gmm", "committee"}:
         raise ValueError(f"Unknown regime engine: {engine}")
     if strategy_policy not in {"legacy", "structural", "high_vol_mean_reversion", "configured"}:
         raise ValueError(f"Unknown regime strategy policy: {strategy_policy}")
@@ -310,7 +450,7 @@ def rank_strategies(
         intraday_momentum_enabled=intraday_momentum_enabled,
     )
     model_shadow = {}
-    if include_models or engine in {"hmm", "gmm"}:
+    if include_models or engine in {"hmm", "gmm", "committee"}:
         model_shadow = {
             model_name: _selected_model(
                 features, engine=model_name, feature_set=feature_set,
@@ -347,14 +487,33 @@ def rank_strategies(
     else:
         raw_states, volatility_states = _raw_rule_states(features, feature_set)
         smoothed = _apply_hysteresis(raw_states)
-        selected = smoothed[-1]
+        rule_selected = smoothed[-1]
         volatility_state = volatility_states[-1]
         current = features[-1]
-        reason = (
+        rule_reason = (
             f"ER20={current.get('efficiency_ratio_20d')}; "
             f"RV20 percentile={current.get('realized_vol_percentile_252d')}; "
             f"volatility state={volatility_state}; feature set={feature_set}"
         )
+        if engine == "committee":
+            committee = _committee_consensus(
+                raw_rule_regime=raw_states[-1],
+                smoothed_rule_regime=rule_selected,
+                model_results=model_shadow,
+                model_min_confidence=model_min_confidence,
+            )
+            selected = committee["regime"]
+            if selected == "volatile":
+                volatility_state = "extreme"
+            reason = (
+                f"Committee selected {selected}: "
+                f"consensus={committee['consensus_score']:.0%}, "
+                f"agreement={committee['agreement']:.0%}, "
+                f"risk scale={committee['uncertainty_risk_multiplier']:.0%}; {rule_reason}"
+            )
+        else:
+            selected = rule_selected
+            reason = rule_reason
         use_legacy_weights = False
 
     if strategy_regime_weights is not None:
@@ -412,6 +571,7 @@ def rank_strategies(
     risk_scale_defaults = {"calm": 1.0, "elevated": 0.75, "extreme": 0.5, "unknown": 1.0}
     risk_scale_defaults.update(volatility_risk_scales or {})
     risk_scale = float(risk_scale_defaults.get(volatility_state, 1.0))
+    uncertainty_multiplier = committee["uncertainty_risk_multiplier"] if engine == "committee" else 1.0
     if selected == "ambiguous":
         risk_scale = min(risk_scale, 0.5)
     policy_scale = float(volatile_policy_risk_multiplier) if selected == "volatile" else 1.0
@@ -440,12 +600,14 @@ def rank_strategies(
         "volatility_state": volatility_state,
         "regime_features": features[-1],
         "regime_shadow": model_shadow,
+        "regime_committee": committee if engine == "committee" else None,
         "ranked": rank_items,
         "active": active,
         "strategy_risk_multipliers": risk_multipliers,
-        "risk_budget_multiplier": risk_scale,
+        "regime_uncertainty_risk_multiplier": uncertainty_multiplier,
+        "risk_budget_multiplier": round(risk_scale * policy_scale * uncertainty_multiplier, 4),
     }
-    if engine == "rule":
+    if engine in {"rule", "committee"}:
         output["regime_history"] = {
             "raw_regime": raw_states[-1],
             "smoothed_regime": smoothed[-1],

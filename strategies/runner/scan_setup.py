@@ -10,6 +10,7 @@ from market.data import feeds_for_session, regular_feed
 from portfolio.config import (
     get_algo_portfolio_coordinator_config,
     get_algo_runtime_settings,
+    get_algo_strategy_settings,
     get_mode_config,
 )
 from strategies.event_driven import EventStrategyConfig
@@ -64,6 +65,9 @@ def prepare_scan_scope(
     universe = universe_result if universe_result is not None else load_algo_universe()
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
     event_parameters = dict(ALGO_DEFAULT_PARAMETERS.get("swing_event_driven") or {})
+    event_parameters["minimum_confidence"] = get_algo_strategy_settings(
+        "swing_event_driven",
+    )["minimum_confidence"]
     # Regime eligibility is controlled by the editable per-strategy route table.
     event_parameters["disable_in_volatile"] = False
     event_config = EventStrategyConfig.from_dict(event_parameters)

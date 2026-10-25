@@ -617,6 +617,19 @@ class ReplaySignalsMixin:
         configured_risk = self.risk.get("risk_multiplier_by_strategy", {}).get(strategy)
         if isinstance(configured_risk, (int, float)) and configured_risk > 0:
             signal = {**signal, "risk_multiplier": float(configured_risk)}
+        uncertainty_multiplier = float(regime.get("regime_uncertainty_risk_multiplier", 1.0))
+        signal = {
+            **signal,
+            "risk_multiplier": float(signal.get("risk_multiplier", 1.0)) * uncertainty_multiplier,
+        }
+        if uncertainty_multiplier < 1.0:
+            base_weight = signal.get("target_weight")
+            if not isinstance(base_weight, (int, float)) or base_weight <= 0:
+                base_weight = self.risk.get("max_position_pct_by_strategy", {}).get(strategy)
+            if not isinstance(base_weight, (int, float)) or base_weight <= 0:
+                base_weight = self.risk.get("max_position_pct")
+            if isinstance(base_weight, (int, float)) and base_weight > 0:
+                signal["target_weight"] = float(base_weight) * uncertainty_multiplier
         if action == "short":
             regime_name = str(regime.get("regime", "unknown"))
             if ticker not in self.symbols:
