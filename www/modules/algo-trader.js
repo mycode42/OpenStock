@@ -298,9 +298,11 @@ export function createAlgoTrader({ request, charts }) {
                 <p class="algo-research-note">${escapeHtml(strategies || 'No strategy results')}</p>
                 <small class="algo-detail-time">${run.created_at ? `Completed ${escapeHtml(dateTime(run.created_at))}` : 'Completion time unavailable'} · research only</small>`;
         }
+        const strategyFitness = Array.isArray(run.strategy_fitness) ? run.strategy_fitness : [];
         return `<div class="algo-research-detail-head"><div><span class="algo-eyebrow">RESEARCH RUN</span><h3>${escapeHtml(run.date || 'Undated run')}</h3></div><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span></div>
             <p class="algo-research-note">${escapeHtml(run.result || 'Research result unavailable')}${run.portfolio_status && run.portfolio_status !== 'unavailable' ? ` · portfolio replay ${escapeHtml(run.portfolio_status)}` : ''}</p>
             ${run.factor_model ? `<div class="algo-run-metrics"><div><span>Factor model</span><strong>${escapeHtml(run.factor_model.family)}</strong></div><div><span>Observations</span><strong>${run.factor_model.observations ?? '—'}</strong></div><div><span>Rolling evaluations</span><strong>${run.factor_model.rolling_evaluations ?? '—'}</strong></div><div><span>Forward horizon</span><strong>${run.factor_model.forward_horizon_sessions ?? '—'} sessions</strong></div></div><p class="algo-research-note">Discovery ${escapeHtml(run.discovery_status)}${run.discovery_reason ? ` · ${escapeHtml(run.discovery_reason)}` : ''}</p>` : `<div class="algo-run-metrics"><div><span>Active trials</span><strong>${run.active_trials ?? '—'}</strong></div><div><span>Promoted</span><strong>${run.promoted ?? 0}</strong></div><div><span>Staged</span><strong>${run.staged ?? 0}</strong></div><div><span>Portfolio return</span><strong class="${classForReturn(run.portfolio_return_pct)}">${signedPercent(run.portfolio_return_pct)}</strong></div></div>`}
+            ${strategyFitness.length ? `<section class="algo-strategy-fitness"><div class="algo-strategy-fitness-title"><strong>Strategy fitness</strong><span>Out-of-sample score</span></div><div class="algo-strategy-fitness-grid algo-strategy-fitness-header"><span>Strategy</span><span>Current</span><span>Δ vs last run</span></div>${strategyFitness.map(strategy => `<div class="algo-strategy-fitness-grid"><span>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</span><strong class="${classForReturn(strategy.fitness)}">${signedScore(strategy.fitness)}</strong><strong class="${classForReturn(strategy.delta_vs_previous)}"${strategy.previous_run_date ? ` title="Compared with ${escapeHtml(strategy.previous_run_date)}"` : ''}>${signedScore(strategy.delta_vs_previous)}</strong></div>`).join('')}</section>` : ''}
             <small class="algo-detail-time">${run.created_at ? `Completed ${escapeHtml(dateTime(run.created_at))}` : ''}${run.duration_seconds !== null && run.duration_seconds !== undefined ? ` · ${Math.round(run.duration_seconds / 60)} min` : ''}</small>`;
     }
 
@@ -323,7 +325,7 @@ export function createAlgoTrader({ request, charts }) {
     }
 
     function renderAccountSwitch() {
-        return `<div class="algo-account-switch" role="group" aria-label="Algo Trader paper account">${[['equity', 'Equity Account'], ['options', 'Options Account']].map(([mode, label]) => `<button type="button" data-account-mode="${mode}" class="${accountMode === mode ? 'active' : ''}" aria-pressed="${accountMode === mode}">${label}</button>`).join('')}</div>`;
+        return `<div class="algo-account-switch algo-title-account-switch" role="group" aria-label="Algo Trader paper account">${[['equity', 'Equity Account'], ['options', 'Options Account']].map(([mode, label]) => `<button type="button" data-account-mode="${mode}" class="${accountMode === mode ? 'active' : ''}" aria-pressed="${accountMode === mode}">${label}</button>`).join('')}</div>`;
     }
 
     function render() {
@@ -360,12 +362,25 @@ export function createAlgoTrader({ request, charts }) {
         const closedMarketQuotePause = String(account.market_state || '').toUpperCase() === 'CLOSED'
             && pauseReasons.length === 1
             && pauseReasons[0] === 'owned positions lack fresh protective quotes';
-        const entryStatus = closedMarketQuotePause ? 'MARKET CLOSED' : account.entries_paused === true ? 'ENTRIES PAUSED' : account.entries_paused === false ? 'ENTRIES ENABLED' : 'ENTRY STATUS UNKNOWN';
-        const entryClass = closedMarketQuotePause ? 'algo-state-pill market-closed' : account.entries_paused === true ? 'algo-state-pill paused' : account.entries_paused === false ? 'algo-state-pill' : 'algo-state-pill unknown';
-        const pauseNoticeTitle = closedMarketQuotePause ? 'Market closed' : 'New entries are paused';
-        const pauseNoticeDetail = closedMarketQuotePause
+        const optionsMarketClosedPause = isOptions
+            && String(account.market_status || '').toUpperCase() === 'CLOSED'
+            && account.entries_paused === true
+            && pauseReasons.length === 1
+            && pauseReasons[0] === 'Options market is closed';
+        const marketClosedPause = closedMarketQuotePause || optionsMarketClosedPause;
+        const entryStatus = marketClosedPause ? 'MARKET CLOSED' : account.entries_paused === true ? 'ENTRIES PAUSED' : account.entries_paused === false ? 'ENTRIES ENABLED' : 'ENTRY STATUS UNKNOWN';
+        const entryClass = marketClosedPause ? 'algo-state-pill market-closed' : account.entries_paused === true ? 'algo-state-pill paused' : account.entries_paused === false ? 'algo-state-pill' : 'algo-state-pill unknown';
+        const pauseNoticeTitle = marketClosedPause ? 'Market closed' : 'New entries are paused';
+        const pauseNoticeDetail = optionsMarketClosedPause
+            ? 'The options marks and regime shown are from the last market session. New entries can resume when the market reopens.'
+            : closedMarketQuotePause
             ? 'Protective quotes will be checked again when the market reopens. New entries remain paused until then.'
             : pauseReasons.join(' · ');
+        const strategyListLabel = isOptions ? account.active_strategies_label || 'Strategies available in this regime' : 'Active strategies';
+        const noStrategiesMessage = isOptions ? 'No enabled strategy sleeves for this regime' : 'No active strategies in the last scan';
+        const strategyScope = isOptions
+            ? `${String(account.market_state || 'Current').replaceAll('_', ' ')} regime`
+            : `${account.universe_count ?? 0} tickers in configured universe`;
 
         host.innerHTML = `<main class="algo-page">
             <header class="algo-page-header">
@@ -373,7 +388,7 @@ export function createAlgoTrader({ request, charts }) {
                 <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ALPACA ${isOptions ? 'OPTIONS ' : ''}PAPER</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
             </header>
 
-            ${account.entries_paused && pauseReasons.length ? `<section class="algo-paused-notice ${closedMarketQuotePause ? 'market-closed' : ''}"><strong>${pauseNoticeTitle}</strong><span>${escapeHtml(pauseNoticeDetail)}</span></section>` : ''}
+            ${account.entries_paused && pauseReasons.length ? `<section class="algo-paused-notice ${marketClosedPause ? 'market-closed' : ''}"><strong>${pauseNoticeTitle}</strong><span>${escapeHtml(pauseNoticeDetail)}</span></section>` : ''}
 
             <section class="algo-kpi-grid" aria-label="Algo account KPIs">
                 <article class="algo-kpi algo-kpi-featured"><div class="algo-kpi-label">ACCOUNT EQUITY <span class="algo-kpi-period">${escapeHtml(snapshotDate)}</span></div><strong>${money(metrics.equity)}</strong><div class="algo-kpi-foot"><span>${isOptions ? 'Open positions' : 'Cash'} ${isOptions ? latestSnapshot?.position_count ?? '—' : money(latestSnapshot?.cash)}</span><span>${isOptions ? 'Options equity' : 'Invested'} ${isOptions ? money(metrics.equity) : money(latestSnapshot?.invested)}</span></div><div class="algo-kpi-spark"><svg viewBox="0 0 120 32" aria-hidden="true"><path d="${sparklinePath(history)}"/></svg></div></article>
@@ -392,9 +407,9 @@ export function createAlgoTrader({ request, charts }) {
                 </article>
 
                 <article class="card algo-panel algo-strategy-panel">
-                    <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(account.market_state || 'State unavailable')}</h2></div><span class="algo-state-pill ${closedMarketQuotePause ? 'market-closed' : account.entries_paused ? 'paused' : ''}"><i></i> ${escapeHtml(closedMarketQuotePause ? 'MARKET CLOSED' : account.entries_paused ? 'PAUSED' : account.last_scan_status || 'UNKNOWN')}</span></div>
-                    <div class="algo-strategy-score"><div class="algo-score-ring"><span>${account.active_strategies?.length ?? 0}</span><small>/strats</small></div><div><strong>Active strategies</strong><span>${account.universe_count ?? 0} ${isOptions ? 'underlyings in recent scans' : 'tickers in configured universe'}</span></div></div>
-                    <div class="algo-active-strategy-list">${(account.active_strategies || []).map(strategy => `<span>${escapeHtml(strategy)}</span>`).join('') || '<span class="algo-muted-text">No active strategies in the last scan</span>'}</div>
+                    <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(account.market_state || 'State unavailable')}</h2></div><span class="algo-state-pill ${marketClosedPause ? 'market-closed' : account.entries_paused ? 'paused' : ''}"><i></i> ${escapeHtml(marketClosedPause ? 'MARKET CLOSED' : account.entries_paused ? 'PAUSED' : account.last_scan_status || 'UNKNOWN')}</span></div>
+                    <div class="algo-strategy-score"><div class="algo-score-ring"><span>${account.active_strategies?.length ?? 0}</span><small>/strats</small></div><div><strong>${escapeHtml(strategyListLabel)}</strong><span>${isOptions ? escapeHtml(strategyScope) : strategyScope}</span></div></div>
+                    <div class="algo-active-strategy-list">${(account.active_strategies || []).map(strategy => `<span>${escapeHtml(strategy)}</span>`).join('') || `<span class="algo-muted-text">${escapeHtml(noStrategiesMessage)}</span>`}</div>
                     <div class="algo-strategy-list"><div><span>Last scan</span><strong>${escapeHtml(dateTime(account.last_scan_at))}</strong></div><div><span>Account mode</span><strong>Alpaca ${isOptions ? 'options ' : ''}paper</strong></div><div><span>Sharpe ratio</span><strong>${metrics.sharpe_ratio === null ? '—' : metrics.sharpe_ratio.toFixed(2)} <small>snapshot based</small></strong></div></div>
                     <button type="button" class="algo-text-link" data-action="open-config">Manage ${isOptions ? 'options' : 'runtime'} settings <span>↗</span></button>
                 </article>

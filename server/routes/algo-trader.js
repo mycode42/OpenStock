@@ -770,6 +770,10 @@ function summarizeResearch(report, fallbackDate = null) {
     if (!report) return null;
     const forward = safeObject(report.forward_validation);
     const portfolio = safeObject(safeObject(safeObject(report.fitness_timeline).current).portfolio);
+    const fitnessTimeline = safeObject(report.fitness_timeline);
+    const fitnessStrategies = safeObject(safeObject(fitnessTimeline.current).strategies);
+    const comparison = safeObject(fitnessTimeline.comparison_to_previous);
+    const strategyChanges = safeObject(comparison.strategy_changes);
     const orchestration = safeObject(report.orchestration);
     const adaptive = safeObject(report.adaptive_research);
     const factor = safeObject(report.factor_model);
@@ -789,6 +793,19 @@ function summarizeResearch(report, fallbackDate = null) {
         rejected,
         portfolio_return_pct: finite(portfolio.compounded_fold_return_pct),
         portfolio_status: String(portfolio.status || 'unavailable'),
+        strategy_fitness: Object.entries(fitnessStrategies).map(([name, strategy]) => {
+            const verification = safeObject(safeObject(strategy).verification);
+            const change = safeObject(strategyChanges[name]);
+            const delta = comparison.available === true && comparison.comparable === true
+                ? finite(change.oos_fitness_delta)
+                : null;
+            return {
+                name,
+                fitness: finite(verification.fitness),
+                delta_vs_previous: delta,
+                previous_run_date: comparison.prior_run_date_et || null,
+            };
+        }),
         duration_seconds: finite(safeObject(report.stage_timings).total_seconds),
         factor_only: factorOnly,
         factor_model: factorOnly ? {
@@ -1269,9 +1286,50 @@ function optionsSnapshotView(row, previous) {
     };
 }
 
-function optionsActivityView(decisions, orders, assignments, research) {
+function optionsStrategiesForRegime(settings, regime) {
+    const currentRegime = String(regime || '').trim().toLowerCase();
+    if (!currentRegime) return [];
+
+    const globalWeights = safeObject(settings.regime_risk_multipliers);
+    const regimeWeight = config => {
+        const weights = { ...globalWeights, ...safeObject(safeObject(config).regime_risk_multipliers) };
+        const value = finite(weights[currentRegime]);
+        return value !== null && value > 0;
+    };
+    const strategies = [];
+    const longVolatility = safeObject(settings.long_volatility);
+    const exclusiveLongVolatility = longVolatility.enabled === true && longVolatility.mode === 'exclusive';
+
+    if (!exclusiveLongVolatility && safeObject(settings.event_driven).enabled !== false
+        && regimeWeight(settings.event_driven)) {
+        strategies.push('Event Driven');
+    }
+
+    const allowedLongVolatilityRegimes = Array.isArray(longVolatility.allowed_regimes)
+        ? longVolatility.allowed_regimes.map(value => String(value).toLowerCase())
+        : ['volatile'];
+    if (longVolatility.enabled !== false && allowedLongVolatilityRegimes.includes(currentRegime)
+        && regimeWeight(longVolatility)) {
+        strategies.push('Long Volatility');
+    }
+
+    const vrp = safeObject(settings.vrp);
+    const allowedVrpRegimes = Array.isArray(vrp.allowed_regimes)
+        ? vrp.allowed_regimes.map(value => String(value).toLowerCase())
+        : [];
+    if (!exclusiveLongVolatility && vrp.enabled !== false && allowedVrpRegimes.includes(currentRegime)
+        && regimeWeight(vrp)) {
+        strategies.push('Volatility Risk Premium');
+    }
+    return strategies;
+}
+
+function optionsActivityView(decisions, orders, fills, assignments, research) {
     const activities = [];
     for (const row of decisions) {
+        // Cycle summaries are stored in the decisions journal too, but they do
+        // not represent signals and have no approval decision to display.
+        if (!row || !row.signal || typeof row.approved !== 'boolean') continue;
         const signal = safeObject(row.signal);
         const underlying = String(signal.underlying || '').toUpperCase();
         const strategy = String(signal.strategy || 'Options strategy').replaceAll('_', ' ');
@@ -1282,7 +1340,22 @@ function optionsActivityView(decisions, orders, assignments, research) {
             status: row.approved === true ? 'approved' : 'rejected',
         });
     }
+    const finalOrderIntents = new Set(orders
+        .filter(row => row?.client_order_id && row.broker_response)
+        .map(row => String(row.client_order_id)));
     for (const row of orders) {
+        if (row?.kind === 'cycle_summary') {
+            const status = String(row.status || '').toLowerCase();
+            const submitted = Number(row.submitted_count) || 0;
+            activities.push({
+                at: isoTimestamp(row.logged_at), kind: 'scan', title: 'Options scan',
+                detail: `${row.candidate_count || 0} candidates · ${row.approved_count || 0} approved · ${row.submitted_count || 0} submitted`,
+                status: submitted > 0 ? 'submitted' : status === 'cycle_no_order' ? 'no order' : 'order intent',
+            });
+            continue;
+        }
+        if (String(row?.status || '').toLowerCase() === 'submitting'
+            && row.client_order_id && finalOrderIntents.has(String(row.client_order_id))) continue;
         const signal = safeObject(row.signal);
         const underlying = String(signal.underlying || '').toUpperCase();
         const status = String(row.status || safeObject(row.broker_response).status || 'recorded').toLowerCase();
@@ -1291,6 +1364,20 @@ function optionsActivityView(decisions, orders, assignments, research) {
             title: `${status === 'dry_run' ? 'Paper order preview' : 'Options order'}${underlying ? ` · ${underlying}` : ''}`,
             detail: `${String(signal.strategy || 'Options strategy').replaceAll('_', ' ')} · ${status}`,
             status,
+        });
+    }
+    const ordersByClientId = new Map(orders
+        .filter(row => row?.client_order_id && row.signal)
+        .map(row => [String(row.client_order_id), row]));
+    for (const row of fills) {
+        const order = ordersByClientId.get(String(row.client_order_id || '')) || {};
+        const signal = safeObject(order.signal);
+        const underlying = String(signal.underlying || '').toUpperCase();
+        activities.push({
+            at: isoTimestamp(row.logged_at), kind: 'order',
+            title: `Options fill${underlying ? ` · ${underlying}` : ''}`,
+            detail: `${String(signal.strategy || 'Options strategy').replaceAll('_', ' ')} · ${row.filled_qty || 0} contracts filled`,
+            status: 'filled',
         });
     }
     for (const row of assignments) {
@@ -1313,7 +1400,7 @@ async function buildOptionsPayload(root) {
     const dataDir = path.join(root, 'data');
     const settings = await loadOptionsSettings(root);
     const accountDir = await optionsAccountDirectory(dataDir);
-    const [riskRows, decisions, orders, fills, strategyGreeks, assignments, research] = await Promise.all([
+    const [riskRows, decisions, orders, fills, strategyGreeks, assignments, research, coordinatorState] = await Promise.all([
         accountDir ? readJsonLines(path.join(accountDir, 'risk_daily.jsonl')) : [],
         accountDir ? readJsonLines(path.join(accountDir, 'decisions.jsonl')) : [],
         accountDir ? readJsonLines(path.join(accountDir, 'orders.jsonl')) : [],
@@ -1321,6 +1408,7 @@ async function buildOptionsPayload(root) {
         accountDir ? readJsonLines(path.join(accountDir, 'strategy_greeks.jsonl')) : [],
         accountDir ? readJsonLines(path.join(accountDir, 'assignment_events.jsonl')) : [],
         readOptionsResearch(dataDir),
+        readJson(path.join(dataDir, 'algo_state.json'), { optional: true }),
     ]);
     const chronologicalRiskRows = [...riskRows].sort((a, b) => String(a.logged_at || '').localeCompare(String(b.logged_at || '')));
     const history = [];
@@ -1336,14 +1424,17 @@ async function buildOptionsPayload(root) {
         lastRowOfDay = row;
     }
     const latestRisk = riskRows[riskRows.length - 1] || {};
-    const activeStrategies = [...new Set(decisions.slice(-50).map(row => safeObject(row.signal).strategy).filter(Boolean))];
     const universe = [...new Set(decisions.slice(-50).map(row => safeObject(row.signal).underlying).filter(Boolean))];
     const disabled = !settings.enabled;
     const unconfigured = !accountDir;
+    const marketStatus = String(coordinatorState?.market_state || '').toUpperCase();
+    const marketClosed = marketStatus === 'CLOSED';
     const entryPauseReasons = [];
     if (disabled) entryPauseReasons.push('Options paper route is disabled in options configuration');
     if (unconfigured) entryPauseReasons.push('No options paper account journal was found');
+    if (marketClosed && !disabled && !unconfigured) entryPauseReasons.push('Options market is closed');
     const latestTimestamp = isoTimestamp(latestRisk.logged_at);
+    const activeStrategies = optionsStrategiesForRegime(settings, latestRisk.regime || latestRisk.volatility_state);
     const strategyPerformance = optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows);
     const hasStrategyPnl = strategyPerformance.strategies.some(strategy => (
         strategy.latest_pnl_usd !== null || strategy.cumulative_pnl_usd !== null
@@ -1353,16 +1444,18 @@ async function buildOptionsPayload(root) {
         account: {
             mode: 'paper',
             market_state: String(latestRisk.regime || latestRisk.volatility_state || 'OPTIONS PAPER'),
+            market_status: marketStatus || 'UNKNOWN',
             last_scan_at: latestTimestamp,
             last_scan_status: latestTimestamp ? 'complete' : 'no options scan recorded',
-            entries_paused: disabled || unconfigured ? true : null,
+            entries_paused: disabled || unconfigured || (marketClosed && entryPauseReasons.length === 1) ? true : null,
             entry_pause_reasons: entryPauseReasons,
             active_strategies: activeStrategies,
+            active_strategies_label: 'Strategies available in this regime',
             universe_count: universe.length,
         },
         performance: { history, metrics: calculateMetrics(history) },
-        activity: optionsActivityView(decisions, orders, assignments, research),
         strategy_performance: attachEuroAmounts(strategyPerformance, fx),
+        activity: optionsActivityView(decisions, orders, fills, assignments, research),
         research,
         settings,
         settings_readonly_fields: process.env.ALPACA_OPTIONS_FEED ? ['market_data_feed'] : [],
