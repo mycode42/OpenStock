@@ -257,6 +257,10 @@ def rank_strategies(
     strategy_policy: str = "legacy", context_bars: dict[str, list[dict]] | None = None,
     macro_series: dict | None = None, include_models: bool = False,
     model_training_window: int = 756, model_min_confidence: float = 0.50,
+    strategy_regime_weights: dict[str, dict[str, float]] | None = None,
+    strategy_enabled: dict[str, bool] | None = None,
+    volatile_policy_risk_multiplier: float = 0.25,
+    volatility_risk_scales: dict[str, float] | None = None,
     precomputed_features: list[dict] | None = None,
 ) -> dict:
     """Rank eligible strategies using the legacy rule, composite rules, HMM, or GMM.
@@ -268,8 +272,15 @@ def rank_strategies(
         raise ValueError(f"Unknown regime feature set: {feature_set}")
     if engine not in {"legacy", "rule", "hmm", "gmm"}:
         raise ValueError(f"Unknown regime engine: {engine}")
-    if strategy_policy not in {"legacy", "structural", "high_vol_mean_reversion"}:
+    if strategy_policy not in {"legacy", "structural", "high_vol_mean_reversion", "configured"}:
         raise ValueError(f"Unknown regime strategy policy: {strategy_policy}")
+    if (
+        isinstance(volatile_policy_risk_multiplier, bool)
+        or not isinstance(volatile_policy_risk_multiplier, (int, float))
+        or not math.isfinite(volatile_policy_risk_multiplier)
+        or not 0 < volatile_policy_risk_multiplier <= 1.5
+    ):
+        raise ValueError("volatile_policy_risk_multiplier must be in (0, 1.5]")
     if (
         isinstance(model_min_confidence, bool)
         or not isinstance(model_min_confidence, (int, float))
@@ -346,7 +357,16 @@ def rank_strategies(
         )
         use_legacy_weights = False
 
-    if use_legacy_weights:
+    if strategy_regime_weights is not None:
+        enabled = strategy_enabled or {}
+        weights = {}
+        for name, regimes in strategy_regime_weights.items():
+            if enabled.get(name, True) is False or not isinstance(regimes, dict):
+                continue
+            score = regimes.get(selected, 0.0)
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score) and score > 0:
+                weights[name] = float(score)
+    elif use_legacy_weights:
         weights = {
             item["strategy"]: float(item["score"])
             for item in legacy.get("ranked", [])
@@ -369,7 +389,7 @@ def rank_strategies(
         intraday_trend_enabled=intraday_trend_enabled,
         intraday_momentum_enabled=intraday_momentum_enabled,
     )
-    if mode == "algo" and not use_legacy_weights:
+    if mode == "algo" and not use_legacy_weights and strategy_regime_weights is None:
         if intraday_trend_enabled and selected in {"trending_up", "trending_down"}:
             weights["intraday_trend_following"] = 0.60
         if intraday_momentum_enabled and selected in {"trending_up", "trending_down"}:
@@ -380,16 +400,25 @@ def rank_strategies(
             intraday_momentum_enabled=intraday_momentum_enabled,
         )
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
-    active = [name for name, score in ranked if name in available and (name != "swing_event_driven" or score >= 0.55)]
+    active = [
+        name for name, score in ranked
+        if name in available and (
+            strategy_regime_weights is not None
+            or name != "swing_event_driven"
+            or score >= 0.55
+        )
+    ]
 
-    risk_scale = 1.0
-    if volatility_state == "elevated":
-        risk_scale = 0.75
-    elif volatility_state == "extreme" or selected == "volatile":
-        risk_scale = 0.50
-    elif selected == "ambiguous":
-        risk_scale = 0.50
-    policy_scale = 0.25 if strategy_policy == "high_vol_mean_reversion" and selected == "volatile" else 1.0
+    risk_scale_defaults = {"calm": 1.0, "elevated": 0.75, "extreme": 0.5, "unknown": 1.0}
+    risk_scale_defaults.update(volatility_risk_scales or {})
+    risk_scale = float(risk_scale_defaults.get(volatility_state, 1.0))
+    if selected == "ambiguous":
+        risk_scale = min(risk_scale, 0.5)
+    policy_scale = float(volatile_policy_risk_multiplier) if selected == "volatile" else 1.0
+    if risk_scale * policy_scale <= 0:
+        # A zero scale is a deliberate pause for this volatility state. Keep
+        # route weights in diagnostics, but don't advertise strategies as live.
+        active = []
     risk_multipliers = {
         name: round(min(1.5, risk_scale * policy_scale * float(weights.get(name, 1.0))), 4)
         for name in active

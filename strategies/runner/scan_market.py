@@ -10,9 +10,9 @@ from threading import RLock
 from market.data import historical_delay_seconds, regular_feed
 from market.regime import load_fred_regime_series
 from portfolio.config import (
-    ALGO_REGIME_CONFIG,
     ALGO_REGIME_WARMUP_CALENDAR_DAYS,
     ALGO_SIGNAL_DATA_CONFIG,
+    get_algo_regime_config,
 )
 from runtime.paths import DATA_DIR
 from strategies.event_driven import EventCalendar, EventSignalGenerator
@@ -201,6 +201,7 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
     except Exception as exc:
         regime_macro_diagnostics = {"status": "unavailable", "error": type(exc).__name__}
         scope.scan_errors.append(f"regime macro data: {type(exc).__name__}: {exc}")
+    regime_config = get_algo_regime_config()
     try:
         regime = rank_strategies(
             daily_bars.get("SPY", []), mode=scope.mode,
@@ -208,14 +209,18 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
             event_disable_in_volatile=scope.event_config.disable_in_volatile,
             intraday_trend_enabled=scope.runtime_settings.enable_intraday_trend_following,
             intraday_momentum_enabled=scope.runtime_settings.enable_intraday_momentum,
-            feature_set=ALGO_REGIME_CONFIG["feature_set"],
-            engine=ALGO_REGIME_CONFIG["engine"],
-            strategy_policy=ALGO_REGIME_CONFIG["strategy_policy"],
+            feature_set=regime_config["feature_set"],
+            engine=regime_config["engine"],
+            strategy_policy=regime_config["strategy_policy"],
             context_bars=daily_bars,
             macro_series=regime_macro_series,
-            include_models=ALGO_REGIME_CONFIG["include_models"],
-            model_training_window=ALGO_REGIME_CONFIG["model_training_window"],
-            model_min_confidence=ALGO_REGIME_CONFIG["min_model_confidence"],
+            include_models=regime_config["include_models"],
+            model_training_window=regime_config["model_training_window"],
+            model_min_confidence=regime_config["min_model_confidence"],
+            strategy_regime_weights=regime_config["strategy_regime_weights"],
+            strategy_enabled=regime_config["strategy_enabled"],
+            volatile_policy_risk_multiplier=regime_config["volatile_policy_risk_multiplier"],
+            volatility_risk_scales=regime_config["volatility_risk_scales"],
         )
         regime["macro_data"] = regime_macro_diagnostics
     except Exception as exc:
@@ -236,6 +241,10 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
             historical_status = "degraded"
     regime_name = str(regime.get("regime", "unknown"))
 
+    multi_factor_parameters = parameters_for_regime("swing_multi_factor", regime_name)
+    if regime_config["strategy_regime_weights"]["swing_multi_factor"].get("volatile", 0) > 0:
+        multi_factor_parameters["disable_in_volatile"] = False
+
     return MarketSnapshot(
         daily_bars=daily_bars,
         bars_by_symbol=bars_by_symbol,
@@ -254,5 +263,5 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
         event_calendar_status=event_context.calendar_status,
         regime=regime,
         regime_name=regime_name,
-        multi_factor_parameters=parameters_for_regime("swing_multi_factor", regime_name),
+        multi_factor_parameters=multi_factor_parameters,
     )

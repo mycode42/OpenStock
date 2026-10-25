@@ -7,7 +7,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from market.data import feeds_for_session, regular_feed
-from portfolio.config import get_algo_runtime_settings, get_mode_config
+from portfolio.config import (
+    get_algo_portfolio_coordinator_config,
+    get_algo_runtime_settings,
+    get_mode_config,
+)
 from strategies.event_driven import EventStrategyConfig
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
 from strategies.runner.factors import multi_factor_parameters_for_session
@@ -59,9 +63,10 @@ def prepare_scan_scope(
     multi_factor_parameters, multi_factor_parameter_source = multi_factor_parameters_for_session()
     universe = universe_result if universe_result is not None else load_algo_universe()
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
-    event_config = EventStrategyConfig.from_dict(
-        ALGO_DEFAULT_PARAMETERS.get("swing_event_driven"),
-    )
+    event_parameters = dict(ALGO_DEFAULT_PARAMETERS.get("swing_event_driven") or {})
+    # Regime eligibility is controlled by the editable per-strategy route table.
+    event_parameters["disable_in_volatile"] = False
+    event_config = EventStrategyConfig.from_dict(event_parameters)
     event_strategy_enabled = (
         event_config.enabled and runtime_settings.swing_event_driven_enabled
     )
@@ -69,7 +74,9 @@ def prepare_scan_scope(
     track_owners = True
     mode_config = get_mode_config(mode)
     risk_config = mode_config["risk"]
-    coordinator_config = PortfolioCoordinatorConfig.from_dict()
+    coordinator_config = PortfolioCoordinatorConfig.from_dict(
+        get_algo_portfolio_coordinator_config(),
+    )
     scan_errors: list[str] = []
     entry_pause_reasons: list[str] = []
     if not selected_symbols:

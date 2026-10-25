@@ -35,11 +35,14 @@ from strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig,
 )
 from strategies.regime import _cached_feature_history, rank_strategies
-from portfolio.config import ALGO_REGIME_CONFIG
+from portfolio.config import get_algo_regime_config
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, validate_parameter_profile
 from strategies.rule_pipeline import evaluate_rule_signal
 from strategies.swing_common import CachedDailyBarHistory
-from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings, get_mode_config
+from portfolio.config import (
+    ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_portfolio_coordinator_config,
+    get_algo_runtime_settings, get_mode_config,
+)
 from execution.risk import _get_universe_maps, validate_trade
 
 
@@ -115,7 +118,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             raise ValueError("execution_delay_bars must be an integer from 0 to 12")
         self.execution_delay_bars = execution_delay_bars
         self.spy_daily_bars = spy_daily_bars
-        self.regime_config = {**ALGO_REGIME_CONFIG, **(regime_config or {})}
+        self.regime_config = {**get_algo_regime_config(), **(regime_config or {})}
         # Adaptive searches share this cache only across replays with identical
         # market inputs and regime settings, avoiding repeated rankings for
         # the same session while evaluating different parameter candidates.
@@ -151,7 +154,9 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.borrow_coverage: Counter[str] = Counter()
         self.borrow_cost_total = 0.0
         self.commission_total = 0.0
-        coordinator_config = coordinator_config or PortfolioCoordinatorConfig.from_dict()
+        coordinator_config = coordinator_config or PortfolioCoordinatorConfig.from_dict(
+            get_algo_portfolio_coordinator_config(),
+        )
         self.coordinator = PortfolioCoordinator(coordinator_config)
         self.force_close_at_end = bool(force_close_at_end)
         self.risk = deepcopy(get_mode_config("algo")["risk"])
@@ -167,7 +172,9 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.runtime_settings = runtime_settings
         self.research_controls = validate_research_controls(research_controls)
         self.event_calendar = event_calendar or EventCalendar()
-        self.event_config = EventStrategyConfig.from_dict(self.profile.get("swing_event_driven"))
+        event_values = dict(self.profile.get("swing_event_driven") or {})
+        event_values["disable_in_volatile"] = False
+        self.event_config = EventStrategyConfig.from_dict(event_values)
         self.event_strategy_enabled = (
             self.event_config.enabled and runtime_settings.swing_event_driven_enabled
             and (self.strategy_filter is None or "swing_event_driven" in self.strategy_filter)
@@ -178,9 +185,10 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             runtime_settings.swing_multi_factor_enabled
             and (self.strategy_filter is None or "swing_multi_factor" in self.strategy_filter)
         )
-        self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(
-            self.parameters_for_regime("swing_multi_factor", "unknown")
-        ))
+        multi_factor_parameters = self.parameters_for_regime("swing_multi_factor", "unknown")
+        if self.regime_config["strategy_regime_weights"]["swing_multi_factor"].get("volatile", 0) > 0:
+            multi_factor_parameters["disable_in_volatile"] = False
+        self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(multi_factor_parameters))
         self.multi_factor_config_key = self.multi_factor_generator.config.to_dict()
         self.multi_factor_fundamentals_cache: dict[str, tuple[dict, dict]] = {}
         all_daily_bars = (

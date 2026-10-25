@@ -10,7 +10,7 @@ from strategies.catalog import STRATEGY_CATALOG, canonical_strategy_id
 from strategies.indicators import adx, closes, efficiency_ratio, moving_average
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from strategies.signals import Signal
-from portfolio.config import get_algo_runtime_settings
+from portfolio.config import get_algo_runtime_settings, get_algo_strategy_settings, get_mode_config
 from strategies.swing_common import SwingSignal
 from strategies.mean_reversion.swing import SwingMeanReversionConfig
 from strategies.momentum.swing import SwingMomentumConfig
@@ -60,12 +60,12 @@ def _trend_config(parameters: dict) -> SwingTrendConfig:
 def _intraday_strategy_signal(signal: Signal | None, name: str) -> SwingSignal | None:
     if signal is None:
         return None
-    runtime_settings = get_algo_runtime_settings()
+    settings = get_algo_strategy_settings(name)
     return SwingSignal(
         signal.ticker, signal.action, name, signal.reason, signal.strength,
         stop_pct=0.01, strategy_group="intraday_core",
-        target_weight=runtime_settings.intraday_strategy_position_pct,
-        risk_multiplier=runtime_settings.intraday_strategy_risk_multiplier,
+        target_weight=settings["max_position_pct"],
+        risk_multiplier=settings["risk_multiplier"],
     )
 
 
@@ -220,8 +220,7 @@ def evaluate_rule_signal(
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
     # Stop distances are live risk settings, not research-tunable signal
     # parameters. Apply the horizon-specific Algo values after profile merge.
-    from portfolio.config import ALGO_MODE_CONFIG
-    algo_risk = ALGO_MODE_CONFIG["risk"]
+    algo_risk = get_mode_config("algo")["risk"]
     if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
         params["hard_stop_pct"] = algo_risk["stop_loss_pct_by_strategy"][name]
     if name in algo_risk.get("trailing_stop_pct_by_strategy", {}):

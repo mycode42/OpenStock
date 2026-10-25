@@ -1,8 +1,10 @@
+import json
+
 import pytest
 
 from execution import risk as risk_validator
 import portfolio.config as portfolio_config
-from portfolio.config import ALGO_MODE_CONFIG, STRATEGY_CONFIG, get_mode_config
+from portfolio.config import ALGO_MODE_CONFIG, STRATEGY_CONFIG, get_algo_configuration, get_mode_config
 from strategies import mean_reversion, momentum, trend_following
 from strategies.regime import rank_strategies
 from strategies.signals import Signal
@@ -82,11 +84,12 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_event_driven"] == 7
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_event_driven"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 4
-    assert STRATEGY_CONFIG["overnight_entries_enabled"] is True
+    config = get_algo_configuration()
+    assert config["general"]["overnight_entries_enabled"] is False
+    assert config["strategies"]["intraday_trend_following"]["enabled"] is True
+    assert config["strategies"]["intraday_momentum"]["enabled"] is True
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["swing_trend_following"] > 0.05
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["intraday_mean_reversion"] <= 0.012
-    assert STRATEGY_CONFIG["enable_intraday_trend_following"] is False
-    assert STRATEGY_CONFIG["enable_intraday_momentum"] is False
     assert STRATEGY_CONFIG["extended_hours_max_spread_pct"] == 0.02
     with pytest.raises(ValueError, match="Only the algo account route"):
         get_mode_config("unknown")
@@ -109,15 +112,16 @@ def test_algo_stop_sizing_uses_horizon_specific_config():
 
 
 def test_algo_trade_sizing_respects_ticker_universe_cap():
-    risk = ALGO_MODE_CONFIG["risk"]
+    mode_config = get_mode_config("algo")
+    risk = mode_config["risk"]
     trade = _make_trade({
         "ticker": "PLTR", "action": "buy", "strategy": "swing_trend_following",
-        "reason": "swing setup", "risk_multiplier": 1.0,
-    }, 200, 100_000, {}, risk, mode_universe=ALGO_MODE_CONFIG["universe"])
+        "reason": "swing setup", "risk_multiplier": 1.0, "target_weight": 0.04,
+    }, 200, 100_000, {}, risk, mode_universe=mode_config["universe"])
 
     assert trade is not None
     assert trade["qty"] * trade["entry_price"] <= (
-        100_000 * ALGO_MODE_CONFIG["universe"]["tactical"]["max_per_stock_pct"]
+        100_000 * mode_config["universe"]["tactical"]["max_per_stock_pct"]
     )
     state = {
         "equity": 100_000, "cash": 100_000, "available_cash": 100_000,
@@ -391,30 +395,24 @@ def test_regime_filter_prefers_trend_strategies_in_a_rising_market():
     assert regime["active"][0] == "swing_trend_following"
 
 
-@pytest.mark.parametrize(
-    ("name", "flag"),
-    [("intraday_trend_following", "enable_intraday_trend_following"),
-     ("intraday_momentum", "enable_intraday_momentum")],
-)
-def test_intraday_strategies_are_opt_in_with_horizon_risk_limits(name, flag, monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        portfolio_config, "ALGO_DASHBOARD_OVERRIDES_PATH",
-        tmp_path / "runtime-overrides.json",
-    )
-    monkeypatch.setitem(STRATEGY_CONFIG, flag, False)
+@pytest.mark.parametrize("name", ["intraday_trend_following", "intraday_momentum"])
+def test_intraday_strategies_use_configured_enable_and_risk_limits(name, monkeypatch, tmp_path):
+    config_path = tmp_path / "algo-strategy-config.json"
+    monkeypatch.setattr(portfolio_config, "ALGO_STRATEGY_CONFIG_PATH", config_path)
+    config_path.write_text(json.dumps({"strategies": {name: {"enabled": False}}}))
     monkeypatch.setattr(
         rule_pipeline, "evaluate_strategy",
         lambda strategy, *_args, **_kwargs: Signal("AAPL", "buy", strategy, "test"),
     )
     assert rule_pipeline.evaluate_rule_signal(name, "AAPL", [], {"enabled": True}) is None
 
-    monkeypatch.setitem(STRATEGY_CONFIG, flag, True)
+    config_path.write_text(json.dumps({"strategies": {name: {"enabled": True}}}))
     signal = rule_pipeline.evaluate_rule_signal(name, "AAPL", [], {"enabled": True})
 
     assert signal is not None
     assert signal.strategy == name
     assert signal.strategy_group == "intraday_core"
-    assert signal.target_weight == pytest.approx(0.01)
+    assert signal.target_weight == pytest.approx(0.02)
     assert signal.risk_multiplier == pytest.approx(0.25)
 
 

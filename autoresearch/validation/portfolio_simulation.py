@@ -16,7 +16,7 @@ from autoresearch.backtest import (
 )
 from autoresearch.backtest.config import REGIME_WARMUP_DAYS
 from autoresearch.backtest.execution import build_replay_timeline
-from portfolio.config import ALGO_REGIME_CONFIG
+from portfolio.config import get_algo_regime_config
 from market.store import SQLiteBarStore
 from autoresearch.cpu import available_cpu_count
 from strategies.catalog import STRATEGY_CATALOG
@@ -473,7 +473,7 @@ def _run_coordinated_fold(
         execution_delay_bars=execution_delay_bars,
         regime_macro_series=macro_series,
         regime_config={
-            **ALGO_REGIME_CONFIG,
+            **get_algo_regime_config(),
             "macro_data_status": macro_diagnostics.get("status"),
         },
         factor_weight_timeline=factor_weight_timeline,

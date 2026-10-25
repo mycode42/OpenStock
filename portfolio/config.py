@@ -26,13 +26,11 @@ ALGO_MIN_CASH_PCT = 0.10
 
 @dataclass(frozen=True)
 class AlgoRuntimeSettings:
-    """Typed source of truth for settings specific to the Algo service."""
+    """Per-scan projection of strategy activation and session settings."""
 
     overnight_entries_enabled: bool = True
     enable_intraday_trend_following: bool = False
     enable_intraday_momentum: bool = False
-    intraday_strategy_position_pct: float = 0.01
-    intraday_strategy_risk_multiplier: float = 0.25
     swing_multi_factor_enabled: bool = True
     swing_event_driven_enabled: bool = True
 
@@ -44,35 +42,11 @@ class AlgoRuntimeSettings:
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
-        for name in (
-            "intraday_strategy_position_pct", "intraday_strategy_risk_multiplier",
-        ):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be a positive finite number")
-
-    def as_legacy_dict(self) -> dict:
-        """Return the compatibility mapping consumed by older integrations."""
+    def as_dict(self) -> dict:
+        """Return the scan's resolved strategy and session switches."""
         return asdict(self)
-
-    @property
-    def enable_intraday_trend(self) -> bool:
-        """Compatibility alias for the horizon-explicit setting."""
-        return self.enable_intraday_trend_following
-
-    @property
-    def algo_multi_factor_enabled(self) -> bool:
-        return self.swing_multi_factor_enabled
-
-    @property
-    def algo_event_driven_enabled(self) -> bool:
-        return self.swing_event_driven_enabled
-
-
-ALGO_RUNTIME_SETTINGS = AlgoRuntimeSettings()
-# Compatibility projection for callers that still consume runtime mappings.
-ALGO_RUNTIME_CONFIG = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
-ALGO_DASHBOARD_OVERRIDES_PATH = DATA_DIR / "dashboard-runtime-overrides.json"
+ALGO_STRATEGY_DEFAULTS_PATH = Path(__file__).with_name("algo-strategy-config.default.json")
+ALGO_STRATEGY_CONFIG_PATH = DATA_DIR / "algo-strategy-config.json"
 ALGO_SIGNAL_DATA_CONFIG = {
     "signal_bar_max_age_minutes": 20,
     "delayed_signal_bar_max_age_minutes": 20,
@@ -274,7 +248,7 @@ ALGO_REGIME_CONFIG = {
     # diagnostics until forward replay establishes stable incremental value.
     "engine": "rule",
     "feature_set": "marketwide",
-    "strategy_policy": "high_vol_mean_reversion",
+    "strategy_policy": "configured",
     "include_models": True,
     "min_model_confidence": 0.50,
     "model_training_window": 756,
@@ -288,24 +262,15 @@ ALGO_SERVICE_CONFIG = {
 
 def get_algo_research_controls() -> dict:
     """Return the live portfolio limits that research replays must respect."""
-    risk = ALGO_MODE_CONFIG["risk"]
+    risk = get_mode_config("algo")["risk"]
     return {
-        "max_entries_per_day": ALGO_ENTRY_LIMITS.max_daily_entries,
+        "max_entries_per_day": risk["max_trades_per_day"],
         "max_open_positions": risk["max_open_positions"],
         "max_positions_per_strategy": risk["max_positions_per_strategy"],
         "max_entries_per_strategy_per_day": deepcopy(risk["max_entries_per_strategy_per_day"]),
         "cooldown_minutes_by_strategy": deepcopy(risk["cooldown_minutes_by_strategy"]),
     }
 
-# Runtime defaults shared by the live portfolio and research workflows.
-_ALGO_RUNTIME_DEFAULTS = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
-_ALGO_RUNTIME_LEGACY_ALIASES = {
-    "enable_intraday_trend": "enable_intraday_trend_following",
-    "intraday_satellite_position_pct": "intraday_strategy_position_pct",
-    "intraday_satellite_risk_multiplier": "intraday_strategy_risk_multiplier",
-    "algo_multi_factor_enabled": "swing_multi_factor_enabled",
-    "algo_event_driven_enabled": "swing_event_driven_enabled",
-}
 STRATEGY_CONFIG = {
     "portfolio_scan_seconds": 60,
     "universe_retry_seconds": 300,
@@ -317,45 +282,105 @@ STRATEGY_CONFIG = {
     "risk_per_trade_pct": 0.005,
     "max_strategy_position_pct": 0.05,
     "take_profit_r_multiple": 2.0,
-    **ALGO_RUNTIME_CONFIG,
 }
 
 
+def _merge_configuration(base: dict, override: dict) -> dict:
+    result = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _merge_configuration(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+    return result
+
+
+def get_algo_configuration() -> dict:
+    """Load the canonical editable live configuration, falling back to defaults."""
+    try:
+        defaults = json.loads(ALGO_STRATEGY_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Algo strategy defaults are unreadable") from exc
+    if not isinstance(defaults, dict):
+        raise ValueError("Algo strategy defaults must be an object")
+    if not ALGO_STRATEGY_CONFIG_PATH.exists():
+        return defaults
+    try:
+        overrides = json.loads(ALGO_STRATEGY_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Algo strategy configuration is unreadable") from exc
+    if not isinstance(overrides, dict):
+        raise ValueError("Algo strategy configuration must be an object")
+    return _merge_configuration(defaults, overrides)
+
+
+def get_algo_strategy_settings(strategy: str) -> dict:
+    """Return the effective editable policy and sizing for one catalog strategy."""
+    from strategies.catalog import canonical_strategy_id
+
+    strategy = canonical_strategy_id(strategy)
+    settings = get_algo_configuration()["strategies"].get(strategy)
+    if settings is None:
+        raise KeyError(f"Unknown Algo strategy: {strategy}")
+    return settings
+
+
+def get_algo_regime_config() -> dict:
+    """Return effective regime classification and per-strategy routing settings."""
+    config = get_algo_configuration()
+    general = config["general"]
+    return {
+        "engine": general["regime_engine"],
+        "feature_set": general["regime_feature_set"],
+        "strategy_policy": "configured",
+        "include_models": general["model_diagnostics_enabled"],
+        "min_model_confidence": general["model_min_confidence"],
+        "model_training_window": general["model_training_window"],
+        "strategy_regime_weights": {
+            name: dict(settings["regime_weights"])
+            for name, settings in config["strategies"].items()
+        },
+        "strategy_enabled": {
+            name: bool(settings["enabled"])
+            for name, settings in config["strategies"].items()
+        },
+        "volatile_policy_risk_multiplier": general["volatile_policy_risk_multiplier"],
+        "volatility_risk_scales": dict(general["volatility_risk_scales"]),
+    }
+
+
+def get_algo_portfolio_coordinator_config() -> dict:
+    """Return the effective settings used by the scan-local exposure coordinator."""
+    portfolio = get_algo_configuration()["portfolio"]
+    return {
+        "max_name_pct": portfolio["max_name_pct"],
+        "max_gross_pct": portfolio["max_gross_pct"],
+        "max_net_long_pct": portfolio["max_net_long_pct"],
+        "max_net_short_pct": portfolio["max_net_short_pct"],
+        "max_daily_entries": portfolio["max_daily_entries"],
+        "max_intraday_entries": portfolio["max_intraday_entries"],
+        "max_swing_entries": portfolio["max_swing_entries"],
+        "swing_open_delay_minutes": portfolio["swing_open_delay_minutes"],
+        "intraday_close_cutoff_minutes": portfolio["intraday_close_cutoff_minutes"],
+        "allow_opposite_netting": portfolio["allow_opposite_netting"],
+        "allow_intraday_overnight": portfolio["allow_intraday_overnight"],
+        "regime_throttle_enabled": portfolio["regime_throttle_enabled"],
+        "regime_gross_caps": dict(portfolio["regime_gross_caps"]),
+        "sector_caps": dict(portfolio["sector_caps"]),
+    }
+
+
 def get_algo_runtime_settings() -> AlgoRuntimeSettings:
-    """Return validated effective settings, including dashboard overrides."""
-    values = ALGO_RUNTIME_SETTINGS.as_legacy_dict()
-    for config in (ALGO_RUNTIME_CONFIG, STRATEGY_CONFIG):
-        for key, value in config.items():
-            canonical_key = _ALGO_RUNTIME_LEGACY_ALIASES.get(key, key)
-            if (
-                canonical_key in _ALGO_RUNTIME_DEFAULTS
-                and value != _ALGO_RUNTIME_DEFAULTS[canonical_key]
-            ):
-                values[canonical_key] = value
-    if ALGO_DASHBOARD_OVERRIDES_PATH.exists():
-        try:
-            overrides = json.loads(ALGO_DASHBOARD_OVERRIDES_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError("Algo dashboard runtime overrides are unreadable") from exc
-        if not isinstance(overrides, dict):
-            raise ValueError("Algo dashboard runtime overrides must be an object")
-        normalized_overrides = {}
-        for key, value in overrides.items():
-            canonical_key = _ALGO_RUNTIME_LEGACY_ALIASES.get(key, key)
-            if canonical_key in normalized_overrides:
-                raise ValueError(f"Algo dashboard overrides contain conflicting settings for {canonical_key}")
-            normalized_overrides[canonical_key] = value
-        allowed = set(_ALGO_RUNTIME_DEFAULTS)
-        if set(normalized_overrides) - allowed:
-            raise ValueError("Algo dashboard runtime overrides contain unsupported settings")
-        values.update(normalized_overrides)
-        settings = AlgoRuntimeSettings(**values)
-        if not 0.001 <= settings.intraday_strategy_position_pct <= 0.04:
-            raise ValueError("intraday_strategy_position_pct must be between 0.001 and 0.04")
-        if not 0.05 <= settings.intraday_strategy_risk_multiplier <= 1.0:
-            raise ValueError("intraday_strategy_risk_multiplier must be between 0.05 and 1.0")
-        return settings
-    return AlgoRuntimeSettings(**values)
+    """Project common scan switches from the editable per-strategy configuration."""
+    config = get_algo_configuration()
+    strategies = config["strategies"]
+    return AlgoRuntimeSettings(
+        overnight_entries_enabled=config["general"]["overnight_entries_enabled"],
+        enable_intraday_trend_following=strategies["intraday_trend_following"]["enabled"],
+        enable_intraday_momentum=strategies["intraday_momentum"]["enabled"],
+        swing_multi_factor_enabled=strategies["swing_multi_factor"]["enabled"],
+        swing_event_driven_enabled=strategies["swing_event_driven"]["enabled"],
+    )
 
 
 def resolve_mode(cli_mode: str | None = None) -> str:
@@ -366,6 +391,75 @@ def resolve_mode(cli_mode: str | None = None) -> str:
 
 
 def get_mode_config(mode: str | None = None) -> dict:
-    """Return Algo settings; reject removed Swing and Day account routes."""
+    """Return effective Algo settings; reject removed Swing and Day account routes."""
     resolve_mode(mode)
-    return ALGO_MODE_CONFIG
+    config = get_algo_configuration()
+    general = config["general"]
+    portfolio = config["portfolio"]
+    result = deepcopy(ALGO_MODE_CONFIG)
+    risk = result["risk"]
+    risk.update({
+        "max_position_pct": portfolio["max_position_pct"],
+        "max_strategy_position_pct": portfolio["max_strategy_position_pct"],
+        "max_sector_pct": max(portfolio["sector_caps"].values()),
+        "daily_loss_limit": portfolio["daily_loss_limit_pct"],
+        "weekly_loss_limit": portfolio["weekly_loss_limit_pct"],
+        "no_buy_if_down_pct": portfolio["no_buy_if_down_pct"],
+        "max_trades_per_day": portfolio["max_daily_entries"],
+        "max_open_positions": portfolio["max_open_positions"],
+        "max_positions_per_strategy": portfolio["max_positions_per_strategy"],
+        "max_short_positions": portfolio["max_short_positions"],
+        "max_short_exposure_pct": portfolio["max_short_exposure_pct"],
+        "allow_short_positions": portfolio["allow_short_positions"],
+        "max_tactical_pct": portfolio["max_tactical_pct"],
+        "max_tactical_positions": portfolio["max_tactical_positions"],
+        "flatten_eod": portfolio["flatten_eod"],
+        "allow_leveraged_etfs": portfolio["allow_leveraged_etfs"],
+        "range_regime_short_risk_multiplier": portfolio["range_regime_short_risk_multiplier"],
+        "min_cash_pct": portfolio["min_cash_pct"],
+        "risk_per_trade_pct": general["risk_per_trade_pct"],
+        "take_profit_r_multiple": general["take_profit_r_multiple"],
+        "stop_loss_pct_by_strategy": {},
+        "trailing_stop_pct_by_strategy": {},
+        "trailing_activation_pct_by_strategy": {},
+        "max_entries_per_strategy_per_day": {},
+        "max_positions_per_strategy_by_strategy": {},
+        "max_position_pct_by_strategy": {},
+        "risk_multiplier_by_strategy": {},
+        "minimum_hold_minutes_by_strategy": {},
+        "cooldown_minutes_by_strategy": {},
+    })
+    for strategy, settings in config["strategies"].items():
+        risk["stop_loss_pct_by_strategy"][strategy] = settings["hard_stop_pct"]
+        risk["trailing_stop_pct_by_strategy"][strategy] = settings["trailing_stop_pct"]
+        risk["trailing_activation_pct_by_strategy"][strategy] = settings["trailing_activation_pct"]
+        risk["max_entries_per_strategy_per_day"][strategy] = settings["max_entries_per_day"]
+        risk["max_positions_per_strategy_by_strategy"][strategy] = min(
+            settings["max_positions"], portfolio["max_positions_per_strategy"],
+        )
+        risk["max_position_pct_by_strategy"][strategy] = settings["max_position_pct"]
+        risk["risk_multiplier_by_strategy"][strategy] = settings["risk_multiplier"]
+        risk["minimum_hold_minutes_by_strategy"][strategy] = settings["minimum_hold_minutes"]
+        risk["cooldown_minutes_by_strategy"][strategy] = settings["cooldown_minutes"]
+    risk["strategy_group_limits"] = {
+        "swing": {
+            "strategies": list(strategy_ids_for_group("swing")),
+            "max_entries_per_day": portfolio["max_swing_entries"],
+        },
+        "intraday_core": {
+            "strategies": list(strategy_ids_for_group("intraday_core")),
+            "max_entries_per_day": portfolio["max_intraday_core_entries"],
+        },
+    }
+    result["coordinator"] = get_algo_portfolio_coordinator_config()
+    result["coordinator"]["max_daily_entries"] = portfolio["max_daily_entries"]
+    result["coordinator"]["max_intraday_entries"] = portfolio["max_intraday_entries"]
+    result["coordinator"]["max_swing_entries"] = portfolio["max_swing_entries"]
+    universe = deepcopy(ALGO_PORTFOLIO_UNIVERSE)
+    for group, limits in universe.items():
+        limits["max_sector_pct"] = portfolio["sector_caps"].get(
+            group, limits["max_sector_pct"],
+        )
+        limits["max_per_stock_pct"] = portfolio["max_position_pct"]
+    result["universe"] = universe
+    return result

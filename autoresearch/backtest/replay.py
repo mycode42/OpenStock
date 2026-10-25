@@ -16,7 +16,6 @@ from strategies.catalog import INTRADAY_STRATEGIES
 from strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from strategies.portfolio_coordinator import strategy_priority
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
-from portfolio.config import STRATEGY_CONFIG
 
 
 class ReplayLoopMixin:
@@ -168,7 +167,13 @@ class ReplayLoopMixin:
             if is_session_end:
                 self._record_holdings(trading_day)
                 self._charge_daily_borrow()
-                if not self.coordinator.config.allow_intraday_overnight:
+                if self.risk.get("flatten_eod"):
+                    self._flatten_positions(
+                        bars, timestamp,
+                        strategies=set(self.risk.get("max_positions_per_strategy_by_strategy", {})),
+                        reason="portfolio_end_of_day_flatten",
+                    )
+                elif not self.coordinator.config.allow_intraday_overnight:
                     self._flatten_positions(
                         bars, timestamp, strategies=set(INTRADAY_STRATEGIES),
                         reason="coordinator_intraday_eod_flatten",
@@ -402,10 +407,10 @@ class ReplayLoopMixin:
             "strategy_filter": self.strategy_filter,
             "research_controls": self.research_controls,
             "risk_config": {
-                "risk_per_trade_pct": STRATEGY_CONFIG["risk_per_trade_pct"],
-                "max_strategy_position_pct": STRATEGY_CONFIG["max_strategy_position_pct"],
+                "risk_per_trade_pct": self.risk["risk_per_trade_pct"],
+                "max_strategy_position_pct": self.risk["max_strategy_position_pct"],
                 "stop_loss_pct": self.risk["stop_loss_pct"],
-                "take_profit_r_multiple": STRATEGY_CONFIG["take_profit_r_multiple"],
+                "take_profit_r_multiple": self.risk["take_profit_r_multiple"],
                 "max_open_positions": self.risk["max_open_positions"],
                 "max_trades_per_day": self.risk["max_trades_per_day"],
                 "max_short_positions": self.risk.get("max_short_positions"),

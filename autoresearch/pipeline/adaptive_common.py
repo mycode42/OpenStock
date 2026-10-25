@@ -9,7 +9,7 @@ from pathlib import Path
 
 from autoresearch.backtest import read_borrow_availability
 from market.store import DEFAULT_DB, SQLiteBarStore
-from portfolio.config import ALGO_REGIME_CONFIG
+from portfolio.config import get_algo_regime_config
 from market.regime import load_fred_regime_series
 from market.data import data_tier, regular_feed
 
@@ -34,7 +34,7 @@ def _prepare_args(args) -> None:
             name: [row for row in rows if str(row.get("date", ""))[:10] <= cutoff]
             for name, rows in args.regime_macro_series.items()
         }
-    args.regime_config = dict(ALGO_REGIME_CONFIG)
+    args.regime_config = get_algo_regime_config()
     args.fitness_weights_data = _normalize_weights(args.fitness_weights)
     args.search_space_data = _search_space(args.strategy, args.search_space)
     args.borrow_availability_data = read_borrow_availability(args.borrow_availability)

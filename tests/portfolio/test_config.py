@@ -1,5 +1,7 @@
 """Algo policy limits have one shared source for live and research paths."""
 
+import json
+
 from portfolio.config import (
     ALGO_ENTRY_LIMITS,
     ALGO_MODE_CONFIG,
@@ -7,7 +9,7 @@ from portfolio.config import (
     get_algo_research_controls,
 )
 from portfolio.config import (
-    ALGO_MODE_CONFIG as LEGACY_ALGO_MODE_CONFIG, STRATEGY_CONFIG,
+    ALGO_MODE_CONFIG as LEGACY_ALGO_MODE_CONFIG,
     get_algo_runtime_settings,
 )
 from strategies.portfolio_coordinator import PortfolioCoordinatorConfig
@@ -54,7 +56,14 @@ def test_catalog_groups_preserve_risk_and_coordinator_membership():
     }
 
 
-def test_typed_runtime_settings_keep_legacy_runtime_overrides(monkeypatch):
-    monkeypatch.setitem(STRATEGY_CONFIG, "enable_intraday_trend", True)
+def test_runtime_settings_are_projected_from_strategy_configuration(monkeypatch, tmp_path):
+    config_path = tmp_path / "algo-strategy-config.json"
+    config_path.write_text(json.dumps({
+        "general": {"overnight_entries_enabled": True},
+        "strategies": {"intraday_trend_following": {"enabled": True}},
+    }))
+    monkeypatch.setattr("portfolio.config.ALGO_STRATEGY_CONFIG_PATH", config_path)
 
-    assert get_algo_runtime_settings().enable_intraday_trend is True
+    settings = get_algo_runtime_settings()
+    assert settings.overnight_entries_enabled is True
+    assert settings.enable_intraday_trend_following is True

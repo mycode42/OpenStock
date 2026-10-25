@@ -115,9 +115,10 @@ def _forward_session_data_version(database: str, base_version: str, symbols: lis
 
 def _current_regime(store, end: date) -> str | None:
     from strategies.regime import rank_strategies
-    from portfolio.config import get_algo_runtime_settings
+    from portfolio.config import get_algo_regime_config, get_algo_runtime_settings
 
     settings = get_algo_runtime_settings()
+    regime_config = get_algo_regime_config()
     spy = store.bars(
         ["SPY"], feed=FEED, timeframe="1Day",
         start=(end - timedelta(days=RESEARCH_WARMUP_DAYS)).isoformat(),
@@ -129,6 +130,16 @@ def _current_regime(store, end: date) -> str | None:
         spy, mode="algo", event_enabled=settings.swing_event_driven_enabled,
         intraday_trend_enabled=settings.enable_intraday_trend_following,
         intraday_momentum_enabled=settings.enable_intraday_momentum,
+        feature_set=regime_config["feature_set"],
+        engine=regime_config["engine"],
+        strategy_policy=regime_config["strategy_policy"],
+        include_models=regime_config["include_models"],
+        model_training_window=regime_config["model_training_window"],
+        model_min_confidence=regime_config["min_model_confidence"],
+        strategy_regime_weights=regime_config["strategy_regime_weights"],
+        strategy_enabled=regime_config["strategy_enabled"],
+        volatile_policy_risk_multiplier=regime_config["volatile_policy_risk_multiplier"],
+        volatility_risk_scales=regime_config["volatility_risk_scales"],
     )
     regime = str(result.get("regime") or "unknown")
     return regime if regime != "unknown" else None

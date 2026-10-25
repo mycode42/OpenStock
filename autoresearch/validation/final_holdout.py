@@ -14,9 +14,7 @@ from autoresearch.backtest import (
     read_borrow_availability, strategy_warmup_days,
 )
 from autoresearch.backtest.config import REGIME_WARMUP_DAYS
-from portfolio.config import (
-    ALGO_MODE_CONFIG, ALGO_REGIME_CONFIG,
-)
+from portfolio.config import get_algo_regime_config, get_mode_config
 from market.store import SQLiteBarStore
 from strategies.portfolio_coordinator import PortfolioCoordinatorConfig
 from strategies.regime import (
@@ -134,7 +132,7 @@ def advance_final_holdout(
     from market.regime import load_fred_regime_series
 
     macro_series, _macro_diagnostics = load_fred_regime_series(store, refresh=False)
-    regime_feature_set = str(ALGO_REGIME_CONFIG.get("feature_set", "core"))
+    regime_feature_set = str(get_algo_regime_config().get("feature_set", "core"))
     feature_rows = compute_regime_feature_history(
         spy, context_bars=context_daily, macro_series=macro_series,
     )
@@ -334,10 +332,10 @@ def initialize_final_holdout(
         "research_controls": deepcopy(controls or {}),
         "coordinator": deepcopy(manifest_snapshot["coordinator"]),
         "runtime": deepcopy(manifest_snapshot["runtime"]),
-        "risk": deepcopy(ALGO_MODE_CONFIG["risk"]),
+        "risk": deepcopy(get_mode_config("algo")["risk"]),
         "strategy_defaults": deepcopy(manifest_snapshot["strategy_defaults"]),
         "regime_profiles": deepcopy(manifest_snapshot["regime_profiles"]),
-        "regime_config": deepcopy(ALGO_REGIME_CONFIG),
+        "regime_config": deepcopy(get_algo_regime_config()),
         "regime_engine_version": REGIME_ENGINE_VERSION,
         "regime_config_sha256": _regime_policy_hash(),
         "live_manifest_sha256": live_manifest["sha256"],
@@ -425,7 +423,7 @@ def _policy_fingerprint(snapshot: dict) -> str:
 
 
 def _regime_policy_hash() -> str:
-    return _hash({"config": ALGO_REGIME_CONFIG, "engine_version": REGIME_ENGINE_VERSION})
+    return _hash({"config": get_algo_regime_config(), "engine_version": REGIME_ENGINE_VERSION})
 
 
 def _regime_performance(daily_equity: list[dict]) -> dict:

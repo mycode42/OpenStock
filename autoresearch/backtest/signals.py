@@ -363,6 +363,10 @@ class ReplaySignalsMixin:
             include_models=bool(config.get("include_models", False)),
             model_training_window=int(config.get("model_training_window", 756)),
             model_min_confidence=float(config.get("min_model_confidence", 0.50)),
+            strategy_regime_weights=config.get("strategy_regime_weights"),
+            strategy_enabled=config.get("strategy_enabled"),
+            volatile_policy_risk_multiplier=float(config.get("volatile_policy_risk_multiplier", 0.25)),
+            volatility_risk_scales=config.get("volatility_risk_scales"),
             precomputed_features=feature_rows,
         )
         result["regime_macro_data_status"] = str(config.get("macro_data_status", "provided"))
@@ -610,13 +614,20 @@ class ReplaySignalsMixin:
                 self.rejections["research_strategy_group_daily_cap"] += 1
                 return
         regime = self._current_regime
+        configured_risk = self.risk.get("risk_multiplier_by_strategy", {}).get(strategy)
+        if isinstance(configured_risk, (int, float)) and configured_risk > 0:
+            signal = {**signal, "risk_multiplier": float(configured_risk)}
         if action == "short":
             regime_name = str(regime.get("regime", "unknown"))
             if ticker not in self.symbols:
                 self.rejections["short_universe_block"] += 1
                 return
             if regime_name == "range_bound":
-                signal = {**signal, "risk_multiplier": float(self.risk.get("range_regime_short_risk_multiplier", 0.75))}
+                signal = {
+                    **signal,
+                    "risk_multiplier": float(signal.get("risk_multiplier", 1.0))
+                    * float(self.risk.get("range_regime_short_risk_multiplier", 0.75)),
+                }
             borrow_status = self._borrow_status(ticker, timestamp)
             if borrow_status is False:
                 self.rejections["hard_to_borrow_short_skip"] += 1

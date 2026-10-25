@@ -17,7 +17,7 @@ from market.store import SQLiteBarStore, fetch_alpaca_bars
 from strategies.event_driven import EventCalendar
 from strategies.registry import validate_parameter_profile
 from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
-from portfolio.config import ALGO_REGIME_CONFIG
+from portfolio.config import get_algo_regime_config
 from market.regime import load_fred_regime_series
 from market.data import data_tier, regular_feed
 
@@ -206,7 +206,7 @@ def run_backtest(args) -> dict:
         research_controls=_read_research_controls(args),
         event_calendar=(EventCalendar.from_csv(args.event_calendar) if getattr(args, "event_calendar", None) else None),
         regime_macro_series=macro_series,
-        regime_config={**ALGO_REGIME_CONFIG, "macro_data_status": macro_diagnostics.get("status")},
+        regime_config={**get_algo_regime_config(), "macro_data_status": macro_diagnostics.get("status")},
     )
     report = replay.run()
     report["data_tier_at_run"] = data_tier()

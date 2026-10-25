@@ -190,8 +190,26 @@ def execute_scan_candidates(
         )
         sizing_signal = item
         if scope.mode == "algo" and action in {"buy", "short"}:
+            sizing_signal = dict(item)
+            strategy_caps = scope.risk_config.get("max_position_pct_by_strategy", {})
+            strategy_risks = scope.risk_config.get("risk_multiplier_by_strategy", {})
+            configured_cap = strategy_caps.get(strategy)
+            if isinstance(configured_cap, (int, float)) and configured_cap > 0:
+                existing_cap = sizing_signal.get("target_weight")
+                sizing_signal["target_weight"] = (
+                    min(float(existing_cap), float(configured_cap))
+                    if isinstance(existing_cap, (int, float)) and existing_cap > 0
+                    else float(configured_cap)
+                )
+            configured_risk = strategy_risks.get(strategy)
+            if isinstance(configured_risk, (int, float)) and configured_risk > 0:
+                sizing_signal["risk_multiplier"] = float(configured_risk)
+            if action == "short" and str(market.regime.get("regime", "unknown")) == "range_bound":
+                sizing_signal["risk_multiplier"] *= float(
+                    scope.risk_config.get("range_regime_short_risk_multiplier", 0.75)
+                )
             sizing_signal, throttle_note = throttle_signal(
-                item, str(market.regime.get("regime", "unknown")), scope.coordinator_config,
+                sizing_signal, str(market.regime.get("regime", "unknown")), scope.coordinator_config,
                 risk_multiplier=float(
                     market.regime.get("strategy_risk_multipliers", {}).get(strategy, 1.0)
                 ),

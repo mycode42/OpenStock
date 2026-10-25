@@ -7,8 +7,8 @@ import hashlib
 import json
 
 from portfolio.config import (
-    ALGO_ENTRY_LIMITS, ALGO_MODE_CONFIG, ALGO_PORTFOLIO_COORDINATOR_CONFIG,
-    get_algo_research_controls,
+    get_algo_configuration, get_algo_portfolio_coordinator_config,
+    get_algo_research_controls, get_mode_config,
 )
 from strategies.catalog import STRATEGY_IDS
 from strategies.registry import (
@@ -25,16 +25,19 @@ def live_configuration_manifest(strategies: list[str] | tuple[str, ...]) -> dict
     reviewable in each generated artifact.
     """
     selected = list(dict.fromkeys(strategies))
+    live_config = get_algo_configuration()
+    risk = get_mode_config("algo")["risk"]
     snapshot = {
         "entry_limits": {
-            "max_daily_entries": ALGO_ENTRY_LIMITS.max_daily_entries,
-            "max_intraday_entries": ALGO_ENTRY_LIMITS.max_intraday_entries,
-            "max_swing_entries": ALGO_ENTRY_LIMITS.max_swing_entries,
-            "max_intraday_core_entries": ALGO_ENTRY_LIMITS.max_intraday_core_entries,
+            "max_daily_entries": live_config["portfolio"]["max_daily_entries"],
+            "max_intraday_entries": live_config["portfolio"]["max_intraday_entries"],
+            "max_swing_entries": live_config["portfolio"]["max_swing_entries"],
+            "max_intraday_core_entries": live_config["portfolio"]["max_intraday_core_entries"],
         },
-        "runtime": get_algo_runtime_settings().as_legacy_dict(),
-        "coordinator": deepcopy(ALGO_PORTFOLIO_COORDINATOR_CONFIG),
-        "risk": deepcopy(ALGO_MODE_CONFIG["risk"]),
+        "runtime": get_algo_runtime_settings().as_dict(),
+        "coordinator": get_algo_portfolio_coordinator_config(),
+        "risk": deepcopy(risk),
+        "strategy_settings": deepcopy(live_config["strategies"]),
         "research_controls": get_algo_research_controls(),
         "strategy_defaults": {
             strategy: deepcopy(ALGO_DEFAULT_PARAMETERS[strategy])
@@ -87,7 +90,7 @@ def _scope_snapshot(snapshot: dict, strategies: list[str]) -> dict:
     """Keep global policy plus settings that can affect the requested strategies."""
     selected = list(dict.fromkeys(strategies))
     source_risk = snapshot.get("risk") or {}
-    current_risk = ALGO_MODE_CONFIG["risk"]
+    current_risk = get_mode_config("algo")["risk"]
     risk = {}
     for key in current_risk:
         value = source_risk.get(key)
@@ -123,6 +126,11 @@ def _scope_snapshot(snapshot: dict, strategies: list[str]) -> dict:
         "entry_limits": snapshot.get("entry_limits"),
         "runtime": snapshot.get("runtime"),
         "coordinator": snapshot.get("coordinator"),
+        "strategy_settings": {
+            strategy: (snapshot.get("strategy_settings") or {}).get(strategy)
+            for strategy in selected
+            if strategy in (snapshot.get("strategy_settings") or {})
+        },
         "risk": risk,
         "research_controls": controls,
         "strategy_defaults": {

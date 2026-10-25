@@ -20,9 +20,9 @@ from execution.risk import get_portfolio_state  # noqa: E402
 from broker.algo import AlgoAlpaca  # noqa: E402
 from portfolio.state_store import AlgoStateStore, StateStoreError  # noqa: E402
 from portfolio.config import (
-    ALGO_MODE_CONFIG,
     ALGO_SERVICE_CONFIG,
     ALGO_SIGNAL_DATA_CONFIG,
+    get_mode_config,
 )  # noqa: E402
 
 
@@ -295,7 +295,7 @@ def build_report() -> dict:
             "pct_of_equity": round(float(position.get("pct_of_equity", 0) or 0) * 100, 2),
         })
 
-    risk = ALGO_MODE_CONFIG["risk"]
+    risk = get_mode_config("algo")["risk"]
     if account_state:
         daily_pnl_pct = float(account_state.get("daily_pnl_pct", 0) or 0)
         raw_weekly_pnl = account_state.get("weekly_pnl_pct")

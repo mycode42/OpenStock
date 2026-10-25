@@ -157,12 +157,14 @@ def _intraday_flatten_signal(
     position_qty: float,
     symbol_bars: list[dict],
 ) -> dict | None:
-    if not (
-        context.mode == "algo"
-        and owner in INTRADAY_STRATEGIES
-        and position_qty != 0
+    if context.mode != "algo" or owner is None or position_qty == 0:
+        return None
+    flatten_all_eod = bool(context.risk_config.get("flatten_eod", False))
+    flatten_intraday = (
+        owner in INTRADAY_STRATEGIES
         and not context.coordinator_config.allow_intraday_overnight
-    ):
+    )
+    if not (flatten_all_eod or flatten_intraday):
         return None
 
     close_cutoff = (
@@ -176,7 +178,10 @@ def _intraday_flatten_signal(
         "ticker": ticker,
         "action": "cover" if position_qty < 0 else "sell",
         "strategy": owner,
-        "reason": "portfolio coordinator mandatory intraday session flatten",
+        "reason": (
+            "portfolio configuration end-of-day flatten"
+            if flatten_all_eod else "portfolio coordinator mandatory intraday session flatten"
+        ),
         "strength": 1.0,
         "rank_score": 1_000_000.0,
         "signal_bar_time": symbol_bars[-1].get("t") if symbol_bars else None,
