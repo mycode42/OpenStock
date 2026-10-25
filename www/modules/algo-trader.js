@@ -129,16 +129,27 @@ function statusClass(value) {
 function renderOptimizerDetail(optimizer) {
     if (!optimizer) return '<div class="algo-empty">Select an optimizer run to inspect its results.</div>';
     const strategies = Array.isArray(optimizer.strategies) ? optimizer.strategies : [];
-    const rows = strategies.map(strategy => `<article class="algo-optimizer-strategy">
-        <div class="algo-optimizer-strategy-head"><div><strong>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</strong><span>Archive #${strategy.archive_sequence ?? '—'} · ${strategy.new_variants ?? 0} new variants</span></div><span class="algo-status-pill ${strategy.selected_eligible ? 'promising' : ''}">${strategy.selected_eligible ? 'CANDIDATE ELIGIBLE' : strategy.selected_candidate === 'baseline' ? 'BASELINE RETAINED' : 'NOT ELIGIBLE'}</span></div>
-        <div class="algo-optimizer-search-grid"><div><span>Top tested candidate</span><strong title="${escapeHtml(strategy.top_tested_candidate || '')}">${escapeHtml(strategy.top_tested_candidate || 'Unavailable')}</strong></div><div><span>Fitness</span><strong class="${classForReturn(strategy.top_tested_fitness)}">${signedScore(strategy.top_tested_fitness)}</strong></div><div><span>Δ vs baseline</span><strong class="${classForReturn(strategy.top_tested_delta)}">${signedScore(strategy.top_tested_delta)}</strong></div></div>
-        <div class="algo-optimizer-selection"><span>Archive choice <strong title="${escapeHtml(strategy.selected_candidate || '')}">${escapeHtml(strategy.selected_candidate || 'Unavailable')}</strong></span><span>${strategy.selected_closed_trades ?? 0} closed trades · ${signedPercent(strategy.selected_return_pct, 4)} research return</span>${strategy.top_tested_window_days ? `<span>Best window ${strategy.top_tested_window_days} sessions</span>` : ''}</div>
-    </article>`).join('');
+    const rows = strategies.map(strategy => {
+        const eligibility = strategy.selected_eligible
+            ? ['promising', 'Eligible']
+            : strategy.selected_candidate === 'baseline' ? ['', 'Baseline retained'] : ['rejected', 'Not eligible'];
+        return `<tr>
+            <th scope="row"><strong>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</strong><small>Archive #${strategy.archive_sequence ?? '—'} · ${strategy.new_variants ?? 0} variants</small></th>
+            <td title="${escapeHtml(strategy.top_tested_candidate || '')}">${escapeHtml(strategy.top_tested_candidate || 'Unavailable')}</td>
+            <td class="${classForReturn(strategy.top_tested_fitness)}">${signedScore(strategy.top_tested_fitness)}</td>
+            <td class="${classForReturn(strategy.top_tested_delta)}">${signedScore(strategy.top_tested_delta)}</td>
+            <td title="${escapeHtml(strategy.selected_candidate || '')}">${escapeHtml(strategy.selected_candidate || 'Unavailable')}</td>
+            <td><span class="algo-status-pill ${eligibility[0]}">${eligibility[1]}</span></td>
+            <td>${strategy.selected_closed_trades ?? 0}</td>
+            <td class="${classForReturn(strategy.selected_return_pct)}">${signedPercent(strategy.selected_return_pct, 4)}</td>
+            <td>${strategy.top_tested_window_days ? `${strategy.top_tested_window_days} sessions` : '—'}</td>
+        </tr>`;
+    }).join('');
     return `<div class="algo-optimizer-detail">
         <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER CYCLE</span><h3>${escapeHtml(optimizer.date || 'Undated run')}</h3><p>${escapeHtml(optimizer.range_start || '—')} to ${escapeHtml(optimizer.range_end || '—')} · ${optimizer.created_at ? `completed ${escapeHtml(dateTime(optimizer.created_at))}` : 'completion time unavailable'}</p></div><span class="algo-status-pill ${statusClass(optimizer.status)}">${escapeHtml(optimizer.status || 'UNKNOWN')}</span></div>
         <div class="algo-optimizer-run-meta"><span title="${escapeHtml(optimizer.run_id || '')}">Run ${escapeHtml(optimizer.run_id || 'ID unavailable')}</span><span>${optimizer.duration_seconds === null || optimizer.duration_seconds === undefined ? 'Duration unavailable' : `${Math.round(optimizer.duration_seconds / 60)} min`}</span></div>
-            <div class="algo-optimizer-summary"><div><span>Strategies</span><strong>${optimizer.strategy_count ?? 0}</strong></div><div><span>New variants</span><strong>${optimizer.new_variants ?? 0}</strong></div><div><span>Search iterations</span><strong>${optimizer.search_iterations ?? 0}</strong></div><div><span>Archive sequence</span><strong>#${optimizer.archive_sequence ?? '—'}</strong></div></div>
-        <div class="algo-optimizer-strategies">${rows || '<div class="algo-empty">No per-strategy discovery results were recorded.</div>'}</div>
+        <div class="algo-optimizer-summary"><div><span>Strategies</span><strong>${optimizer.strategy_count ?? 0}</strong></div><div><span>New variants</span><strong>${optimizer.new_variants ?? 0}</strong></div><div><span>Search iterations</span><strong>${optimizer.search_iterations ?? 0}</strong></div><div><span>Archive sequence</span><strong>#${optimizer.archive_sequence ?? '—'}</strong></div></div>
+        ${rows ? `<div class="algo-optimizer-table-wrap" role="region" aria-label="Per-strategy optimizer results" tabindex="0"><table class="algo-optimizer-results"><thead><tr><th scope="col">Strategy</th><th scope="col">Top candidate</th><th scope="col">Fitness</th><th scope="col">Δ baseline</th><th scope="col">Archive choice</th><th scope="col">Eligibility</th><th scope="col">Trades</th><th scope="col">Return</th><th scope="col">Best window</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="algo-optimizer-table-empty">No per-strategy discovery results were recorded.</div>'}
         <p class="algo-optimizer-note">Discovery fitness is measured on the search window. Optimizer-only cycles do not verify or promote candidates.</p>
     </div>`;
 }
@@ -146,9 +157,8 @@ function renderOptimizerDetail(optimizer) {
 function renderOptimizerPanel(optimizer, selectedCycleId) {
     const history = Array.isArray(optimizer?.history) ? optimizer.history : [];
     const selected = history.find(run => run.cycle_id === selectedCycleId) || history[0] || null;
-    const runs = history.map(run => `<button type="button" class="algo-optimizer-run-row ${run.cycle_id === selected?.cycle_id ? 'selected' : ''}" data-optimizer-run="${escapeHtml(run.cycle_id || '')}" aria-pressed="${run.cycle_id === selected?.cycle_id}">
-        <span class="algo-optimizer-run-date">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved cycle'}</small></span>
-        <span class="algo-optimizer-run-id" title="${escapeHtml(run.run_id || '')}">${escapeHtml(run.run_id || 'Run ID unavailable')}<small>${run.new_variants ?? 0} variants · ${run.search_iterations ?? 0} iterations</small></span>
+    const runs = history.map(run => `<button type="button" class="algo-optimizer-run-row ${run.cycle_id === selected?.cycle_id ? 'selected' : ''}" data-optimizer-run="${escapeHtml(run.cycle_id || '')}" aria-pressed="${run.cycle_id === selected?.cycle_id}" title="${escapeHtml(run.run_id || '')}">
+        <span class="algo-optimizer-run-date">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved cycle'} · ${escapeHtml(run.run_id || 'Run ID unavailable')} · ${run.new_variants ?? 0} variants · ${run.search_iterations ?? 0} iterations</small></span>
         <span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span>
     </button>`).join('');
     return `<section class="card algo-panel algo-history-panel algo-optimizer-panel" id="algo-optimizer">
