@@ -238,7 +238,7 @@ function optionsSettingFields(settings, readonlyFields = []) {
         if (!groups.has(group)) groups.set(group, []);
         groups.get(group).push(field);
     }
-    return [...groups.entries()].map(([group, rows]) => `<details class="algo-options-config-section"><summary>${escapeHtml(group.replaceAll('_', ' '))}</summary><div class="algo-options-config-fields">${rows.map(field => {
+    return [...groups.entries()].map(([group, rows]) => `<details class="algo-options-config-section" data-config-section="options:${escapeHtml(group)}"><summary>${escapeHtml(group.replaceAll('_', ' '))}</summary><div class="algo-options-config-fields">${rows.map(field => {
         const label = field.path.replaceAll('_', ' ').replaceAll('.', ' · ');
         const disabled = field.readonly ? 'disabled' : '';
         const input = typeof field.value === 'boolean'
@@ -290,9 +290,9 @@ function equitySettingSections(settings) {
     const sections = [
         ['general', settings.general || {}],
         ['portfolio', settings.portfolio || {}],
-    ].map(([name, value]) => '<details class="algo-options-config-section"><summary>' + escapeHtml(name) + '</summary><div class="algo-options-config-fields">' + fields(value, name) + '</div></details>');
-    const strategies = Object.entries(settings.strategies || {}).map(([name, value]) => '<details class="algo-options-config-section"><summary>' + escapeHtml(name.replaceAll('_', ' ')) + '</summary><div class="algo-options-config-fields">' + fields(value, 'strategies.' + name) + '</div></details>').join('');
-    sections.push('<details class="algo-options-config-section"><summary>Strategies</summary><div class="algo-options-config">' + strategies + '</div></details>');
+    ].map(([name, value]) => '<details class="algo-options-config-section" data-config-section="equity:' + escapeHtml(name) + '"><summary>' + escapeHtml(name) + '</summary><div class="algo-options-config-fields">' + fields(value, name) + '</div></details>');
+    const strategies = Object.entries(settings.strategies || {}).map(([name, value]) => '<details class="algo-options-config-section" data-config-section="equity:strategy:' + escapeHtml(name) + '"><summary>' + escapeHtml(name.replaceAll('_', ' ')) + '</summary><div class="algo-options-config-fields">' + fields(value, 'strategies.' + name) + '</div></details>').join('');
+    sections.push('<details class="algo-options-config-section" data-config-section="equity:strategies"><summary>Strategies</summary><div class="algo-options-config">' + strategies + '</div></details>');
     return sections.join('');
 }
 
@@ -304,6 +304,7 @@ export function createAlgoTrader({ request, charts }) {
     const requestInFlight = new Set();
     const draftSettingsByAccount = { equity: null, options: null };
     const dirtyAccounts = new Set();
+    const openConfigSections = { equity: new Set(), options: new Set() };
     const notices = { equity: '', options: '' };
     let accountMode = 'equity';
     let saving = false;
@@ -361,8 +362,23 @@ export function createAlgoTrader({ request, charts }) {
         return `<div class="algo-account-switch algo-title-account-switch" role="group" aria-label="Algo Trader paper account">${[['equity', 'Equity Account'], ['options', 'Options Account']].map(([mode, label]) => `<button type="button" data-account-mode="${mode}" class="${accountMode === mode ? 'active' : ''}" aria-pressed="${accountMode === mode}">${label}</button>`).join('')}</div>`;
     }
 
+    function rememberOpenConfigSections(mode) {
+        openConfigSections[mode] = new Set([...host.querySelectorAll('details[data-config-section]')]
+            .filter(section => section.open && section.dataset.configSection.startsWith(`${mode}:`))
+            .map(section => section.dataset.configSection));
+    }
+
+    function restoreOpenConfigSections(mode) {
+        const openSections = openConfigSections[mode] || new Set();
+        for (const section of host.querySelectorAll('details[data-config-section]')) {
+            if (openSections.has(section.dataset.configSection)) section.open = true;
+        }
+    }
+
     function render() {
         if (!host) return;
+        const renderedMode = host.querySelector('#algo-config-form')?.dataset.account;
+        if (renderedMode) rememberOpenConfigSections(renderedMode);
         const snapshot = snapshots[accountMode];
         const isOptions = accountMode === 'options';
         if (!snapshot) {
@@ -472,6 +488,7 @@ export function createAlgoTrader({ request, charts }) {
             ${!isOptions ? renderOptimizerPanel(research.optimizer, selectedOptimizerRunId) : ''}
 
         </main>`;
+        restoreOpenConfigSections(accountMode);
         charts.attachInteractiveLineCharts(host);
     }
 
