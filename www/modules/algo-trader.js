@@ -260,6 +260,27 @@ function optionsSettingFields(settings, readonlyFields = []) {
     }).join('')}</div></details>`).join('');
 }
 
+function equitySettingSections(settings) {
+    const renderToggle = field => `<label class="algo-config-toggle"><input type="checkbox" name="${field.key}" ${settings[field.key] ? 'checked' : ''}><span><strong>${escapeHtml(field.title)}</strong><small>${escapeHtml(field.detail)}</small></span><i></i></label>`;
+    const sizePct = (Number(settings.intraday_satellite_position_pct) * 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+    const sections = [
+        {
+            title: 'General',
+            content: SETTING_FIELDS.filter(field => field.key === 'overnight_entries_enabled').map(renderToggle).join(''),
+        },
+        {
+            title: 'Strategy selection',
+            content: SETTING_FIELDS.filter(field => field.key !== 'overnight_entries_enabled').map(renderToggle).join(''),
+        },
+        {
+            title: 'Position sizing',
+            content: `<div class="algo-config-field"><label for="algo-satellite-size">Intraday satellite size <small>% of equity</small></label><input id="algo-satellite-size" type="number" name="intraday_satellite_position_pct" min="0.1" max="4" step="0.1" value="${escapeHtml(sizePct)}"><small class="algo-field-help">Configured cap for each satellite position.</small></div>
+                <div class="algo-config-field"><label for="algo-satellite-risk">Satellite risk multiplier</label><input id="algo-satellite-risk" type="number" name="intraday_satellite_risk_multiplier" min="0.05" max="1" step="0.05" value="${escapeHtml(settings.intraday_satellite_risk_multiplier)}"><small class="algo-field-help">Scales risk for intraday satellite strategies.</small></div>`,
+        },
+    ];
+    return sections.map(section => `<details class="algo-options-config-section"><summary>${escapeHtml(section.title)}</summary><div class="algo-options-config-fields">${section.content}</div></details>`).join('');
+}
+
 export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');
     const snapshots = { equity: null, options: null };
@@ -314,12 +335,8 @@ export function createAlgoTrader({ request, charts }) {
                 <div class="algo-config-actions"><p class="algo-save-notice" aria-live="polite">${escapeHtml(notice)}</p><button type="submit" class="btn btn-primary algo-save-button" ${saving ? 'disabled' : ''}>${saving ? 'Saving…' : 'Save options settings'} <span>→</span></button></div>
             </form>`;
         }
-        const toggles = SETTING_FIELDS.map(field => `<label class="algo-config-toggle"><input type="checkbox" name="${field.key}" ${settings[field.key] ? 'checked' : ''}><span><strong>${escapeHtml(field.title)}</strong><small>${escapeHtml(field.detail)}</small></span><i></i></label>`).join('');
-        const sizePct = (Number(settings.intraday_satellite_position_pct) * 100).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
         return `<form id="algo-config-form" class="algo-config-form" data-account="equity">
-            <div class="algo-config-toggles">${toggles}</div>
-            <div class="algo-config-field"><label for="algo-satellite-size">Intraday satellite size <small>% of equity</small></label><input id="algo-satellite-size" type="number" name="intraday_satellite_position_pct" min="0.1" max="4" step="0.1" value="${escapeHtml(sizePct)}"><small class="algo-field-help">Configured cap for each satellite position.</small></div>
-            <div class="algo-config-field"><label for="algo-satellite-risk">Satellite risk multiplier</label><input id="algo-satellite-risk" type="number" name="intraday_satellite_risk_multiplier" min="0.05" max="1" step="0.05" value="${escapeHtml(settings.intraday_satellite_risk_multiplier)}"><small class="algo-field-help">Scales risk for intraday satellite strategies.</small></div>
+            <div class="algo-options-config">${equitySettingSections(settings)}</div>
             <div class="algo-config-actions"><p class="algo-save-notice" aria-live="polite">${escapeHtml(notice)}</p><button type="submit" class="btn btn-primary algo-save-button" ${saving ? 'disabled' : ''}>${saving ? 'Saving…' : 'Save runtime settings'} <span>→</span></button></div>
         </form>`;
     }
