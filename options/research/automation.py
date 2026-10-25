@@ -34,7 +34,7 @@ def _append_jsonl(path: Path, row: dict) -> None:
 
 def _strategy_summary(strategy: str, report: dict) -> dict:
     return {
-        "status": "completed",
+        "status": report.get("status", "completed"),
         "run_id": report.get("run_id"),
         "run_dir": report.get("run_dir"),
         "report_path": str(Path(report["run_dir"]) / "report.md") if report.get("run_dir") else None,
@@ -43,6 +43,7 @@ def _strategy_summary(strategy: str, report: dict) -> dict:
         "walk_forward": (report.get("walk_forward") or {}).get("oos_metrics", {}),
         "holdout": report.get("holdout", {}).get("metrics", {}),
         "final_parameters": report.get("final_parameters", {}),
+        "exploratory_replay": report.get("exploratory_replay"),
         "data_mode": report.get("data_mode"),
         "underlying": report.get("underlying"),
     }
@@ -126,6 +127,14 @@ def _render_markdown(report: dict) -> str:
                     f"Rolling OOS: trades {wf.get('trade_count', 0)}, return {float(wf.get('total_return', 0.0)):.2%}, Sharpe {float(wf.get('annualized_sharpe', 0.0)):.3f}, max drawdown {float(wf.get('max_drawdown', 0.0)):.2%}  ",
                     f"Untouched holdout: trades {holdout.get('trade_count', 0)}, return {float(holdout.get('total_return', 0.0)):.2%}, Sharpe {float(holdout.get('annualized_sharpe', 0.0)):.3f}  ",
                     f"Parameters: `{json.dumps(item.get('final_parameters', {}), sort_keys=True)}`  ",
+                    f"Detailed report: `{item.get('report_path')}`",
+                ])
+            elif item.get("status") == "exploratory_only":
+                metrics = (item.get("exploratory_replay") or {}).get("metrics", {})
+                lines.extend([
+                    "",
+                    f"Exploratory baseline replay: {metrics.get('trade_count', 0)} trades, {float(metrics.get('total_return', 0.0)):.2%} return, Sharpe {float(metrics.get('annualized_sharpe', 0.0)):.3f}  ",
+                    "No parameter search, OOS validation, or promotion eligibility; treat these as descriptive results only.",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
         lines.append("")
@@ -249,7 +258,7 @@ def run_automated_options_research(
                 strategy_status = (
                     "partial_error" if "error" in child_statuses
                     else "waiting_for_data" if child_statuses <= {"skipped_missing_dataset", "insufficient_history"}
-                    else "partial_data" if child_statuses & {"skipped_missing_dataset", "insufficient_history"}
+                    else "partial_data" if child_statuses & {"skipped_missing_dataset", "insufficient_history", "exploratory_only"}
                     else "completed"
                 )
                 strategies_report[strategy] = {
@@ -267,7 +276,7 @@ def run_automated_options_research(
             status = "partial_error"
         elif statuses and statuses <= {"skipped_missing_dataset", "insufficient_history"}:
             status = "waiting_for_data"
-        elif statuses & {"skipped_missing_dataset", "insufficient_history"}:
+        elif statuses & {"skipped_missing_dataset", "insufficient_history", "exploratory_only"}:
             status = "partial_data"
         else:
             status = "completed"

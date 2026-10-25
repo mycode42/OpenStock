@@ -61,6 +61,10 @@
     "minimum_high_volatility_holdout_sessions": 5,
     "high_volatility_labels": ["volatile", "high_vol", "high_volatility", "elevated", "crisis", "risk_off"]
   },
+  "short_history_exploration": {
+    "enabled": true,
+    "minimum_sessions": 60
+  },
   "search": {
     "mode": "surrogate",
     "maximum_candidates": 20,

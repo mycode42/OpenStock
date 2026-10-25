@@ -353,9 +353,109 @@ def run_research(
             data_mode=str(research_config.get("data_mode", "auto")),
             model_surface_config=research_config.get("model_surface", {}),
         )
-        folds, holdout, split = make_purged_walk_forward(
-            dataset.observations, strategy=strategy, strategy_section=section, config=research_config,
-        )
+        try:
+            folds, holdout, split = make_purged_walk_forward(
+                dataset.observations, strategy=strategy, strategy_section=section, config=research_config,
+            )
+        except ValueError as exc:
+            short_history = research_config.get("short_history_exploration", {})
+            minimum_sessions = int(short_history.get("minimum_sessions", 60))
+            if (
+                short_history.get("enabled", False)
+                and "insufficient history for" in str(exc)
+                and len(dataset.observations) >= minimum_sessions
+            ):
+                baseline = candidate_pool(strategy, research_config, base_config)[0]
+                replay = simulate_options_strategy(
+                    dataset, dataset.observations, strategy_name=strategy,
+                    candidate=baseline, config=research_config,
+                    base_config=base_config, force_close=True,
+                )
+                replay_summary = _aggregate_runs(
+                    [replay], starting_equity=float(research_config.get("starting_equity", 100000)),
+                    gamma_vega_threshold=float(
+                        research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60)
+                    ),
+                )
+                report = {
+                    "run_id": run_id,
+                    "created_at": timestamp.isoformat(),
+                    "strategy": strategy,
+                    "underlying": underlying,
+                    "status": "exploratory_only",
+                    "research_tier": "short_history_baseline_replay",
+                    "dataset_path": str(dataset.source_path),
+                    "run_dir": str(run_dir),
+                    "dataset_sha256": dataset.source_sha256,
+                    "dataset_observations": len(dataset.observations),
+                    "dataset_chain_errors": sum(item.chain is None for item in dataset.observations),
+                    "data_mode": dataset.data_mode,
+                    "research_config_path": str(config_path_resolved),
+                    "research_config_sha256": config_digest,
+                    "live_base_config_sha256": base_config_digest,
+                    "code_sha256": code_digest,
+                    "random_seed": int(research_config.get("random_seed", 1)),
+                    "split": {
+                        "standard_validation_available": False,
+                        "available_sessions": len(dataset.observations),
+                        "standard_validation_requirement": str(exc),
+                    },
+                    "folds": [],
+                    "candidate_leaderboard": [],
+                    "exploratory_replay": {
+                        "period_start": dataset.observations[0].as_of.isoformat(),
+                        "period_end": dataset.observations[-1].as_of.isoformat(),
+                        "profile": "current live defaults; no parameter search",
+                        "candidate": baseline.to_dict(),
+                        "metrics": replay_summary["metrics"],
+                        "regime_breakdown": replay_summary["regime_breakdown"],
+                        "volatility_breakdown": replay_summary["volatility_breakdown"],
+                        "greek_summary": replay_summary["greek_summary"],
+                        "equity_curve": replay_summary["equity_curve"],
+                        "trades": replay_summary["trades"],
+                    },
+                    "walk_forward": {},
+                    "holdout": {},
+                    "final_parameters": {},
+                    "final_allowed_regimes": list(baseline.allowed_regimes),
+                    "parameter_stability": {},
+                    "robustness": {},
+                    "validation": {
+                        "approved": False,
+                        "promotion_eligible": False,
+                        "status": "not_validated",
+                        "reason": "Short-history replay is descriptive only; standard rolling OOS and holdout gates were not met.",
+                    },
+                    "data_assumptions": {
+                        "historical_chain_snapshots_required_for_empirical_claims": True,
+                        "model_or_synthetic_rows_present": dataset.data_mode.startswith("model_surface") or dataset.data_mode == "model_or_synthetic_chain_rows",
+                        "point_in_time_events_and_signals_only": True,
+                    },
+                }
+                write_research_report(run_dir, report)
+                atomic_write_json(run_dir / "candidate_reports.json", [], indent=2, sort_keys=True)
+                _write_equity_csv(run_dir / "exploratory_equity_curve.csv", replay_summary["equity_curve"])
+                _write_trades_csv(run_dir / "exploratory_trades.csv", replay_summary["trades"])
+                atomic_write_json(run_dir / "run.json", {
+                    "run_id": run_id, "strategy": strategy,
+                    "research_config": research_config,
+                    "research_config_sha256": config_digest,
+                    "live_base_config_sha256": base_config_digest,
+                    "code_sha256": code_digest,
+                    "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
+                    "created_at": timestamp.isoformat(), "status": "exploratory_only",
+                    "validation": report["validation"],
+                }, indent=2, sort_keys=True, allow_nan=False)
+                _append_run_log(output_root / "research_runs.jsonl", {
+                    "run_id": run_id, "created_at": timestamp.isoformat(), "strategy": strategy,
+                    "underlying": underlying, "dataset_sha256": dataset.source_sha256,
+                    "research_config_sha256": config_digest,
+                    "live_base_config_sha256": base_config_digest, "code_sha256": code_digest,
+                    "run_dir": str(run_dir), "status": "exploratory_only",
+                    "validation": report["validation"],
+                })
+                return report
+            raise
     except Exception as exc:
         failure = {**run_start, "status": "preflight_failed", "error": f"{type(exc).__name__}: {exc}"}
         atomic_write_json(run_dir / "run.json", {**failure, "research_config": research_config},

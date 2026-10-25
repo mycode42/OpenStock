@@ -31,6 +31,34 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
 def write_research_report(run_dir: Path, report: dict) -> None:
     """Write stable JSON and a concise Markdown report for a completed run."""
     atomic_write_json(run_dir / "report.json", report, indent=2, sort_keys=True, allow_nan=False)
+    if report.get("research_tier") == "short_history_baseline_replay":
+        replay = report.get("exploratory_replay", {})
+        metrics = replay.get("metrics", {})
+        lines = [
+            f"# Exploratory options replay: {report.get('strategy')} ({report.get('run_id')})",
+            "",
+            f"Status: **EXPLORATORY ONLY — NOT VALIDATED**  ",
+            f"Underlying: {report.get('underlying')}  ",
+            f"Available sessions: {report.get('dataset_observations')}  ",
+            f"Period: {replay.get('period_start')} to {replay.get('period_end')}  ",
+            f"Profile: {replay.get('profile')}  ",
+            "",
+            "This is a descriptive replay on the full available history. It is not out-of-sample validation, includes no parameter search, and cannot be promoted or exported to paper/live configuration.",
+            "",
+            "## Descriptive metrics",
+            "",
+            f"Trades: {metrics.get('trade_count', 0)}  ",
+            f"Return: {_fmt(metrics.get('total_return'), percent=True)}  ",
+            f"Sharpe: {_fmt(metrics.get('annualized_sharpe'))}  ",
+            f"Maximum drawdown: {_fmt(metrics.get('max_drawdown'), percent=True)}  ",
+            f"Risk-adjusted score: {_fmt(metrics.get('risk_adjusted_score'))}  ",
+            f"Detailed equity and trade rows: `exploratory_equity_curve.csv`, `exploratory_trades.csv`  ",
+            "",
+            f"Standard validation requirement: `{report.get('split', {}).get('standard_validation_requirement')}`",
+            "",
+        ]
+        (run_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
+        return
     oos = report.get("walk_forward", {}).get("oos_metrics", {})
     holdout = report.get("holdout", {}).get("metrics", {})
     rows = [

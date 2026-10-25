@@ -26,10 +26,21 @@ RESEARCH_DIR = ROOT / "data" / "options" / "research" / "theta"
 LOCK_PATH = RESEARCH_DIR / "theta_backfill.lock"
 FIRST_DATA_DATE = date(2020, 1, 1)
 REQUIRED_RESEARCH_SESSIONS = 1013
+MIN_EXPLORATORY_RESEARCH_SESSIONS = 60
 MAX_RESEARCH_DTE = 60
 STRIKE_RANGE = 20
 ET = ZoneInfo("America/New_York")
 META_TICKER_CHANGE_DATE = date(2022, 6, 9)
+# PLTR began trading on 2020-09-30, but ThetaData has no options rows for
+# September 2020. Start at the first fully available month to avoid a
+# NoDataFoundError on the pre-history part of the archive.
+# The current SPCX is SpaceX, whose options began trading on 2026-06-16. The
+# former SPAC ETF changed its ticker from SPCX to SPCK on 2026-04-07, so do not
+# combine that ETF's history with SpaceX's options history.
+SYMBOL_HISTORY_START_DATES = {
+    "PLTR": date(2020, 10, 1),
+    "SPCX": date(2026, 6, 16),
+}
 
 
 def _read_api_key() -> str:
@@ -140,7 +151,7 @@ def _month_chunks(start: date, end: date, *, newest_first: bool = False):
         else:
             next_month = date(cursor.year, cursor.month + 1, 1)
         chunk_end = min(end, next_month - timedelta(days=1))
-        chunks.append((cursor, chunk_end))
+        chunks.append((max(cursor, start), chunk_end))
         cursor = next_month
     yield from reversed(chunks) if newest_first else chunks
 
@@ -230,6 +241,11 @@ def _symbol_has_archive_gaps(symbol: str, *, start_date: date, end_date: date) -
         or not (oi_dir / f"{month_start:%Y-%m}.json.gz").is_file()
         for month_start, _month_end in _month_chunks(start_date, end_date)
     )
+
+
+def _effective_start_date(symbol: str, start_date: date) -> date:
+    """Respect a symbol's earliest available option-history month."""
+    return max(start_date, SYMBOL_HISTORY_START_DATES.get(symbol, start_date))
 
 
 def _contract_key(row: dict) -> tuple[str, float, str]:
@@ -414,10 +430,18 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         and _archive_covers_through(oi_dir / f"{month_start:%Y-%m}.json.gz", month_end)
         for month_start, month_end in archive_chunks
     )
+    standard_research_ready = len(rows) >= REQUIRED_RESEARCH_SESSIONS
+    exploratory_research_ready = (
+        archive_complete and len(rows) >= MIN_EXPLORATORY_RESEARCH_SESSIONS
+    )
     manifest = {
         "provider": "ThetaData",
         "data_type": "historical option EOD NBBO and open interest",
-        "status": "research_ready" if len(rows) >= REQUIRED_RESEARCH_SESSIONS else "collecting",
+        "status": (
+            "research_ready" if standard_research_ready
+            else "exploratory_ready" if exploratory_research_ready
+            else "collecting"
+        ),
         "archive_complete": archive_complete,
         "archive_start_date": start_date.isoformat(),
         "archive_end_date": end_date.isoformat(),
@@ -433,6 +457,9 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         "combined_dataset_sessions": combined["combined_sessions"],
         "dataset_sessions": len(rows),
         "research_sessions_required": REQUIRED_RESEARCH_SESSIONS,
+        "standard_research_ready": standard_research_ready,
+        "exploratory_research_sessions_required": MIN_EXPLORATORY_RESEARCH_SESSIONS,
+        "exploratory_research_ready": exploratory_research_ready,
         "contracts_in_dataset": contracts_total,
         "contract_dte_filter": {"min": 0, "max": MAX_RESEARCH_DTE},
         "strike_range": STRIKE_RANGE,
@@ -600,15 +627,20 @@ def _run_symbols(symbols: list[str], start_date: date, end_date: date) -> int:
     ordered_symbols = list(dict.fromkeys(symbols))
     original_order = {symbol: index for index, symbol in enumerate(ordered_symbols)}
     ordered_symbols.sort(key=lambda symbol: (
-        not _symbol_has_archive_gaps(symbol, start_date=start_date, end_date=end_date),
+        not _symbol_has_archive_gaps(
+            symbol, start_date=_effective_start_date(symbol, start_date), end_date=end_date,
+        ),
         original_order[symbol],
     ))
     if ordered_symbols != list(dict.fromkeys(symbols)):
         print(f"ThetaData resume order: {', '.join(ordered_symbols)}")
     for symbol in ordered_symbols:
         try:
+            symbol_start_date = _effective_start_date(symbol, start_date)
+            if symbol_start_date > start_date:
+                print(f"ThetaData {symbol}: starting archive at {symbol_start_date} (earliest available history)")
             manifests.append(_fetch_symbol(
-                client, symbol, start_date=start_date, end_date=end_date,
+                client, symbol, start_date=symbol_start_date, end_date=end_date,
             ))
         except Exception as error:
             message = str(error).replace(api_key, "[redacted]")
@@ -618,8 +650,9 @@ def _run_symbols(symbols: list[str], start_date: date, end_date: date) -> int:
         "provider": "ThetaData",
         "underlyings": len(manifests),
         "research_ready": [row["underlying"] for row in manifests if row["status"] == "research_ready"],
+        "exploratory_ready": [row["underlying"] for row in manifests if row["status"] == "exploratory_ready"],
         "archive_complete": [row["underlying"] for row in manifests if row.get("archive_complete")],
-        "collecting": [row["underlying"] for row in manifests if row["status"] != "research_ready"],
+        "collecting": [row["underlying"] for row in manifests if row["status"] == "collecting"],
         "manifest_dir": str(RESEARCH_DIR),
     }, sort_keys=True))
     return 0
