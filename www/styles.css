@@ -16,7 +16,7 @@ h1{font-size:1.75rem;color:#ffffff;margin-bottom:.5rem}
 .stock-price{font-size:1.5rem;font-weight:700;margin-bottom:.5rem}
 .stock-price.eu{color:#fbbf24}
 .stock-price.usd{color:#94a3b8;font-size:1rem}
-.quote-sides{display:flex;gap:.8rem;margin:-.15rem 0 .6rem;color:#94a3b8;font-size:.78rem}.quote-sides strong{color:#f8fafc;font-variant-numeric:tabular-nums}
+.quote-sides{display:flex;gap:.8rem;margin:-.15rem 0 .6rem;color:#94a3b8;font-size:.78rem}.quote-sides strong{color:var(--os-text,#f8fafc);font-variant-numeric:tabular-nums}
 .thresholds{display:flex;gap:1rem;margin-bottom:.5rem;flex-wrap:wrap}
 .threshold{font-size:.8rem;padding:.2rem .5rem;border-radius:.25rem}
 .threshold.buy{background:rgba(34,197,94,.2);color:#22c55e}

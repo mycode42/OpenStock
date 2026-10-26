@@ -4,6 +4,7 @@ import { money, parseOpenStockDate, formatLocalDate } from './formatting.js';
 export function createJournal(context) {
     let journalChartMode = 'equity';
     let journalPerformanceChartType = 'line';
+    const openJournalSections = new Set();
     const { getTrades, getTradePagination, getCapitalEvents, getAnalytics, request: af, showA, setJournalPage, reloadJournal, charts } = context;
     const capitalEvents = getCapitalEvents;
     const tradingAnalytics = getAnalytics;
@@ -306,6 +307,12 @@ function collapseJournalCard(container, selector, label, description = '') {
     if (!card || card.querySelector(':scope > details.journal-collapsible')) return;
     const details = document.createElement('details');
     details.className = 'journal-collapsible';
+    details.dataset.journalSection = label;
+    details.open = openJournalSections.has(label);
+    details.addEventListener('toggle', () => {
+        if (details.open) openJournalSections.add(label);
+        else openJournalSections.delete(label);
+    });
     const summary = document.createElement('summary');
     summary.innerHTML = `<span>${escapeHtml(label)}</span>${description ? `<small>${escapeHtml(description)}</small>` : ''}`;
     const content = document.createElement('div');
@@ -334,7 +341,7 @@ function renderJournal() {
     const capitalHelp = initialCapitalExists
         ? `Initial capital was set on ${formatLocalDate(initialCapital.occurred_at)}. To align with your broker cash balance, add the difference as a Deposit (or Withdrawal); it does not change trading P/L.`
         : 'Set Initial Capital once to establish the starting balance. Later cash changes should be recorded as Deposits or Withdrawals.';
-    container.innerHTML = `<header><h1>📓 Trading Journal</h1></header><div id="ac"></div>${analytics?.equity_available ? '' : '<div class="alert-box info">Add an <strong>Initial capital</strong> event below to calculate current capital, return, exposure and an equity curve.</div>'}
+    container.innerHTML = `<header><h1>Trading Journal</h1></header><div id="ac"></div>${analytics?.equity_available ? '' : '<div class="alert-box info">Add an <strong>Initial capital</strong> event below to calculate current capital, return, exposure and an equity curve.</div>'}
       <div class="journal-kpi-grid journal-kpi-featured-grid">${journalKpi('Current Capital', journalMoney(capital.current_eur), 'Cash plus priced open positions.', '', journalKpiSparkline((analytics?.equity_curve || []).map(point => point.equity_eur)))}${journalKpi('Net P/L', journalSigned(currentPnl), 'Realized plus unrealized P/L; capital events excluded.', journalClass(currentPnl), journalKpiBalance(currentPnl, capital.net_contributions_eur))}${journalKpi('Return', journalPercent(capital.current_return_pct), 'Current capital less net owner contributions divided by net owner contributions.', journalClass(capital.current_return_pct), journalKpiRing(capital.current_return_pct, 25, 'Return magnitude · 25% scale'))}${journalKpi('Win Rate', journalPercent(tradeStats.win_rate_pct), 'Winning completed trades divided by completed trades.', '', journalKpiRing(tradeStats.win_rate_pct, 100, 'Winning closed trades'))}</div>
       <div class="journal-kpi-grid journal-kpi-secondary-grid">${journalKpi('Available Cash', journalMoney(capital.available_cash_eur), 'Capital events less purchases/fees plus sales.')}${journalKpi('Avg Daily', `${journalSigned(performance.average_daily_pnl_eur)} · ${journalPercent(performance.average_daily_return_pct)}`, 'Average realized P/L per completed trading day and its percentage of contributed capital.', journalClass(performance.average_daily_pnl_eur))}${journalKpi('Avg Monthly', `${journalSigned(performance.average_monthly_pnl_eur)} · ${journalPercent(performance.average_monthly_return_pct)}`, 'Average realized P/L per completed month and its percentage of contributed capital.', journalClass(performance.average_monthly_pnl_eur))}${journalKpi('YTD P/L', journalSigned(performance.ytd_pnl_eur), 'Net P/L from completed trades this calendar year.', journalClass(performance.ytd_pnl_eur))}${journalKpi('Est. Yearly Profit', journalSigned(performance.estimated_yearly_profit_eur), 'Observed-rate annual profit illustration.', journalClass(performance.estimated_yearly_profit_eur))}${journalKpi('Open Positions', String(tradeStats.open ?? 0), 'Lots not yet closed.')}</div>
       <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution, initialCapital?.amount_eur)}</div>
@@ -359,9 +366,18 @@ function renderJournal() {
     collapseJournalCardByTitle(container, 'Capital Events', 'Capital & cash movements', 'Deposits, withdrawals, and financing');
     collapseJournalCardByTitle(container, 'Trades', 'Trades', 'Read-only trade history');
     collapseJournalCardByTitle(container, 'Per-Instrument Analytics', 'Per-instrument analytics', 'Completed-trade breakdown by instrument');
-    container.querySelectorAll('[data-trade-page]').forEach(button => button.addEventListener('click', () => {
+    container.querySelectorAll('[data-trade-page]').forEach(button => button.addEventListener('click', async () => {
         const page = Number(button.dataset.tradePage);
-        if (Number.isInteger(page) && page > 0) { setJournalPage(page); reloadJournal(page); }
+        if (!Number.isInteger(page) || page < 1) return;
+        const tradesSection = button.closest('[data-journal-section="Trades"]');
+        const tradesTop = tradesSection?.getBoundingClientRect().top;
+        setJournalPage(page);
+        await reloadJournal(page);
+        const refreshedTradesSection = container.querySelector('[data-journal-section="Trades"]');
+        if (refreshedTradesSection && Number.isFinite(tradesTop)) {
+            const offset = refreshedTradesSection.getBoundingClientRect().top - tradesTop;
+            if (Math.abs(offset) > 0.5) window.scrollBy(0, offset);
+        }
     }));
     container.querySelectorAll('[data-journal-chart-mode]').forEach(button => button.addEventListener('click', () => {
         journalChartMode = button.dataset.journalChartMode;

@@ -1140,6 +1140,10 @@ async function buildPayload(root) {
         account: {
             mode: 'paper',
             market_state: String(state.market_state || 'UNKNOWN'),
+            market_status: String(state.market_state || 'UNKNOWN'),
+            regime: String(safeObject(portfolio.market_regime).regime || 'unknown'),
+            volatility_state: String(safeObject(portfolio.market_regime).volatility_state || 'unknown'),
+            regime_engine: String(safeObject(portfolio.market_regime).regime_engine || 'unknown'),
             last_scan_at: isoTimestamp(portfolio.last_scan_at),
             last_scan_status: String(portfolio.last_scan_status || 'unknown'),
             entries_paused: typeof portfolio.entries_paused === 'boolean' ? portfolio.entries_paused : null,
@@ -1507,14 +1511,20 @@ async function buildOptionsPayload(root) {
     const universe = [...new Set(decisions.slice(-50).map(row => safeObject(row.signal).underlying).filter(Boolean))];
     const disabled = !settings.enabled;
     const unconfigured = !accountDir;
+    const coordinatorPortfolio = safeObject(coordinatorState?.strategy_portfolio);
+    const sharedMarketRegime = safeObject(coordinatorPortfolio.market_regime);
+    const sharedRegime = String(sharedMarketRegime.regime || 'unknown').trim().toLowerCase();
     const marketStatus = String(coordinatorState?.market_state || '').toUpperCase();
     const marketClosed = marketStatus === 'CLOSED';
     const entryPauseReasons = [];
     if (disabled) entryPauseReasons.push('Options paper route is disabled in options configuration');
     if (unconfigured) entryPauseReasons.push('No options paper account journal was found');
     if (marketClosed && !disabled && !unconfigured) entryPauseReasons.push('Options market is closed');
-    const latestTimestamp = isoTimestamp(latestRisk.logged_at);
-    const activeStrategies = optionsStrategiesForRegime(settings, latestRisk.regime || latestRisk.volatility_state);
+    if (sharedRegime === 'unknown' && !disabled && !unconfigured && !marketClosed) {
+        entryPauseReasons.push('Shared Algo coordinator regime is unavailable');
+    }
+    const entriesPaused = disabled || unconfigured || marketClosed || sharedRegime === 'unknown';
+    const activeStrategies = optionsStrategiesForRegime(settings, sharedRegime);
     const strategyPerformance = optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows);
     const hasStrategyPnl = strategyPerformance.strategies.some(strategy => (
         strategy.latest_pnl_usd !== null || strategy.cumulative_pnl_usd !== null
@@ -1523,11 +1533,14 @@ async function buildOptionsPayload(root) {
     return {
         account: {
             mode: 'paper',
-            market_state: String(latestRisk.regime || latestRisk.volatility_state || 'OPTIONS PAPER'),
+            market_state: marketStatus || 'UNKNOWN',
             market_status: marketStatus || 'UNKNOWN',
-            last_scan_at: latestTimestamp,
-            last_scan_status: latestTimestamp ? 'complete' : 'no options scan recorded',
-            entries_paused: disabled || unconfigured || (marketClosed && entryPauseReasons.length === 1) ? true : null,
+            regime: sharedRegime,
+            volatility_state: String(sharedMarketRegime.volatility_state || 'unknown'),
+            regime_engine: String(sharedMarketRegime.regime_engine || 'unknown'),
+            last_scan_at: isoTimestamp(coordinatorPortfolio.last_scan_at),
+            last_scan_status: String(coordinatorPortfolio.last_scan_status || 'unknown'),
+            entries_paused: entriesPaused,
             entry_pause_reasons: entryPauseReasons,
             active_strategies: activeStrategies,
             active_strategies_label: 'Strategies available in this regime',

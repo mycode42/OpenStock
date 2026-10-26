@@ -1,6 +1,6 @@
 import { escapeHtml } from './escape.js';
 
-const RANGES = ['1W', '1M', '3M', 'ALL'];
+const RANGES = ['1D', '1W', '1M', '3M', 'ALL'];
 const ACTIVITY_PAGE_SIZE = 10;
 function numberOrNull(value) {
     const number = Number(value);
@@ -58,12 +58,12 @@ function classForReturn(value) {
 function rangeHistory(history, range) {
     const points = Array.isArray(history) ? history.filter(item => numberOrNull(item.equity) !== null) : [];
     if (range === 'ALL' || points.length <= 1) return points;
-    const lookback = range === '1W' ? 7 : range === '1M' ? 31 : 92;
+    const lookback = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 31 : 92;
     const latestDate = new Date(points[points.length - 1].timestamp || points[points.length - 1].date);
     if (Number.isNaN(latestDate.getTime())) return points;
     const cutoff = latestDate.getTime() - lookback * 86400000;
     const filtered = points.filter(item => new Date(item.timestamp || item.date).getTime() >= cutoff);
-    return filtered.length > 1 ? filtered : points;
+    return filtered.length > 1 || range === '1D' ? filtered : points;
 }
 
 function renderChart(history, range, charts) {
@@ -96,7 +96,9 @@ function renderChart(history, range, charts) {
     const labelIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
     const labels = labelIndexes.map(index => {
         const anchor = index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle';
-        return `<text class="algo-chart-x-label" x="${coords[index].x}" y="252" text-anchor="${anchor}">${escapeHtml(dateOnly(points[index].date || points[index].timestamp))}</text>`;
+        const value = points[index].timestamp || points[index].date;
+        const label = range === '1D' && points[index].timestamp ? timeOnly(value) : dateOnly(points[index].date || points[index].timestamp);
+        return `<text class="algo-chart-x-label" x="${coords[index].x}" y="252" text-anchor="${anchor}">${escapeHtml(label)}</text>`;
     }).join('');
     const hoverPoints = coords.map((point, index) => ({
         x: point.x,
@@ -421,11 +423,17 @@ export function createAlgoTrader({ request, charts }) {
         const latestSnapshot = history[history.length - 1];
         const snapshotDate = latestSnapshot?.date ? dateOnly(latestSnapshot.date) : 'no snapshots';
         const pauseReasons = Array.isArray(account.entry_pause_reasons) ? account.entry_pause_reasons : [];
-        const closedMarketQuotePause = String(account.market_state || '').toUpperCase() === 'CLOSED'
+        const marketStatus = String(account.market_status || account.market_state || '').toUpperCase();
+        const regimeLabel = String(account.regime || 'unknown').replaceAll('_', ' ').toUpperCase();
+        const scanStatus = String(account.last_scan_status || 'unknown').trim() || 'unknown';
+        const coordinatorStatusLabel = ['ok', 'complete', 'completed', 'success', 'succeeded'].includes(scanStatus.toLowerCase())
+            ? 'OK' : scanStatus.replaceAll('_', ' ').toUpperCase();
+        const regimeEngineLabel = String(account.regime_engine || 'unknown').replaceAll('_', ' ').toUpperCase();
+        const closedMarketQuotePause = marketStatus === 'CLOSED'
             && pauseReasons.length === 1
             && pauseReasons[0] === 'owned positions lack fresh protective quotes';
         const optionsMarketClosedPause = isOptions
-            && String(account.market_status || '').toUpperCase() === 'CLOSED'
+            && marketStatus === 'CLOSED'
             && account.entries_paused === true
             && pauseReasons.length === 1
             && pauseReasons[0] === 'Options market is closed';
@@ -441,8 +449,8 @@ export function createAlgoTrader({ request, charts }) {
         const strategyListLabel = isOptions ? account.active_strategies_label || 'Strategies available in this regime' : 'Active strategies';
         const noStrategiesMessage = isOptions ? 'No enabled strategy sleeves for this regime' : 'No active strategies in the last scan';
         const strategyScope = isOptions
-            ? `${String(account.market_state || 'Current').replaceAll('_', ' ')} regime`
-            : `${account.universe_count ?? 0} tickers in configured universe`;
+            ? `${regimeLabel} regime · ${regimeEngineLabel} engine`
+            : `${account.universe_count ?? 0} tickers · ${regimeEngineLabel} regime engine`;
 
         host.innerHTML = `<main class="algo-page">
             <header class="algo-page-header">
@@ -469,7 +477,7 @@ export function createAlgoTrader({ request, charts }) {
                 </article>
 
                 <article class="card algo-panel algo-strategy-panel">
-                    <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(account.market_state || 'State unavailable')}</h2></div><span class="algo-state-pill ${marketClosedPause ? 'market-closed' : account.entries_paused ? 'paused' : ''}"><i></i> ${escapeHtml(marketClosedPause ? 'MARKET CLOSED' : account.entries_paused ? 'PAUSED' : account.last_scan_status || 'UNKNOWN')}</span></div>
+                    <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(regimeLabel)}</h2></div><span class="algo-state-pill"><i></i> ${escapeHtml(coordinatorStatusLabel)}</span></div>
                     <div class="algo-strategy-score"><div class="algo-score-ring"><span>${account.active_strategies?.length ?? 0}</span><small>/strats</small></div><div><strong>${escapeHtml(strategyListLabel)}</strong><span>${isOptions ? escapeHtml(strategyScope) : strategyScope}</span></div></div>
                     <div class="algo-active-strategy-list">${(account.active_strategies || []).map(strategy => `<span>${escapeHtml(strategy)}</span>`).join('') || `<span class="algo-muted-text">${escapeHtml(noStrategiesMessage)}</span>`}</div>
                     <div class="algo-strategy-list"><div><span>Last scan</span><strong>${escapeHtml(dateTime(account.last_scan_at))}</strong></div><div><span>Account mode</span><strong>Alpaca ${isOptions ? 'options ' : ''}paper</strong></div><div><span>Sharpe ratio</span><strong>${metrics.sharpe_ratio === null ? '—' : metrics.sharpe_ratio.toFixed(2)} <small>snapshot based</small></strong></div></div>

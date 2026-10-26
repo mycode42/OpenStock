@@ -245,7 +245,8 @@ test('journal chart modes use concise labels with no explanatory subtitle', () =
     const journal = fs.readFileSync(path.join(root, 'www/modules/journal.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
     assert.match(journal, /\['equity', 'Equity'\], \['daily', 'Daily'\], \['monthly', 'Monthly'\]/);
-    assert.match(journal, /<header><h1>📓 Trading Journal<\/h1><\/header>/);
+    assert.match(journal, /<header><h1>Trading Journal<\/h1><\/header>/);
+    assert.doesNotMatch(journal, /📓/);
     assert.doesNotMatch(journal, /Trades, performance and risk/);
     assert.doesNotMatch(journal, /Current capital and peak equity over time/);
     assert.doesNotMatch(journal, /Realized P\/L in euros, with percentage return on contributed capital/);

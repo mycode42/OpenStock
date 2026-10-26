@@ -106,6 +106,15 @@ test('options paper account payload reads its own account journal and research',
     status: 'completed', run_date_et: '2026-10-20', created_at: '2026-10-20T21:00:00Z',
     strategies: { vrp: { status: 'completed', approved: true, underlying: 'SPY' } },
   }));
+  await fs.writeFile(path.join(root, 'data', 'algo_state.json'), JSON.stringify({
+    market_state: 'REGULAR',
+    strategy_portfolio: {
+      last_scan_at: '2026-10-20T20:00:00Z',
+      last_scan_status: 'ok',
+      entries_paused: false,
+      market_regime: { regime: 'range_bound', volatility_state: 'normal', regime_engine: 'committee' },
+    },
+  }));
 
   const handlers = routeHandlers(root);
   const res = response();
@@ -116,6 +125,9 @@ test('options paper account payload reads its own account journal and research',
   assert.equal(res.body.account.mode, 'paper');
   assert.equal(res.body.performance.metrics.equity, 11000);
   assert.equal(res.body.performance.metrics.daily_pnl, 1000);
+  assert.equal(res.body.account.regime, 'range_bound');
+  assert.equal(res.body.account.regime_engine, 'committee');
+  assert.equal(res.body.account.entries_paused, false);
   assert.deepEqual(res.body.account.active_strategies, ['Event Driven', 'Volatility Risk Premium']);
   assert.equal(res.body.research.latest.promoted, 1);
   assert.ok(res.body.activity.some(item => item.title.includes('SPY')));
