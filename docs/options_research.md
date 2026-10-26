@@ -13,7 +13,7 @@ default underlying; use `--underlying` to select another ticker:
 ```sh
 poetry run python -m options.research --strategy vrp \
   --underlying NVDA \
-  --data data/options/research/combined/NVDA/chains.jsonl
+  --data data/options/research/options_history.sqlite3
 ```
 
 Use `--config` for a JSON override and `--output-dir` to change the artifact
@@ -24,6 +24,8 @@ the broker, or submit orders. Run-specific artifacts are written beneath
 Markdown reports, an OOS equity/Greek CSV, and a live-format candidate config.
 Candidate-specific fold metrics and selected OOS summaries are also written to
 `candidate_reports.json`; closed OOS and holdout trades have separate CSVs.
+Compressed copies of reports, run artifacts, and candidates are stored in
+`data/options/research/research.sqlite3`; the files remain available as exports.
 An `approved-options-config.json` is emitted only if the configured validation
 gates pass. Otherwise the export is named `candidate-options-config.json` and
 the researched strategy section is disabled so copying it cannot enable an
@@ -33,10 +35,12 @@ unvalidated sleeve by accident.
 
 The scheduled AutoResearch automation runs `autoresearch.nightly`, which starts
 the existing equity research command and an independent options job concurrently.
-The nightly job uses `config.portfolio.json` to run `vrp`, `event_driven`, and
-`long_volatility` against all 24 tickers in the Algo portfolio universe. Each
-ticker reads its merged ThetaData/Alpaca daily archive through
-`automation.data_path_template`;
+The options job currently runs VRP and long-volatility. VRP screens the 117-symbol
+history candidate pool one ticker at a time; long-volatility keeps its explicit
+9-symbol list. Event-driven options remains excluded until point-in-time event
+recommendations are available. Each ticker reads its effective ThetaData and
+Alpaca history from `data/options/research/options_history.sqlite3`, selected
+through `automation.data_path_template`;
 missing or not-yet-long-enough datasets are reported per ticker while available
 datasets continue through research. Edit `automation.strategies` in
 `config.portfolio.json` to select a different subset, including
@@ -54,13 +58,76 @@ If the configured chain dataset does not exist, the options report uses
 completes independently. Supply historical option-chain snapshots (or explicitly
 marked point-in-time IV-surface rows) before expecting options validation runs.
 
+## Cached eligible universe and portfolio exposure checks
+
+The optional research selector starts with the 117-symbol history universe and
+uses only completed daily-close snapshots. It applies a rolling 20-session
+options activity gate (average contract volume or total open interest), equity
+share volume and dollar volume gates, and a median option spread gate around the
+money. Thresholds, liquidity coverage requirements, sector proxy mappings,
+regime rules, and exposure caps are versioned in
+[`eligibility.default.json`](../options/research/eligibility.default.json).
+The initial values are screening candidates, not fitted thresholds.
+
+The selector ranks configured sector ETF proxies by 20-session relative
+strength, uses SPY's 200-session trend and stored volatility label for the
+low-cardinality regime, then caches a shared eligible list with per-ticker
+metrics and exclusion reasons. A small core can pass the soft sector overlay
+only; it still must pass every hard liquidity gate. It also creates an equal
+notional exposure preview with sector and rolling-correlation cluster limits.
+The preview is for research portfolio simulations and does not change live
+position sizing.
+
+Option daily volume and underlying daily share volume are now retained in the
+normalized history store. The Theta EOD collector reads the resumable monthly
+archives and writes the refreshed snapshots and liquidity summaries directly
+to SQLite. Until summary coverage exists, the selector fails closed and returns
+no eligible tickers. Underlying historical NBBO spread
+is not stored, so the hard spread gate currently uses option spreads. The
+earnings blackout is configurable but defaults off because the current event
+calendar does not yet provide adequate fresh point-in-time history.
+If the earnings gate is enabled before historical calendar snapshots cover the
+walk-forward range, the simulation reports `insufficient_event_history` and
+withholds performance results.
+
+After the history import is current, build a timestamped daily cache and run the
+separate selection walk-forward report:
+
+```sh
+poetry run python -m options.research.universe_selection cache
+poetry run python -m options.research.universe_selection simulate
+poetry run python -m options.research.universe_selection simulate --universe-scope history_117
+```
+
+The simulation defaults to the original 24 tickers, using a chronological
+60/20/20 train, validation, and untouched holdout split. It reports eligible
+set size and turnover, sector exposure and cap binding, correlation exposure,
+and how often the regime filter changes the set versus a sector-momentum-only
+counterfactual. After reviewing that result, run the broader candidate pool with
+`--universe-scope history_117`. Its parameter grid changes
+one rule at a time and reports all results; it does not pick or promote a
+winner. It evaluates selection composition rather than any strategy's option
+entries or exits.
+
+Nightly automation builds the shared cache after the normalized SQLite store is
+updated. Applying it to the research ticker jobs is a separate
+`automation.eligibility.apply_to_research` switch, which stays `false` while the
+volume fields are being repopulated and the selection walk-forward remains
+unvalidated. Once validated, set it to `true`; every configured options sleeve
+will then use the same cached list, intersected with its own strategy-specific
+universe. This switch affects only offline research. The live 24-ticker
+portfolio and its risk settings stay unchanged.
+
 ## ThetaData historical backfill
 
 ThetaData EOD bid/ask chains and historical open interest feed the same snapshot
-loader used by the research runner. The collector writes a compressed monthly
-raw archive and a separate `chains.jsonl` per underlying, so a rerun can resume
-without loading all symbols into memory. Its default universe is the complete
-Algo portfolio universe, and it starts at 2020-01-01. Symbols with fewer than
+loader used by the research runner. The collector writes directly to
+`options_history.sqlite3`. It retains compressed monthly Theta responses as a
+resumable download cache, but no longer writes per-symbol or combined chain
+JSONL files. Its default is the 117-symbol research
+history universe in [`universe.json`](../options/research/universe.json), which
+is separate from live Algo portfolio membership. It starts at 2020-01-01, with
+later listing dates configured per symbol. Symbols with fewer than
 1,013 usable sessions remain marked `collecting` in their per-symbol manifest.
 
 Install the optional client on Python 3.12 or newer and run the collector:
@@ -75,43 +142,71 @@ official `THETADATA_API_KEY` name). To backfill a smaller set, repeat
 `--underlying`, for example `--underlying SPY --underlying NVDA`. The output is
 written under `data/options/research/theta/<SYMBOL>/`.
 
-The Theta files under `data/options/research/theta/<SYMBOL>/chains.jsonl` are
-the historical source archive. Their per-symbol manifest now distinguishes
+SQLite is the canonical research history. Per-symbol manifests distinguish
 `research_ready` (at least 1,013 usable sessions) from `archive_complete` (all
 requested monthly EOD and open-interest files through the requested end date
 were fetched). `research_ready` alone does not mean the full backfill is done.
+If an older collector left chain JSONL files behind, migrate and remove only
+database-verified copies with
+`poetry run python scripts/options/migrate_chain_jsonl_to_sqlite.py --delete-verified`.
+That command refuses to run while a Theta collector holds the backfill lock.
+
+Historical opening snapshots for the same research history universe are
+collected separately with `poetry run python -m scripts.options.theta_opening_backfill`. The collector
+requests the last NBBO at 09:35 ET, applies the same 60-DTE and 20-strikes-per-
+side filters, and writes opening snapshots directly to SQLite while retaining
+compressed monthly source responses for resumability. Opening snapshots use the
+underlying's daily opening price, prior-session close, and prior-session open
+interest to avoid same-day lookahead; they remain separate from the
+one-row-per-session close dataset. If local EOD open-interest archives arrive
+after the opening quote backfill, rebuild those derived rows with
+`--compile-only` after the EOD backfill finishes.
 
 ## Daily Alpaca capture
 
 The `options-history-capture` OpenClaw automation runs at 16:15
 America/New_York on weekdays, after the regular close. It saves OPRA quotes from the current session and the
-session's underlying close for all 24 portfolio tickers. It captures options
+session's underlying close for all 117 options research history tickers. It captures options
 expiring within 60 days and up to 20 strikes on each side of spot per expiry.
 Snapshots with fewer than 20 valid same-session quotes are rejected and logged
 per ticker. The collector reads only the Alpaca options account credentials;
 it does not read or call ThetaData.
 
-Alpaca rows are stored under `data/options/research/alpaca/<SYMBOL>/`. The
-research input is the merged `data/options/research/combined/<SYMBOL>/chains.jsonl`:
-it keeps one row per New York session and prefers Alpaca when both providers
+Alpaca rows are upserted directly into `options_history.sqlite3`. Research keeps
+one effective row per New York session and prefers Alpaca when both providers
 have that date. Thus Theta remains the historical backfill source, while daily
 research advances from Alpaca. The capture can also be run manually with
 `poetry run python -m scripts.options.alpaca_daily_capture`.
+
+The `options-opening-capture` automation runs at 09:35 ET on weekdays for the
+same 117-symbol history universe and stores a current-session opening snapshot
+from Alpaca OPRA directly in SQLite. It uses a fresh
+underlying quote for spot and records each contract's actual quote timestamp.
+Opening rows are kept separate from the close archive and are not merged into
+the daily research file.
 
 After every ticker's Theta manifest reports `archive_complete: true` for the
 same requested date range, and the Alpaca capture has successfully archived the
 latest session for the configured universe, the Theta subscription is no longer
 needed to extend the dataset. The Alpaca automation will continue adding current
-sessions to the combined research files.
+sessions to SQLite.
+
+The capture CLI defaults to the 24-symbol Algo portfolio for manual use. Pass
+`--universe research` to collect the expanded history universe, as the two
+scheduled Alpaca captures do. This research universe does not change live
+trading eligibility; it expands the offline VRP candidate scan, while
+long-volatility retains its explicit nine-symbol list. The candidate scan is a
+research backtest and does not submit orders.
 
 To narrow the nightly batch, set `automation.underlyings` in
-`config.portfolio.json`. The full list matches the Algo portfolio universe and
-uses `data/options/research/combined/{underlying}/chains.jsonl`; custom datasets
-can use `automation.data_path_template` or per-symbol `automation.data_paths`. The
+`config.portfolio.json`; strategy-specific lists can be set with
+`automation.underlyings_by_strategy`. VRP defaults to the 117 history symbols,
+while long-volatility remains on its explicit nine names. The collectors write
+directly to `data/options/research/options_history.sqlite3`; custom datasets can use
+`automation.data_path_template` or per-symbol `automation.data_paths`. The
 automation keeps one result per strategy and underlying. Symbols remain in the
 report as `waiting_for_data` or `insufficient_history` until their own archive
-is ready, then start research automatically on a later run. One nightly run
-will evaluate each configured strategy for each ticker with usable history.
+is ready, then start research automatically on a later run.
 
 The collector takes each option's EOD NBBO and prior-session open interest. It
 keeps the unadjusted close as the option-pricing spot, while split-adjusting the
@@ -120,6 +215,13 @@ Finance split events. It labels trend from 50/200-session moving averages and
 volatility from the trailing 252-session distribution of 20-session realized
 volatility. The per-symbol manifest records these assumptions. Historical
 option EOD marks are daily snapshots, not intraday replay data.
+
+The added research tickers also have an independent Alpaca daily equity-bar
+archive. Run `poetry run python -m scripts.options.alpaca_equity_history_backfill`
+to collect split-adjusted OHLCV bars from each ticker's configured history start
+through the latest completed session. The collector follows Alpaca page tokens
+and writes a compressed per-symbol archive plus a checksum manifest under
+`data/options/research/alpaca/<SYMBOL>/`.
 
 ## Snapshot format
 
@@ -132,6 +234,7 @@ object with a `snapshots` array. A snapshot has this shape:
   "underlying": "SPY",
   "spot": 470.0,
   "underlying_close": 470.0,
+  "equity_volume": 54230000,
   "regime": "range_bound",
   "volatility_state": "normal",
   "feed": "historical",
@@ -146,6 +249,7 @@ object with a `snapshots` array. A snapshot has this shape:
       "quote_at": "2024-01-03T20:59:59Z",
       "iv": 0.22,
       "open_interest": 1200,
+      "volume": 418,
       "multiplier": 100,
       "exercise_style": "american"
     }
@@ -157,7 +261,9 @@ object with a `snapshots` array. A snapshot has this shape:
 ```
 
 Contract rows retain the vendor's original symbol, bid/ask, IV, open interest,
-multiplier, and exercise style. `quote_at` must be timezone-aware. Each
+daily option volume, multiplier, and exercise style. Snapshot-level
+`equity_volume` stores underlying daily shares traded when available.
+`quote_at` must be timezone-aware. Each
 observation should include a full enough chain for the strategy's DTE and delta
 selection. If `underlying_close` is omitted on every row, spot is used as a
 close proxy and the report marks that weaker data mode. To supply a separate

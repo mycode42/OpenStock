@@ -14,6 +14,7 @@ from pathlib import Path
 
 from portfolio.incidents import open_incident_symbols, resolve_incident
 from portfolio.protection.evidence import recovery_oco_order, verified_recovery_oco
+from strategies.catalog import canonical_strategy_id
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
 from strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
 
@@ -53,6 +54,13 @@ def _journal_entries(path: Path, account_id: str | None = None) -> tuple[dict[st
             continue
         if row.get("trading_mode") != "algo" or str(row.get("action", "")).lower() not in {"buy", "short"}:
             continue
+        strategy = row.get("strategy")
+        if not isinstance(strategy, str):
+            continue
+        # Old journal rows retain their pre-prefix names after the catalog
+        # migration. Normalize at the journal boundary so exact broker order
+        # evidence still proves ownership under the canonical strategy ID.
+        row["strategy"] = canonical_strategy_id(strategy)
         if account_id is not None and row.get("account_id") != account_id:
             continue
         order_id = row.get("order_id")

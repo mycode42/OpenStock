@@ -17,6 +17,7 @@ import statistics
 from typing import Any
 
 from autoresearch.cpu import available_cpu_count
+from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.dataset import load_options_research_dataset
 from options.research.reporting import write_research_report
 from options.research.search import Candidate, add_plateau_scores, candidate_pool, evaluate_candidates
@@ -67,6 +68,14 @@ def _digest_path(path: Path) -> str:
         for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _dataset_digest(path: Path, underlying: str) -> str:
+    if path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}:
+        from options.research.history_store import OptionsHistoryStore
+
+        return OptionsHistoryStore(path, initialize=False).dataset_fingerprint(underlying)
+    return _digest_path(path)
 
 
 def _mean_metrics(rows: list[dict]) -> dict:
@@ -319,7 +328,11 @@ def _evaluate_fold_index(fold_index: int) -> dict:
             "equity_curve_summary": _equity_summary(run),
         }
 
-    candidate_rows = evaluate_candidates(strategy, research_config, base_config, evaluate)
+    candidate_rows = evaluate_candidates(
+        strategy, research_config, base_config, evaluate,
+        include_candidate_objects=True,
+        candidate_pool_override=context["candidate_pool"],
+    )
     candidate_rows = add_plateau_scores(
         candidate_rows,
         min_profitable_neighbour_fraction=float(
@@ -328,10 +341,9 @@ def _evaluate_fold_index(fold_index: int) -> dict:
         neighbour_count=int(research_config.get("search", {}).get("plateau_neighbours", 4)),
     )
     chosen = candidate_rows[0]
-    chosen_obj = next(
-        item for item in candidate_pool(strategy, research_config, base_config)
-        if item.candidate_id == chosen["candidate"]["candidate_id"]
-    )
+    chosen_obj = chosen.pop("_candidate_obj")
+    for row in candidate_rows[1:]:
+        row.pop("_candidate_obj", None)
     oos_run = simulate_options_strategy(
         dataset, oos, strategy_name=strategy, candidate=chosen_obj,
         config=research_config, base_config=base_config, force_close=True,
@@ -376,7 +388,8 @@ def run_research(
     base_config_digest = hashlib.sha256(live_config_path.read_bytes()).hexdigest()
     code_digest = _digest_files([
         Path(__file__), Path(__file__).with_name("simulator.py"),
-        Path(__file__).with_name("dataset.py"), Path(__file__).with_name("search.py"),
+        Path(__file__).with_name("dataset.py"), Path(__file__).with_name("history_store.py"),
+        Path(__file__).with_name("search.py"),
         Path(__file__).with_name("validation.py"), Path(__file__).with_name("execution.py"),
         Path(__file__).with_name("strategy_factory.py"), Path(__file__).with_name("reporting.py"),
         Path(__file__).parents[1] / "data.py", Path(__file__).parents[1] / "pricing.py",
@@ -390,8 +403,9 @@ def run_research(
     section = deepcopy(base_config[strategy])
     section.update(research_config.get("strategy_defaults", {}).get(strategy, {}))
     section["underlying"] = underlying
-    if strategy == "long_volatility":
+    if strategy in {"long_volatility", "directional_overlay"}:
         section["underlyings"] = [underlying]
+    if strategy == "long_volatility":
         research_config.setdefault("search", {}).setdefault("grids", {}).setdefault(
             "long_volatility", {},
         )["underlyings"] = [[underlying]]
@@ -400,7 +414,7 @@ def run_research(
         "selected_underlying": underlying,
     }, sort_keys=True).encode("utf-8")).hexdigest()
     timestamp = datetime.now(timezone.utc)
-    source_digest = _digest_path(selected_data_path) if selected_data_path.is_file() else "missing"
+    source_digest = _dataset_digest(selected_data_path, underlying) if selected_data_path.is_file() else "missing"
     run_id = f"{strategy}-{underlying.lower()}-{timestamp:%Y%m%dT%H%M%S%fZ}-{source_digest[:10]}-{config_digest[:8]}"
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -428,10 +442,17 @@ def run_research(
             model_surface_config=research_config.get("model_surface", {}),
             workers=loader_worker_count,
         )
+        database_source = selected_data_path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+        read_stage = "SQLite/DuckDB read" if database_source else "JSONL parse/normalize"
+        read_seconds = dataset.loading_parallelism.get(
+            "database_read_elapsed_seconds" if database_source
+            else "jsonl_parse_and_normalize_elapsed_seconds",
+            0,
+        )
         print(
             f"Options research {strategy}/{underlying}: loading complete in "
             f"{dataset.loading_parallelism.get('elapsed_seconds', 0)}s total; "
-            f"JSONL parse/normalize {dataset.loading_parallelism.get('jsonl_parse_and_normalize_elapsed_seconds', 0)}s, "
+            f"{read_stage} {read_seconds}s, "
             f"chain preparation {dataset.loading_parallelism.get('chain_preparation_elapsed_seconds', 0)}s "
             f"({dataset.loading_parallelism.get('chain_workers_used', 1)} workers)",
             flush=True,
@@ -550,6 +571,7 @@ def run_research(
                     "validation": report["validation"],
                     "parallelism": report["parallelism"],
                 })
+                OptionsResearchArtifactStore().store_run(run_dir, report)
                 return report
             raise
     except Exception as exc:
@@ -557,6 +579,7 @@ def run_research(
         atomic_write_json(run_dir / "run.json", {**failure, "research_config": research_config},
                           indent=2, sort_keys=True, allow_nan=False)
         _append_run_log(output_root / "research_runs.jsonl", failure)
+        OptionsResearchArtifactStore().store_run(run_dir, failure)
         raise
     if not all(item.chain is not None for item in dataset.observations):
         chain_errors = sum(item.chain is None for item in dataset.observations)
@@ -572,12 +595,14 @@ def run_research(
         fold_worker_count = 1
 
     global _FOLD_EVALUATION_CONTEXT
+    shared_candidate_pool = candidate_pool(strategy, research_config, base_config)
     _FOLD_EVALUATION_CONTEXT = {
         "dataset": dataset,
         "folds": folds,
         "strategy": strategy,
         "research_config": research_config,
         "base_config": base_config,
+        "candidate_pool": shared_candidate_pool,
     }
     try:
         if fold_worker_count > 1:
@@ -783,7 +808,7 @@ def run_research(
         strategy, parameters=final_candidate.parameters,
         allowed_regimes=final_candidate.allowed_regimes, base_config=exported,
     )
-    if strategy == "long_volatility":
+    if strategy in {"long_volatility", "directional_overlay"}:
         exported[strategy]["underlyings"] = [underlying]
     else:
         exported[strategy]["underlying"] = underlying
@@ -891,6 +916,7 @@ def run_research(
         "run_dir": str(run_dir), "status": "completed",
         "parallelism": report["parallelism"],
     })
+    OptionsResearchArtifactStore().store_run(run_dir, report)
     return report
 
 

@@ -543,7 +543,7 @@ def simulate_options_strategy(
         chain = current_chain(observation)
         if chain is not None:
             chain = _widen_chain(chain, spread_width_multiplier)
-        chain_by_symbol = chain.by_symbol() if chain is not None else {}
+        chain_by_symbol = chain.symbol_index() if chain is not None else {}
         day_attribution = {"delta": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0, "residual": 0.0}
         daily_greeks = {key: 0.0 for key in greek_peaks}
         newly_opened: list[_OpenTrade] = []
@@ -822,7 +822,7 @@ def simulate_options_strategy(
         chain = current_chain(observation)
         if chain is not None:
             chain = _widen_chain(chain, spread_width_multiplier)
-        chain_by_symbol = chain.by_symbol() if chain else {}
+        chain_by_symbol = chain.symbol_index() if chain else {}
         for trade in list(active):
             close_at_window_end(trade, observation, chain_by_symbol)
             active.remove(trade)

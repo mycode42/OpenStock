@@ -126,18 +126,31 @@ def evaluate_candidates(
     config: dict,
     base_config: dict,
     evaluator: Callable[[Candidate], dict],
+    *,
+    include_candidate_objects: bool = False,
+    candidate_pool_override: list[Candidate] | None = None,
 ) -> list[dict]:
     search_config = config.get("search", {})
     budget = int(search_config.get("maximum_candidates", 20))
     if budget < 2 or budget > 100:
         raise ValueError("search.maximum_candidates must be between 2 and 100")
-    full_pool = candidate_pool(strategy, config, base_config)
+    full_pool = (
+        candidate_pool_override
+        if candidate_pool_override is not None
+        else candidate_pool(strategy, config, base_config)
+    )
     mode = str(search_config.get("mode", "surrogate")).lower()
     if mode not in {"grid", "surrogate"}:
         raise ValueError("search.mode must be grid or surrogate")
     if mode == "grid":
         selected = _select_budget(full_pool, budget)
-        return [{"candidate": item.to_dict(), **evaluator(item)} for item in selected]
+        rows = []
+        for item in selected:
+            row = {"candidate": item.to_dict(), **evaluator(item)}
+            if include_candidate_objects:
+                row["_candidate_obj"] = item
+            rows.append(row)
+        return rows
 
     # A tiny inverse-distance surrogate avoids a new ML dependency and keeps
     # the adaptive search inspectable. It predicts train-window score only;
@@ -154,23 +167,34 @@ def evaluate_candidates(
         coordinates = np.zeros((len(full_pool), dimensions), dtype=np.int32)
         active = np.ones(len(full_pool), dtype=np.uint8)
         baseline_distances = np.zeros(len(full_pool), dtype=np.float64)
-        candidate_ids = [item.candidate_id for item in full_pool]
+        candidate_ids = []
         index_by_id = {item.candidate_id: index for index, item in enumerate(full_pool)}
         baseline = next((item for item in full_pool if item.is_baseline), None)
         if baseline is None:
             raise ValueError("candidate pool lost its baseline candidate")
-        for index, item in enumerate(full_pool):
-            if item.grid_indices:
-                coordinates[index, :len(item.grid_indices)] = item.grid_indices
-            if item.is_baseline:
-                active[index] = 0
-            else:
-                squared = sum(
-                    item.parameters.get(name) != baseline.parameters.get(name)
-                    for name in names
+        maximum_grid_values = max((len(grid[name]) for name in names), default=0)
+        baseline_parameter_matches = np.zeros(
+            (len(names), maximum_grid_values), dtype=np.uint8,
+        )
+        for dimension, name in enumerate(names):
+            baseline_value = baseline.parameters.get(name)
+            for choice_index, value in enumerate(grid[name]):
+                baseline_parameter_matches[dimension, choice_index] = (
+                    value == baseline_value
                 )
-                squared += item.allowed_regimes != baseline.allowed_regimes
-                baseline_distances[index] = math.sqrt(float(squared))
+        regime_sets = search_config.get("regime_sets_by_strategy", {}).get(strategy)
+        if regime_sets is None:
+            regime_sets = search_config.get("regime_sets")
+        if regime_sets is None:
+            regime_sets = [base_config.get(strategy, {}).get("allowed_regimes", ["range_bound"])]
+        baseline_regime_matches = np.asarray([
+            tuple(sorted(set(regimes))) == baseline.allowed_regimes
+            for regimes in regime_sets
+        ], dtype=np.uint8)
+        _search_cy.prepare_surrogate_arrays(
+            full_pool, coordinates, active, baseline_distances,
+            candidate_ids, baseline_parameter_matches, baseline_regime_matches,
+        )
         for item in seed:
             active[index_by_id[item.candidate_id]] = 0
         scales = np.asarray([max(1, len(grid[name]) - 1) for name in names], dtype=np.float64)
@@ -229,8 +253,9 @@ def evaluate_candidates(
             chosen = remaining.pop(chosen_index)
             result = evaluator(chosen)
             results.append({"candidate": chosen.to_dict(), **result, "_candidate_obj": chosen})
-    for row in results:
-        row.pop("_candidate_obj", None)
+    if not include_candidate_objects:
+        for row in results:
+            row.pop("_candidate_obj", None)
     return results
 
 

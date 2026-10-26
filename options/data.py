@@ -5,8 +5,9 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from functools import cached_property
 import math
-from typing import Callable, Iterable, Protocol, Sequence
+from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
 from market.quotes import QuoteParseError, parse_quote
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
@@ -43,18 +44,62 @@ class OptionChain:
     feed: str
     data_quality: tuple[str, ...] = ()
 
-    def expirations(self, *, min_dte: int = 0, max_dte: int = 365) -> tuple[date, ...]:
+    @cached_property
+    def _expiration_dtes(self) -> tuple[tuple[int, date], ...]:
         today = self.as_of.date()
         return tuple(sorted({
-            row.contract.expiration for row in self.contracts
-            if min_dte <= (row.contract.expiration - today).days <= max_dte
+            ((row.contract.expiration - today).days, row.contract.expiration)
+            for row in self.contracts
         }))
 
+    @cached_property
+    def _expirations_by_range(self) -> dict[tuple[int, int], tuple[date, ...]]:
+        return {}
+
+    @cached_property
+    def _quotes_by_expiration(self) -> dict[date, tuple[ChainQuote, ...]]:
+        grouped: dict[date, list[ChainQuote]] = {}
+        for row in self.contracts:
+            grouped.setdefault(row.contract.expiration, []).append(row)
+        return {expiration: tuple(rows) for expiration, rows in grouped.items()}
+
+    @cached_property
+    def _symbol_index(self) -> Mapping[str, ChainQuote]:
+        return {row.contract.symbol: row for row in self.contracts}
+
+    @cached_property
+    def _derived_cache(self) -> dict[tuple, object]:
+        return {}
+
+    def expirations(self, *, min_dte: int = 0, max_dte: int = 365) -> tuple[date, ...]:
+        key = (min_dte, max_dte)
+        cached = self._expirations_by_range.get(key)
+        if cached is None:
+            cached = tuple(
+                expiration for dte, expiration in self._expiration_dtes
+                if min_dte <= dte <= max_dte
+            )
+            self._expirations_by_range[key] = cached
+        return cached
+
     def for_expiration(self, expiration: date) -> tuple[ChainQuote, ...]:
-        return tuple(row for row in self.contracts if row.contract.expiration == expiration)
+        return self._quotes_by_expiration.get(expiration, ())
+
+    def symbol_index(self) -> Mapping[str, ChainQuote]:
+        """Read-only cached symbol lookup for repeated simulation access."""
+        return self._symbol_index
+
+    def cached_derived(self, key: tuple, factory: Callable[[], object]):
+        """Cache immutable derived views used repeatedly during one research run."""
+        cache = self._derived_cache
+        if key not in cache:
+            cache[key] = factory()
+        return cache[key]
 
     def by_symbol(self) -> dict[str, ChainQuote]:
-        return {row.contract.symbol: row for row in self.contracts}
+        # Preserve the public method's fresh mutable-dict behavior. The
+        # simulator uses symbol_index() when it only needs read access.
+        return dict(self._symbol_index)
 
 
 class OptionDataProvider(Protocol):
@@ -98,7 +143,7 @@ def _parse_chain_snapshot(
     spot: float,
     as_of: datetime,
     contracts: Sequence[dict],
-    snapshots: dict,
+    snapshots: dict | None,
     *,
     feed: str,
     rate: float = 0.04,
@@ -110,11 +155,12 @@ def _parse_chain_snapshot(
     for row in contracts:
         try:
             contract = _parse_contract(row)
-            raw = snapshots.get(contract.symbol) or {}
+            raw = row if snapshots is None else snapshots.get(contract.symbol) or {}
             item = parse_snapshot_quote(
                 contract, raw, spot=spot, as_of=as_of, feed=feed,
                 rate=rate, dividend_yield=dividend_yield,
                 max_quote_age_seconds=max_quote_age_seconds,
+                inline_historical=snapshots is None,
             )
             if item is None:
                 quality.add("stale_or_invalid_option_quotes_excluded")
@@ -137,15 +183,26 @@ def parse_snapshot_quote(
     dividend_yield: float = 0.015,
     max_quote_age_seconds: int = 120,
     american_model: bool = False,
+    inline_historical: bool = False,
 ) -> ChainQuote | None:
-    quote = raw.get("latestQuote") or raw.get("latest_quote") or raw.get("quote") or {}
+    if inline_historical:
+        quote = {
+            "bp": raw.get("bid"),
+            "ap": raw.get("ask"),
+            "t": raw.get("quote_at", as_of),
+        }
+    else:
+        quote = raw.get("latestQuote") or raw.get("latest_quote") or raw.get("quote") or {}
     parsed = parse_quote(quote)
     age = (as_of.astimezone(timezone.utc) - parsed["timestamp"]).total_seconds()
     if age < 0 or age > max_quote_age_seconds or parsed["price"] <= 0:
         return None
     years = max((contract.expiration - as_of.date()).days / 365.0, 1.0 / 365.0)
     raw_greeks = raw.get("greeks") or {}
-    raw_iv = raw.get("impliedVolatility", raw.get("implied_volatility"))
+    raw_iv = (
+        raw.get("iv") if inline_historical
+        else raw.get("impliedVolatility", raw.get("implied_volatility"))
+    )
     if raw_iv is None:
         raw_iv = raw_greeks.get("iv", raw_greeks.get("impliedVolatility", raw_greeks.get("implied_volatility")))
     try:
@@ -299,24 +356,14 @@ class HistoricalChainSnapshotProvider:
             raise ValueError(f"no historical option-chain snapshot at or before {as_of.isoformat()}")
         stamp, snapshot = snapshots[index]
         contracts = []
-        quote_map = {}
         for row in snapshot.get("contracts", []):
-            contract = dict(row)
-            expiration = date.fromisoformat(str(contract.get("expiration_date")))
+            expiration = date.fromisoformat(str(row.get("expiration_date")))
             dte = (expiration - stamp.date()).days
             if not min_dte <= dte <= max_dte:
                 continue
-            contracts.append(contract)
-            quote_map[str(contract["symbol"]).upper()] = {
-                "latestQuote": {
-                    "bp": contract.get("bid"), "ap": contract.get("ask"),
-                    "t": contract.get("quote_at", snapshot["as_of"]),
-                },
-                "impliedVolatility": contract.get("iv"),
-                "greeks": contract.get("greeks", {}),
-            }
+            contracts.append(row)
         return _parse_chain_snapshot(
-            underlying, float(snapshot["spot"]), stamp, contracts, quote_map,
+            underlying, float(snapshot["spot"]), stamp, contracts, None,
             feed=str(snapshot.get("feed", "historical")),
             rate=self.rate, dividend_yield=self.dividend_yield,
             max_quote_age_seconds=10**9,

@@ -16,8 +16,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
-from options.research.archive import merge_symbol_dataset, session_labels as _classify_sessions
+from options.research.history_store import OptionsHistoryStore
+from options.research.archive import session_labels as _classify_sessions
+from options.research.universe import history_start_date, history_underlyings
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,16 +32,9 @@ MAX_RESEARCH_DTE = 60
 STRIKE_RANGE = 20
 ET = ZoneInfo("America/New_York")
 META_TICKER_CHANGE_DATE = date(2022, 6, 9)
-# PLTR began trading on 2020-09-30, but ThetaData has no options rows for
-# September 2020. Start at the first fully available month to avoid a
-# NoDataFoundError on the pre-history part of the archive.
-# The current SPCX is SpaceX, whose options began trading on 2026-06-16. The
-# former SPAC ETF changed its ticker from SPCX to SPCK on 2026-04-07, so do not
-# combine that ETF's history with SpaceX's options history.
-SYMBOL_HISTORY_START_DATES = {
-    "PLTR": date(2020, 10, 1),
-    "SPCX": date(2026, 6, 16),
-}
+# Per-symbol start dates live in options/research/universe.json. PLTR and later
+# listings start at the first month with available option history; SPCX is the
+# current SpaceX ticker, not the former SPCX ETF.
 
 
 def _read_api_key() -> str:
@@ -94,6 +88,10 @@ def _records(frame: Any) -> list[dict]:
 
 
 def _json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
     if value is None or isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, (datetime, date)):
@@ -116,13 +114,18 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    number = _finite(value)
+    return int(number) if number is not None and number >= 0 else None
+
+
 def _atomic_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
     ) as stream:
         temp = Path(stream.name)
-        json.dump(payload, stream, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_json_value)
+        json.dump(_json_value(payload), stream, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_json_value)
         stream.write("\n")
         stream.flush()
         os.fsync(stream.fileno())
@@ -135,7 +138,7 @@ def _atomic_gzip_json(path: Path, payload: Any) -> None:
         temp = Path(raw.name)
     try:
         with gzip.open(temp, "wt", encoding="utf-8", compresslevel=6) as stream:
-            json.dump(payload, stream, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_json_value)
+            json.dump(_json_value(payload), stream, sort_keys=True, separators=(",", ":"), allow_nan=False, default=_json_value)
             stream.write("\n")
         os.replace(temp, path)
     finally:
@@ -245,7 +248,7 @@ def _symbol_has_archive_gaps(symbol: str, *, start_date: date, end_date: date) -
 
 def _effective_start_date(symbol: str, start_date: date) -> date:
     """Respect a symbol's earliest available option-history month."""
-    return max(start_date, SYMBOL_HISTORY_START_DATES.get(symbol, start_date))
+    return history_start_date(symbol, start_date)
 
 
 def _contract_key(row: dict) -> tuple[str, float, str]:
@@ -284,7 +287,9 @@ def _download_stock_rows(symbol: str, *, start_date: date, end_date: date) -> li
             continue
         output.append({
             "last_trade": datetime.combine(day, time(16, 0), tzinfo=ET).isoformat(),
+            "open": _finite(row.get("Open")),
             "close": close,
+            "volume": _nonnegative_int(row.get("Volume")),
             "split_ratio": _finite(row.get("Stock Splits")) or 0.0,
         })
     return output
@@ -317,11 +322,15 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
     stock_path = symbol_dir / "archive" / "stock_eod.json.gz"
     stock_rows = _load_gzip_rows(stock_path)
     spot_by_date: dict[date, float] = {}
+    equity_volume_by_date: dict[date, int] = {}
     for row in stock_rows:
         day = _row_date(row, "last_trade", "created", "timestamp")
         close = _finite(row.get("close"))
+        equity_volume = _nonnegative_int(row.get("volume"))
         if day and start_date <= day <= end_date and close and close > 0:
             spot_by_date[day] = close
+            if equity_volume is not None:
+                equity_volume_by_date[day] = equity_volume
     adjusted_closes, split_count = _split_adjusted_history(spot_by_date, stock_rows)
     session_labels = _session_labels(adjusted_closes)
 
@@ -390,6 +399,7 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
                 "status": "active",
                 "tradable": True,
                 "open_interest": oi_map.get(key),
+                "volume": _nonnegative_int(raw.get("volume")),
                 "bid": bid,
                 "ask": ask,
                 "quote_at": quote_stamp.isoformat(),
@@ -403,6 +413,7 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
             "underlying": symbol,
             "spot": spot,
             "underlying_close": adjusted_closes.get(day, spot),
+            "equity_volume": equity_volume_by_date.get(day),
             "as_of": as_of.isoformat(),
             "feed": "thetadata_historical_eod",
             "regime": session_labels.get(day, ("range_bound", "normal"))[0],
@@ -410,20 +421,10 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
             "contracts": contracts,
         })
 
-    dataset_path = symbol_dir / "chains.jsonl"
-    dataset_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=dataset_path.parent,
-        prefix=".chains.", suffix=".tmp", delete=False,
-    ) as stream:
-        temp = Path(stream.name)
-        for row in rows:
-            stream.write(json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False))
-            stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temp, dataset_path)
-    combined = merge_symbol_dataset(symbol)
+    history_store = OptionsHistoryStore()
+    database_sync = history_store.write_snapshots(
+        symbol, "theta", rows, replace_source=True,
+    )
     archive_chunks = list(_month_chunks(start_date, end_date))
     archive_complete = all(
         _archive_covers_through(eod_dir / f"{month_start:%Y-%m}.json.gz", month_end)
@@ -452,9 +453,19 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         ),
         "archive_months_expected": len(archive_chunks),
         "underlying": symbol,
-        "dataset_path": str(dataset_path),
-        "combined_dataset_path": combined["dataset_path"],
-        "combined_dataset_sessions": combined["combined_sessions"],
+        "dataset_path": str(history_store.path),
+        "history_database_path": str(history_store.path),
+        "database_sync_status": database_sync["status"],
+        "database_sessions": database_sync.get("sessions", 0),
+        "database_liquidity_coverage": {
+            key: database_sync.get(key, 0)
+            for key in (
+                "equity_volume_sessions", "option_volume_sessions",
+                "option_volume_sessions_80pct_coverage",
+                "open_interest_sessions_80pct_coverage",
+                "option_spread_sessions_80pct_coverage",
+            )
+        },
         "dataset_sessions": len(rows),
         "research_sessions_required": REQUIRED_RESEARCH_SESSIONS,
         "standard_research_ready": standard_research_ready,
@@ -572,12 +583,8 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
     return manifest
 
 
-def _portfolio_symbols() -> list[str]:
-    symbols = list(dict.fromkeys(
-        str(symbol).strip().upper()
-        for group in ALGO_PORTFOLIO_UNIVERSE.values()
-        for symbol in group.get("tickers", [])
-    ))
+def _research_symbols() -> list[str]:
+    symbols = history_underlyings()
     priority = ["SPY", "QQQ", "GLD", "TLT"]
     return sorted(symbols, key=lambda symbol: (priority.index(symbol) if symbol in priority else len(priority), symbols.index(symbol)))
 
@@ -586,7 +593,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill daily ThetaData option chains for Algo symbols")
     parser.add_argument(
         "--underlying", action="append",
-        help="symbol to collect (repeatable); defaults to the complete Algo portfolio universe",
+        help="symbol to collect (repeatable); defaults to the options research history universe",
     )
     parser.add_argument("--start-date", type=date.fromisoformat, default=FIRST_DATA_DATE)
     parser.add_argument(
@@ -596,7 +603,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.end_date < args.start_date:
         parser.error("--end-date must be on or after --start-date")
-    symbols = [item.strip().upper() for item in args.underlying] if args.underlying else _portfolio_symbols()
+    symbols = [item.strip().upper() for item in args.underlying] if args.underlying else _research_symbols()
     if not symbols or any(not item or not item.replace(".", "").isalnum() for item in symbols):
         parser.error("underlying symbols must be non-empty alphanumeric ticker names")
 

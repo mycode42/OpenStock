@@ -103,11 +103,12 @@ and trial artifacts remain under `data/research/algo-auto/`.
 ## Durable run and candidate lineage
 
 Every scheduled invocation is recorded in
-`data/research/algo-auto/research.sqlite3`. Each invocation also gets an
+`data/research/algo-auto/research.sqlite3`. Candidate selection, search seeds,
+champions, validation queues, and candidate history now read from and write to
+the SQLite candidate archive document. The old `candidate-archive.json` was
+migrated into SQLite and is no longer written. Each invocation still gets an
 immutable `invocations/<invocation_id>/report.json` snapshot; `latest.json`,
-the date-named reports, and the existing fitness-history JSON remain for
-compatibility. The first ledger initialization imports the existing fitness
-scorecards and candidate archive, including its saved verification folds.
+date-named reports, and fitness-history JSON remain as report exports.
 
 The database links invocations and stage outcomes to candidate evaluations,
 training and out-of-sample folds, portfolio folds, forward-trial observations,
@@ -116,8 +117,10 @@ fingerprint, search sequence and seed, date windows, metrics, gate results,
 reuse/source links, and artifact path. Forward trials keep their originating
 invocation and source candidate, baseline profile fingerprint, simulation
 observations, final status, and promotion release ID. Full reports and replay
-details remain in JSON so the ledger stays compact while retaining links and
-SHA-256 fingerprints.
+details are stored as compressed payloads in the ledger as well as JSON exports.
+The full candidate archive is mirrored there alongside its normalized candidate
+and evaluation rows. Existing linked artifacts can be embedded with
+`poetry run python scripts/research/backfill_artifact_payloads.py`.
 
 For example, this query follows one candidate through its discovery and
 historical evaluations:

@@ -1,0 +1,51 @@
+{
+  "name": "options_research_history",
+  "scope": "research_only",
+  "notes": [
+    "This data collection universe is separate from the live Algo portfolio universe.",
+    "XLRE was selected from the user's XLRE or VNQ alternative."
+  ],
+  "categories": {
+    "existing_algo_portfolio": [
+      "NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD",
+      "JPM", "V", "UNH", "JNJ", "PG", "KO", "SPY", "QQQ", "GLD", "TLT",
+      "PLTR", "CRM", "PANW", "TSLA", "SPCX"
+    ],
+    "sector_rotation_and_hedge_etfs": [
+      "XLE", "XLF", "XLI", "XLV", "XLY", "XLP", "XLU", "XLRE", "SMH", "IWM",
+      "USO", "SLV", "EWZ", "EEM", "HYG"
+    ],
+    "energy": [
+      "XOM", "CVX", "COP", "EOG", "SLB", "HAL", "OXY", "MPC", "PSX", "DVN"
+    ],
+    "ai_power_and_infrastructure": [
+      "CEG", "VST", "VRT", "GEV", "NEE", "CCJ", "ETN", "PWR", "ETR", "DUK"
+    ],
+    "quality_financials_and_payments": [
+      "BAC", "GS", "MS", "BRK.B", "AXP", "SCHW", "MA", "BLK"
+    ],
+    "consumer_staples_and_discretionary": [
+      "WMT", "COST", "HD", "LOW", "MCD", "SBUX", "NKE", "TGT", "ROST", "TJX"
+    ],
+    "healthcare_expansion": [
+      "LLY", "MRK", "ABBV", "AMGN", "ISRG", "REGN", "GILD", "MRNA"
+    ],
+    "industrials_and_defense": [
+      "CAT", "DE", "HON", "RTX", "LMT", "BA", "UNP", "GE", "PH", "ITW"
+    ],
+    "semis_tech_adjacent_and_high_volatility": [
+      "MU", "ORCL", "INTC", "ASML", "AMAT", "LRCX", "QCOM", "NFLX", "CRWD", "MSTR",
+      "COIN", "SOXL"
+    ],
+    "international_commodities_and_other": [
+      "BABA", "MELI", "NU", "FXI", "GDX", "DBC", "URA", "PPLT", "EWJ", "INDA"
+    ]
+  },
+  "history_start_dates": {
+    "PLTR": "2020-10-01",
+    "COIN": "2021-04-01",
+    "NU": "2022-01-01",
+    "GEV": "2024-04-01",
+    "SPCX": "2026-06-16"
+  }
+}

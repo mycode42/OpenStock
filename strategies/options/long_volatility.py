@@ -49,41 +49,55 @@ def historical_iv_percentile(current: float | None, history: Iterable[float], *,
 def _liquid_chain_rows(chain: OptionChain, expiration: date, config: dict):
     max_spread = float(config.get("max_spread_pct", 0.15))
     min_oi = int(config.get("min_open_interest", 100))
-    return [
-        row for row in chain.for_expiration(expiration)
-        if row.contract.open_interest is not None
-        and row.contract.open_interest >= min_oi
-        and valid_quote(row, max_spread_pct=max_spread, min_open_interest=min_oi)
-    ]
+    key = ("long-volatility-liquid-rows", expiration, max_spread, min_oi)
+    return chain.cached_derived(
+        key,
+        lambda: tuple(
+            row for row in chain.for_expiration(expiration)
+            if row.contract.open_interest is not None
+            and row.contract.open_interest >= min_oi
+            and valid_quote(row, max_spread_pct=max_spread, min_open_interest=min_oi)
+        ),
+    )
 
 
 def atm_implied_volatility(chain: OptionChain, config: dict) -> float | None:
     """Return liquid, near-ATM call/put IV for the configured target expiry."""
-    expiration = choose_expiration(
-        chain,
-        min_dte=int(config.get("min_dte", 7)),
-        max_dte=int(config.get("max_dte", 45)),
-        target_dte=int(config.get("target_dte", 30)),
-    )
-    if expiration is None:
-        return None
-    rows = _liquid_chain_rows(chain, expiration, config)
-    calls = [row for row in rows if row.contract.right == "call"]
-    puts = [row for row in rows if row.contract.right == "put"]
-    call = nearest_delta(calls, 0.50)
-    put = nearest_delta(puts, -0.50)
-    if call is None or put is None:
-        return None
+    min_dte = int(config.get("min_dte", 7))
+    max_dte = int(config.get("max_dte", 45))
+    target_dte = int(config.get("target_dte", 30))
+    max_spread = float(config.get("max_spread_pct", 0.15))
+    min_oi = int(config.get("min_open_interest", 100))
     delta_tolerance = float(config.get("atm_delta_tolerance", 0.20))
-    if (
-        abs(call.greeks.delta - 0.50) > delta_tolerance
-        or abs(put.greeks.delta + 0.50) > delta_tolerance
-    ):
-        return None
-    values = (call.greeks.implied_volatility, put.greeks.implied_volatility)
-    if any(not math.isfinite(value) or value <= 0 for value in values):
-        return None
-    return sum(values) / 2.0
+    key = (
+        "long-volatility-atm-iv", min_dte, max_dte, target_dte,
+        max_spread, min_oi, delta_tolerance,
+    )
+
+    def calculate() -> float | None:
+        expiration = choose_expiration(
+            chain, min_dte=min_dte, max_dte=max_dte, target_dte=target_dte,
+        )
+        if expiration is None:
+            return None
+        rows = _liquid_chain_rows(chain, expiration, config)
+        calls = [row for row in rows if row.contract.right == "call"]
+        puts = [row for row in rows if row.contract.right == "put"]
+        call = nearest_delta(calls, 0.50)
+        put = nearest_delta(puts, -0.50)
+        if call is None or put is None:
+            return None
+        if (
+            abs(call.greeks.delta - 0.50) > delta_tolerance
+            or abs(put.greeks.delta + 0.50) > delta_tolerance
+        ):
+            return None
+        values = (call.greeks.implied_volatility, put.greeks.implied_volatility)
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            return None
+        return sum(values) / 2.0
+
+    return chain.cached_derived(key, calculate)
 
 
 def build_long_volatility_structure(chain: OptionChain, config: dict) -> OptionStructure | None:

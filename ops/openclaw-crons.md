@@ -8,13 +8,15 @@ The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `Ameri
 | `event-briefing` | 10:00, 13:00, and 15:00 ET, weekdays | Refresh the read-only Event Driven signal snapshot and report market context. |
 | `midday` | 11:35 ET, weekdays | Send a concise Algo account and strategy update. |
 | `optimization` | 08:00 ET, daily | Run an archive-backed AutoResearch optimizer cycle on stored bars, without refreshing, rolling verification, or portfolio replay. |
-| `options-history-capture` | 16:15 ET, weekdays | Save same-session Alpaca OPRA option chains for all 24 portfolio tickers and refresh the merged options research datasets. |
+| `options-history-capture` | 16:15 ET, weekdays | Save same-session Alpaca OPRA option chains for the 117-symbol options research history universe and refresh merged datasets. |
+| `options-opening-capture` | 09:35 ET, weekdays | Save a separate Alpaca OPRA opening snapshot for the 117-symbol options research history universe. |
+| `Theta options history` | Every 25 hours | Resume ThetaData EOD quotes and open interest across the 117-symbol options research history universe. |
 | `autoresearch` | 17:00 ET, daily | Run equity AutoResearch alongside the independent VRP and event-driven options research batch, then report them in separate sections. It starts one hour after the close and the 16:15 ET options-history capture. Validate each report date against its file write time in New York time so a long cycle crossing midnight is not mislabeled stale. Research may write artifacts; it does not place trades or alter live settings. |
 | `morning` | 04:00 ET, weekdays | Send an overnight session, order, risk, and fill-attribution report. |
 
 The Algo daemon records timestamped equity points every 15 minutes during the regular session and a daily close point after the market closes. The close point remains the weekly risk-baseline source, so no separate `close-snapshot` automation is needed.
 
-The `options-history-capture` OpenClaw command runs separately at 16:15 ET on weekdays. It archives same-session Alpaca OPRA option chains into `data/options/research/alpaca/` and refreshes the merged datasets consumed by nightly options research. ThetaData remains needed only until every ticker's backfill manifest reports `archive_complete: true` for the requested date range.
+The research history universe is in `options/research/universe.json`; it contains the existing 24 Algo tickers plus 93 additions and does not alter the live trading universe. The `options-opening-capture` OpenClaw command runs at 09:35 ET on weekdays and writes separate opening snapshots to `data/options/research/alpaca/<SYMBOL>/opening_chains.jsonl`. The `options-history-capture` command runs at 16:15 ET, archives close-side OPRA chains under `data/options/research/alpaca/`, and refreshes merged datasets. ThetaData remains needed until every history-universe manifest reports `archive_complete: true` for the requested date range.
 
 The `event-briefing` analysis command uses a 300-second Gateway exec timeout; the automation retains its separate 20-minute turn timeout. Analyst phases and ticker-level progress are appended to `data/algo/event_driven/analysis-runs.jsonl`. Missing headline sentiment is classified in one batch request, and LLM requests time out after 30 seconds by default (`EVENT_ANALYSIS_LLM_TIMEOUT_SECONDS` overrides this). A timed-out run does not publish or reuse a signal snapshot.
 

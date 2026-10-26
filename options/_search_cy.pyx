@@ -5,6 +5,45 @@
 from libc.math cimport sqrt
 
 
+cpdef void prepare_surrogate_arrays(
+    list candidates,
+    int[:, ::1] coordinates,
+    unsigned char[:] active,
+    double[:] baseline_distances,
+    list candidate_ids,
+    const unsigned char[:, ::1] baseline_parameter_matches,
+    const unsigned char[:] baseline_regime_matches,
+):
+    cdef Py_ssize_t candidate_count = len(candidates)
+    cdef Py_ssize_t dimensions = coordinates.shape[1]
+    cdef Py_ssize_t index, dimension
+    cdef int regime_index, choice_index
+    cdef double squared
+    cdef object candidate, grid_indices
+
+    candidate_ids.clear()
+    for index in range(candidate_count):
+        candidate = candidates[index]
+        grid_indices = candidate.grid_indices
+        candidate_ids.append(candidate.candidate_id)
+        if grid_indices:
+            for dimension in range(min(dimensions, len(grid_indices))):
+                coordinates[index, dimension] = grid_indices[dimension]
+        if candidate.is_baseline:
+            active[index] = 0
+            continue
+
+        regime_index = grid_indices[0]
+        squared = 0.0
+        for dimension in range(1, dimensions):
+            choice_index = grid_indices[dimension]
+            if baseline_parameter_matches[dimension - 1, choice_index] == 0:
+                squared += 1.0
+        if baseline_regime_matches[regime_index] == 0:
+            squared += 1.0
+        baseline_distances[index] = sqrt(squared)
+
+
 cpdef int best_surrogate_index(
     const int[:, ::1] coordinates,
     const unsigned char[:] active,

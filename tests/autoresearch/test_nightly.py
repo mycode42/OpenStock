@@ -5,7 +5,7 @@ from runtime.atomic import atomic_write_json
 import autoresearch.nightly as nightly
 
 
-def test_nightly_starts_both_research_pipelines_and_attaches_separate_options_report(monkeypatch, tmp_path, capsys):
+def test_nightly_runs_research_pipelines_sequentially_and_attaches_options_report(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(nightly, "ROOT", tmp_path)
     output_dir = tmp_path / "equity-report"
     options_path = tmp_path / "data/options/research/automation/latest.json"
@@ -18,7 +18,10 @@ def test_nightly_starts_both_research_pipelines_and_attaches_separate_options_re
             launched.append(self.kind)
 
         def wait(self):
-            assert launched == ["options", "equity"]
+            if self.kind == "options":
+                assert launched == ["options"]
+            else:
+                assert launched == ["options", "equity"]
             now = datetime.now(timezone.utc).isoformat()
             if self.kind == "options":
                 atomic_write_json(options_path, {
@@ -41,7 +44,7 @@ def test_nightly_starts_both_research_pipelines_and_attaches_separate_options_re
     assert exit_code == 0
     report = json.loads((output_dir / "latest.json").read_text(encoding="utf-8"))
     assert report["options_research"]["status"] == "waiting_for_data"
-    assert report["parallel_research"]["concurrent"] is True
+    assert report["parallel_research"]["concurrent"] is False
     assert launched == ["options", "equity"]
     summary = json.loads(capsys.readouterr().out)
     assert summary["options_status"] == "waiting_for_data"

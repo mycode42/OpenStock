@@ -89,7 +89,12 @@ read model is `data/options/risk_snapshot.json`.
   debit spread and a `sell` recommendation becomes a put debit spread. The
   options expression does not require or generate the legacy scheduled-event
   calendar, and it does not invoke or optimize the LLM core.
-- Both sleeves produce one contract before risk sizing. Sizing then uses the
+- The directional overlay scans its configured `underlyings`, which defaults
+  to the full 24-symbol Algo portfolio universe. It expresses each fresh,
+  eligible Algo `buy` or `short` signal as a call or put debit vertical. Its
+  per-sleeve daily cap is 24; the shared options limits still cap entries at 10
+  per day and open structures at four.
+- Each strategy produces one contract before risk sizing. Sizing then uses the
   options account equity, maximum loss, estimated costs, current positions,
   combined stock/options delta, Greek limits, stress scenarios, assignment
   shares, and broker buying power.

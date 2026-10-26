@@ -19,7 +19,9 @@ import requests
 
 from broker.options import OptionsPaperClient
 from market.quotes import parse_timestamp
-from options.research.archive import RESEARCH_ROOT, merge_symbol_dataset, session_labels
+from options.research.archive import RESEARCH_ROOT, session_labels
+from options.research.history_store import OptionsHistoryStore
+from options.research.universe import history_underlyings
 from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
 
 
@@ -55,6 +57,14 @@ def _open_interest(row: dict) -> int | None:
     return value if value >= 0 else None
 
 
+def _nonnegative_int(value: Any) -> int | None:
+    try:
+        result = int(float(value))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if result >= 0 else None
+
+
 def _sanitize(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _sanitize(item) for key, item in value.items()}
@@ -77,8 +87,8 @@ def _session_close(client: OptionsPaperClient, session_date: date) -> tuple[date
 
 
 def _underlying_history(
-    client: OptionsPaperClient, symbol: str, session_date: date,
-) -> tuple[float, dict[date, float]]:
+    client: OptionsPaperClient, symbol: str, session_date: date, *, opening: bool = False,
+) -> tuple[float, dict[date, float], dict[date, int]]:
     bars = client.stock_bars(
         symbol,
         start=session_date - timedelta(days=500),
@@ -87,14 +97,22 @@ def _underlying_history(
         adjustment="split",
     )
     closes = {}
+    volumes = {}
     for row in bars:
         day, close = _as_date(row.get("t")), _number(row.get("c"))
         if day and close and close > 0 and day <= session_date:
             closes[day] = close
+            volume = _number(row.get("v"))
+            if volume is not None and volume >= 0:
+                volumes[day] = int(volume)
     spot = closes.pop(session_date, None)
+    if opening:
+        # The current daily bar is incomplete at the open. Use a fresh stock
+        # NBBO midpoint for the option-chain spot and retain only prior closes.
+        spot = client.underlying_price(symbol, max_age_seconds=120)
     if spot is None:
         raise RuntimeError(f"Alpaca has no completed {session_date} stock bar for {symbol}")
-    return spot, closes
+    return spot, closes, volumes
 
 
 def _select_contracts(contracts: list[dict], *, spot: float, session_date: date) -> list[dict]:
@@ -231,8 +249,14 @@ def capture_symbol(
     open_at: datetime,
     close_at: datetime,
     feed: str,
+    phase: str = "close",
 ) -> dict:
-    spot, closes = _underlying_history(client, symbol, session_date)
+    if phase not in {"open", "close"}:
+        raise ValueError("phase must be 'open' or 'close'")
+    opening = phase == "open"
+    spot, closes, equity_volumes = _underlying_history(
+        client, symbol, session_date, opening=opening,
+    )
     contracts = client.list_contracts(
         symbol,
         expiration_date_gte=session_date.isoformat(),
@@ -246,11 +270,12 @@ def capture_symbol(
         str(row.get("symbol") or "").upper(): row for row in selected if row.get("symbol")
     }
     snapshots = _fetch_snapshots(client, list(symbol_by_contract), feed=feed)
-    snapshot_as_of = close_at
+    snapshot_as_of = datetime.now(ET) if opening else close_at
     rows = []
     for option_symbol, contract in symbol_by_contract.items():
         raw = snapshots.get(option_symbol) or snapshots.get(option_symbol.lower()) or {}
         quote = raw.get("latestQuote") or raw.get("latest_quote") or raw.get("quote") or {}
+        daily_bar = raw.get("dailyBar") or raw.get("daily_bar") or raw.get("day") or {}
         try:
             quote_at = parse_timestamp(quote.get("t"), context=f"{option_symbol} quote")
             bid, ask = _number(quote.get("bp")), _number(quote.get("ap"))
@@ -259,7 +284,8 @@ def capture_symbol(
         if (
             _as_date(quote.get("t")) != session_date
             or quote_at < open_at.astimezone(quote_at.tzinfo)
-            or quote_at > close_at.astimezone(quote_at.tzinfo)
+            or quote_at > snapshot_as_of.astimezone(quote_at.tzinfo)
+            or (not opening and quote_at > close_at.astimezone(quote_at.tzinfo))
             or bid is None or ask is None or bid < 0 or ask <= 0 or ask < bid
         ):
             continue
@@ -279,6 +305,7 @@ def capture_symbol(
             "tradable": bool(contract.get("tradable", True)),
             "open_interest": _open_interest(contract),
             "open_interest_date": contract.get("open_interest_date"),
+            "volume": _nonnegative_int(daily_bar.get("v", daily_bar.get("volume"))),
             "bid": bid,
             "ask": ask,
             "quote_at": quote_at.isoformat(),
@@ -292,43 +319,77 @@ def capture_symbol(
             f"need at least {MINIMUM_CHAIN_CONTRACTS}"
         )
 
-    closes[session_date] = spot
-    labels = session_labels(closes).get(session_date, ("range_bound", "normal"))
+    previous_close = closes[max(closes)] if closes else spot
+    equity_volume_date = max(
+        (day for day in equity_volumes if day < session_date), default=None,
+    ) if opening else session_date
+    if opening:
+        prior_day = max(closes) if closes else None
+        labels = (
+            session_labels(closes).get(prior_day, ("range_bound", "normal"))
+            if prior_day else ("range_bound", "normal")
+        )
+    else:
+        closes[session_date] = spot
+        labels = session_labels(closes).get(session_date, ("range_bound", "normal"))
     snapshot = {
         "underlying": symbol,
         "spot": spot,
-        "underlying_close": spot,
+        "underlying_close": previous_close if opening else spot,
+        "equity_volume": equity_volumes.get(equity_volume_date) if equity_volume_date else None,
         "as_of": snapshot_as_of.isoformat(),
-        "feed": f"alpaca_{feed}_daily_close",
+        "snapshot_phase": "opening" if opening else "daily_close",
+        "target_time": (open_at + timedelta(minutes=5)).isoformat() if opening else close_at.isoformat(),
+        "feed": f"alpaca_{feed}_opening" if opening else f"alpaca_{feed}_daily_close",
         "regime": labels[0],
         "volatility_state": labels[1],
         "contracts": rows,
     }
 
-    archive_path = RESEARCH_ROOT / "alpaca" / symbol / "chains.jsonl"
-    _write_daily_archive(archive_path, snapshot)
-    merged = merge_symbol_dataset(symbol)
+    history_store = OptionsHistoryStore()
+    database_sync = history_store.write_snapshots(
+        symbol, "alpaca_opening" if opening else "alpaca", [snapshot],
+        replace_source=False,
+    )
     return {
         "underlying": symbol,
         "quote_count": len(rows),
         "open_interest_coverage": sum(row["open_interest"] is not None for row in rows),
         "as_of": snapshot["as_of"],
-        "combined_sessions": merged["combined_sessions"],
+        "database_sync_status": database_sync["status"],
+        "database_sessions": database_sync.get("sessions"),
+        "database_liquidity_coverage": {
+            key: database_sync.get(key, 0)
+            for key in (
+                "equity_volume_sessions", "option_volume_sessions",
+                "option_volume_sessions_80pct_coverage",
+                "open_interest_sessions_80pct_coverage",
+                "option_spread_sessions_80pct_coverage",
+            )
+        },
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Archive daily Alpaca OPRA chains for options research")
     parser.add_argument("--underlying", action="append", help="ticker to capture; repeatable")
+    parser.add_argument("--phase", choices=("open", "close"), default="close", help="opening or daily-close snapshot")
+    parser.add_argument(
+        "--universe", choices=("portfolio", "research"), default="portfolio",
+        help="configured Algo portfolio or expanded options research history universe",
+    )
     parser.add_argument("--feed", choices=("opra", "indicative"), default=os.getenv("ALPACA_OPTIONS_FEED", "opra").strip().lower())
     args = parser.parse_args()
     if args.feed != "opra":
         parser.error("research archive capture requires the OPRA feed")
-    symbols = args.underlying or list(dict.fromkeys(
+    portfolio_symbols = list(dict.fromkeys(
         str(symbol).strip().upper()
         for group in ALGO_PORTFOLIO_UNIVERSE.values()
         for symbol in group.get("tickers", [])
     ))
+    symbols = args.underlying or (
+        history_underlyings() if args.universe == "research" else portfolio_symbols
+    )
     if not symbols or any(not symbol or not symbol.replace(".", "").isalnum() for symbol in symbols):
         parser.error("underlyings must be valid ticker symbols")
 
@@ -347,7 +408,15 @@ def main() -> int:
                 print(f"Alpaca options history capture skipped: {now.date()} is not a market session.")
                 return 0
             open_at, close_at = session
-            if now < close_at + timedelta(minutes=5):
+            if args.phase == "open":
+                target_at = open_at + timedelta(minutes=5)
+                if now < target_at:
+                    print(f"Alpaca opening capture skipped: wait until {target_at.isoformat()}.")
+                    return 0
+                if now > target_at + timedelta(minutes=15):
+                    print(f"Alpaca opening capture skipped: {target_at.isoformat()} window has passed.")
+                    return 0
+            elif now < close_at + timedelta(minutes=5):
                 print(
                     f"Alpaca options history capture skipped: wait until "
                     f"{(close_at + timedelta(minutes=5)).isoformat()} for the completed session bar."
@@ -359,11 +428,11 @@ def main() -> int:
                 try:
                     result = capture_symbol(
                         client, symbol, session_date=now.date(), open_at=open_at,
-                        close_at=close_at, feed=args.feed,
+                        close_at=close_at, feed=args.feed, phase=args.phase,
                     )
                     results.append(result)
                     print(
-                        f"Alpaca options archive {symbol}: quotes={result['quote_count']} "
+                        f"Alpaca options {args.phase} archive {symbol}: quotes={result['quote_count']} "
                         f"OI={result['open_interest_coverage']} as_of={result['as_of']}",
                         flush=True,
                     )
@@ -374,6 +443,7 @@ def main() -> int:
             summary = {
                 "session_date": now.date().isoformat(),
                 "provider": "Alpaca OPRA",
+                "phase": args.phase,
                 "captured": len(results),
                 "failed": failures,
                 "results": results,

@@ -13,7 +13,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from autoresearch.cpu import available_cpu_count
-from options.research.archive import merge_symbol_dataset
+from options.research.artifact_store import OptionsResearchArtifactStore
+from options.research.history_store import OptionsHistoryStore
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -57,6 +58,8 @@ def _error_summary(
     status = "error"
     message = f"{type(error).__name__}: {error}"
     if isinstance(error, FileNotFoundError) and "historical options dataset not found" in str(error):
+        status = "skipped_missing_dataset"
+    elif isinstance(error, ValueError) and "no daily_close options history" in str(error):
         status = "skipped_missing_dataset"
     elif isinstance(error, ValueError) and (
         "insufficient history for" in str(error)
@@ -117,6 +120,25 @@ def _render_markdown(report: dict) -> str:
         "This report is a separate research sleeve alongside equity AutoResearch. Options candidates remain research-only; exported parameters are not applied to paper or live settings.",
         "",
     ]
+    eligibility = report.get("eligible_universe")
+    if eligibility:
+        lines.extend([
+            "## Cached eligible universe",
+            "",
+            f"Rule version: `{eligibility.get('rule_version')}`; as of `{eligibility.get('as_of_date')}`; "
+            f"{eligibility.get('eligible_count', 0)} of {eligibility.get('universe_size', 0)} tickers eligible.",
+            f"Applied to strategy jobs: **{bool(report.get('eligible_universe_applied'))}**.",
+            f"Cache: `{eligibility.get('cache_path')}`.",
+            "",
+        ])
+        excluded_by_strategy = report.get("selection_excluded_by_strategy", {})
+        if excluded_by_strategy:
+            lines.extend(["Excluded from strategy runs by the shared cache:", ""])
+            lines.extend(
+                f"- **{strategy}:** {len(symbols)} ticker(s)"
+                for strategy, symbols in excluded_by_strategy.items()
+            )
+            lines.append("")
     excluded = report.get("excluded_strategies", {})
     if excluded:
         lines.extend(["## Not researched", ""])
@@ -168,6 +190,7 @@ def _render_markdown(report: dict) -> str:
         "## Data and execution assumptions",
         "",
         "Historical chain snapshots are required for empirical results. A missing dataset skips the strategy runs and is reported as such; a model surface is only used when explicitly represented in the configured dataset. Fills include per-leg spread slippage and commissions. Assignment remains a simplified simulation heuristic.",
+        "The eligibility cache and sector/correlation overlays are research-only. They do not change the live portfolio universe or place orders.",
         "",
     ])
     return "\n".join(lines)
@@ -260,10 +283,85 @@ def run_automated_options_research(
     excluded_strategies = {str(name): str(reason) for name, reason in configured_exclusions.items()}
     strategies_report: dict[str, dict] = {}
     archive_merge = {
-        symbol: merge_symbol_dataset(symbol)
+        symbol: {
+            "underlying": symbol,
+            "dataset_path": str(underlying_data_paths[symbol]),
+            "skipped": True,
+            "reason": "collectors write directly to the SQLite history database",
+        }
         for symbol in underlyings
     }
-    data_available = any(path.is_file() for path in underlying_data_paths.values())
+    eligibility_config = automation_config.get("eligibility", {})
+    if not isinstance(eligibility_config, dict):
+        raise ValueError("automation.eligibility must be an object")
+    sqlite_database_paths = {
+        path.resolve() for path in underlying_data_paths.values()
+        if path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+    }
+    if len(sqlite_database_paths) > 1:
+        raise ValueError("all options research tickers must share one SQLite history database")
+    uses_sqlite_datasets = bool(sqlite_database_paths)
+    apply_eligibility = bool(eligibility_config.get(
+        "apply_to_research", eligibility_config.get("enabled", False),
+    ))
+    cache_eligibility = bool(eligibility_config.get("cache_enabled", True)) and uses_sqlite_datasets
+    if apply_eligibility and not uses_sqlite_datasets:
+        raise ValueError("automation.eligibility.apply_to_research requires the SQLite history store")
+    uses_history_store = any(
+        path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+        for path in underlying_data_paths.values()
+    ) or cache_eligibility or apply_eligibility
+    history_store = None
+    if uses_history_store:
+        history_store = (
+            OptionsHistoryStore(next(iter(sqlite_database_paths)))
+            if sqlite_database_paths else OptionsHistoryStore()
+        )
+    history_store_sync = {
+        symbol: {
+            "underlying": symbol,
+            "status": "database_ready" if history_store.has_underlying(symbol) else "waiting_for_data",
+            "coverage": history_store.coverage_summary(symbol),
+        }
+        for symbol in underlyings
+    } if history_store else {}
+    eligibility_report = None
+    selection_excluded_by_strategy = {}
+    if cache_eligibility or apply_eligibility:
+        from options.research.universe_selection import build_eligible_cache
+
+        eligibility_report = build_eligible_cache(
+            database=history_store.path,
+            rules_path=eligibility_config.get("rules_path"),
+            cache_dir=eligibility_config.get("cache_dir", "data/options/research/universe_cache"),
+        )
+        eligible = set(eligibility_report.get("eligible_symbols", []))
+        if apply_eligibility:
+            original_by_strategy = underlyings_by_strategy
+            underlyings_by_strategy = {
+                strategy: [symbol for symbol in symbols if symbol in eligible]
+                for strategy, symbols in original_by_strategy.items()
+            }
+            selection_excluded_by_strategy = {
+                strategy: [symbol for symbol in symbols if symbol not in eligible]
+                for strategy, symbols in original_by_strategy.items()
+            }
+            for strategy, symbols in underlyings_by_strategy.items():
+                outer_limit = max(1, available_cpus // fold_worker_budget)
+                workers_used_by_strategy[strategy] = min(
+                    workers_requested_by_strategy[strategy], outer_limit, len(symbols),
+                )
+                fold_workers_used_by_strategy[strategy] = (
+                    min(fold_worker_budget, max(1, available_cpus // workers_used_by_strategy[strategy]))
+                    if workers_used_by_strategy[strategy] else 0
+                )
+            worker_count = max(workers_used_by_strategy.values(), default=0)
+    data_available = any(
+        history_store.has_underlying(symbol)
+        if history_store and path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+        else path.is_file()
+        for symbol, path in underlying_data_paths.items()
+    )
     data_mode = config.get("data_mode", "auto")
 
     if not enabled:
@@ -292,6 +390,12 @@ def run_automated_options_research(
             strategy_jobs = [
                 (strategy, underlying) for underlying in underlyings_by_strategy[strategy]
             ]
+            if not strategy_jobs:
+                strategies_report[strategy] = {
+                    "status": "skipped_eligibility_empty" if eligibility_report else "skipped_empty_universe",
+                    "eligible_cache": eligibility_report.get("cache_path") if eligibility_report else None,
+                }
+                continue
             strategy_workers = workers_used_by_strategy[strategy]
             if strategy_workers == 1:
                 for job_strategy, underlying in strategy_jobs:
@@ -342,6 +446,8 @@ def run_automated_options_research(
                     )
                 else:
                     by_underlying[underlying] = job_result["summary"]
+            if not strategy_underlyings:
+                continue
             if len(strategy_underlyings) == 1:
                 strategies_report[strategy] = by_underlying[strategy_underlyings[0]]
             else:
@@ -365,6 +471,8 @@ def run_automated_options_research(
         }
         if "error" in statuses:
             status = "partial_error"
+        elif statuses and statuses <= {"skipped_eligibility_empty"}:
+            status = "eligibility_empty"
         elif statuses and statuses <= {"skipped_missing_dataset", "insufficient_history"}:
             status = "waiting_for_data"
         elif statuses & {"skipped_missing_dataset", "insufficient_history", "exploratory_only"}:
@@ -384,13 +492,24 @@ def run_automated_options_research(
         "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()},
         "dataset_available": data_available,
         "underlyings_by_strategy": underlyings_by_strategy,
+        "selection_excluded_by_strategy": selection_excluded_by_strategy,
+        "eligible_universe": eligibility_report,
+        "eligible_universe_applied": apply_eligibility,
         "excluded_strategies": excluded_strategies,
         "archive_merge": {
             symbol: {
                 "updated": not bool(result.get("skipped")),
-                "combined_sessions": result.get("combined_sessions"),
+                "combined_sessions": None,
+                "reason": result.get("reason"),
             }
             for symbol, result in archive_merge.items()
+        },
+        "history_store_sync": {
+            symbol: {
+                "status": result.get("status"),
+                "coverage": result.get("coverage"),
+            }
+            for symbol, result in history_store_sync.items()
         },
         "data_mode": data_mode,
         "workers_requested": configured_workers,
@@ -419,6 +538,15 @@ def run_automated_options_research(
         "fold_workers_requested": configured_fold_workers,
         "fold_workers_used_by_strategy": fold_workers_used_by_strategy if enabled else {},
         "underlyings_by_strategy": underlyings_by_strategy,
+        "eligible_universe": ({
+            "status": eligibility_report.get("status"),
+            "as_of_date": eligibility_report.get("as_of_date"),
+            "eligible_count": eligibility_report.get("eligible_count"),
+            "universe_size": eligibility_report.get("universe_size"),
+            "cache_path": eligibility_report.get("cache_path"),
+            "rules_sha256": eligibility_report.get("rules_sha256"),
+            "applied": apply_eligibility,
+        } if eligibility_report else None),
         "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()}, "dataset_available": data_available,
         "strategies": {
             name: (
@@ -441,6 +569,15 @@ def run_automated_options_research(
         },
         "report_path": str(report_path),
     })
+    artifact_store = OptionsResearchArtifactStore()
+    for document_type, identity, path in (
+        ("automation_report", today, report_path),
+        ("automation_report_latest", "latest", automation_dir / "latest.json"),
+        ("automation_markdown", today, markdown_path),
+        ("automation_markdown_latest", "latest", automation_dir / "latest.md"),
+        ("automation_history", "runs", automation_dir / "runs.jsonl"),
+    ):
+        artifact_store.store_document(document_type=document_type, identity=identity, path=path)
     return report
 
 

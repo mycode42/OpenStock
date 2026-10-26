@@ -1,7 +1,7 @@
 {
   "underlying": "SPY",
   "data_mode": "auto",
-  "data_path": "data/options/research/combined/SPY/chains.jsonl",
+  "data_path": "data/options/research/options_history.sqlite3",
   "output_dir": "data/options/research/runs",
   "automation": {
     "enabled": true,
@@ -9,6 +9,12 @@
     "excluded_strategies": {
       "event_driven": "Historical chain archives do not contain point-in-time event_recommendations.",
       "directional_overlay": "Historical chain archives do not contain point-in-time equity_signals."
+    },
+    "eligibility": {
+      "cache_enabled": true,
+      "apply_to_research": false,
+      "rules_path": "options/research/eligibility.default.json",
+      "cache_dir": "data/options/research/universe_cache"
     }
   },
   "model_surface": {

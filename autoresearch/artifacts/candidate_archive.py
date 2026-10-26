@@ -4,17 +4,16 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import lru_cache
 import fcntl
 import hashlib
 import json
 import math
 from pathlib import Path
 import statistics
+from urllib.parse import quote
 
 from strategies.catalog import STRATEGY_ID_ALIASES, canonical_strategy_id
-
-from .files import _atomic_json
-
 
 ARCHIVE_SCHEMA = "swarm_algo_candidate_archive_v1"
 MAX_CANDIDATES_PER_STRATEGY = 64
@@ -31,10 +30,41 @@ STRATEGY_LOGIC_VERSIONS = {
 
 
 def _archive_path(root: str | Path) -> Path:
+    """Return the stable identity path used for the SQLite archive document."""
     path = Path(root)
     if path.name != "candidate-archive.json":
         path = path / "candidate-archive.json"
     return path
+
+
+def _database_path(path: Path) -> Path:
+    if path.parent.name == "archive" and path.parent.parent.name == "adaptive":
+        output_root = path.parent.parent.parent
+    else:
+        output_root = path.parent
+    return output_root / "research.sqlite3"
+
+
+@lru_cache(maxsize=8)
+def _ledger_for_database(path: str):
+    from .research_ledger import ResearchLedger
+
+    return ResearchLedger(path)
+
+
+def archive_reference(root: str | Path) -> str:
+    """Return a stable reference to the candidate archive document in SQLite."""
+    path = _archive_path(root).resolve()
+    database = _database_path(path).resolve()
+    identity = quote(str(path), safe="")
+    return f"sqlite://{database}#research_document/candidate_archive/{identity}"
+
+
+def _write_archive(path: Path, archive: dict) -> None:
+    """Persist candidate state in SQLite; no JSON working copy is written."""
+    _ledger_for_database(str(_database_path(path).resolve())).record_document(
+        kind="candidate_archive", identity=str(path.resolve()), payload=archive,
+    )
 
 
 def _canonicalize_strategy_maps(value: dict) -> None:
@@ -69,15 +99,28 @@ def _canonicalize_strategy_maps(value: dict) -> None:
 
 @contextmanager
 def _locked(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.with_suffix(path.suffix + ".lock").open("a+") as lock:
+    database = _database_path(path)
+    lock_path = database.with_suffix(database.suffix + ".candidate-archive.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         yield
 
 
 def _read(path: Path) -> dict:
-    if not path.exists():
-        return {
+    ledger = _ledger_for_database(str(_database_path(path).resolve()))
+    value = ledger.read_document(
+        kind="candidate_archive", identity=str(path.resolve()),
+    )
+    if value is None and path.is_file():
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"cannot safely read legacy candidate archive: {type(exc).__name__}") from exc
+        if not isinstance(value, dict):
+            raise ValueError("legacy candidate archive has an unsupported schema")
+    if value is None:
+        value = {
             "schema": ARCHIVE_SCHEMA,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "run_counters": {},
@@ -86,12 +129,8 @@ def _read(path: Path) -> dict:
             "champions": {},
             "validation_queue": {},
         }
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot safely read candidate archive: {type(exc).__name__}") from exc
     if not isinstance(value, dict) or value.get("schema") != ARCHIVE_SCHEMA:
-        raise ValueError("candidate archive has an unsupported schema")
+        raise ValueError("SQLite candidate archive has an unsupported schema")
     value.setdefault("run_counters", {})
     value.setdefault("candidates", {})
     value.setdefault("search_runs", {})
@@ -195,7 +234,7 @@ def reserve_search_seed(root: str | Path, strategy: str, pipeline_version: str) 
         digest = hashlib.sha256(f"{strategy}:{sequence}:{pipeline_version}".encode()).hexdigest()
         seed = int(digest[:8], 16)
         archive["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
     return seed, sequence
 
 
@@ -557,7 +596,7 @@ def archive_discoveries(root: str | Path, strategy: str, details: list[dict]) ->
             rows.clear()
             rows.update({row["candidate_id"]: row for row in retained})
         archive["updated_at"] = timestamp
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
     return count
 
 
@@ -656,7 +695,7 @@ def candidate_validation_candidates(
                 "last_invocation_id": invocation_id,
                 "source_invocation_ids": [invocation_id] if invocation_id else [],
                 "candidate_validation_folds": [],
-                "archive_artifact": str(_archive_path(root).resolve()),
+                "archive_artifact": archive_reference(root),
             }
         if row not in ordered:
             ordered.append(row)
@@ -692,7 +731,7 @@ def candidate_validation_candidates(
             "candidate_validation_folds": row.get("candidate_validation_folds") or [],
             "last_seen": row.get("last_seen"),
             "archive_rank": _candidate_rank(row),
-            "archive_artifact": str(_archive_path(root).resolve()),
+            "archive_artifact": archive_reference(root),
         })
         if len(selected) >= limit:
             break
@@ -766,7 +805,7 @@ def record_validation_queue_result(
             "validation_summary": summary,
         })
         archive["updated_at"] = timestamp
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
 
 
 def champion_candidate(root: str | Path, strategy: str) -> dict | None:
@@ -802,7 +841,7 @@ def record_champion_validation_result(
         }
         champion["currently_passes_gates"] = summary.get("status") == "passed"
         archive["updated_at"] = timestamp
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
 
 
 def update_champion_if_better(
@@ -864,7 +903,7 @@ def update_champion_if_better(
             proposed["first_selected_at"] = timestamp
         champions[strategy] = proposed
         archive["updated_at"] = timestamp
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
         return {"updated": True, "candidate_id": identifier, "previous_candidate_id": (prior or {}).get("candidate_id")}
 
 
@@ -957,7 +996,7 @@ def record_candidate_validation_folds(
             rows.clear()
             rows.update({row["candidate_id"]: row for row in retained})
         archive["updated_at"] = timestamp
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
     return added
 
 
@@ -1002,7 +1041,7 @@ def record_verification(root: str | Path, strategy: str, detail: dict) -> int:
             row["last_verified_at"] = datetime.now(timezone.utc).isoformat()
             rows[key] = row
         archive["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _atomic_json(path, archive)
+        _write_archive(path, archive)
     return added
 
 

@@ -94,9 +94,16 @@ def load_options_config(path: str | Path | None = None) -> dict:
     directional = config["directional_overlay"]
     if not isinstance(directional.get("enabled"), bool):
         raise ValueError("directional_overlay.enabled must be a boolean")
-    underlying = directional.get("underlying")
-    if not isinstance(underlying, str) or not underlying or underlying != underlying.upper():
-        raise ValueError("directional_overlay.underlying must be a non-empty uppercase ticker")
+    underlyings = directional.get("underlyings")
+    if underlyings is None and isinstance(directional.get("underlying"), str):
+        underlyings = [directional["underlying"]]
+    if not isinstance(underlyings, list) or not underlyings or any(
+        not isinstance(symbol, str) or not symbol or symbol != symbol.upper()
+        for symbol in underlyings
+    ) or len(set(underlyings)) != len(underlyings):
+        raise ValueError("directional_overlay.underlyings must be a non-empty list of unique uppercase symbols")
+    if len(underlyings) > 50:
+        raise ValueError("directional_overlay.underlyings is limited to fifty symbols")
     for field in ("min_dte", "max_dte", "target_dte", "min_open_interest",
                   "max_signal_age_seconds", "max_entries_per_day", "max_holding_days",
                   "close_dte"):
@@ -130,8 +137,8 @@ def load_options_config(path: str | Path | None = None) -> dict:
     long_vol = config["long_volatility"]
     if not isinstance(long_vol.get("enabled"), bool) or not isinstance(long_vol.get("close_on_regime_exit"), bool):
         raise ValueError("long_volatility enabled and close_on_regime_exit must be booleans")
-    if not isinstance(long_vol.get("bootstrap_iv_history_from_cboe", True), bool):
-        raise ValueError("long_volatility.bootstrap_iv_history_from_cboe must be a boolean")
+    if not isinstance(long_vol.get("bootstrap_iv_history_from_theta", True), bool):
+        raise ValueError("long_volatility.bootstrap_iv_history_from_theta must be a boolean")
     if long_vol.get("mode") not in {"alongside", "exclusive"}:
         raise ValueError("long_volatility.mode must be alongside or exclusive")
     if long_vol.get("activation_mode") not in {"regime_only", "regime_or_realized_vol"}:

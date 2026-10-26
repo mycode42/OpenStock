@@ -1,0 +1,111 @@
+{
+  "rule_version": "eligible-universe-v1",
+  "lookback_sessions": 20,
+  "min_valid_sessions": 20,
+  "minimum_coverage": 0.8,
+  "hard_filters": {
+    "activity_mode": "volume_or_oi",
+    "min_average_option_volume_60d": 250,
+    "min_latest_total_open_interest_60d": 1000,
+    "min_average_equity_volume": 25000,
+    "min_average_equity_dollar_volume": 5000000,
+    "max_median_option_spread_fraction": 0.25,
+    "max_equity_spread_fraction": null
+  },
+  "earnings_blackout": {
+    "enabled": false,
+    "days_before": 3,
+    "days_after": 1,
+    "require_fresh_calendar": true,
+    "calendar_max_age_hours": 96
+  },
+  "regime": {
+    "trend_lookback_sessions": 200,
+    "sector_momentum_lookback_sessions": 20,
+    "top_sector_buckets": 4,
+    "max_eligible_tickers": 40,
+    "always_eligible": ["SPY", "QQQ", "GLD", "TLT"],
+    "risk_off_high_vol_buckets": ["consumer_staples", "healthcare", "utilities", "hedges", "macro_hedges"],
+    "risk_off_normal_vol_buckets": ["consumer_staples", "healthcare", "utilities", "financials", "hedges", "macro_hedges"],
+    "hard_only_when_proxy_data_missing": true
+  },
+  "portfolio_caps": {
+    "max_sector_exposure": 0.3,
+    "max_correlation_cluster_exposure": 0.4,
+    "correlation_lookback_sessions": 60,
+    "correlation_threshold": 0.85
+  },
+  "walk_forward": {
+    "minimum_sessions": 100,
+    "minimum_symbols_with_complete_liquidity_history": 20,
+    "universe_scope": "original_24",
+    "train_fraction": 0.6,
+    "validation_fraction": 0.2
+  },
+  "bucket_proxies": {
+    "technology": "QQQ",
+    "semiconductors": "SMH",
+    "energy": "XLE",
+    "financials": "XLF",
+    "industrials": "XLI",
+    "healthcare": "XLV",
+    "consumer_discretionary": "XLY",
+    "consumer_staples": "XLP",
+    "utilities": "XLU",
+    "real_estate": "XLRE",
+    "small_caps": "IWM",
+    "emerging_markets": "EEM",
+    "commodities": "DBC",
+    "precious_metals": "GLD",
+    "hedges": "SPY",
+    "macro_hedges": "TLT",
+    "alternative_etfs": "HYG",
+    "international_equities": "EEM"
+  },
+  "category_buckets": {
+    "sector_rotation_and_hedge_etfs": "hedges",
+    "energy": "energy",
+    "ai_power_and_infrastructure": "industrials",
+    "quality_financials_and_payments": "financials",
+    "consumer_staples_and_discretionary": "consumer_discretionary",
+    "healthcare_expansion": "healthcare",
+    "industrials_and_defense": "industrials",
+    "semis_tech_adjacent_and_high_volatility": "technology",
+    "international_commodities_and_other": "international_equities",
+    "existing_algo_portfolio": "technology"
+  },
+  "ticker_buckets": {
+    "NVDA": "semiconductors", "AVGO": "semiconductors", "TSM": "semiconductors", "AMD": "semiconductors",
+    "MSFT": "technology", "AAPL": "technology", "GOOGL": "technology", "META": "technology",
+    "AMZN": "consumer_discretionary", "CRM": "technology", "PANW": "technology", "PLTR": "technology",
+    "JPM": "financials", "V": "financials", "UNH": "healthcare", "JNJ": "healthcare",
+    "PG": "consumer_staples", "KO": "consumer_staples", "SPY": "hedges", "QQQ": "technology",
+    "GLD": "precious_metals", "TLT": "macro_hedges", "TSLA": "consumer_discretionary", "SPCX": "alternative_etfs",
+    "XLE": "energy", "XLF": "financials", "XLI": "industrials", "XLV": "healthcare",
+    "XLY": "consumer_discretionary", "XLP": "consumer_staples", "XLU": "utilities", "XLRE": "real_estate",
+    "SMH": "semiconductors", "IWM": "small_caps", "USO": "energy", "SLV": "precious_metals",
+    "EWZ": "emerging_markets", "EEM": "emerging_markets", "HYG": "alternative_etfs",
+    "CEG": "utilities", "VST": "utilities", "NEE": "utilities", "ETR": "utilities", "DUK": "utilities",
+    "CCJ": "energy", "VRT": "industrials", "GEV": "industrials", "ETN": "industrials", "PWR": "industrials",
+    "BRK.B": "financials", "WMT": "consumer_staples", "COST": "consumer_staples", "HD": "consumer_discretionary",
+    "LOW": "consumer_discretionary", "MCD": "consumer_discretionary", "SBUX": "consumer_discretionary",
+    "NKE": "consumer_discretionary", "TGT": "consumer_discretionary", "ROST": "consumer_discretionary", "TJX": "consumer_discretionary",
+    "GDX": "precious_metals", "DBC": "commodities", "URA": "energy", "PPLT": "precious_metals",
+    "FXI": "emerging_markets", "EWJ": "international_equities", "INDA": "emerging_markets",
+    "BABA": "international_equities", "MELI": "international_equities", "NU": "financials",
+    "MU": "semiconductors", "INTC": "semiconductors", "ASML": "semiconductors",
+    "AMAT": "semiconductors", "LRCX": "semiconductors", "QCOM": "semiconductors",
+    "SOXL": "semiconductors", "ORCL": "technology", "NFLX": "technology",
+    "CRWD": "technology", "MSTR": "technology", "COIN": "technology"
+  },
+  "parameter_sweep": {
+    "min_average_option_volume_60d": [100, 250, 500],
+    "min_latest_total_open_interest_60d": [500, 1000, 2500],
+    "min_average_equity_volume": [0, 25000, 100000],
+    "min_average_equity_dollar_volume": [1000000, 5000000, 10000000],
+    "max_median_option_spread_fraction": [0.2, 0.25, 0.4],
+    "top_sector_buckets": [3, 4, 6],
+    "max_sector_exposure": [0.25, 0.3, 0.4],
+    "correlation_threshold": [0.8, 0.85, 0.9]
+  }
+}

@@ -27,7 +27,7 @@ from options.config import load_options_config
 from options.costs import OptionsCostModel
 from options.data import AlpacaOptionDataProvider, OptionChain, parse_snapshot_quote
 from options.journal import OptionsJournal
-from options.iv_history import seed_cboe_iv_history
+from options.iv_history import seed_theta_iv_history
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
 from options.assignment import simulate_early_assignment
 from options.risk import (
@@ -98,10 +98,15 @@ def _load_directional_equity_signals(
     *, config: dict, now: datetime,
 ) -> tuple[dict[str, dict], dict]:
     """Use only fresh, healthy Algo entry signals as options overlay inputs."""
-    symbol = str(config.get("underlying", "SPY")).strip().upper()
+    configured = config.get("underlyings")
+    if not isinstance(configured, list):
+        configured = [config.get("underlying", "SPY")]
+    underlyings = {
+        str(symbol).strip().upper() for symbol in configured if str(symbol).strip()
+    }
     diagnostics = {
         "source": "algo_state.strategy_portfolio.last_signals",
-        "underlying": symbol,
+        "underlyings": sorted(underlyings),
         "status": "unavailable",
         "scan_at": None,
         "scan_age_seconds": None,
@@ -151,7 +156,10 @@ def _load_directional_equity_signals(
     min_confidence = float(config.get("min_signal_confidence", 0.60))
     selected: dict[str, dict] = {}
     for row in rows:
-        if not isinstance(row, dict) or str(row.get("ticker") or "").strip().upper() != symbol:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("ticker") or "").strip().upper()
+        if symbol not in underlyings:
             continue
         action = str(row.get("action") or "").strip().lower()
         # Algo uses buy/short for entries; sell/cover are equity position exits.
@@ -947,16 +955,18 @@ def run_paper_cycle(
     iv_history_bootstrap = {}
     if (
         long_volatility_config.get("enabled", True)
-        and long_volatility_config.get("bootstrap_iv_history_from_cboe", True)
+        and long_volatility_config.get("bootstrap_iv_history_from_theta", True)
     ):
         for symbol in long_volatility_config.get("underlyings", ["SPY"]):
             symbol = str(symbol).upper()
             try:
-                iv_history_bootstrap[symbol] = seed_cboe_iv_history(
+                iv_history_bootstrap[symbol] = seed_theta_iv_history(
                     journal,
                     symbol,
                     before_date=datetime.fromisoformat(session_date).date(),
                     config=long_volatility_config,
+                    rate=float(config.get("rate", 0.04)),
+                    dividend_yield=float(config.get("dividend_yield", 0.015)),
                 )
             except Exception as exc:
                 iv_history_bootstrap[symbol] = {
@@ -964,7 +974,7 @@ def run_paper_cycle(
                     "underlying": symbol,
                     "error": type(exc).__name__,
                 }
-                LOG.warning("Options Cboe IV-history bootstrap failed for %s: %s", symbol, type(exc).__name__)
+                LOG.warning("Options ThetaData IV-history bootstrap failed for %s: %s", symbol, type(exc).__name__)
     exclusive_long_volatility = bool(
         long_volatility_config.get("enabled")
         and long_volatility_config.get("mode") == "exclusive"
@@ -1022,7 +1032,9 @@ def run_paper_cycle(
         config=directional_config, now=now,
     ) if directional_config.get("enabled", False) else ({}, {
         "source": "algo_state.strategy_portfolio.last_signals",
-        "underlying": str(directional_config.get("underlying", "SPY")).upper(),
+        "underlyings": directional_config.get(
+            "underlyings", [directional_config.get("underlying", "SPY")],
+        ),
         "status": "disabled",
         "selected_symbols": [],
         "candidate_count": 0,
@@ -1035,9 +1047,14 @@ def run_paper_cycle(
         "feed": feed,
     }
     if directional_config.get("enabled", False) and not exclusive_long_volatility:
-        symbol = str(directional_config.get("underlying", "SPY")).upper()
-        equity_signal = directional_signals.get(symbol)
-        if equity_signal is not None:
+        directional_diagnostics["per_underlying"] = {}
+        for symbol, equity_signal in sorted(directional_signals.items()):
+            symbol_diagnostics = {
+                "signal_confidence": equity_signal.get("confidence"),
+                "source_signal_strategy": equity_signal.get("strategy"),
+                "chain_contracts": 0,
+                "signal": False,
+            }
             try:
                 chain = provider.get_chain(
                     symbol,
@@ -1054,8 +1071,8 @@ def run_paper_cycle(
                     equity_signals={symbol: equity_signal},
                     as_of=now,
                 ))
-                directional_diagnostics["chain_contracts"] = len(chain.contracts)
-                directional_diagnostics["signal"] = signal is not None
+                symbol_diagnostics["chain_contracts"] = len(chain.contracts)
+                symbol_diagnostics["signal"] = signal is not None
                 if signal:
                     structure = replace(
                         signal.structure,
@@ -1063,8 +1080,16 @@ def run_paper_cycle(
                     )
                     candidates.append((replace(signal, structure=structure), chain, []))
             except Exception as exc:
-                directional_diagnostics["chain_error"] = type(exc).__name__
+                symbol_diagnostics["chain_error"] = type(exc).__name__
                 LOG.warning("Options directional overlay could not build %s: %s", symbol, type(exc).__name__)
+            directional_diagnostics["per_underlying"][symbol] = symbol_diagnostics
+        directional_diagnostics["chain_contracts"] = sum(
+            int(row["chain_contracts"])
+            for row in directional_diagnostics["per_underlying"].values()
+        )
+        directional_diagnostics["signal"] = any(
+            bool(row["signal"]) for row in directional_diagnostics["per_underlying"].values()
+        )
     elif exclusive_long_volatility and directional_config.get("enabled", False):
         directional_diagnostics["status"] = "disabled_by_exclusive_long_volatility_mode"
     diagnostics["directional_overlay"] = directional_diagnostics
@@ -1096,19 +1121,19 @@ def run_paper_cycle(
                     sessions=max(3, int(long_volatility_config.get("realized_lookback_sessions", 20)) + 1),
                 )
                 prior_by_date = {}
+                prior_feed_by_date = {}
                 for row in history_rows:
                     if str(row.get("underlying") or "").upper() != symbol:
                         continue
                     session = str(row.get("session_date") or "")
                     if session and session < session_date:
                         prior_by_date[session] = _safe_number(row.get("atm_iv"))
-                prior_samples = [value for _day, value in sorted(prior_by_date.items()) if value > 0][-lookback:]
-                history_sources = sorted({
-                    str(row.get("feed") or "unknown")
-                    for row in history_rows
-                    if str(row.get("underlying") or "").upper() == symbol
-                    and str(row.get("session_date") or "") < session_date
-                })
+                        prior_feed_by_date[session] = str(row.get("feed") or "unknown")
+                ranked_history = [
+                    (session, value) for session, value in sorted(prior_by_date.items()) if value > 0
+                ][-lookback:]
+                prior_samples = [value for _session, value in ranked_history]
+                history_sources = sorted({prior_feed_by_date.get(session, "unknown") for session, _value in ranked_history})
                 current_atm_iv = atm_implied_volatility(chain, long_volatility_config)
                 iv_percentile = historical_iv_percentile(
                     current_atm_iv, prior_samples, min_samples=minimum_samples,
@@ -1481,7 +1506,9 @@ def run_paper_cycle(
         else 1 if entry[0].strategy == "options_event_driven"
         else 2 if entry[0].strategy == DirectionalOverlayStrategy.strategy_id
         else 3,
-        -float(entry[0].confidence or 0.0) if entry[0].strategy == "options_vrp" else 0.0,
+        -float(entry[0].confidence or 0.0)
+        if entry[0].strategy in {"options_vrp", DirectionalOverlayStrategy.strategy_id}
+        else 0.0,
         entry[0].underlying,
     ))
     seen_underlyings = set(managed_long_vol_underlyings) | managed_directional_underlyings

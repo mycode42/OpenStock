@@ -55,6 +55,7 @@ python-dotenv = "^1.2.2"
 requests = "^2.33.0"
 pydantic = "^2.4.2"
 certifi = "^2026.10.19"
+duckdb = "^2.0.0"
 
 [tool.poetry.group.ai]
 optional = true
@@ -77,6 +78,7 @@ optional = true
 
 [tool.poetry.group.research.dependencies]
 yfinance = "^1.2.0"
+pyarrow = "^20.0.0"
 
 [tool.poetry.group.theta]
 optional = true

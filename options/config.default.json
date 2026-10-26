@@ -37,7 +37,7 @@
   },
   "vrp": {
     "enabled": true,
-    "underlyings": ["SPY", "QQQ"],
+    "underlyings": ["SPY", "QQQ", "GLD", "TLT"],
     "min_dte": 25,
     "max_dte": 45,
     "min_iv_minus_rv": 0.04,
@@ -60,7 +60,11 @@
   },
   "directional_overlay": {
     "enabled": true,
-    "underlying": "SPY",
+    "underlyings": [
+      "NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD",
+      "JPM", "V", "UNH", "JNJ", "PG", "KO", "SPY", "QQQ", "GLD", "TLT",
+      "PLTR", "CRM", "PANW", "TSLA", "SPCX"
+    ],
     "min_dte": 25,
     "max_dte": 60,
     "target_dte": 40,
@@ -71,7 +75,7 @@
     "max_spread_pct": 0.20,
     "min_open_interest": 100,
     "max_risk_per_trade_pct": 0.005,
-    "max_entries_per_day": 1,
+    "max_entries_per_day": 24,
     "max_holding_days": 21,
     "close_dte": 5,
     "profit_target_pct": 0.50,
@@ -80,7 +84,7 @@
   "long_volatility": {
     "enabled": true,
     "mode": "alongside",
-    "underlyings": ["SPY"],
+    "underlyings": ["SPY", "QQQ", "GLD", "TLT", "NVDA", "AMD", "TSLA", "PLTR", "SPCX"],
     "exercise_style_by_underlying": {"SPX": "european"},
     "allowed_regimes": ["volatile"],
     "activation_mode": "regime_only",
@@ -94,7 +98,7 @@
     "iv_percentile_lookback_sessions": 252,
     "iv_rank_min_samples": 20,
     "atm_delta_tolerance": 0.20,
-    "bootstrap_iv_history_from_cboe": true,
+    "bootstrap_iv_history_from_theta": true,
     "iv_percentile_ceiling": 75.0,
     "max_risk_per_trade_pct": 0.01,
     "realized_lookback_sessions": 20,

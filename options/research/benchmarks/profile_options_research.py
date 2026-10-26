@@ -274,10 +274,10 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Profile a bounded options research run")
     parser.add_argument("--strategy", choices=("vrp", "event_driven", "directional_overlay", "long_volatility"), default="long_volatility")
     parser.add_argument("--underlying", default="GLD")
-    parser.add_argument("--data-path", help="historical JSONL archive; defaults to the configured ticker archive")
+    parser.add_argument("--data-path", help="historical JSONL archive or SQLite history store; defaults to the configured ticker archive")
     parser.add_argument("--mode", choices=("full", "load"), default="full")
-    parser.add_argument("--snapshot-count", type=int, default=900,
-                        help="use the latest N snapshots (0 uses the full archive)")
+    parser.add_argument("--snapshot-count", type=int, default=None,
+                        help="use the latest N JSONL snapshots (0 uses the full archive; SQLite defaults to full history)")
     parser.add_argument("--workers", type=int, default=min(8, available_cpu_count()),
                         help="loader and fold worker limit")
     parser.add_argument("--candidates", type=int, default=2,
@@ -299,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     args.underlying = str(args.underlying).strip().upper()
     if not args.underlying or not args.underlying.replace(".", "").isalnum():
         raise ValueError("underlying must be a valid ticker symbol")
-    if args.snapshot_count < 0:
+    if args.snapshot_count is not None and args.snapshot_count < 0:
         raise ValueError("snapshot-count cannot be negative")
     if args.workers < 1 or args.candidates < 2 or args.candidates > 100:
         raise ValueError("workers must be positive and candidates must be between 2 and 100")
@@ -326,12 +326,17 @@ def main(argv: list[str] | None = None) -> int:
         .replace("{underlying}", args.underlying)
     )
     if not configured_path:
-        configured_path = f"data/options/research/combined/{args.underlying}/chains.jsonl"
+        configured_path = "data/options/research/options_history.sqlite3"
     source_path = Path(configured_path).expanduser()
     if not source_path.is_absolute():
         source_path = (ROOT / source_path).resolve()
     if not source_path.is_file():
         raise FileNotFoundError(f"historical options archive not found: {source_path}")
+    database_source = source_path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+    if args.snapshot_count is None:
+        args.snapshot_count = 0 if database_source else 900
+    if database_source and args.snapshot_count:
+        raise ValueError("SQLite profiling currently uses the full ticker history; pass --snapshot-count 0")
 
     source_used = source_path
     selected_snapshots = None

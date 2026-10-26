@@ -121,23 +121,41 @@ class OptionsPaperClient:
 
     def stock_bars(
         self, symbol: str, *, start: date, end: date,
-        limit: int = 100, adjustment: str = "raw",
+        limit: int = 100, adjustment: str = "raw", feed: str = "sip",
     ) -> list[dict]:
+        if not 1 <= int(limit) <= 10000:
+            raise ValueError("stock bar page limit must be between 1 and 10000")
         params = {
             "timeframe": "1Day", "start": start.isoformat(), "end": end.isoformat(),
-            "limit": limit, "feed": "sip",
+            "limit": int(limit), "feed": feed, "sort": "asc",
         }
         if adjustment != "raw":
             params["adjustment"] = adjustment
-        payload = self._get(
-            DATA_BASE,
-            f"v2/stocks/{symbol.upper()}/bars",
-            params=params,
-        )
-        bars = payload.get("bars", []) if isinstance(payload, dict) else payload
-        if not isinstance(bars, list):
-            raise ValueError("Alpaca stock bars response is malformed")
-        return bars
+        output = []
+        page_token = None
+        seen_tokens = set()
+        for _ in range(1000):
+            request_params = dict(params)
+            if page_token:
+                request_params["page_token"] = page_token
+            payload = self._get(
+                DATA_BASE,
+                f"v2/stocks/{symbol.upper()}/bars",
+                params=request_params,
+            )
+            bars = payload.get("bars", []) if isinstance(payload, dict) else payload
+            if not isinstance(bars, list):
+                raise ValueError("Alpaca stock bars response is malformed")
+            output.extend(row for row in bars if isinstance(row, dict))
+            next_token = payload.get("next_page_token") if isinstance(payload, dict) else None
+            if not next_token:
+                return output
+            next_token = str(next_token)
+            if next_token in seen_tokens:
+                raise RuntimeError("Alpaca stock bars pagination repeated a page token")
+            seen_tokens.add(next_token)
+            page_token = next_token
+        raise RuntimeError("Alpaca stock bars pagination exceeded 1000 pages")
 
     def market_calendar(self, on_date: date) -> dict | None:
         """Return the paper account's regular-session schedule for one date."""

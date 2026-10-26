@@ -211,9 +211,15 @@ def _expected_extended_session_data(
 
 
 def _only_expected_extended_session_data_pause(pause_reasons: list[str]) -> bool:
+    # Overnight entry suppression is expected independently of whether
+    # extended-session quotes have refreshed for existing holdings.
+    data_pause_reasons = [
+        reason for reason in pause_reasons
+        if reason != EXPECTED_OVERNIGHT_PAUSE
+    ]
     return bool(
-        pause_reasons
-        and all(reason in EXTENDED_SESSION_DATA_PAUSE_REASONS for reason in pause_reasons)
+        data_pause_reasons
+        and all(reason in EXTENDED_SESSION_DATA_PAUSE_REASONS for reason in data_pause_reasons)
     )
 
 

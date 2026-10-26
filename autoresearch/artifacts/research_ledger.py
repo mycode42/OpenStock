@@ -11,13 +11,14 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import zlib
 from uuid import uuid4
 
-from .candidate_archive import candidate_id, logic_version, model_family
+from .candidate_archive import archive_reference, candidate_id, logic_version, model_family
 from .files import _json_safe
 
 
-LEDGER_SCHEMA_VERSION = 1
+LEDGER_SCHEMA_VERSION = 2
 
 
 def _now() -> str:
@@ -61,6 +62,15 @@ class ResearchLedger:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(_SCHEMA)
+            artifact_columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(research_artifact)")
+            }
+            if "payload_zlib" not in artifact_columns:
+                connection.execute("ALTER TABLE research_artifact ADD COLUMN payload_zlib BLOB")
+            if "payload_encoding" not in artifact_columns:
+                connection.execute("ALTER TABLE research_artifact ADD COLUMN payload_encoding TEXT")
+            if "byte_size" not in artifact_columns:
+                connection.execute("ALTER TABLE research_artifact ADD COLUMN byte_size INTEGER")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version > LEDGER_SCHEMA_VERSION:
                 raise RuntimeError(
@@ -162,15 +172,94 @@ class ResearchLedger:
     ) -> None:
         path = Path(uri)
         resolved = str(path.resolve()) if not uri.startswith(("http://", "https://")) else uri
-        digest = _sha256(Path(resolved)) if not resolved.startswith(("http://", "https://")) else None
+        payload = None
+        digest = None
+        byte_size = None
+        if not resolved.startswith(("http://", "https://")):
+            try:
+                raw = Path(resolved).read_bytes()
+                digest = hashlib.sha256(raw).hexdigest()
+                byte_size = len(raw)
+                payload = zlib.compress(raw, level=6)
+            except OSError:
+                pass
         with self._connect() as connection:
             connection.execute(
                 """INSERT OR IGNORE INTO research_artifact
-                   (artifact_id, invocation_id, kind, uri, sha256, metadata_json, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (artifact_id, invocation_id, kind, uri, sha256, metadata_json, created_at,
+                    payload_zlib, payload_encoding, byte_size)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(invocation_id, kind, uri) DO UPDATE SET
+                    sha256=COALESCE(excluded.sha256, research_artifact.sha256),
+                    metadata_json=excluded.metadata_json,
+                    payload_zlib=COALESCE(excluded.payload_zlib, research_artifact.payload_zlib),
+                    payload_encoding=COALESCE(excluded.payload_encoding, research_artifact.payload_encoding),
+                    byte_size=COALESCE(excluded.byte_size, research_artifact.byte_size)""",
                 (uuid4().hex, invocation_id, kind, resolved, digest,
-                 _json(metadata or {}), _now()),
+                 _json(metadata or {}), _now(), payload,
+                 "zlib+identity" if payload is not None else None, byte_size),
             )
+
+    def record_document(self, *, kind: str, identity: str, payload: object) -> None:
+        """Keep a compressed, versioned copy of mutable research state in SQLite."""
+        raw = _json(payload).encode("utf-8")
+        with self._connect() as connection:
+            connection.execute("""
+                INSERT INTO research_document
+                    (kind, identity, payload_zlib, payload_encoding, sha256, byte_size, updated_at)
+                VALUES (?, ?, ?, 'zlib+json', ?, ?, ?)
+                ON CONFLICT(kind, identity) DO UPDATE SET
+                    payload_zlib=excluded.payload_zlib,
+                    payload_encoding=excluded.payload_encoding,
+                    sha256=excluded.sha256, byte_size=excluded.byte_size,
+                    updated_at=excluded.updated_at
+            """, (
+                kind, identity, zlib.compress(raw, level=6),
+                hashlib.sha256(raw).hexdigest(), len(raw), _now(),
+            ))
+
+    def read_document(self, *, kind: str, identity: str) -> object | None:
+        """Read and integrity-check a compressed research document."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_zlib, sha256 FROM research_document WHERE kind=? AND identity=?",
+                (kind, identity),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            raw = zlib.decompress(row[0])
+            if hashlib.sha256(raw).hexdigest() != row[1]:
+                raise ValueError("research document checksum mismatch")
+            return json.loads(raw)
+        except (OSError, zlib.error, json.JSONDecodeError) as error:
+            raise ValueError(f"cannot read research document {kind}:{identity}") from error
+
+    def backfill_artifact_payloads(self) -> dict:
+        """Embed existing linked files into the ledger without changing their URIs."""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT artifact_id, uri FROM research_artifact WHERE payload_zlib IS NULL"
+            ).fetchall()
+        stored = missing = byte_size = 0
+        for artifact_id, uri in rows:
+            if str(uri).startswith(("http://", "https://")):
+                missing += 1
+                continue
+            try:
+                raw = Path(uri).read_bytes()
+            except OSError:
+                missing += 1
+                continue
+            with self._connect() as connection:
+                connection.execute(
+                    """UPDATE research_artifact SET sha256=?, payload_zlib=?,
+                       payload_encoding='zlib+identity', byte_size=? WHERE artifact_id=?""",
+                    (hashlib.sha256(raw).hexdigest(), zlib.compress(raw, level=6), len(raw), artifact_id),
+                )
+            stored += 1
+            byte_size += len(raw)
+        return {"stored": stored, "missing": missing, "uncompressed_bytes": byte_size}
 
     def record_discovery_stage(
         self, invocation_id: str, discovery: dict, *, data_version: str | None,
@@ -629,6 +718,17 @@ class ResearchLedger:
     def import_legacy(self, output_dir: str | Path) -> None:
         """One-time import of existing JSON scorecards and candidate memory."""
         root = Path(output_dir)
+        archive_path = root / "adaptive" / "archive" / "candidate-archive.json"
+        archive_identity = str(archive_path.resolve())
+        archive = self.read_document(kind="candidate_archive", identity=archive_identity)
+        if archive is None:
+            archive = _read_json(archive_path) or {}
+            if archive:
+                self.record_document(
+                    kind="candidate_archive", identity=archive_identity, payload=archive,
+                )
+        if not isinstance(archive, dict):
+            raise ValueError("candidate archive document must be an object")
         with self._connect() as connection:
             done = connection.execute(
                 "SELECT value FROM research_meta WHERE key='legacy_json_import_v1'"
@@ -654,8 +754,6 @@ class ResearchLedger:
                     ),
                 )
 
-        archive_path = root / "adaptive" / "archive" / "candidate-archive.json"
-        archive = _read_json(archive_path) or {}
         for strategy, candidates in (archive.get("candidates") or {}).items():
             for cid, row in candidates.items():
                 parameters = row.get("parameters") or {}
@@ -676,7 +774,7 @@ class ResearchLedger:
                         "legacy": True,
                         "regime_metrics": row.get("regime_metrics"),
                         "discovery_observations": row.get("discovery_observations"),
-                    }, artifact_path=str(archive_path),
+                    }, artifact_path=archive_reference(archive_path),
                     legacy_key=f"legacy-archive-{cid}",
                 )
                 for fold_index, fold in enumerate(row.get("verification_folds") or []):
@@ -687,14 +785,10 @@ class ResearchLedger:
                         test_end=fold.get("test_end"), fold_number=fold_index + 1,
                         fitness=fold.get("fitness"), metrics=fold.get("metrics") or {},
                         baseline_metrics={}, eligible=None, passed=None,
-                        gates={"legacy": True}, artifact_path=str(archive_path),
+                        gates={"legacy": True}, artifact_path=archive_reference(archive_path),
                         legacy_key=f"legacy-fold-{cid}-{fold_index}",
                     )
 
-        self.record_artifact(
-            "legacy-import", kind="legacy_candidate_archive", uri=str(archive_path),
-            metadata={"updated_at": archive.get("updated_at")},
-        )
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO research_meta(key,value) VALUES ('legacy_json_import_v1',?)",
@@ -843,6 +937,19 @@ CREATE TABLE IF NOT EXISTS research_artifact (
     sha256 TEXT,
     metadata_json TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
+    payload_zlib BLOB,
+    payload_encoding TEXT,
+    byte_size INTEGER,
     UNIQUE(invocation_id, kind, uri)
+);
+CREATE TABLE IF NOT EXISTS research_document (
+    kind TEXT NOT NULL,
+    identity TEXT NOT NULL,
+    payload_zlib BLOB NOT NULL,
+    payload_encoding TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(kind, identity)
 );
 """

@@ -19,7 +19,7 @@ from strategies.multi_factor.features import aggregate_intraday_bars
 
 from ..artifacts.artifact_cache import read_json, stable_hash
 from ..artifacts.candidate_archive import (
-    archived_candidate, candidate_id, champion_candidate,
+    archive_reference, archived_candidate, candidate_id, champion_candidate,
     logic_version, model_family,
     pending_validation_candidates, record_candidate_validation_folds,
     record_champion_validation_result, record_validation_queue_result,
@@ -302,7 +302,7 @@ def run_candidate_validation(
                     *(cohort_by_id.get(identifier, {}).get("validation_roles") or []),
                     *(record.get("validation_roles") or []),
                 ])),
-                "archive_artifact": str((archive_root / "candidate-archive.json").resolve()),
+                "archive_artifact": archive_reference(archive_root),
             }
             if role not in candidate["validation_roles"]:
                 candidate["validation_roles"].append(role)

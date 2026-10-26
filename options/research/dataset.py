@@ -377,11 +377,68 @@ def load_options_research_dataset(
     requested_mode = str(data_mode or "auto").lower()
     if requested_mode not in {"auto", "historical", "historical_chains", "model", "model_surface"}:
         raise ValueError("data_mode must be auto, historical_chains, or model_surface")
-    source_sha256 = _hash_file(source)
     requested_loader_workers = min(workers, available_cpu_count())
     parallel_loaded = None
     jsonl_elapsed_seconds = 0.0
-    if source.suffix.lower() == ".jsonl" and requested_loader_workers > 1:
+    database_elapsed_seconds = 0.0
+    database_loaded = source.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+    if database_loaded:
+        database_started = perf_counter()
+        from options.research.history_store import OptionsHistoryStore
+
+        store = OptionsHistoryStore(source, initialize=False)
+        if not store.has_underlying(target):
+            raise ValueError(f"no daily_close options history for {target} in {source}")
+        source_sha256 = store.dataset_fingerprint(target)
+        observations: list[ResearchObservation] = []
+        normalized_snapshots = []
+        model_rows = []
+        history: dict[str, list[tuple[date, float]]] = {}
+        use_model_surface = requested_mode in {"model", "model_surface"} or (
+            requested_mode == "auto" and store.has_model_surface(target)
+        )
+        loader_workers_used = requested_loader_workers
+        metadata = {}
+        for row in store.iter_effective_snapshots(
+            target, phase="daily_close", threads=requested_loader_workers,
+        ):
+            as_of = _timestamp(row.get("as_of"), field=f"snapshot[{row['source_line']}].as_of")
+            spot = float(row.get("spot", 0))
+            if spot <= 0 or not math.isfinite(spot):
+                raise ValueError(f"database snapshot {row['source_line']} needs a positive finite spot")
+            if use_model_surface:
+                points = row.get("iv_surface") or []
+                if not isinstance(points, (list, dict)) or not points:
+                    raise ValueError(f"model surface snapshot {row['source_line']} needs iv_surface points")
+                model_rows.append({"as_of": as_of, "spot": spot, "raw": row})
+            else:
+                normalized_snapshots.append({
+                    "underlying": target,
+                    "spot": spot,
+                    "as_of": as_of.isoformat(),
+                    "feed": str(row.get("feed", "historical")),
+                    "contracts": row.get("contracts", []),
+                })
+            close = row.get("underlying_close")
+            if close is not None:
+                history.setdefault(target, []).append((as_of.date(), float(close)))
+            observations.append(ResearchObservation(
+                as_of=as_of,
+                underlying=target,
+                spot=spot,
+                regime=str(row.get("regime", "unknown")).lower(),
+                volatility_state=str(row.get("volatility_state", "unknown")).lower(),
+                feed=("model" if use_model_surface else str(row.get("feed", "historical"))),
+                events=_events(row.get("events", []), as_of=as_of),
+                equity_signals=_signals(row.get("equity_signals", []), as_of=as_of),
+                event_recommendations=_signals(row.get("event_recommendations", []), as_of=as_of),
+                dividends={str(k).upper(): float(v) for k, v in (row.get("dividends") or {}).items()},
+                source_line=int(row["source_line"]),
+            ))
+        database_elapsed_seconds = perf_counter() - database_started
+        parallel_loaded = True
+    elif source.suffix.lower() == ".jsonl" and requested_loader_workers > 1:
+        source_sha256 = _hash_file(source)
         parallel_loaded = _load_jsonl_parallel(
             source, target=target, workers=requested_loader_workers,
             requested_mode=requested_mode,
@@ -393,6 +450,7 @@ def load_options_research_dataset(
         metadata = {}
         rows = None
     else:
+        source_sha256 = _hash_file(source)
         rows, history, metadata = _load_rows(source)
         observations: list[ResearchObservation] = []
         normalized_snapshots = []
@@ -595,7 +653,12 @@ def load_options_research_dataset(
             "workers_requested": requested_loader_workers,
             "workers_used": loader_workers_used,
             "chain_workers_used": chain_worker_count,
-            "source_format": "jsonl_process_chunks" if loader_workers_used > 1 else source.suffix.lower().lstrip(".") or "json",
+            "source_format": (
+                "duckdb_sqlite_batches" if database_loaded
+                else "jsonl_process_chunks" if loader_workers_used > 1
+                else source.suffix.lower().lstrip(".") or "json"
+            ),
+            "database_read_elapsed_seconds": round(database_elapsed_seconds, 3),
             "jsonl_parse_and_normalize_elapsed_seconds": round(jsonl_elapsed_seconds, 3),
             "chain_preparation_elapsed_seconds": round(perf_counter() - chain_started, 3),
             "elapsed_seconds": round(perf_counter() - load_started, 3),
