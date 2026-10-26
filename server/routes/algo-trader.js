@@ -9,6 +9,19 @@ const strategyPnlCache = new Map();
 let usdEurRateCache = null;
 const STRATEGY_PNL_CACHE_MS = 90_000;
 const USD_EUR_CACHE_MS = 60 * 60_000;
+const OPTIONS_STRATEGY_IDS = Object.freeze([
+    'options_vrp',
+    'options_event_driven',
+    'options_directional_overlay',
+    'options_long_volatility_sleeve',
+]);
+const OPTIONS_STRATEGY_ALIASES = Object.freeze({
+    vrp: 'options_vrp',
+    event_driven: 'options_event_driven',
+    directional_overlay: 'options_directional_overlay',
+    long_volatility: 'options_long_volatility_sleeve',
+    options_long_volatility: 'options_long_volatility_sleeve',
+});
 
 function finite(value) {
     if (value === null || value === undefined || value === '') return null;
@@ -18,6 +31,11 @@ function finite(value) {
 
 function safeObject(value) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function canonicalOptionsStrategyId(value) {
+    const strategy = String(value || '').trim();
+    return OPTIONS_STRATEGY_ALIASES[strategy] || strategy;
 }
 
 function runPythonJson(root, script, env = {}) {
@@ -52,8 +70,10 @@ async function readEquityFillReport(root, accountId) {
         'from decimal import Decimal',
         'from reporting.performance import load_trade_journal',
         'from reporting.fills import get_account_fill_report',
+        'from strategies.catalog import STRATEGY_CATALOG, canonical_strategy_id',
         'account_id = os.environ.get("OPENSTOCK_ALGO_ACCOUNT_ID") or None',
         'journal = load_trade_journal(mode="algo", account_id=account_id)',
+        'journal = [({**row, "strategy": canonical_strategy_id(row["strategy"])} if isinstance(row.get("strategy"), str) else row) for row in journal]',
         'report = get_account_fill_report("algo", journal)',
         'latest = {}',
         'for fill in report.get("realized_fills", []):',
@@ -68,6 +88,7 @@ async function readEquityFillReport(root, accountId) {
         'keys = ("strategy_pnl", "strategy_basis", "strategy_open_pnl", "strategy_open_basis", "strategy_open_pnl_complete", "realized_pnl_complete", "strategy_attribution_complete", "source", "fetched_at")',
         'payload = {key: report.get(key) for key in keys}',
         'payload["strategy_latest_activity"] = latest',
+        'payload["known_strategies"] = list(STRATEGY_CATALOG)',
         'print(json.dumps(payload, separators=(",", ":")))',
     ].join('\n');
     const promise = runPythonJson(root, script, { OPENSTOCK_ALGO_ACCOUNT_ID: String(accountId || '') })
@@ -158,6 +179,7 @@ function equityStrategyPerformance(report) {
         };
     }
     const names = new Set([
+        ...(Array.isArray(report.known_strategies) ? report.known_strategies : []),
         ...Object.keys(safeObject(report.strategy_pnl)),
         ...Object.keys(safeObject(report.strategy_basis)),
         ...Object.keys(safeObject(report.strategy_open_pnl)),
@@ -191,7 +213,9 @@ function equityStrategyPerformance(report) {
         && report.strategy_attribution_complete === true
         && report.strategy_open_pnl_complete === true;
     const strategies = [...byName.values()].map(row => {
-        const pnl = row.hasUnpricedOpenLot ? null : row.realizedPnl + row.openPnl;
+        const hasActivity = Boolean(row.latest) || row.realizedBasis !== 0 || row.openBasis !== 0
+            || row.realizedPnl !== 0 || row.openPnl !== 0 || row.hasUnpricedOpenLot;
+        const pnl = !hasActivity || row.hasUnpricedOpenLot ? null : row.realizedPnl + row.openPnl;
         const basis = row.realizedBasis + row.openBasis;
         return {
             strategy: row.strategy,
@@ -209,8 +233,10 @@ function equityStrategyPerformance(report) {
         if (b === null) return -1;
         return b - a;
     });
+    const hasActivity = strategies.some(strategy => strategy.latest_activity
+        || strategy.cumulative_pnl_usd !== null);
     return {
-        status: strategies.length ? complete ? 'ready' : 'partial' : 'empty',
+        status: hasActivity ? complete ? 'ready' : 'partial' : complete ? 'empty' : 'partial',
         message: report.stale === true
             ? 'Showing the last reconciled broker report because the latest refresh failed.'
             : complete
@@ -273,7 +299,7 @@ function optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows) {
             intent: String(leg.position_intent || '').toLowerCase(),
         })).filter(leg => leg.symbol);
     };
-    const strategyForOrder = row => String(safeObject(row?.signal).strategy || '');
+    const strategyForOrder = row => canonicalOptionsStrategyId(safeObject(row?.signal).strategy);
     const executionLegs = (fill, order, submittedLegs) => {
         const brokerLegs = safeObject(order?.broker_response).legs;
         const journalLegs = Array.isArray(fill?.legs) ? fill.legs : [];
@@ -314,6 +340,7 @@ function optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows) {
         });
         return strategies.get(name);
     };
+    for (const name of OPTIONS_STRATEGY_IDS) ensure(name);
     const activityAction = (legs, fallback = 'TRADE') => {
         const intents = legs.map(leg => leg.intent);
         if (intents.length && intents.every(intent => intent.includes('to_close'))) {
@@ -466,12 +493,16 @@ function optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows) {
         let at = entryFill.logged_at;
         let action = 'BUY';
         let status = 'open position';
-        if (exitFill && String(safeObject(exitOrder?.broker_response).status || exitFill.status || '').toLowerCase() === 'filled') {
+        const exitStatus = String(exitFill?.status || safeObject(exitOrder?.broker_response).status || '').toLowerCase();
+        if (exitFill && exitStatus === 'filled') {
             const exitPrice = finite(exitFill.filled_avg_price);
             const exitQty = finite(exitFill.filled_qty);
             if (exitPrice !== null && exitQty !== null && entryBasis !== null) {
                 knownLifecycleEntries.add(entryId);
-                pnl = exitPrice * exitQty * 100 - entryBasis;
+                // Alpaca records net credits for multi-leg sell-to-close orders
+                // with a negative aggregate average price. The long-volatility
+                // position's proceeds are positive, so use the credit magnitude.
+                pnl = Math.abs(exitPrice) * exitQty * 100 - entryBasis;
                 basis = entryBasis;
                 at = exitFill.logged_at;
                 action = 'SELL';
@@ -561,9 +592,11 @@ function optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows) {
             return symbol && !longVolOpenSymbols.has(symbol) && !(ownersBySymbol.get(symbol) || []).length;
         });
     const rows = [...strategies.values()].map(strategy => {
-        const cumulativePnl = strategy.has_unpriced_position || strategy.has_untracked_close
-            ? null
-            : strategy.realized_pnl + strategy.open_pnl;
+        const hasActivity = strategy.known_activity || strategy.realized_basis !== 0 || strategy.open_basis !== 0
+            || strategy.realized_pnl !== 0 || strategy.open_pnl !== 0
+            || strategy.has_unpriced_position || strategy.has_untracked_close;
+        const cumulativePnl = !hasActivity || strategy.has_unpriced_position || strategy.has_untracked_close
+            ? null : strategy.realized_pnl + strategy.open_pnl;
         const cumulativeBasis = strategy.realized_basis + strategy.open_basis;
         const latest = strategy.latest_activity;
         let latestPnl = latest?.pnl_usd ?? null;
@@ -579,7 +612,7 @@ function optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows) {
             latest_pnl_pct: latestPnlPct,
             cumulative_pnl_usd: cumulativePnl,
             cumulative_pnl_pct: cumulativePnl !== null && cumulativeBasis > 0 ? cumulativePnl / cumulativeBasis * 100 : null,
-            complete: cumulativePnl !== null && !unmatchedPositions,
+            complete: hasActivity && cumulativePnl !== null && !unmatchedPositions,
         };
     }).sort((left, right) => {
         const a = finite(left.cumulative_pnl_usd);
@@ -588,13 +621,17 @@ function optionsStrategyPerformance(orders, fills, strategyGreeks, riskRows) {
         if (b === null) return -1;
         return b - a;
     });
-    const hasUnknownHistory = rows.some(row => !row.complete);
+    const hasActivity = rows.some(row => row.latest_activity || row.cumulative_pnl_usd !== null);
+    const hasUnknownHistory = unmatchedPositions || rows.some(row => (
+        (row.latest_activity || row.cumulative_pnl_usd !== null) && !row.complete
+    ));
     return {
-        status: rows.length ? hasUnknownHistory ? 'partial' : 'ready' : 'empty',
+        status: hasActivity ? hasUnknownHistory ? 'partial' : 'ready' : hasUnknownHistory ? 'partial' : 'empty',
         message: hasUnknownHistory
             ? 'Open positions are marked from the latest account journal. Closed strategy P/L is shown only where an exit fill is recorded.'
             : 'Strategy P/L is calculated from confirmed option fills and the latest position marks.',
         source: 'Options paper fills and position marks',
+        known_strategies: OPTIONS_STRATEGY_IDS,
         strategies: rows,
         fx_rate: null,
     };
