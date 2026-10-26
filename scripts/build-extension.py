@@ -13,6 +13,14 @@ from setuptools.command.build_ext import build_ext
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSIONS = (
     (
+        "options._pricing_cy",
+        ROOT / "options/_pricing_cy.pyx",
+    ),
+    (
+        "options._search_cy",
+        ROOT / "options/_search_cy.pyx",
+    ),
+    (
         "strategies.multi_factor._features_cy",
         ROOT / "strategies/multi_factor/_features_cy.pyx",
     ),

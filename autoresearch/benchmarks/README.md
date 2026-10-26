@@ -64,3 +64,6 @@ poetry run python -m autoresearch.benchmarks.benchmark_daily_bar_cleanup
 It checks parity for stored and unsorted/invalid input rows, then reports
 median timings over a workload sized to the profiled daily-cleaning call
 count.
+
+For the options research pipeline benchmark, see
+[`options/research/benchmarks/README.md`](../../options/research/benchmarks/README.md).

@@ -8,6 +8,13 @@ from itertools import product
 import math
 from typing import Callable
 
+import numpy as np
+
+try:
+    from options import _search_cy
+except ImportError:  # pragma: no cover - retain a Python fallback without Cython builds
+    _search_cy = None
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -72,24 +79,33 @@ def candidate_pool(strategy: str, config: dict, base_config: dict) -> list[Candi
     return list(unique.values())
 
 
-def _distance(left: Candidate, right: Candidate, grid: dict, regime_sets: list) -> float:
-    dimensions = []
-    names = tuple(sorted(grid))
+def _distance(
+    left: Candidate,
+    right: Candidate,
+    grid: dict,
+    regime_sets: list,
+    *,
+    names: tuple[str, ...] | None = None,
+) -> float:
+    if names is None:
+        names = tuple(sorted(grid))
+    squared_distance = 0.0
     if left.grid_indices and right.grid_indices:
         if left.grid_indices[0] != right.grid_indices[0]:
-            dimensions.append(1.0)
+            squared_distance = 1.0
         for offset, name in enumerate(names, start=1):
             choices = grid[name]
             a = left.grid_indices[offset] if len(left.grid_indices) > offset else -1
             b = right.grid_indices[offset] if len(right.grid_indices) > offset else -1
-            dimensions.append(abs(a - b) / max(1, len(choices) - 1))
+            delta = abs(a - b) / max(1, len(choices) - 1)
+            squared_distance += delta * delta
     else:
-        dimensions.extend(
-            0.0 if left.parameters.get(name) == right.parameters.get(name) else 1.0
-            for name in names
-        )
-        dimensions.append(0.0 if left.allowed_regimes == right.allowed_regimes else 1.0)
-    return math.sqrt(sum(value * value for value in dimensions))
+        for name in names:
+            if left.parameters.get(name) != right.parameters.get(name):
+                squared_distance += 1.0
+        if left.allowed_regimes != right.allowed_regimes:
+            squared_distance += 1.0
+    return math.sqrt(squared_distance)
 
 
 def _select_budget(pool: list[Candidate], budget: int) -> list[Candidate]:
@@ -127,26 +143,92 @@ def evaluate_candidates(
     # the adaptive search inspectable. It predicts train-window score only;
     # untouched OOS and holdout data never enter this loop.
     results = []
-    remaining = list(full_pool)
     seed = _select_budget(full_pool, min(4, budget))
     for item in seed:
         results.append({"candidate": item.to_dict(), **evaluator(item), "_candidate_obj": item})
-        remaining.remove(item)
     exploration = float(search_config.get("surrogate_exploration", 0.15))
-    while remaining and len(results) < budget:
-        scored = []
-        observed = [(row["_candidate_obj"], float(row.get("risk_adjusted_score", -5.0))) for row in results]
-        # Keep private objects out of reports while retaining them for distance calculations.
-        for item in remaining:
-            distances = [(max(1e-6, _distance(item, known, search_config.get("grids", {}).get(strategy, {}), search_config.get("regime_sets", []))), score) for known, score in observed]
-            weights = [1.0 / (distance * distance) for distance, _ in distances]
-            prediction = sum(weight * score for weight, (_, score) in zip(weights, distances)) / sum(weights)
-            novelty = min(distance for distance, _ in distances)
-            scored.append((prediction + exploration * novelty, item))
-        _, chosen = max(scored, key=lambda pair: (pair[0], pair[1].candidate_id))
-        result = evaluator(chosen)
-        results.append({"candidate": chosen.to_dict(), **result, "_candidate_obj": chosen})
-        remaining.remove(chosen)
+    if len(results) < budget and _search_cy is not None:
+        grid = search_config.get("grids", {}).get(strategy, {})
+        names = tuple(sorted(grid))
+        dimensions = len(names) + 1
+        coordinates = np.zeros((len(full_pool), dimensions), dtype=np.int32)
+        active = np.ones(len(full_pool), dtype=np.uint8)
+        baseline_distances = np.zeros(len(full_pool), dtype=np.float64)
+        candidate_ids = [item.candidate_id for item in full_pool]
+        index_by_id = {item.candidate_id: index for index, item in enumerate(full_pool)}
+        baseline = next((item for item in full_pool if item.is_baseline), None)
+        if baseline is None:
+            raise ValueError("candidate pool lost its baseline candidate")
+        for index, item in enumerate(full_pool):
+            if item.grid_indices:
+                coordinates[index, :len(item.grid_indices)] = item.grid_indices
+            if item.is_baseline:
+                active[index] = 0
+            else:
+                squared = sum(
+                    item.parameters.get(name) != baseline.parameters.get(name)
+                    for name in names
+                )
+                squared += item.allowed_regimes != baseline.allowed_regimes
+                baseline_distances[index] = math.sqrt(float(squared))
+        for item in seed:
+            active[index_by_id[item.candidate_id]] = 0
+        scales = np.asarray([max(1, len(grid[name]) - 1) for name in names], dtype=np.float64)
+
+        while len(results) < budget:
+            known_coordinates = np.zeros((len(results), dimensions), dtype=np.int32)
+            known_has_grid = np.zeros(len(results), dtype=np.uint8)
+            known_scores = np.empty(len(results), dtype=np.float64)
+            for known_index, row in enumerate(results):
+                known = row["_candidate_obj"]
+                known_scores[known_index] = float(row.get("risk_adjusted_score", -5.0))
+                if known.grid_indices:
+                    known_coordinates[known_index, :len(known.grid_indices)] = known.grid_indices
+                    known_has_grid[known_index] = 1
+            chosen_index = _search_cy.best_surrogate_index(
+                coordinates, active, baseline_distances,
+                known_coordinates, known_has_grid, known_scores, scales,
+                candidate_ids, exploration,
+            )
+            if chosen_index < 0:
+                break
+            active[chosen_index] = 0
+            chosen = full_pool[chosen_index]
+            result = evaluator(chosen)
+            results.append({"candidate": chosen.to_dict(), **result, "_candidate_obj": chosen})
+    elif len(results) < budget:
+        grid = search_config.get("grids", {}).get(strategy, {})
+        grid_names = tuple(sorted(grid))
+        remaining = list(full_pool)
+        for item in seed:
+            remaining.remove(item)
+        while remaining and len(results) < budget:
+            best_score = -math.inf
+            chosen_index = -1
+            observed = [(row["_candidate_obj"], float(row.get("risk_adjusted_score", -5.0))) for row in results]
+            for index, item in enumerate(remaining):
+                numerator = 0.0
+                denominator = 0.0
+                novelty = math.inf
+                for known, score in observed:
+                    distance = max(1e-6, _distance(item, known, grid, search_config.get("regime_sets", []), names=grid_names))
+                    weight = 1.0 / (distance * distance)
+                    numerator += weight * score
+                    denominator += weight
+                    novelty = min(novelty, distance)
+                selection_score = numerator / denominator + exploration * novelty
+                if (
+                    selection_score > best_score
+                    or (selection_score == best_score and chosen_index >= 0
+                        and item.candidate_id > remaining[chosen_index].candidate_id)
+                ):
+                    best_score = selection_score
+                    chosen_index = index
+            if chosen_index < 0:
+                break
+            chosen = remaining.pop(chosen_index)
+            result = evaluator(chosen)
+            results.append({"candidate": chosen.to_dict(), **result, "_candidate_obj": chosen})
     for row in results:
         row.pop("_candidate_obj", None)
     return results

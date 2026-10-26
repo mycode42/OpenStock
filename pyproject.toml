@@ -26,6 +26,10 @@ include = [
     { path = "strategies/event_driven/analysis/ollama_models.json", format = ["sdist", "wheel"] },
     { path = "options/config.default.json", format = ["sdist", "wheel"] },
     { path = "options/research/config.default.json", format = ["sdist", "wheel"] },
+    { path = "options/_pricing_cy.pyx", format = "sdist" },
+    { path = "options/_search_cy.pyx", format = "sdist" },
+    { path = "options/*.so", format = "wheel" },
+    { path = "options/*.pyd", format = "wheel" },
     { path = "strategies/multi_factor/_features_cy.pyx", format = "sdist" },
     { path = "strategies/multi_factor/*.so", format = "wheel" },
     { path = "strategies/multi_factor/*.pyd", format = "wheel" },
@@ -40,6 +44,8 @@ exclude = [
     "strategies/multi_factor/_features_cy.pyx",
     "autoresearch/backtest/_execution_cy.pyx",
     "strategies/_swing_common_cy.pyx",
+    "options/_pricing_cy.pyx",
+    "options/_search_cy.pyx",
 ]
 
 [tool.poetry.dependencies]

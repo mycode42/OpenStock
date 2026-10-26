@@ -1,4 +1,4 @@
-"""Run equity AutoResearch and the independent options research job concurrently."""
+"""Run options research first, then equity AutoResearch."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ logger = logging.getLogger("autoresearch.nightly")
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run equity and options research concurrently")
+    parser = argparse.ArgumentParser(description="Run options and equity research sequentially")
     parser.add_argument("--db", default=None)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--workers", type=int, default=8)
@@ -92,13 +92,15 @@ def main(argv: list[str] | None = None) -> int:
     options_process = None
     equity_process = None
     options_launch_error = None
+    options_started_at = None
+    options_completed_at = None
+    equity_started_at = None
 
     with equity_log_path.open("w", encoding="utf-8") as equity_log:
         with options_log_path.open("w", encoding="utf-8") as options_log:
             if not args.skip_options_research:
-                # Lower priority protects the existing equity research workload
-                # when both CPU-heavy pipelines overlap.
                 try:
+                    options_started_at = datetime.now(timezone.utc)
                     options_process = subprocess.Popen(
                         [
                             sys.executable, "-m", "options.research.automation",
@@ -109,12 +111,23 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 except OSError as exc:
                     options_launch_error = f"{type(exc).__name__}: {exc}"
+                if options_process is not None:
+                    options_code = options_process.wait()
+                    options_completed_at = datetime.now(timezone.utc)
+                else:
+                    options_code = None
+            else:
+                options_code = None
+
+            # Both pipelines are CPU and memory intensive. Finish the options
+            # child before starting equity research to avoid overlapping their
+            # worker pools.
+            equity_started_at = datetime.now(timezone.utc)
             equity_process = subprocess.Popen(
                 _equity_command(args), cwd=ROOT, stdout=equity_log,
                 stderr=subprocess.STDOUT,
             )
             equity_code = equity_process.wait()
-            options_code = options_process.wait() if options_process is not None else None
 
     completed_at = datetime.now(timezone.utc)
     options_report = _read_json(options_path)
@@ -155,8 +168,12 @@ def main(argv: list[str] | None = None) -> int:
         }
 
     process_summary = {
-        "concurrent": not args.skip_options_research,
+        "concurrent": False,
+        "execution_order": "options_then_equity" if options_process is not None else "equity_only",
         "started_at": started_at.isoformat(),
+        "options_started_at": options_started_at.isoformat() if options_started_at else None,
+        "options_completed_at": options_completed_at.isoformat() if options_completed_at else None,
+        "equity_started_at": equity_started_at.isoformat() if equity_started_at else None,
         "completed_at": completed_at.isoformat(),
         "equity_exit_code": equity_code,
         "options_exit_code": options_code,

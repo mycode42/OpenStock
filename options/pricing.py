@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from datetime import date
 import math
 
+try:
+    from . import _pricing_cy
+except ImportError:  # pragma: no cover - used when Cython extensions are unavailable
+    _pricing_cy = None
+
 
 def _normal_cdf(value: float) -> float:
     return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
@@ -21,6 +26,11 @@ def black_scholes_price(
     right: str, *, dividend_yield: float = 0.0,
 ) -> float:
     """European Black-Scholes price; useful for European contracts and checks."""
+    if _pricing_cy is not None:
+        return _pricing_cy.european_price(
+            spot, strike, years, rate, volatility, right,
+            dividend_yield=dividend_yield,
+        )
     if min(spot, strike) <= 0 or years <= 0:
         return max(spot - strike, 0.0) if right == "call" else max(strike - spot, 0.0)
     if volatility <= 0:
@@ -86,6 +96,11 @@ def model_greeks(
     right: str, *, dividend_yield: float = 0.0, american: bool = True,
 ) -> ModelGreeks:
     """Central finite-difference Greeks per underlying share."""
+    if not american and _pricing_cy is not None:
+        return ModelGreeks(*_pricing_cy.european_model_greeks(
+            spot, strike, years, rate, volatility, right,
+            dividend_yield=dividend_yield,
+        ))
     price_fn = american_binomial_price if american else black_scholes_price
     kwargs = {"dividend_yield": dividend_yield}
     if american:
@@ -119,6 +134,12 @@ def implied_volatility(
     low: float = 0.005, high: float = 5.0, tolerance: float = 1e-5,
 ) -> float:
     """Bisection IV solver; returns a decimal volatility, e.g. 0.25."""
+    if not american and _pricing_cy is not None:
+        return _pricing_cy.european_implied_volatility(
+            market_price, spot, strike, years, rate, right,
+            dividend_yield=dividend_yield, low=low, high=high,
+            tolerance=tolerance,
+        )
     if not all(math.isfinite(v) for v in (market_price, spot, strike, years, rate)) or market_price < 0 or spot <= 0 or strike <= 0 or years <= 0:
         raise ValueError("invalid inputs for implied volatility")
     price_fn = american_binomial_price if american else black_scholes_price
