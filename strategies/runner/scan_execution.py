@@ -62,7 +62,7 @@ def execute_scan_candidates(
         )
         for name, group in group_limits.items()
     }
-    strategy_caps = scope.risk_config.get("max_positions_per_strategy_by_strategy", {})
+    strategy_position_caps = scope.risk_config.get("max_positions_per_strategy_by_strategy", {})
     batch_entry_counts: dict[str, int] = {}
     batch_open_counts: dict[str, int] = {}
     if scope.mode == "algo":
@@ -143,7 +143,7 @@ def execute_scan_candidates(
             if strategy_limit is not None and already_entered >= int(strategy_limit):
                 item["suppressed_reason"] = "per-strategy daily entry limit reached"
                 continue
-            position_limit = strategy_caps.get(
+            position_limit = strategy_position_caps.get(
                 strategy, scope.risk_config.get("max_positions_per_strategy"),
             )
             already_open = strategy_open_counts.get(strategy, 0) + batch_open_counts.get(strategy, 0)
@@ -191,9 +191,9 @@ def execute_scan_candidates(
         sizing_signal = item
         if scope.mode == "algo" and action in {"buy", "short"}:
             sizing_signal = dict(item)
-            strategy_caps = scope.risk_config.get("max_position_pct_by_strategy", {})
+            strategy_weight_caps = scope.risk_config.get("max_position_pct_by_strategy", {})
             strategy_risks = scope.risk_config.get("risk_multiplier_by_strategy", {})
-            configured_cap = strategy_caps.get(strategy)
+            configured_cap = strategy_weight_caps.get(strategy)
             if isinstance(configured_cap, (int, float)) and configured_cap > 0:
                 existing_cap = sizing_signal.get("target_weight")
                 sizing_signal["target_weight"] = (
