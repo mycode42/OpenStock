@@ -131,7 +131,14 @@ def get_model(
         if not api_key:
             print(f"API Key Error: Please make sure ANTHROPIC_API_KEY is set in your .env file or provided via API keys.")
             raise ValueError("Anthropic API key not found.  Please make sure ANTHROPIC_API_KEY is set in your .env file or provided via API keys.")
-        return ChatAnthropic(model=model_name, api_key=api_key, timeout=timeout_seconds, max_retries=0)
+        # Top-level automatic prompt caching: Anthropic places the breakpoint on the last cacheable block.
+        return ChatAnthropic(
+            model=model_name,
+            api_key=api_key,
+            timeout=timeout_seconds,
+            max_retries=0,
+            model_kwargs={"cache_control": {"type": "ephemeral"}},
+        )
     elif model_provider == ModelProvider.DEEPSEEK:
         api_key = (api_keys or {}).get("DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
