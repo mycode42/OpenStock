@@ -307,6 +307,11 @@ STRATEGY_CONFIG = {
     "risk_per_trade_pct": 0.005,
     "max_strategy_position_pct": 0.05,
     "take_profit_r_multiple": 2.0,
+    # Regular-session entries are limit orders this far from the decision price.
+    "entry_limit_band_bps": 10,
+    # Intraday stops are at least this many 5-minute return standard deviations.
+    "intraday_stop_vol_multiple": 3.0,
+    "intraday_stop_vol_lookback_bars": 36,
 }
 
 

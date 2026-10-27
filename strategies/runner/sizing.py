@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 
 from portfolio.config import STRATEGY_CONFIG
 
@@ -44,6 +45,26 @@ def _ticker_max_position_pct(ticker: str, universe: dict | None) -> float | None
     return limit
 
 
+def entry_limit_price(action: str, reference: float, band_bps: float) -> float | None:
+    """Limit that tolerates a small move from the decision price, never chasing it."""
+    if action not in {"buy", "short"} or not math.isfinite(reference) or reference <= 0:
+        return None
+    band = band_bps / 10_000.0
+    price = reference * (1 + band) if action == "buy" else reference * (1 - band)
+    return round(price, 2)
+
+
+def intraday_volatility_stop_pct(
+    bars: list[dict] | None, *, multiple: float, lookback: int,
+) -> float | None:
+    """Stop distance as a multiple of recent 5-minute return volatility, or None."""
+    closes = [float(bar["c"]) for bar in (bars or [])[-(lookback + 1):] if bar.get("c") is not None]
+    returns = [later / earlier - 1.0 for earlier, later in zip(closes, closes[1:]) if earlier > 0]
+    if len(returns) < 12:
+        return None
+    return multiple * statistics.pstdev(returns)
+
+
 def _make_trade(
     signal: dict,
     price: float,
@@ -52,6 +73,7 @@ def _make_trade(
     mode_risk: dict,
     *,
     mode_universe: dict | None = None,
+    minimum_stop_pct: float | None = None,
 ) -> dict | None:
     action = signal["action"]
     if action in {"sell", "cover"}:
@@ -75,6 +97,8 @@ def _make_trade(
         stop_pct = float(signal.get("stop_pct") or 0.0)
     else:
         stop_pct = float(configured_stop or signal.get("stop_pct") or mode_risk["stop_loss_pct"])
+    if minimum_stop_pct is not None and minimum_stop_pct > stop_pct:
+        stop_pct = minimum_stop_pct
     if equity <= 0 or price <= 0 or stop_pct <= 0:
         return None
     try:

@@ -16,7 +16,9 @@ from strategies.portfolio_coordinator import (
     strategy_priority,
     throttle_signal,
 )
-from strategies.runner.sizing import _is_protective_sell_order, _make_trade
+from strategies.runner.sizing import (
+    _is_protective_sell_order, _make_trade, entry_limit_price, intraday_volatility_stop_pct,
+)
 from strategies.registry import profile_id_for_regime
 
 from .scan_types import ExecutionResult, MarketSnapshot, QuoteSnapshot, ScanScope
@@ -230,10 +232,18 @@ def execute_scan_candidates(
             )
             if throttle_note:
                 LOG.info("%s for %s", throttle_note, item["ticker"])
+        minimum_stop_pct = None
+        if item["strategy"] in strategy_ids_for_group("intraday_core"):
+            minimum_stop_pct = intraday_volatility_stop_pct(
+                market.bars_by_symbol.get(item["ticker"]),
+                multiple=STRATEGY_CONFIG["intraday_stop_vol_multiple"],
+                lookback=int(STRATEGY_CONFIG["intraday_stop_vol_lookback_bars"]),
+            )
         trade = _make_trade(
             sizing_signal, execution_price, scope.equity,
             scope.positions.get(item["ticker"], {}), scope.risk_config,
             mode_universe=risk_universe(scope.mode_config),
+            minimum_stop_pct=minimum_stop_pct,
         )
         if not trade:
             item["suppressed_reason"] = "position or strategy sizing produced zero shares"
@@ -258,6 +268,12 @@ def execute_scan_candidates(
                 "limit_price": execution_price,
                 "extended_hours": True,
             })
+        elif scope.mode == "algo" and action in {"buy", "short"}:
+            # Regular-session entries use a limit band so a fill never chases the signal.
+            limit = entry_limit_price(action, float(trade.get("entry_price") or execution_price),
+                                      STRATEGY_CONFIG["entry_limit_band_bps"])
+            if limit is not None:
+                trade.update({"order_type": "limit", "limit_price": limit})
         signal_kind = "protective" if item.get("software_protection") else "rule"
         identity = (
             f"{scope.mode}:{scope.today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:"

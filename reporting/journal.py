@@ -129,7 +129,10 @@ def append_trades(execution_result: dict):
                 "broker_status": broker_status,
                 "reasoning": trade.get("reasoning") or trade.get("reason", ""),
                 "order_id": trade.get("order_id"),
-                "error": trade.get("error"),
+                "error": trade.get("error") or (
+                    trade.get("reason") if raw_status in ("blocked", "failed") else None
+                ),
+                "rule": trade.get("rule"),
                 "filled_qty": trade.get("filled_qty"),
                 "filled_avg_price": trade.get("filled_avg_price"),
                 "filled_at": trade.get("filled_at"),
