@@ -383,18 +383,14 @@ def test_account_verification_failure_stops_other_broker_reads():
     assert "broker_account_unavailable" in _codes(report)
     assert broker.calls == ["account"]
 
-def test_open_execution_incident_and_failed_repair_remain_alerts():
+def test_open_execution_incident_remains_an_alert():
     state = portfolio()
     state["execution_incident"] = {"status": "open", "reason": "CRM exit submission failed"}
-    state["protection_recovery_status"] = {
-        "status": "degraded", "errors": ["CRM stop coverage remains unverified"],
-    }
 
     report = build_report(
         now=NOW, store=FakeStore(state), broker=FakeBroker(positions=[]), service_active=True,
     )
 
     assert report["ok"] is False
-    assert {"execution_incident_open", "protection_recovery_degraded"} <= _codes(report)
+    assert "execution_incident_open" in _codes(report)
     assert report["execution_incident_status"] == "open"
-    assert report["protection_recovery_status"] == "degraded"

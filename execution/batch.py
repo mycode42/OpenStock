@@ -335,7 +335,7 @@ def execute_trade_batch(
                             "action": action,
                             "qty": qty,
                             "status": "blocked",
-                            "reason": "Short bracket no longer surrounds the fresh entry reference price",
+                            "reason": "Short exit levels no longer surround the fresh entry reference price",
                             "rule": "stale_short_bracket",
                             "strategy": strategy,
                         }
@@ -445,8 +445,6 @@ def execute_trade_batch(
                 dry_entry["limit_price"] = limit_price
             if trail_percent is not None:
                 dry_entry["trail_percent"] = trail_percent
-            if trade.get("cancel_open_orders"):
-                dry_entry["cancel_open_orders"] = True
             results.append(dry_entry)
             would_execute_count += 1
             if action in {"buy", "short"} and hooks.risk_validator_available and rm_portfolio_state is not None:

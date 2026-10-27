@@ -266,37 +266,6 @@ def build_report(
     if state_available and incident_status == "open":
         detail = incident.get("reason") or incident.get("detail") or incident.get("error") or "broker reconciliation has not cleared it"
         problems.append(_problem("execution_incident_open", f"Algo execution incident remains open: {detail}"))
-    recovery = portfolio.get("protection_recovery_status") or {}
-    recovery_status = recovery.get("status") if isinstance(recovery, dict) else None
-    recovery_errors = recovery.get("errors") if isinstance(recovery, dict) else None
-    if state_available and recovery_status in {"error", "degraded"} and recovery_errors:
-        if isinstance(recovery_errors, list):
-            detail = "; ".join(str(item) for item in recovery_errors[:2])
-        else:
-            detail = str(recovery_errors)
-        problems.append(_problem("protection_recovery_degraded", f"Algo broker protection repair is {recovery_status}: {detail}"))
-    recovery_waiting = recovery.get("waiting") if isinstance(recovery, dict) else None
-    recovery_waiting = recovery_waiting if isinstance(recovery_waiting, list) else []
-    recovery_waiting_age = recovery.get("waiting_age_seconds") if isinstance(recovery, dict) else None
-    if state_available and recovery_waiting and recovery_status in {
-        "waiting", "outside_trading_session", "stale_reconciliation", "broker_market_closed",
-    }:
-        detail = "; ".join(str(item) for item in recovery_waiting[:2])
-        age = f"; waiting {int(recovery_waiting_age)}s" if isinstance(recovery_waiting_age, (int, float)) else ""
-        problems.append(_problem(
-            "protection_recovery_waiting",
-            f"Algo broker protection repair is waiting{age}: {detail}",
-        ))
-    stop_sync = portfolio.get("protection_sync_status") or {}
-    stop_sync_status = stop_sync.get("status") if isinstance(stop_sync, dict) else None
-    if state_available and stop_sync_status in {"degraded", "waiting"}:
-        sync_details = (stop_sync.get("errors") or []) + (stop_sync.get("waiting") or [])
-        if sync_details:
-            problems.append(_problem(
-                "broker_stop_sync_pending",
-                "Algo broker stop synchronization needs attention: " + "; ".join(str(item) for item in sync_details[:2]),
-            ))
-
     account_available = False
     window: TradingWindow | None = None
     calendar_available = False
@@ -519,10 +488,6 @@ def build_report(
         "entries_paused": portfolio.get("entries_paused") if state_available else None,
         "entry_pause_reasons": pause_reasons,
         "execution_incident_status": incident_status,
-        "protection_recovery_status": recovery_status,
-        "protection_recovery_waiting": recovery_waiting,
-        "protection_recovery_waiting_age_seconds": recovery_waiting_age,
-        "broker_stop_sync_status": stop_sync_status,
         "broker_position_count": len(positions) if positions is not None else None,
         "unsupported_positions": unsupported_positions,
         "unowned_positions": unowned,

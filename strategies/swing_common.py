@@ -19,7 +19,7 @@ except ImportError:
 
 
 class SwingSignal(Signal):
-    """Signal with sizing and bracket metadata understood by the Algo runner."""
+    """Signal with sizing, stop, and target metadata understood by the Algo runner."""
 
     def __init__(
         self, ticker: str, action: str, strategy: str, reason: str,

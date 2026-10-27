@@ -18,7 +18,7 @@ from strategies.portfolio_coordinator import (
     throttle_signal,
 )
 from strategies.runner.sizing import (
-    _is_protective_sell_order, _make_trade, entry_limit_price, intraday_volatility_stop_pct,
+    _make_trade, entry_limit_price, intraday_volatility_stop_pct,
 )
 from strategies.registry import profile_id_for_regime
 
@@ -303,7 +303,6 @@ def execute_scan_candidates(
             trade["event_id"] = item["event_id"]
         item_orders = scope.pending_by_symbol.get(item["ticker"], [])
         held_qty = float((scope.positions.get(item["ticker"]) or {}).get("qty", 0) or 0)
-        protective_exit = any(_is_protective_sell_order(order, held_qty) for order in item_orders)
         state = (scope.strategy_states or {}).get(item["strategy"], {}).get(item["ticker"], {})
         pending_intent = state.get("pending_exit_intent") if isinstance(state, dict) else None
         if (
@@ -336,10 +335,6 @@ def execute_scan_candidates(
         ):
             item["suppressed_reason"] = "persisted strategy exit deferred until regular hours"
             continue
-        if trade["action"] in {"sell", "cover"} and (
-            protective_exit or item.get("coordinator_force_flatten")
-        ):
-            trade["cancel_open_orders"] = True
         if item.get("software_protection"):
             trade["software_protection"] = True
         if item.get("coordinator_force_flatten"):

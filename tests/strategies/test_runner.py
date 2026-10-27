@@ -318,7 +318,8 @@ def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
         assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
         assert result["trades"][0]["action"] == "sell"
         assert result["trades"][0]["qty"] == 2
-        assert result["trades"][0]["cancel_open_orders"] is True
+        # Broker legs are never cancelled for a software exit; no cancel flag is emitted.
+        assert "cancel_open_orders" not in result["trades"][0]
         assert not result["trades"][0].get("software_protection")
         assert not result["signals"][0].get("suppressed_reason")
     if session_name == "overnight" and frozen_now.hour == 4:
@@ -355,7 +356,8 @@ def test_regular_software_stop_can_close_against_broker_bracket(monkeypatch):
 
     assert len(result["trades"]) == 1, result["signals"]
     assert result["trades"][0]["action"] == "sell"
-    assert result["trades"][0]["cancel_open_orders"] is True
+    # Broker legs are never cancelled for a software exit; no cancel flag is emitted.
+    assert "cancel_open_orders" not in result["trades"][0]
     assert result["trades"][0]["software_protection"] is True
 
 

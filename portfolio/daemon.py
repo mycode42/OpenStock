@@ -237,16 +237,10 @@ def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, wi
             journal_path=state_path.parent / "trade_journal.jsonl",
             exact_entry_orders=orders.exact_entry_orders,
             exact_incident_orders=orders.exact_incident_orders,
-            require_broker_stops=window.name == "regular",
             regular_session=window.name == "regular",
             history_complete=orders.history_complete,
         )
         _restore_pre_submit_exit_intents(portfolio, positions, open_orders)
-        if not report["unprotected_positions"]:
-            portfolio["protection_recovery_status"] = {
-                "status": "not_needed", "checked_at": datetime.now(ET).isoformat(),
-                "submitted": [], "verified": [], "waiting": [], "errors": [],
-            }
         store.save(window.name.upper(), portfolio)
         checked_monotonic = time.monotonic()
         startup_verified = report["status"] == "verified"

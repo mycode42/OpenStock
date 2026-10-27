@@ -275,7 +275,6 @@ def reconcile_startup(
     journal_path: Path,
     exact_entry_orders: dict[str, dict] | None = None,
     exact_incident_orders: dict[str, dict] | None = None,
-    require_broker_stops: bool = False,
     regular_session: bool = True,
     history_complete: bool | None = None,
 ) -> dict:

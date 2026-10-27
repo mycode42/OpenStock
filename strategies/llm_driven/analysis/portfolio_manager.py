@@ -15,12 +15,6 @@ class PortfolioDecision(BaseModel):
     quantity: int = Field(description="Number of shares to trade")
     confidence: int = Field(description="Confidence 0-100")
     reasoning: str = Field(description="Reasoning for the decision")
-    order_type: Literal["market", "limit", "bracket", "trailing_stop"] = Field(
-        default="market", description="Order type to use for execution"
-    )
-    stop_price: float | None = Field(default=None, description="Stop-loss price (optional, enables bracket when combined with take_profit)")
-    take_profit: float | None = Field(default=None, description="Take-profit limit price (optional, enables bracket when combined with stop_price)")
-    limit_price: float | None = Field(default=None, description="Limit entry price for limit orders")
 
 
 class PortfolioManagerOutput(BaseModel):
@@ -223,10 +217,8 @@ def generate_trading_decision(
                 "Inputs per ticker: analyst signals and allowed actions with max qty (already validated).\n"
                 "Pick one allowed action per ticker and a quantity ≤ the max. "
                 "Keep reasoning very concise (max 100 chars). No cash or margin math. Return JSON only.\n\n"
-                "For buy/sell decisions with a clear thesis and defined risk levels, optionally include "
-                "stop_price and take_profit to enable bracket orders. Example: buying NVDA at 950 "
-                "with stop 900, target 1050 → set stop_price=900, take_profit=1050, order_type='bracket'. "
-                "Omit these fields (or set to null) when you lack conviction on specific price levels."
+                "Do not set stop, target, or order-type fields. Each position's stop and target come from "
+                "the strategy's configured rules and are enforced by the Algo software, not by the broker."
             ),
             (
                 "human",
@@ -235,8 +227,7 @@ def generate_trading_decision(
                 "Format:\n"
                 "{{\n"
                 '  "decisions": {{\n'
-                '    "TICKER": {{"action":"...","quantity":int,"confidence":int,"reasoning":"...",'
-                '"order_type":"market","stop_price":null,"take_profit":null,"limit_price":null}}\n'
+                '    "TICKER": {{"action":"...","quantity":int,"confidence":int,"reasoning":"..."}}\n'
                 "  }}\n"
                 "}}"
             ),
