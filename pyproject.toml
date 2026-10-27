@@ -1,6 +1,6 @@
 [project]
 name = "algo-trader"
-version = "3.1.0"
+version = "3.1.1"
 description = "Coordinated paper trading and research for equity and options strategies"
 authors = [{ name = "Algo Trader maintainers" }]
 readme = "README.md"

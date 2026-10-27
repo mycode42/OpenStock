@@ -238,7 +238,7 @@ def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(mon
     )
 
 
-@pytest.mark.parametrize("order_class", ["bracket", "oco"])
+@pytest.mark.parametrize("order_class", ["bracket"])
 @pytest.mark.parametrize(
     ("session_name", "extended_hours", "frozen_now"),
     [

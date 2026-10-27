@@ -8,6 +8,22 @@
 - Overnight Algo entries are enabled by default (`overnight_entries_enabled`).
 - Extended-session quotes are fresh for 300 seconds instead of 90, so overnight and premarket entries and protective updates are not paused by indicative BOATS quotes. Regular-session quotes keep the 90-second window.
 
+## [3.1.1] - 2026-10-27
+
+Patch release: CI fixes and test cleanup. No runtime behavior changes.
+
+### Fixed
+
+- `poetry.lock` refreshed after the `requires-python` cap, so the CI
+  lock check passes again. Only environment markers changed.
+- Trade-guard tests no longer depend on Alpaca credentials or the live
+  market calendar.
+
+### Changed
+
+- Removed a duplicate parametrization of the rule-sell deferral test (the
+  `oco` case covered the same open-sell check as `bracket`).
+
 ## [3.1.0] - 2026-10-27
 
 Release: software-managed protection replaces broker brackets, the
