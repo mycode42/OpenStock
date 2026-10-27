@@ -10,6 +10,7 @@ from options.risk import load_options_delta_overlay
 from strategies.catalog import CORE_STRATEGIES
 from market.calendar import EXTENDED_SESSIONS
 from portfolio.config import STRATEGY_CONFIG
+from strategies.catalog import strategy_ids_for_group
 from strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES,
     PortfolioCoordinator,
