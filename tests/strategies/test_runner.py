@@ -134,7 +134,6 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
             "active": ["swing_momentum"],
         },
     )
-    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
         runner, "generate_swing_momentum_signals",
         lambda *args, **kwargs: ({"AAPL": Signal("AAPL", "buy", "swing_momentum", "test entry", 0.8)}, {}),
@@ -288,7 +287,6 @@ def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
             "active": ["swing_trend_following"],
         },
     )
-    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
         runner_signal_generation, "evaluate_rule_signal",
         lambda *args, **kwargs: Signal("AAPL", "sell", "swing_trend_following", "rule exit", strength=1.0),
@@ -384,7 +382,6 @@ def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
             "ranked": [], "active": [],
         },
     )
-    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
 
     result = runner.scan(
         mode="algo", universe_result={"tickers": []},
@@ -429,7 +426,6 @@ def test_overnight_swing_signal_bar_within_extended_window_does_not_pause(monkey
             "ranked": [{"strategy": "swing_momentum", "score": 0.9}], "active": ["swing_momentum"],
         },
     )
-    monkeypatch.setattr(runner, "apply_regime_advisory", lambda regime: regime)
     monkeypatch.setattr(
         runner_signal_generation, "evaluate_rule_signal",
         lambda *args, **kwargs: Signal("AAPL", "buy", "swing_momentum", "test", strength=1.0),
@@ -473,8 +469,14 @@ def test_historical_bar_fetch_follows_pagination(monkeypatch):
     assert calls[1]["page_token"] == "next"
 
 
-def test_algo_universe_keeps_fixed_membership_and_overnight_asset_flags(monkeypatch):
-    fixed = strategy_universe.configured_universe("algo")["tickers"]
+def test_algo_universe_is_the_selector_output_with_overnight_asset_flags(monkeypatch):
+    selected = {
+        "tickers": ["XLE", "NVDA", "SPY"],
+        "categories": {"XLE": "energy", "NVDA": "core_tech", "SPY": "hedge"},
+        "sector_by_symbol": {"NVDA": "information_technology", "XLE": "energy", "SPY": "hedge"},
+        "source": "eligible_universe",
+    }
+    monkeypatch.setattr(strategy_universe, "selected_universe", lambda now=None: dict(selected))
     monkeypatch.setattr(
         strategy_universe, "_fetch_active_assets",
         lambda mode: {
@@ -485,11 +487,58 @@ def test_algo_universe_keeps_fixed_membership_and_overnight_asset_flags(monkeypa
 
     result = strategy_universe.load_algo_universe()
 
-    assert result["tickers"] == fixed
+    assert result["tickers"] == ["XLE", "NVDA", "SPY"]
+    assert result["source"] == "eligible_universe"
     assert result["overnight_tradable_tickers"] == ["NVDA", "SPY"]
     assert not {"dynamic", "selection_source", "selected_count", "target_count"}.intersection(result)
+
+
+def test_selector_failure_propagates_so_the_daemon_can_pause_entries(monkeypatch):
+    from options.research.universe_selection import EligibleUniverseError
+
+    def stale(now=None):
+        raise EligibleUniverseError("selection is stale")
+
+    monkeypatch.setattr("options.research.universe_selection.live_eligible_universe", stale)
+
+    with pytest.raises(EligibleUniverseError):
+        strategy_universe.selected_universe()
+
+
+def test_candidate_pool_is_risk_catalogued_without_displacing_static_categories():
+    from portfolio.config import get_mode_config, risk_universe
+
+    mode_config = get_mode_config("algo")
+    catalog = risk_universe(mode_config)
+    assert catalog["core_tech"]["tickers"][0] == "NVDA"
+    pool_only = next(
+        category for category, bucket in mode_config["candidate_universe"].items()
+        if "XOM" in bucket["tickers"]
+    )
+    assert "XOM" in catalog[pool_only]["tickers"]
+    assert catalog[pool_only]["max_sector_pct"] == 0.30
+    for category, bucket in mode_config["universe"].items():
+        assert set(bucket["tickers"]) <= set(catalog[category]["tickers"])
 
 
 def test_algo_scan_requires_coordinator_state():
     with pytest.raises(ValueError, match="coordinator"):
         runner.scan(mode="algo")
+
+
+def test_entries_are_limited_to_selected_names_while_exits_pass_through():
+    from strategies.runner.scan_signals import _limit_entries_to_selected
+
+    generated = [
+        {"ticker": "AAPL", "action": "buy"},
+        {"ticker": "OLDX", "action": "buy"},
+        {"ticker": "OLDX", "action": "sell"},
+        {"ticker": "OLDY", "action": "short"},
+        {"ticker": "OLDZ", "action": "cover"},
+    ]
+
+    kept = _limit_entries_to_selected(generated, ["aapl"])
+
+    assert [(item["ticker"], item["action"]) for item in kept] == [
+        ("AAPL", "buy"), ("OLDX", "sell"), ("OLDZ", "cover"),
+    ]

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from portfolio.config import risk_universe
+
 # Leveraged ETFs blocked by the Algo portfolio policy.
 LEVERAGED_ETFS = {
     "TQQQ", "SOXL", "UPRO", "SPXL", "TECL", "LABU", "SOXS", "TECS",
@@ -16,7 +18,7 @@ def build_universe_maps(mode: str, config_loader, cache: dict) -> tuple[dict, di
     """Build and cache ticker sector, position cap, tactical set and universe."""
     if mode not in cache:
         mode_config = config_loader(mode)
-        universe = mode_config["universe"]
+        universe = risk_universe(mode_config)
         default_max_pct = mode_config["risk"]["max_position_pct"]
         ticker_sector: dict[str, str] = {}
         ticker_max_pct: dict[str, float] = {}

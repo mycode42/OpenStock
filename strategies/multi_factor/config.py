@@ -78,7 +78,11 @@ class MultiFactorConfig:
     minimum_price: float = 5.0
     minimum_average_dollar_volume: float = 500_000.0
     maximum_bar_age_days: int = 7
-    factor_neutralization: str = "none"
+    factor_neutralization: str = "sector"
+    # Market-neutral book: equal long and short names with equal per-side
+    # budgets, and sector counts that differ by at most one per sector.
+    dollar_neutral: bool = True
+    min_names_per_side: int = 3
     factor_weight_mode: str = "static"
     regime_factor_weights: dict[str, dict[str, float]] = field(default_factory=dict)
     portfolio_weight_method: str = "equal"
@@ -138,6 +142,8 @@ class MultiFactorConfig:
             raise ValueError("direction_mode must be long_only, long_short, or regime_dependent")
         if not isinstance(self.factor_neutralization, str) or self.factor_neutralization not in {"none", "sector"}:
             raise ValueError("factor_neutralization must be none or sector")
+        if isinstance(self.min_names_per_side, bool) or not isinstance(self.min_names_per_side, int) or self.min_names_per_side < 1:
+            raise ValueError("min_names_per_side must be a positive integer")
         if self.factor_weight_mode not in {"static", *LEARNED_FACTOR_MODES}:
             raise ValueError(
                 "factor_weight_mode must be static, ridge_walk_forward, "

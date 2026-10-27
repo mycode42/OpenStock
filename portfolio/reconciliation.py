@@ -305,8 +305,14 @@ def reconcile_startup(
     exact_incident_orders: dict[str, dict] | None = None,
     require_broker_stops: bool = False,
     regular_session: bool = True,
+    history_complete: bool | None = None,
 ) -> dict:
-    """Verify current holdings before any new Algo entry is allowed."""
+    """Verify current holdings before any new Algo entry is allowed.
+
+    ``history_complete`` is True when ``all_orders`` is the full account history
+    from the ledger. When it is None, a page of 500 orders is treated as
+    possibly truncated, which is the conservative reading for raw API pages.
+    """
     journal, journal_errors = _journal_entries(journal_path, portfolio.get("account_id"))
     fills_by_symbol, fill_errors = _filled_orders(all_orders)
     errors = journal_errors + fill_errors
@@ -321,6 +327,7 @@ def reconcile_startup(
             continue
         live_positions[ticker] = position
 
+    history_truncated = (len(all_orders) >= 500) if history_complete is None else not history_complete
     recovered = []
     verified = []
     verified_entries: dict[str, str] = {}
@@ -356,7 +363,7 @@ def reconcile_startup(
         # symbol appears in the page; all other incomplete histories pause.
         if (
             reason
-            and len(all_orders) >= 500
+            and history_truncated
             and prior_owner
             and prior_state.get("entry_order_id")
             and prior_state.get("last_known_qty") is not None

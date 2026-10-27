@@ -476,6 +476,9 @@ def test_daemon_first_cycle_reconciles_and_clears_execution_lease(tmp_path, monk
         def orders(self, status, *, nested=False):
             return []
 
+        def orders_after(self, after, *, status="all", limit=500):
+            return []
+
     window = SimpleNamespace(
         name="regular", trade_date="2026-10-08", extended_hours=False,
         bar_feed="sip", quote_feed="sip",
@@ -506,6 +509,59 @@ def test_daemon_first_cycle_reconciles_and_clears_execution_lease(tmp_path, monk
     assert portfolio["last_scan_status"] == "ok"
     assert store.db_path.exists()
     assert not store.verify_coordinator_token("anything", 1)
+
+def test_daemon_replaces_a_same_day_universe_from_the_old_fixed_source(tmp_path, monkeypatch):
+    snapshot = tmp_path / "algo_state.sqlite3"
+    seeded = empty_portfolio()
+    seeded["account_id"] = "paper-algo"
+    seeded["universe"] = {
+        "tickers": ["NVDA", "AAPL"], "selection_date": "2026-10-08", "source": "fixed_catalog",
+    }
+    _seed(snapshot, seeded)
+    (tmp_path / "trade_journal.jsonl").write_text("")
+    loaded = []
+
+    class FakeBroker:
+        def calendar(self, *args):
+            return []
+
+        def account(self):
+            return {"id": "paper-algo", "status": "ACTIVE"}
+
+        def positions(self):
+            return []
+
+        def orders(self, status, *, nested=False):
+            return []
+
+        def orders_after(self, after, *, status="all", limit=500):
+            return []
+
+    window = SimpleNamespace(
+        name="regular", trade_date="2026-10-08", extended_hours=False,
+        bar_feed="sip", quote_feed="sip", regular_open=None, regular_close=None,
+    )
+
+    def fake_universe():
+        loaded.append(True)
+        return {"tickers": ["XLE"], "source": "eligible_universe", "selection_date": "2026-10-08"}
+
+    monkeypatch.setattr(daemon, "_state_path", lambda: snapshot)
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(daemon, "get_trading_window", lambda now, calendar: window)
+    monkeypatch.setattr(daemon, "load_algo_universe", fake_universe)
+    monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **kwargs: {
+        "market_regime": {"regime": "range_bound", "active": []},
+        "signals": [], "trades": [], "scan_errors": [], "entries_paused": False,
+        "entry_pause_reasons": [], "unowned_positions": [], "data_status": {"historical_bars": "ok"},
+    })
+
+    daemon.run_loop(max_cycles=1, broker_client=FakeBroker())
+
+    assert loaded == [True]
+    _, persisted = AlgoStateStore(snapshot).read()
+    assert persisted["universe"]["source"] == "eligible_universe"
+
 
 def test_daemon_refuses_state_from_a_different_paper_account(tmp_path, monkeypatch):
     snapshot = tmp_path / "algo_state.sqlite3"

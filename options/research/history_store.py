@@ -114,6 +114,21 @@ CREATE TABLE IF NOT EXISTS options_history_liquidity (
 );
 CREATE INDEX IF NOT EXISTS options_history_liquidity_date_idx
     ON options_history_liquidity(session_date);
+CREATE TABLE IF NOT EXISTS options_automation_checkpoint (
+    run_id TEXT PRIMARY KEY,
+    config_sha256 TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS eligible_universe_snapshot (
+    as_of_date TEXT NOT NULL,
+    rules_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    eligible_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY (as_of_date, rules_sha256)
+);
 """
 
 
@@ -294,6 +309,73 @@ class OptionsHistoryStore:
                         "ALTER TABLE options_history_contract ADD COLUMN volume INTEGER"
                     )
                 connection.commit()
+
+    def write_eligible_snapshot(self, result: dict) -> None:
+        """Persist one selector run; re-running the same date and rules replaces it."""
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO eligible_universe_snapshot
+                    (as_of_date, rules_sha256, created_at, status, eligible_json, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(as_of_date, rules_sha256) DO UPDATE SET
+                    created_at = excluded.created_at,
+                    status = excluded.status,
+                    eligible_json = excluded.eligible_json,
+                    payload_json = excluded.payload_json
+                """,
+                (
+                    str(result["as_of_date"]),
+                    str(result["rules_sha256"]),
+                    str(result["created_at"]),
+                    str(result["status"]),
+                    json.dumps(result.get("eligible_symbols", []), allow_nan=False),
+                    json.dumps(result, sort_keys=True, allow_nan=False),
+                ),
+            )
+            connection.commit()
+
+    def latest_eligible_snapshot(self) -> dict | None:
+        """Return the most recent selector run, or None before the first run."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM eligible_universe_snapshot "
+                "ORDER BY as_of_date DESC, created_at DESC LIMIT 1",
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def read_automation_checkpoint(self, run_id: str) -> dict | None:
+        """Return the saved automation checkpoint for a run, if one exists."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM options_automation_checkpoint WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row[0])
+        return payload if isinstance(payload, dict) else None
+
+    def write_automation_checkpoint(self, run_id: str, payload: dict) -> None:
+        """Upsert one run's checkpoint; runs are resumable across process restarts."""
+        with closing(self._connect()) as connection:
+            connection.execute(
+                """
+                INSERT INTO options_automation_checkpoint (run_id, config_sha256, payload_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    config_sha256 = excluded.config_sha256,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    run_id,
+                    str(payload.get("config_sha256") or ""),
+                    json.dumps(payload, sort_keys=True, allow_nan=False),
+                    str(payload.get("updated_at") or ""),
+                ),
+            )
+            connection.commit()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=60.0)

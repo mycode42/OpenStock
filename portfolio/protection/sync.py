@@ -8,6 +8,7 @@ from decimal import Decimal
 from portfolio.protection.evidence import (
     ACTIVE_ORDER_STATUSES,
     broker_prices_match,
+    current_recovery,
     normalize_broker_price,
     recovery_oco_order,
     remaining_order_quantity,
@@ -217,8 +218,7 @@ def sync_broker_stops(
             report["errors"].append(f"{symbol}: saved stop and take-profit levels cross")
             continue
 
-        recovery = state.get("protection_recovery")
-        recovery = recovery if isinstance(recovery, dict) and recovery.get("client_order_id") else None
+        recovery = current_recovery(state)
         try:
             if recovery is not None:
                 parent_id = str(recovery.get("order_id") or "")

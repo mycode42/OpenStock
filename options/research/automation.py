@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from autoresearch.cpu import available_cpu_count
 from options.research.artifact_store import OptionsResearchArtifactStore
-from options.research.history_store import OptionsHistoryStore
+from options.research.history_store import DEFAULT_DATABASE, OptionsHistoryStore
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -165,7 +165,7 @@ def _render_markdown(report: dict) -> str:
             f"Rule version: `{eligibility.get('rule_version')}`; as of `{eligibility.get('as_of_date')}`; "
             f"{eligibility.get('eligible_count', 0)} of {eligibility.get('universe_size', 0)} tickers eligible.",
             f"Applied to strategy jobs: **{bool(report.get('eligible_universe_applied'))}**.",
-            f"Cache: `{eligibility.get('cache_path')}`.",
+            f"Snapshot: `{eligibility.get('snapshot_location')}`.",
             "",
         ])
         excluded_by_strategy = report.get("selection_excluded_by_strategy", {})
@@ -324,10 +324,10 @@ def run_automated_options_research(
         fingerprint_paths["__eligibility_rules__"] = _project_path(configured_rules_path)
     input_fingerprint = _input_fingerprint(fingerprint_paths, config_hash=config_hash)
     run_id = run_id or created_at.strftime("options-%Y%m%dT%H%M%S%fZ")
-    checkpoint_dir = automation_dir / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = checkpoint_dir / f"{run_id}.json"
-    checkpoint = (_read_json(checkpoint_path) if checkpoint_path.exists() else None) or {}
+    checkpoint_store = OptionsHistoryStore(
+        _project_path(automation_config.get("checkpoint_database") or DEFAULT_DATABASE)
+    )
+    checkpoint = checkpoint_store.read_automation_checkpoint(run_id) or {}
     if (
         checkpoint.get("schema") != "swarm_options_automation_checkpoint_v1"
         or checkpoint.get("run_id") != run_id
@@ -400,7 +400,6 @@ def run_automated_options_research(
         eligibility_report = build_eligible_cache(
             database=history_store.path,
             rules_path=eligibility_config.get("rules_path"),
-            cache_dir=eligibility_config.get("cache_dir", "data/options/research/universe_cache"),
         )
         eligible = set(eligibility_report.get("eligible_symbols", []))
         if apply_eligibility:
@@ -463,7 +462,7 @@ def run_automated_options_research(
             checkpoint["updated_at"] = datetime.now(timezone.utc).isoformat()
             checkpoint["completed_jobs"] = len(job_results)
             checkpoint["total_jobs"] = len(jobs)
-            atomic_write_json(checkpoint_path, checkpoint, indent=2, sort_keys=True, allow_nan=False)
+            checkpoint_store.write_automation_checkpoint(run_id, checkpoint)
             completed = {
                 f"{strategy}/{underlying}": result.get("summary")
                 for (strategy, underlying), (_, result) in job_results.items()
@@ -485,7 +484,7 @@ def run_automated_options_research(
                 "total_jobs": len(jobs),
                 "pending_jobs": pending,
                 "jobs": completed,
-                "checkpoint_path": str(checkpoint_path.resolve()),
+                "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
             }
             atomic_write_json(run_progress_dir / "progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
             atomic_write_json(run_progress_dir / "partial-report.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
@@ -523,7 +522,7 @@ def run_automated_options_research(
             if not strategy_jobs:
                 strategies_report[strategy] = {
                     "status": "skipped_eligibility_empty" if eligibility_report else "skipped_empty_universe",
-                    "eligible_cache": eligibility_report.get("cache_path") if eligibility_report else None,
+                    "eligible_snapshot": eligibility_report.get("snapshot_location") if eligibility_report else None,
                 }
                 continue
             strategy_workers = workers_used_by_strategy[strategy]
@@ -650,7 +649,7 @@ def run_automated_options_research(
         "strategies": strategies_report,
         "research_only": True,
         "trade_or_order_actions": 0,
-        "checkpoint_path": str(checkpoint_path.resolve()),
+        "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
     }
     report_path = automation_dir / f"{today}.json"
     atomic_write_json(report_path, report, indent=2, sort_keys=True, allow_nan=False)
@@ -662,7 +661,7 @@ def run_automated_options_research(
         "run_id": run_id,
         "created_at": created_at.isoformat(), "run_date_et": today,
         "status": status, "config_sha256": config_hash,
-        "checkpoint_path": str(checkpoint_path.resolve()),
+        "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
         "workers_requested": configured_workers,
         "workers_used": worker_count if enabled else 0,
         "workers_requested_by_strategy": workers_requested_by_strategy,
@@ -675,7 +674,7 @@ def run_automated_options_research(
             "as_of_date": eligibility_report.get("as_of_date"),
             "eligible_count": eligibility_report.get("eligible_count"),
             "universe_size": eligibility_report.get("universe_size"),
-            "cache_path": eligibility_report.get("cache_path"),
+            "snapshot_location": eligibility_report.get("snapshot_location"),
             "rules_sha256": eligibility_report.get("rules_sha256"),
             "applied": apply_eligibility,
         } if eligibility_report else None),
@@ -718,7 +717,7 @@ def run_automated_options_research(
         "report_path": str(final_path.resolve()),
         "completed_jobs": len(checkpoint.get("jobs", {})),
     })
-    atomic_write_json(checkpoint_path, checkpoint, indent=2, sort_keys=True, allow_nan=False)
+    checkpoint_store.write_automation_checkpoint(run_id, checkpoint)
     final_progress = {
         "schema": "swarm_options_automation_progress_v1",
         "run_id": run_id,
@@ -729,7 +728,7 @@ def run_automated_options_research(
         "total_jobs": checkpoint.get("total_jobs", 0),
         "pending_jobs": [],
         "report_path": str(final_path.resolve()),
-        "checkpoint_path": str(checkpoint_path.resolve()),
+        "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
     }
     progress_dir = automation_dir / "runs" / run_id
     atomic_write_json(progress_dir / "progress.json", final_progress, indent=2, sort_keys=True, allow_nan=False)

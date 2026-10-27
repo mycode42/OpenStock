@@ -58,7 +58,7 @@ If the configured chain dataset does not exist, the options report uses
 completes independently. Supply historical option-chain snapshots (or explicitly
 marked point-in-time IV-surface rows) before expecting options validation runs.
 
-## Cached eligible universe and portfolio exposure checks
+## Eligible universe snapshots and portfolio exposure checks
 
 The optional research selector starts with the 117-symbol history universe and
 uses only completed daily-close snapshots. It applies a rolling 20-session
@@ -71,7 +71,7 @@ The initial values are screening candidates, not fitted thresholds.
 
 The selector ranks configured sector ETF proxies by 20-session relative
 strength, uses SPY's 200-session trend and stored volatility label for the
-low-cardinality regime, then caches a shared eligible list with per-ticker
+low-cardinality regime, then stores a shared eligible list with per-ticker
 metrics and exclusion reasons. A small core can pass the soft sector overlay
 only; it still must pass every hard liquidity gate. It also creates an equal
 notional exposure preview with sector and rolling-correlation cluster limits.
@@ -90,11 +90,11 @@ If the earnings gate is enabled before historical calendar snapshots cover the
 walk-forward range, the simulation reports `insufficient_event_history` and
 withholds performance results.
 
-After the history import is current, build a timestamped daily cache and run the
+After the history import is current, store a dated selector snapshot and run the
 separate selection walk-forward report:
 
 ```sh
-poetry run python -m options.research.universe_selection cache
+poetry run python -m options.research.universe_selection cache   # writes a snapshot to options_history.sqlite3
 poetry run python -m options.research.universe_selection simulate
 poetry run python -m options.research.universe_selection simulate --universe-scope history_117
 ```
@@ -113,21 +113,22 @@ shows the selected basket trailing the equal-weight universe by about 0.9% per
 five-session hold (t ≈ -3.1 over all sessions, -0.3% on the holdout) and
 roughly matching SPY. Part of that gap may be style: the risk-off rules favor
 defensive buckets, which can lag in rising markets. Either way the selection adds
-no excess return over the universe, so the cached list must not be applied to
-research. The liquidity thresholds barely change the output on this history. After reviewing that result, run the broader candidate pool with
+no excess return over the universe, so the selector must not be applied to
+offline research. The liquidity thresholds barely change the output on this history. After reviewing that result, run the broader candidate pool with
 `--universe-scope history_117`. Its parameter grid changes
 one rule at a time and reports all results; it does not pick or promote a
 winner. It evaluates selection composition rather than any strategy's option
 entries or exits.
 
-Nightly automation builds the shared cache after the normalized SQLite store is
+Nightly automation stores the shared snapshot after the normalized SQLite store is
 updated. Applying it to the research ticker jobs is a separate
 `automation.eligibility.apply_to_research` switch, which stays `false` while the
 volume fields are being repopulated and the selection walk-forward remains
 unvalidated. Once validated, set it to `true`; every configured options sleeve
-will then use the same cached list, intersected with its own strategy-specific
-universe. This switch affects only offline research. The live 24-ticker
-portfolio and its risk settings stay unchanged.
+will then use the same snapshot list, intersected with its own strategy-specific
+universe. This switch affects only offline research. The live equity universe
+is the same selector's eligible subset of the 117-symbol pool, applied by the
+Algo daemon each session; see the README.
 
 ## ThetaData historical backfill
 

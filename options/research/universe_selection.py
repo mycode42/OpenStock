@@ -26,7 +26,6 @@ from options.research.history_store import OptionsHistoryStore
 
 ET = ZoneInfo("America/New_York")
 DEFAULT_RULES_PATH = Path(__file__).with_name("eligibility.default.json")
-DEFAULT_CACHE_DIR = DATA_DIR / "options" / "research" / "universe_cache"
 DEFAULT_DATABASE = DATA_DIR / "options" / "research" / "options_history.sqlite3"
 BASE_UNIVERSE_PATH = Path(__file__).with_name("universe.json")
 
@@ -353,17 +352,20 @@ def _apply_sector_overlay(
     favored = ranked[:top_n]
     always = {str(item).upper() for item in regime_rules.get("always_eligible", [])}
     fallback = not scores and bool(regime_rules.get("hard_only_when_proxy_data_missing", True))
+    tilt = regime_rules.get("membership_mode", "gate") == "tilt"
     selected = []
     for row in hard_rows:
         symbol = row["ticker"]
         bucket = _bucket_for(symbol, rules, universe)
         is_core = symbol in always
-        soft_ok = fallback or is_core or bucket in favored
+        # "gate" keeps only favored sectors. "tilt" keeps every hard-eligible name
+        # and lets the regime decide the ranking, so breadth is not regime-limited.
+        soft_ok = tilt or fallback or is_core or bucket in favored
         row.update({
             "bucket": bucket, "always_eligible_core": is_core,
             "soft_eligible": soft_ok,
             "soft_reason": "core" if is_core else "favored_sector" if bucket in favored else (
-                "proxy_data_missing_hard_only" if fallback else "sector_not_favored"
+                "proxy_data_missing_hard_only" if fallback else "sector_ranked_lower" if tilt else "sector_not_favored"
             ),
             "sector_relative_momentum": scores.get(bucket, {}).get("relative_momentum"),
         })
@@ -372,11 +374,21 @@ def _apply_sector_overlay(
     selected.sort(
         key=lambda row: (
             0 if row["always_eligible_core"] else 1,
+            0 if row["bucket"] in favored else 1,
             -(row["sector_relative_momentum"] if row["sector_relative_momentum"] is not None else -999),
             row["ticker"],
         )
     )
     max_names = int(regime_rules.get("max_eligible_tickers", 40))
+    per_bucket_cap = regime_rules.get("max_names_per_bucket")
+    if per_bucket_cap is not None:
+        per_bucket: dict[str, int] = {}
+        capped = []
+        for row in selected:
+            if row["always_eligible_core"] or per_bucket.get(row["bucket"], 0) < int(per_bucket_cap):
+                capped.append(row)
+                per_bucket[row["bucket"]] = per_bucket.get(row["bucket"], 0) + 1
+        selected = capped
     selected = selected[:max_names]
     return selected, {
         "market_state": state,
@@ -488,7 +500,7 @@ def apply_portfolio_caps(
 
 def build_eligible_cache(
     *, database: str | Path = DEFAULT_DATABASE, as_of_date: str | None = None,
-    rules_path: str | Path | None = None, cache_dir: str | Path = DEFAULT_CACHE_DIR,
+    rules_path: str | Path | None = None,
     event_calendar_path: str | Path | None = None,
 ) -> dict:
     """Compute one timestamped cache that all research strategies can share."""
@@ -569,15 +581,68 @@ def build_eligible_cache(
             "The sector and exposure rules are research filters; they do not alter live portfolios or orders.",
         ],
     }
-    target_dir = Path(cache_dir)
-    if not target_dir.is_absolute():
-        target_dir = ROOT / target_dir
-    target_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = target_dir / f"eligible-{target}.json"
-    result["cache_path"] = str(cache_path)
-    temp_path = cache_path.with_suffix(".json.tmp")
-    temp_path.write_text(json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
-    temp_path.replace(cache_path)
+    OptionsHistoryStore(db_path).write_eligible_snapshot(result)
+    result["snapshot_location"] = f"{db_path}#{target}#{result['rules_sha256']}"
+    return result
+
+
+class EligibleUniverseError(RuntimeError):
+    """The selector cannot supply a trustworthy live equity universe."""
+
+
+def last_completed_session(now: datetime) -> date:
+    """Last weekday whose close should be in the history store at ``now``."""
+    local = now.astimezone(ET)
+    day = local.date()
+    if local.weekday() < 5 and local.time() >= time(16, 30):
+        return day
+    day -= timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
+def _weekdays_between(earlier: date, later: date) -> int:
+    count = 0
+    day = earlier
+    while day < later:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            count += 1
+    return count
+
+
+def live_eligible_universe(
+    *, now: datetime | None = None, database: str | Path = DEFAULT_DATABASE,
+    rules_path: str | Path | None = None,
+) -> dict:
+    """Run the selector for the live equity universe, failing closed.
+
+    Raises ``EligibleUniverseError`` when the history is missing, older than
+    the configured staleness limit, or leaves fewer than the minimum eligible
+    names. The caller must then pause new entries; existing positions are still
+    managed.
+    """
+    now = now or datetime.now(ET)
+    rules = load_rules(rules_path)
+    live = rules.get("live_selection") or {}
+    max_lag = int(live.get("max_staleness_sessions", 1))
+    min_eligible = int(live.get("min_eligible_tickers", 6))
+    try:
+        result = build_eligible_cache(database=database, rules_path=rules_path)
+    except (ValueError, sqlite3.Error) as exc:
+        raise EligibleUniverseError(f"selector history unavailable: {exc}") from exc
+    as_of = date.fromisoformat(result["as_of_date"])
+    expected = last_completed_session(now)
+    lag = _weekdays_between(as_of, expected)
+    if lag > max_lag:
+        raise EligibleUniverseError(
+            f"selection as of {as_of.isoformat()} is {lag} sessions behind {expected.isoformat()}"
+        )
+    if result["eligible_count"] < min_eligible:
+        raise EligibleUniverseError(
+            f"selection has {result['eligible_count']} eligible tickers; minimum is {min_eligible}"
+        )
     return result
 
 
@@ -975,7 +1040,6 @@ def main() -> int:
     parser.add_argument("--database", default=str(DEFAULT_DATABASE))
     parser.add_argument("--rules", help="eligibility rules JSON")
     parser.add_argument("--as-of-date", help="session date for a cache build (YYYY-MM-DD)")
-    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR))
     parser.add_argument("--output", help="simulation report path")
     parser.add_argument("--hold-period-sessions", type=int, default=5)
     parser.add_argument(
@@ -987,12 +1051,12 @@ def main() -> int:
     if args.mode == "cache":
         result = build_eligible_cache(
             database=args.database, as_of_date=args.as_of_date, rules_path=args.rules,
-            cache_dir=args.cache_dir, event_calendar_path=args.event_calendar,
+            event_calendar_path=args.event_calendar,
         )
         print(json.dumps({
             "status": result["status"], "as_of_date": result["as_of_date"],
             "eligible_count": result["eligible_count"], "eligible_symbols": result["eligible_symbols"],
-            "cache_path": result["cache_path"], "rules_sha256": result["rules_sha256"],
+            "snapshot_location": result["snapshot_location"], "rules_sha256": result["rules_sha256"],
         }, sort_keys=True))
     else:
         result = simulate_selection_walk_forward(

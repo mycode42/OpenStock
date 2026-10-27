@@ -78,6 +78,7 @@ def test_signal_generator_emits_targets_and_sells_held_names_outside_ranked_univ
     config = MultiFactorConfig(
         top_n=1,
         min_universe=3,
+        min_names_per_side=1,
         momentum_lookbacks={"momentum_1m": 5},
         volatility_lookback=10,
         factor_weights={"momentum_1m": 1},
@@ -107,6 +108,7 @@ def test_ridge_walk_forward_weights_drive_replay_and_fail_closed_without_snapsho
         factor_weight_mode="ridge_walk_forward",
         top_n=1,
         min_universe=3,
+        min_names_per_side=1,
         momentum_lookbacks={"momentum_1m": 5},
         volatility_lookback=10,
         factor_weights={"momentum_1m": 1},
@@ -184,6 +186,7 @@ def test_regime_dependent_factor_strategy_selects_weakest_names_bearishly():
     config = MultiFactorConfig(
         top_n=1,
         min_universe=3,
+        min_names_per_side=1,
         momentum_lookbacks={"momentum_1m": 5},
         volatility_lookback=10,
         factor_weights={"momentum_1m": 1},
@@ -400,3 +403,70 @@ def test_bearish_factor_short_recommendation_persists_for_core_targets():
 def test_multi_factor_config_rejects_malformed_or_non_finite_values(values):
     with pytest.raises(ValueError):
         MultiFactorConfig.from_dict(values)
+
+
+def _sleeve_config(**overrides):
+    values = dict(
+        top_n=2, min_universe=4, momentum_lookbacks={"momentum_1m": 5},
+        volatility_lookback=10, factor_weights={"momentum_1m": 1},
+        min_names_per_side=2, factor_neutralization="none",
+    )
+    values.update(overrides)
+    return MultiFactorConfig(**values)
+
+
+def test_long_short_sleeve_is_dollar_neutral_and_sector_balanced():
+    bars = {
+        "AAA": _daily_closes("AAA", growth=0.010),
+        "BBB": _daily_closes("BBB", growth=0.008),
+        "CCC": _daily_closes("CCC", growth=-0.008),
+        "DDD": _daily_closes("DDD", growth=-0.010),
+    }
+    groups = {"AAA": "technology", "BBB": "energy", "CCC": "technology", "DDD": "energy"}
+
+    signals, diagnostics = SignalGenerator(_sleeve_config()).generate(
+        bars, symbols=list(bars), as_of=date(2026, 10, 1), session=date(2026, 10, 2),
+        groups_by_symbol=groups,
+    )
+
+    assert diagnostics["pair_construction"]["status"] == "balanced"
+    assert diagnostics["pair_construction"]["pairs"] == 2
+    assert diagnostics["portfolio_construction"]["dollar_neutral"] is True
+    actions = {signal.ticker: signal.action for signal in signals}
+    assert sorted(t for t, a in actions.items() if a == "buy") == ["AAA", "BBB"]
+    assert sorted(t for t, a in actions.items() if a == "short") == ["CCC", "DDD"]
+
+
+def test_one_sided_ranking_holds_nothing_instead_of_a_directional_book():
+    bars = {
+        "AAA": _daily_closes("AAA", growth=0.010),
+        "BBB": _daily_closes("BBB", growth=0.008),
+        "CCC": _daily_closes("CCC", growth=0.006),
+        "DDD": _daily_closes("DDD", growth=0.004),
+    }
+
+    signals, diagnostics = SignalGenerator(_sleeve_config(min_names_per_side=3)).generate(
+        bars, symbols=list(bars), as_of=date(2026, 10, 1), session=date(2026, 10, 2),
+        groups_by_symbol={"AAA": "a", "BBB": "b", "CCC": "c", "DDD": "d"},
+    )
+
+    assert diagnostics["pair_construction"]["status"] == "insufficient_names"
+    assert not [signal for signal in signals if signal.action in {"buy", "short"}]
+
+
+def test_sector_tilted_candidates_are_refused_rather_than_traded():
+    bars = {
+        "AAA": _daily_closes("AAA", growth=0.010),
+        "BBB": _daily_closes("BBB", growth=0.008),
+        "CCC": _daily_closes("CCC", growth=-0.008),
+        "DDD": _daily_closes("DDD", growth=-0.010),
+    }
+    groups = {"AAA": "technology", "BBB": "technology", "CCC": "energy", "DDD": "energy"}
+
+    signals, diagnostics = SignalGenerator(_sleeve_config()).generate(
+        bars, symbols=list(bars), as_of=date(2026, 10, 1), session=date(2026, 10, 2),
+        groups_by_symbol=groups,
+    )
+
+    assert diagnostics["pair_construction"]["status"] == "no_sector_balanced_pairs"
+    assert not [signal for signal in signals if signal.action in {"buy", "short"}]

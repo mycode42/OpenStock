@@ -128,6 +128,13 @@ class AlgoAlpaca:
             params["symbols"] = symbols
         return self._get(f"{PAPER_BASE}/orders", params=params)
 
+    def orders_after(self, after: str | None, *, status: str = "all", limit: int = 500) -> list[dict]:
+        """Oldest-first page of orders submitted after a timestamp, for ledger sync."""
+        params: dict = {"status": status, "limit": limit, "direction": "asc"}
+        if after:
+            params["after"] = after
+        return self._get(f"{PAPER_BASE}/orders", params=params)
+
     def order_by_client_id(self, client_order_id: str) -> dict | None:
         response = self.session.get(
             f"{PAPER_BASE}/orders:by_client_order_id",

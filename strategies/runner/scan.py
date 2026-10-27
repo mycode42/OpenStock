@@ -15,7 +15,6 @@ load_dotenv()
 from market.data import feeds_for_session, historical_delay_seconds, regular_feed
 from market.regime import load_fred_regime_series
 from portfolio.config import get_algo_runtime_settings
-from strategies.regime_advisor import apply_regime_advisory
 from strategies.regime import rank_strategies
 from strategies.registry import refresh_active_parameter_profile
 from strategies.runner.data import (
@@ -98,7 +97,6 @@ def _sync_scan_dependencies() -> None:
     scan_market._completed_daily = _completed_daily
     scan_market._completed_intraday = _completed_intraday
     scan_market._latest_bar_age_seconds = _latest_bar_age_seconds
-    scan_market.apply_regime_advisory = apply_regime_advisory
     scan_market.rank_strategies = rank_strategies
     scan_market._DAILY_BAR_CACHE_LOCK = _DAILY_BAR_CACHE_LOCK
     scan_market._DAILY_BAR_CACHE = _DAILY_BAR_CACHE

@@ -47,6 +47,21 @@ def remaining_order_quantity(order: dict) -> Decimal | None:
     return quantity - filled
 
 
+def current_recovery(state: dict) -> dict | None:
+    """Return the persisted OCO decision only if it belongs to the open entry.
+
+    A decision from an earlier episode of the same ticker must never be applied
+    to a new entry; the new entry's own bracket is then the protection to verify.
+    """
+    recovery = state.get("protection_recovery")
+    if not isinstance(recovery, dict) or not recovery.get("client_order_id"):
+        return None
+    recorded_entry = recovery.get("entry_order_id")
+    if recorded_entry and recorded_entry != state.get("entry_order_id"):
+        return None
+    return recovery
+
+
 def recovery_oco_order(nested_orders: list[dict], state: dict, position_qty: Decimal) -> dict | None:
     """Return an active, exact full-size OCO parent with its live stop child.
 

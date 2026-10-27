@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Callable
 
 from portfolio.incidents import record_incident, resolve_incident
-from portfolio.protection.evidence import normalize_broker_price, recovery_oco_order, to_finite_decimal
+from portfolio.protection.evidence import current_recovery, normalize_broker_price, recovery_oco_order, to_finite_decimal
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected", "replaced"})
 RETRY_SECONDS = 90
 MAX_DECISIONS = 3
@@ -333,6 +333,9 @@ def recover_broker_protection(
         if not isinstance(recovery, dict):
             report["errors"].append(f"{symbol}: persisted OCO decision is malformed")
             continue
+        if recovery and current_recovery(state) is None:
+            # Left over from an earlier entry of this ticker; start fresh.
+            recovery = {}
         client_id = recovery.get("client_order_id")
         if client_id is not None and (not isinstance(client_id, str) or not client_id):
             report["errors"].append(f"{symbol}: persisted OCO client ID is malformed")

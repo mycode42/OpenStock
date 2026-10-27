@@ -198,19 +198,21 @@ def test_cache_uses_one_timestamped_soft_sector_selection(tmp_path, monkeypatch)
         "max_eligible_tickers": 10,
         "always_eligible": ["SPY"],
         "hard_only_when_proxy_data_missing": False,
+        "membership_mode": "gate",
     })
     rules["bucket_proxies"] = {"technology": "QQQ", "energy": "XLE"}
     rules["ticker_buckets"] = {"SPY": "hedges", "QQQ": "technology", "XLE": "energy", "XOM": "energy"}
     rules["portfolio_caps"].update({"correlation_lookback_sessions": 20})
     rules_path.write_text(json.dumps(rules))
 
-    result = build_eligible_cache(
-        database=database, rules_path=rules_path, cache_dir=tmp_path / "cache",
-    )
+    result = build_eligible_cache(database=database, rules_path=rules_path)
     assert result["status"] == "ready"
     assert result["as_of_date"] == "2026-09-25"
     assert set(result["eligible_symbols"]) == {"SPY", "XLE", "XOM"}
-    assert (tmp_path / "cache" / "eligible-2026-09-25.json").is_file()
+    stored = OptionsHistoryStore(database).latest_eligible_snapshot()
+    assert stored["as_of_date"] == "2026-09-25"
+    assert stored["eligible_symbols"] == result["eligible_symbols"]
+    assert result["snapshot_location"].endswith(f"#2026-09-25#{result['rules_sha256']}")
 
 
 def test_excess_returns_are_measured_against_universe_and_spy_for_the_same_hold():
@@ -233,3 +235,43 @@ def test_excess_returns_are_measured_against_universe_and_spy_for_the_same_hold(
     assert period["mean_excess_vs_spy"] == pytest.approx((0.01 + 0.01 + 0.04) / 3)
     assert period["excess_vs_universe_t_stat"] is not None
     assert universe_selection._t_statistic([0.01]) is None
+
+
+def test_tilt_mode_keeps_hard_eligible_names_ranked_and_capped_per_sector():
+    from options.research import universe_selection as selector
+
+    def row(ticker):
+        return {"ticker": ticker, "hard_eligible": True, "hard_reasons": []}
+
+    rules = json.loads(selector.DEFAULT_RULES_PATH.read_text())
+    rules["regime"].update({
+        "membership_mode": "tilt", "max_eligible_tickers": 4, "max_names_per_bucket": 2,
+        "top_sector_buckets": 1, "always_eligible": [],
+    })
+    history = {}
+    universe = {}
+    rows = [row("A1"), row("A2"), row("A3"), row("B1"), row("B2")]
+    scores = {
+        "alpha": {"relative_momentum": 0.2}, "beta": {"relative_momentum": -0.1},
+    }
+    monkeypatch_bucket = {"A1": "alpha", "A2": "alpha", "A3": "alpha", "B1": "beta", "B2": "beta"}
+    original_bucket = selector._bucket_for
+    original_scores = selector._sector_scores
+    original_state = selector._market_state
+    try:
+        selector._bucket_for = lambda symbol, rules, universe: monkeypatch_bucket[symbol]
+        selector._sector_scores = lambda history, as_of_date, rules: scores
+        selector._market_state = lambda history, as_of_date, rules: {"trend": "up", "volatility": "low"}
+        selected, overlay = selector._apply_sector_overlay(
+            rows, history=history, as_of_date="2026-10-01", rules=rules, universe=universe,
+        )
+    finally:
+        selector._bucket_for = original_bucket
+        selector._sector_scores = original_scores
+        selector._market_state = original_state
+
+    tickers = [item["ticker"] for item in selected]
+    assert len(tickers) == 4
+    assert sum(item["bucket"] == "alpha" for item in selected) == 2
+    assert "B1" in tickers and "B2" in tickers
+    assert overlay["max_eligible_tickers"] == 4

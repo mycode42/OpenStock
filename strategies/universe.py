@@ -1,4 +1,4 @@
-"""The fixed Algo portfolio universe and its broker eligibility metadata."""
+"""Algo equity universe: static categories, live selection, and broker metadata."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from broker.accounts import get_account_for_mode
-from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
+from portfolio.config import ALGO_CANDIDATE_UNIVERSE, ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
 
 
 ET = ZoneInfo("America/New_York")
@@ -66,14 +66,51 @@ def _overnight_tradable(asset: dict | None) -> bool:
     return bool(asset.get("overnight_tradable") or listed) and not bool(asset.get("overnight_halted"))
 
 
-def load_algo_universe() -> dict:
-    """Load fixed Algo membership and Alpaca's current overnight flags.
+def selected_universe(now: datetime | None = None) -> dict:
+    """Live membership: the selector's eligible subset of the 117-name pool.
 
-    The catalog is the source of membership. Broker metadata is consulted only
-    for BOATS eligibility; an asset-master outage therefore cannot silently
-    replace the configured list or authorize overnight entries.
+    Raises ``EligibleUniverseError`` when the selection is stale or too small.
+    The caller pauses new entries in that case; owned positions are still managed.
     """
-    result = configured_universe("algo")
+    from options.research.universe_selection import live_eligible_universe
+
+    selection = live_eligible_universe(now=now)
+    static_categories = configured_universe("algo")["categories"]
+    pool_categories = {
+        ticker: category
+        for category, bucket in ALGO_CANDIDATE_UNIVERSE.items()
+        for ticker in bucket["tickers"]
+    }
+    tickers: list[str] = []
+    for raw in selection["eligible_symbols"]:
+        ticker = str(raw).upper().strip()
+        if ticker and ticker not in tickers:
+            tickers.append(ticker)
+    categories = {
+        ticker: static_categories.get(ticker) or pool_categories.get(ticker, "unknown")
+        for ticker in tickers
+    }
+    return {
+        "tickers": tickers,
+        "categories": categories,
+        "sector_by_symbol": {
+            ticker: ALGO_FACTOR_SECTOR_BY_SYMBOL.get(ticker, categories[ticker]) for ticker in tickers
+        },
+        "source": "eligible_universe",
+        "selector_as_of": selection["as_of_date"],
+        "selector_rules_sha256": selection["rules_sha256"],
+        "selector_snapshot": selection["snapshot_location"],
+    }
+
+
+def load_algo_universe() -> dict:
+    """Load the selected live universe and Alpaca's current overnight flags.
+
+    Membership comes from the selector. Broker metadata is consulted only for
+    BOATS and shortability; an asset-master outage cannot change membership or
+    authorize overnight entries.
+    """
+    result = selected_universe()
     result.update({
         "selection_date": datetime.now(ET).date().isoformat(),
         "timestamp": datetime.now(ET).isoformat(),

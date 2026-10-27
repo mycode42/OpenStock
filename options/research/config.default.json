@@ -13,8 +13,7 @@
     "eligibility": {
       "cache_enabled": true,
       "apply_to_research": false,
-      "rules_path": "options/research/eligibility.default.json",
-      "cache_dir": "data/options/research/universe_cache"
+      "rules_path": "options/research/eligibility.default.json"
     }
   },
   "model_surface": {

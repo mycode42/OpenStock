@@ -19,6 +19,16 @@ from strategies.runner.signal_generation import (
 from .scan_types import MarketSnapshot, QuoteSnapshot, ScanScope, SignalSnapshot
 
 
+def _limit_entries_to_selected(generated: list[dict], selected_symbols) -> list[dict]:
+    """Drop new buys and shorts outside the selected universe; exits always pass."""
+    selected = {str(symbol).upper() for symbol in selected_symbols}
+    return [
+        signal for signal in generated
+        if str(signal.get("action") or "").lower() not in {"buy", "short"}
+        or str(signal.get("ticker") or "").upper() in selected
+    ]
+
+
 def generate_scan_signals(
     scope: ScanScope, market: MarketSnapshot, quotes: QuoteSnapshot,
 ) -> SignalSnapshot:
@@ -135,6 +145,9 @@ def generate_scan_signals(
             entry_pause_reasons=scope.entry_pause_reasons,
         )
     )
+    # Names outside today's selected universe are exit-only: a held position
+    # outside the universe may be closed or reduced, but never opened or added to.
+    generated = _limit_entries_to_selected(generated, scope.selected_symbols)
     return SignalSnapshot(
         multi_factor_diagnostics=multi_factor_diagnostics,
         rank_score=rank_score,

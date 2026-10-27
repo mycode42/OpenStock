@@ -79,6 +79,39 @@ class ResearchLedger:
                 )
             connection.execute(f"PRAGMA user_version={LEDGER_SCHEMA_VERSION}")
 
+    def read_nightly_checkpoint(self, run_id: str) -> dict | None:
+        """Return the saved nightly cycle state, if any."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM nightly_checkpoint WHERE run_id = ?", (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row[0])
+        return payload if isinstance(payload, dict) else None
+
+    def write_nightly_checkpoint(self, run_id: str, state: dict) -> None:
+        """Upsert the nightly cycle state after each stage transition."""
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO nightly_checkpoint (run_id, cycle_date_et, status, payload_json, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    cycle_date_et = excluded.cycle_date_et,
+                    status = excluded.status,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    run_id,
+                    str(state.get("cycle_date_et") or ""),
+                    str(state.get("status") or "running"),
+                    json.dumps(state, sort_keys=True, allow_nan=False),
+                    str(state.get("updated_at") or ""),
+                ),
+            )
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
         connection.execute("PRAGMA busy_timeout=30000")
@@ -960,5 +993,12 @@ CREATE TABLE IF NOT EXISTS research_document (
     byte_size INTEGER NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY(kind, identity)
+);
+CREATE TABLE IF NOT EXISTS nightly_checkpoint (
+    run_id TEXT PRIMARY KEY,
+    cycle_date_et TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 """

@@ -20,6 +20,7 @@ from strategies.runner.sizing import _is_protective_sell_order, _make_trade
 from strategies.registry import profile_id_for_regime
 
 from .scan_types import ExecutionResult, MarketSnapshot, QuoteSnapshot, ScanScope
+from portfolio.config import risk_universe
 
 
 LOG = logging.getLogger("strategy_runner")
@@ -232,7 +233,7 @@ def execute_scan_candidates(
         trade = _make_trade(
             sizing_signal, execution_price, scope.equity,
             scope.positions.get(item["ticker"], {}), scope.risk_config,
-            mode_universe=scope.mode_config.get("universe"),
+            mode_universe=risk_universe(scope.mode_config),
         )
         if not trade:
             item["suppressed_reason"] = "position or strategy sizing produced zero shares"

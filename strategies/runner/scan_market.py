@@ -17,7 +17,6 @@ from portfolio.config import (
 from runtime.paths import DATA_DIR
 from strategies.event_driven import EventCalendar, EventSignalGenerator
 from strategies.regime import rank_strategies
-from strategies.regime_advisor import apply_regime_advisory
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, parameters_for_regime
 from strategies.runner.data import (
     _completed_daily,
@@ -230,11 +229,6 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
         }
         scope.scan_errors.append(f"SPY regime calculation: {type(exc).__name__}: {exc}")
         scope.entry_pause_reasons.append("SPY regime calculation failed")
-    try:
-        regime = apply_regime_advisory(regime)
-    except Exception as exc:
-        scope.scan_errors.append(f"optional regime advisor: {type(exc).__name__}: {exc}")
-        regime["regime_advisory"] = {"status": "fallback", "error": str(exc)}
     if regime.get("regime") == "unknown":
         scope.entry_pause_reasons.append("deterministic SPY regime is unavailable")
         if historical_status == "ok":

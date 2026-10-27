@@ -6,10 +6,12 @@ Systematic equity and options trading research with paper execution on Alpaca.
 
 ## What it does
 
-- **Algo equity sleeve:** a rule-based coordinator selects strategies by market
-  regime, scans a fixed 24-name large-cap universe, and sends entries through a
-  risk gate to Alpaca Paper. Strategies cover mean reversion, trend, momentum,
-  multi-factor ranking, and scheduled events, with intraday and daily horizons.
+- **Algo equity sleeve:** a rule-based coordinator selects strategies by a
+  regime committee and trades the live universe, which is the selector's
+  eligible subset of a 117-name candidate pool, recomputed each session.
+  Strategies cover mean reversion, trend, momentum, multi-factor, and scheduled
+  events on intraday and daily horizons. Multi-factor runs as a sector-neutral,
+  dollar-neutral long/short book.
 - **Options sleeve:** a separate paper account for volatility premium,
   long-volatility, and event structures, with combined equity/options risk
   checks.
@@ -47,29 +49,38 @@ poetry run python -m options.research.universe_selection simulate --universe-sco
 Production runs as `ops/systemd/algo-trader.service`; scheduled research and
 reports are described in [ops/openclaw-crons.md](ops/openclaw-crons.md).
 
+## Live universe
+
+Each session the daemon runs the eligible-universe selector over the 117-name
+pool in `options/research/universe.json`. The result is stored as a dated
+snapshot in `data/options/research/options_history.sqlite3`. Entries pause if
+the snapshot is more than one session old, or if fewer than six names are
+eligible. Positions that leave the universe are still managed until they exit.
+Regime context stays on the static 24-name set in `portfolio/config.py`.
+
 ## State and backups
 
-Coordinator state lives in SQLite at `data/algo_state.sqlite3`, which is the only
-persisted copy. The daemon writes one verified backup per trading day to
-`data/backups/algo_state/` and keeps the newest 30. To restore, stop the daemon
-and copy a backup over the database.
+Coordinator state, the broker order ledger, and the research checkpoints all
+live in SQLite. The state database at `data/algo_state.sqlite3` is backed up
+once per trading day to `data/backups/algo_state/`; the newest 30 are kept. To
+restore, stop the daemon and copy a backup over the database.
 
 ## Research and promotion
 
-Research is offline. Adaptive parameter profiles are promoted automatically when
-they pass rolling walk-forward and forward-simulation gates; a detected drift
-warning pauses promotion. Every promotion is recorded in
-`data/research/algo-auto/promoted-profile.json`. Review that file after each
-nightly run.
+Research runs nightly. Parameter profiles that pass rolling walk-forward and
+forward-simulation gates go live automatically, without human confirmation; a
+detected drift warning pauses promotion. Every promotion is recorded in
+`data/research/algo-auto/promoted-profile.json`.
 
 Configuration is file-based:
 
 | Setting | File |
 | --- | --- |
-| Equity universe, limits, and strategy switches | `portfolio/config.py`, `data/algo-strategy-config.json` |
+| Equity limits and strategy switches | `portfolio/config.py`, `data/algo-strategy-config.json` |
+| Candidate pool | `options/research/universe.json` |
+| Selector rules and live gates | `options/research/eligibility.default.json` |
 | Options paper settings | `options/config.default.json` (copy to `data/options/config.json`) |
 | Options research windows, costs, and grids | `options/research/config.default.json` |
-| Eligible-universe rules | `options/research/eligibility.default.json` |
 
 Options research guides: [options_research.md](docs/options_research.md),
 [options_trading.md](docs/options_trading.md). Equity research:

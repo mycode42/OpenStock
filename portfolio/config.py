@@ -6,7 +6,7 @@ import json
 import math
 from pathlib import Path
 
-from runtime.paths import DATA_DIR
+from runtime.paths import DATA_DIR, ROOT
 from strategies.catalog import strategy_ids_for_group
 
 
@@ -89,6 +89,31 @@ ALGO_PORTFOLIO_UNIVERSE = {
         "max_per_stock_pct": 0.07,
     },
 }
+# The equity candidate pool is the 117-name research universe. The live universe
+# is the selector's eligible subset of it. Static names above keep their own
+# categories and caps; pool-only names use these pool categories.
+ALGO_CANDIDATE_POOL_PATH = ROOT / "options" / "research" / "universe.json"
+ALGO_CANDIDATE_SECTOR_CAP = 0.30
+ALGO_CANDIDATE_PER_STOCK_CAP = 0.07
+
+
+def _load_candidate_universe() -> dict:
+    payload = json.loads(ALGO_CANDIDATE_POOL_PATH.read_text(encoding="utf-8"))
+    categories = payload.get("categories") or {}
+    if not isinstance(categories, dict) or not categories:
+        raise ValueError(f"candidate pool has no categories: {ALGO_CANDIDATE_POOL_PATH}")
+    return {
+        category: {
+            "label": category.replace("_", " ").title(),
+            "tickers": [str(ticker).strip().upper() for ticker in tickers],
+            "max_sector_pct": ALGO_CANDIDATE_SECTOR_CAP,
+            "max_per_stock_pct": ALGO_CANDIDATE_PER_STOCK_CAP,
+        }
+        for category, tickers in categories.items()
+    }
+
+
+ALGO_CANDIDATE_UNIVERSE = _load_candidate_universe()
 ALGO_FACTOR_SECTOR_BY_SYMBOL = {
     "NVDA": "information_technology", "AVGO": "information_technology",
     "TSM": "information_technology", "MSFT": "information_technology",
@@ -279,9 +304,6 @@ STRATEGY_CONFIG = {
     # paused entries and skipped protective updates on live Alpaca data.
     "extended_quote_stale_seconds": 300,
     "extended_hours_max_spread_pct": 0.02,
-    "regime_llm_advisor_enabled": True,
-    "regime_llm_default_model": "gpt-6-luna",
-    "regime_llm_timeout_seconds": 10,
     "risk_per_trade_pct": 0.005,
     "max_strategy_position_pct": 0.05,
     "take_profit_r_multiple": 2.0,
@@ -472,4 +494,10 @@ def get_mode_config(mode: str | None = None) -> dict:
         )
         limits["max_per_stock_pct"] = portfolio["max_position_pct"]
     result["universe"] = universe
+    result["candidate_universe"] = deepcopy(ALGO_CANDIDATE_UNIVERSE)
     return result
+
+
+def risk_universe(mode_config: dict) -> dict:
+    """Ticker catalog for risk caps: static categories win over pool categories."""
+    return {**mode_config.get("candidate_universe", {}), **mode_config["universe"]}

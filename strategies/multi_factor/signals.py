@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import logging
 import math
 from dataclasses import asdict, dataclass, replace
@@ -280,6 +282,11 @@ class SignalGenerator:
             selected_longs, selected_shorts = [], short_candidates
         else:
             selected_longs, selected_shorts = long_candidates, []
+        pair_diagnostics = {"status": "not_applicable"}
+        if self.config.direction_mode == "long_short" and not volatile_disabled:
+            selected_longs, selected_shorts, pair_diagnostics = self._balanced_pairs(
+                selected_longs, selected_shorts, groups_by_symbol,
+            )
 
         long_targets = {row["symbol"] for row in selected_longs}
         short_targets = {row["symbol"] for row in selected_shorts} - long_targets
@@ -316,6 +323,17 @@ class SignalGenerator:
                 "lookback_sessions": self.config.covariance_lookback_sessions,
                 "sleeve_budget_fraction_of_equal_weight_caps": 0.8,
             }
+        if self.config.dollar_neutral and long_targets and short_targets:
+            # Equal names per side at equal weight budgets keep the sleeve's net
+            # exposure at zero, whichever weighting method produced the names.
+            side_budget = len(long_targets) * self.config.max_position_pct
+            for side in (long_targets, short_targets):
+                total = sum(target_weights[symbol] for symbol in side)
+                if total > 0:
+                    for symbol in side:
+                        target_weights[symbol] = target_weights[symbol] * side_budget / total
+            portfolio_diagnostics = {**portfolio_diagnostics, "dollar_neutral": True, "side_budget": side_budget}
+        diagnostics["pair_construction"] = pair_diagnostics
         diagnostics["portfolio_construction"] = portfolio_diagnostics
         diagnostics.update({
             "selected_long_count": len(long_targets),
@@ -386,6 +404,41 @@ class SignalGenerator:
             diagnostics["selected_factors"],
         )
         return result, diagnostics
+
+    def _balanced_pairs(
+        self, longs: list[dict], shorts: list[dict], groups_by_symbol: dict[str, str] | None,
+    ) -> tuple[list[dict], list[dict], dict]:
+        """Largest equal-count long and short sets whose sector counts differ by at most one.
+
+        When no balanced set reaches ``min_names_per_side``, the sleeve holds
+        nothing rather than a one-sided or sector-tilted book.
+        """
+        if not self.config.dollar_neutral:
+            return longs, shorts, {"status": "not_requested"}
+        groups = groups_by_symbol or {}
+        ordered_longs = sorted(longs, key=lambda row: -row["score"])
+        ordered_shorts = sorted(shorts, key=lambda row: row["score"])
+        minimum = self.config.min_names_per_side
+        limit = min(len(ordered_longs), len(ordered_shorts))
+        if limit < minimum:
+            return [], [], {
+                "status": "insufficient_names", "minimum": minimum,
+                "available_long": len(longs), "available_short": len(shorts),
+            }
+        for count in range(limit, minimum - 1, -1):
+            chosen_longs = ordered_longs[:count]
+            chosen_shorts = ordered_shorts[:count]
+            long_sectors = Counter(groups.get(row["symbol"], "unknown") for row in chosen_longs)
+            short_sectors = Counter(groups.get(row["symbol"], "unknown") for row in chosen_shorts)
+            sectors = set(long_sectors) | set(short_sectors)
+            if all(abs(long_sectors[sector] - short_sectors[sector]) <= 1 for sector in sectors):
+                return chosen_longs, chosen_shorts, {
+                    "status": "balanced", "pairs": count,
+                    "sector_counts": {
+                        sector: [long_sectors[sector], short_sectors[sector]] for sector in sorted(sectors)
+                    },
+                }
+        return [], [], {"status": "no_sector_balanced_pairs", "minimum": minimum}
 
     def _minimum_variance_weights(
         self,

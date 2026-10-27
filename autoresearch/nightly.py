@@ -15,6 +15,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from autoresearch.artifacts.files import _json_safe
+from autoresearch.artifacts.research_ledger import ResearchLedger
 from autoresearch.settings import DEFAULT_OUTPUT_DIR, ET
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -180,13 +181,19 @@ def _equity_report_for_invocation(output_dir: Path, invocation_id: str) -> dict 
     return None
 
 
+def _checkpoint_store(output_dir: Path) -> ResearchLedger:
+    """Nightly cycle state lives in the equity research database."""
+    return ResearchLedger(output_dir / "research.sqlite3")
+
+
+def _checkpoint_location(output_dir: Path, run_id: str) -> str:
+    return f"{(output_dir / 'research.sqlite3').resolve()}#{run_id}"
+
+
 def _checkpoint_progress(output_dir: Path, run_dir: Path, state: dict, *, current_stage: str | None = None) -> None:
     state["updated_at"] = datetime.now(timezone.utc).isoformat()
-    checkpoint_path = Path(state.get("checkpoint_path") or run_dir / "checkpoint.json")
-    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(checkpoint_path, state, indent=2, sort_keys=True, allow_nan=False)
-    if checkpoint_path != run_dir / "checkpoint.json":
-        atomic_write_json(run_dir / "checkpoint.json", state, indent=2, sort_keys=True, allow_nan=False)
+    _checkpoint_store(output_dir).write_nightly_checkpoint(state["run_id"], state)
+    checkpoint_location = _checkpoint_location(output_dir, state["run_id"])
     progress = {
         "schema": "swarm_autoresearch_nightly_progress_v1",
         "run_id": state["run_id"],
@@ -199,7 +206,7 @@ def _checkpoint_progress(output_dir: Path, run_dir: Path, state: dict, *, curren
             name: {key: value for key, value in stage.items() if key != "report"}
             for name, stage in (state.get("stages") or {}).items()
         },
-        "checkpoint_path": str(checkpoint_path.resolve()),
+        "checkpoint_location": checkpoint_location,
     }
     atomic_write_json(run_dir / "progress.json", progress, indent=2, sort_keys=True, allow_nan=False)
     atomic_write_json(output_dir / "latest-progress.json", progress, indent=2, sort_keys=True, allow_nan=False)
@@ -217,7 +224,7 @@ def _checkpoint_progress(output_dir: Path, run_dir: Path, state: dict, *, curren
             "progress_path": str((output_dir / "invocations" / str(state.get("equity_invocation_id")) / "progress.json").resolve()),
         },
         "stages": progress["stages"],
-        "checkpoint_path": str(checkpoint_path.resolve()),
+        "checkpoint_location": checkpoint_location,
     }, indent=2, sort_keys=True, allow_nan=False)
 
 
@@ -232,22 +239,20 @@ def _state_report_hash(path: Path) -> str | None:
         return None
 
 
-def _cycle_checkpoint(output_dir: Path, args) -> tuple[dict, Path, bool]:
+def _cycle_checkpoint(output_dir: Path, args) -> tuple[dict, bool]:
+    """Return the cycle state to run, and whether a finished cycle can be reused."""
     cycle_date = _cycle_date()
     request = _request_fingerprint(args)
-    checkpoint_root = output_dir / "parallel" / "checkpoints"
-    checkpoint_root.mkdir(parents=True, exist_ok=True)
     base_id = f"nightly-{cycle_date:%Y%m%d}"
-    checkpoint_path = checkpoint_root / f"{base_id}.json"
-    existing = _read_json(checkpoint_path)
     if args.new_run:
         run_id = f"{base_id}-{uuid4().hex[:10]}"
-        return _new_cycle_state(cycle_date, args, run_id), checkpoint_root / f"{run_id}.json", False
+        return _new_cycle_state(cycle_date, args, run_id), False
+    existing = _checkpoint_store(output_dir).read_nightly_checkpoint(base_id)
     if existing and existing.get("request") == request:
         if existing.get("status") == "completed" and existing.get("final_result"):
-            return existing, checkpoint_path, True
-        return existing, checkpoint_path, False
-    return _new_cycle_state(cycle_date, args, base_id), checkpoint_path, False
+            return existing, True
+        return existing, False
+    return _new_cycle_state(cycle_date, args, base_id), False
 
 
 def _valid_options_checkpoint(stage: dict, report_path: Path, run_id: str) -> dict | None:
@@ -330,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     # unwinding. Serialize the cycle so retries wait for the checkpoint owner.
     with lock_path.open("w", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        state, checkpoint_path, cached_complete = _cycle_checkpoint(output_dir, args)
+        state, cached_complete = _cycle_checkpoint(output_dir, args)
         run_id = state["run_id"]
         run_dir = output_dir / "parallel" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -339,10 +344,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, sort_keys=True))
             return int(result.get("exit_code", 0))
 
-        # Keep the checkpoint in the selected run directory as well as in the
-        # lookup directory, so its logs and progress remain self-contained.
-        state["checkpoint_path"] = str(checkpoint_path.resolve())
-        atomic_write_json(checkpoint_path, state, indent=2, sort_keys=True, allow_nan=False)
+        _checkpoint_store(output_dir).write_nightly_checkpoint(run_id, state)
         started_at = datetime.fromisoformat(state["started_at"].replace("Z", "+00:00"))
         options_log_path = run_dir / "options.log"
         equity_log_path = run_dir / "equity.log"
@@ -452,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
             "options_exit_code": options_code,
             "equity_log_path": str(equity_log_path.resolve()),
             "options_log_path": str(options_log_path.resolve()),
-            "checkpoint_path": str(checkpoint_path.resolve()),
+            "checkpoint_location": _checkpoint_location(output_dir, run_id),
             "progress_path": str((run_dir / "progress.json").resolve()),
         }
         equity_report = _attach_options_report(

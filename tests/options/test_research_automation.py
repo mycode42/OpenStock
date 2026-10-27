@@ -8,7 +8,11 @@ def _write_config(tmp_path, *, data_path, strategies=None):
     config_path.write_text(json.dumps({
         "data_path": str(data_path),
         "output_dir": str(tmp_path / "runs"),
-        "automation": {"enabled": True, "strategies": strategies or ["vrp", "event_driven"]},
+        "automation": {
+            "enabled": True,
+            "strategies": strategies or ["vrp", "event_driven"],
+            "checkpoint_database": str(tmp_path / "history.sqlite3"),
+        },
     }), encoding="utf-8")
     return config_path
 
@@ -27,6 +31,12 @@ def test_missing_chain_dataset_generates_separate_waiting_report(tmp_path):
     assert "historical chain snapshots" in (report_dir / "latest.md").read_text(encoding="utf-8").lower()
     run = json.loads((report_dir / "runs.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert run["dataset_available"] is False
+    assert not (report_dir / "checkpoints").exists()
+    checkpoint = automation.OptionsHistoryStore(tmp_path / "history.sqlite3").read_automation_checkpoint(
+        report["run_id"],
+    )
+    assert checkpoint["schema"] == "swarm_options_automation_checkpoint_v1"
+    assert report["checkpoint_location"].endswith(f"#{report['run_id']}")
 
 
 def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path):

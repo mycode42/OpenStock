@@ -48,3 +48,29 @@ def test_nightly_runs_research_pipelines_sequentially_and_attaches_options_repor
     assert launched == ["options", "equity"]
     summary = json.loads(capsys.readouterr().out)
     assert summary["options_status"] == "waiting_for_data"
+
+
+def test_nightly_cycle_checkpoint_is_resumed_from_research_database(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from datetime import date
+
+    from autoresearch import nightly
+
+    args = SimpleNamespace(
+        db=str(tmp_path / "market.db"), output_dir=str(tmp_path), workers=1, no_refresh=False,
+        factor_only=False, force=False, skip_options_research=False, new_run=False,
+    )
+    monkeypatch.setattr(nightly, "_cycle_date", lambda now=None: date(2026, 10, 27))
+
+    state, cached = nightly._cycle_checkpoint(tmp_path, args)
+    assert state["run_id"] == "nightly-20261027"
+    assert cached is False
+    state["status"] = "completed"
+    state["final_result"] = {"exit_code": 0}
+    nightly._checkpoint_store(tmp_path).write_nightly_checkpoint(state["run_id"], state)
+
+    assert (tmp_path / "research.sqlite3").is_file()
+    assert not (tmp_path / "parallel").exists()
+    resumed, cached = nightly._cycle_checkpoint(tmp_path, args)
+    assert cached is True
+    assert resumed["final_result"] == {"exit_code": 0}

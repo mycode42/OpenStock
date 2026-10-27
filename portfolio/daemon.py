@@ -19,6 +19,7 @@ from pathlib import Path
 
 from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
 from portfolio.incidents import open_incident_symbols, record_incident
+from portfolio.order_ledger import BrokerOrderLedger
 from portfolio.protection.recovery import recover_broker_protection
 from portfolio.protection.sync import sync_broker_stops
 from portfolio.reconciliation import reconcile_startup
@@ -30,7 +31,7 @@ from portfolio.config import STRATEGY_CONFIG
 from execution.strategy import execute_strategy_trades
 from strategies.runner.scan import scan as scan_strategy_portfolio
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
-from strategies.universe import configured_universe, load_algo_universe
+from strategies.universe import load_algo_universe
 from reporting.performance import take_snapshot
 
 
@@ -48,6 +49,7 @@ class ReconciliationOrders:
     nested_orders: list[dict]
     exact_entry_orders: dict[str, dict]
     exact_incident_orders: dict[str, dict]
+    history_complete: bool
 
 
 def _state_path() -> Path:
@@ -123,12 +125,15 @@ def _capture_equity_snapshot(snapshot_kind: str, now: datetime, account: dict, b
     return True
 
 
-def _load_reconciliation_orders(portfolio: dict, broker) -> ReconciliationOrders:
-    """Load order history and exact references needed for safe reconciliation."""
-    all_orders = broker.orders("all")
+def _load_reconciliation_orders(portfolio: dict, broker, *, ledger: BrokerOrderLedger, open_orders: list[dict]) -> ReconciliationOrders:
+    """Sync the broker order ledger and load exact references for reconciliation."""
+    account_id = str(portfolio.get("account_id") or "")
+    ledger.sync(broker, account_id=account_id, today=datetime.now(ET).date(), open_orders=open_orders)
+    all_orders = ledger.orders(account_id)
+    history_complete = ledger.history_complete(account_id)
     recent_order_ids = {str(order.get("id")) for order in all_orders}
     exact_entry_orders = {}
-    if len(all_orders) >= 500:
+    if not history_complete:
         for ticker, owner in portfolio["position_owners"].items():
             state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
             entry_id = state.get("entry_order_id")
@@ -177,15 +182,18 @@ def _load_reconciliation_orders(portfolio: dict, broker) -> ReconciliationOrders
         nested_orders=nested_orders,
         exact_entry_orders=exact_entry_orders,
         exact_incident_orders=exact_incident_orders,
+        history_complete=history_complete,
     )
 
 
 def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, window) -> float:
     """Reconcile persisted ownership and protection against one broker snapshot."""
     try:
-        orders = _load_reconciliation_orders(portfolio, broker)
         positions = broker.positions()
         open_orders = broker.orders("open")
+        orders = _load_reconciliation_orders(
+            portfolio, broker, ledger=BrokerOrderLedger(state_path), open_orders=open_orders,
+        )
         report = reconcile_startup(
             portfolio,
             positions=positions,
@@ -197,6 +205,7 @@ def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, wi
             exact_incident_orders=orders.exact_incident_orders,
             require_broker_stops=window.name == "regular",
             regular_session=window.name == "regular",
+            history_complete=orders.history_complete,
         )
         _restore_pre_submit_exit_intents(portfolio, positions, open_orders)
         if not report["unprotected_positions"]:
@@ -642,10 +651,10 @@ def run_loop(
                     }
 
                 universe = portfolio.get("universe") or {}
-                fixed_tickers = configured_universe("algo")["tickers"]
                 universe_due = (
                     universe.get("selection_date") != session_day
-                    or universe.get("tickers") != fixed_tickers
+                    or universe.get("source") != "eligible_universe"
+                    or bool(universe.get("error"))
                 )
                 universe_retry_due = (
                     last_universe_attempt_monotonic is None
@@ -657,7 +666,7 @@ def run_loop(
                         portfolio["universe"] = load_algo_universe()
                         portfolio["universe"]["selection_date"] = session_day
                         LOG.info(
-                            "[ALGO] Fixed universe loaded: %d tickers",
+                            "[ALGO] Selected universe loaded: %d tickers",
                             len(portfolio["universe"].get("tickers", [])),
                         )
                     except Exception as exc:
