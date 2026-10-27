@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeInstrumentHistory, sanitizeAccount, sanitizeCollection, parseOrderResponse, brokerHistoryRange } = require('../lib/brokers/trade-republic');
+const { TradeRepublicClient, sanitizeQuote, sanitizeInstrument, sanitizeInstrumentHistory, sanitizeAccount, sanitizeCollection, brokerHistoryRange } = require('../lib/brokers/trade-republic');
 const { chooseTicker } = require('../lib/instrument-resolution');
 
 test('Trade Republic client sends X-API-Key server-side and never returns it', async () => {
@@ -114,25 +114,6 @@ test('transaction normalization reads nested amount values without exposing acco
   assert.equal(rows[0].amount_eur, 12.34);
   assert.equal(rows[0].currency, 'EUR');
   assert.equal(JSON.stringify(rows).includes('1234567890123456'), false);
-});
-
-test('order parser never treats an order id alone as a fill', () => {
-  assert.deepEqual(parseOrderResponse({ orderId: 'secret-id' }), { external_ref_masked: 'se••••id', status: 'UNKNOWN', execution: 'none' });
-  assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id' }).execution, 'filled');
-  assert.equal(parseOrderResponse({ status: 'FILLED', orderId: 'secret-id', executionPrice: 10, filledQuantity: 1, executedAt: '2026-09-15T10:00:00Z' }).execution_details, undefined);
-});
-
-test('place order sends the documented validity field and never invents a GTD date', async () => {
-  let body;
-  const client = new TradeRepublicClient({ env: { TRADE_REPUBLIC_API_KEY: 'secret' }, fetchImpl: async (_url, options) => {
-    body = JSON.parse(options.body);
-    return { ok: true, json: async () => ({ status: 'SUBMITTED', orderId: 'order-secret' }) };
-  } });
-  client.accountNumbers.set('DE••••56', 'DE1234567890123456');
-  await client.placeOrder({ account_ref_masked: 'DE••••56', instrument: 'US0000000001', exchange: 'TIB', type: 'buy', mode: 'market', quantity: 1, validity: 'GTD' });
-  assert.equal(body.validity, 'GTD');
-  assert.equal('validity_date' in body, false);
-  assert.equal('expiry' in body, false);
 });
 
 test('live listing fields produce recognizable non-TIB tickers and preferred names', () => {

@@ -36,9 +36,6 @@ class BrokersMethods extends LedgerMethods {
     }
     addBrokerReconciliationCandidate(input) { return this.db.prepare(`INSERT OR IGNORE INTO broker_reconciliation_candidates (broker,candidate_key,external_ref_masked,status,title,subtitle,amount_eur,currency,occurred_at,reason) VALUES (@broker,@candidate_key,@external_ref_masked,@status,@title,@subtitle,@amount_eur,@currency,@occurred_at,@reason)`).run(input); }
     getBrokerReconciliationCandidates() { return this.db.prepare('SELECT id,broker,candidate_key,external_ref_masked,status,title,subtitle,amount_eur,currency,occurred_at,reason,created_at FROM broker_reconciliation_candidates WHERE resolved_at IS NULL ORDER BY occurred_at DESC, id DESC').all(); }
-    createBrokerOrderIntent(input) { return this.db.prepare(`INSERT INTO broker_order_intents (broker,idempotency_key,status,request_json,quote_id) VALUES (@broker,@idempotency_key,@status,@request_json,@quote_id)`).run(input); }
-    getBrokerOrderIntent(key) { return this.db.prepare('SELECT * FROM broker_order_intents WHERE idempotency_key=?').get(key); }
-    updateBrokerOrderIntent(id, input) { return this.db.prepare(`UPDATE broker_order_intents SET status=@status, response_json=@response_json, external_ref_masked=@external_ref_masked, reconciled_at=@reconciled_at, frozen_reason=@frozen_reason, updated_at=datetime('now') WHERE id=@id`).run({ ...input, id }); }
     getBrokerExecution(identity, broker = 'trade_republic') {
         const hashedIdentity = executionKey(broker, identity);
         return this.db.prepare('SELECT * FROM broker_executions WHERE execution_identity IN (?, ?) ORDER BY CASE WHEN execution_identity=? THEN 0 ELSE 1 END LIMIT 1').get(hashedIdentity, identity, hashedIdentity);

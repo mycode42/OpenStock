@@ -7,10 +7,6 @@ import { createJournal } from './modules/journal.js?trade-pagination=2&title-cle
 import { createAlgoTrader } from './modules/algo-trader.js?v=1.4.3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1';
 import { createSettings } from './modules/settings.js';
 
-// Keep the Trading module in the repository for a future re-enable, but do
-// not expose or load it while broker trading is not in use.
-const ENABLE_TRADING = false;
-
 const state = createState();
 let pageLoadId = 0;
 let stockRevision = 0;
@@ -21,7 +17,7 @@ function removeStockFromState(id) { replaceStocks(state.stocks.filter(stock => s
 function beginStockMutation(id) { const token=(stockMutationTokens.get(id)||0)+1; stockMutationTokens.set(id, token); stockRevision += 1; return token; }
 function isCurrentStockMutation(id, token) { return stockMutationTokens.get(id) === token; }
 function showA(message, type='i', containerId='ac') { const container=document.getElementById(containerId); if(!container)return; const alert=document.createElement('div'); alert.className=`alert-box ${type}`; alert.textContent=message; container.appendChild(alert); setTimeout(()=>alert.remove(),5000); }
-function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','journal','config','algo-trader','settings', ...(ENABLE_TRADING ? ['trading'] : [])].includes(page)?page:'dashboard'; }
+function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','journal','config','algo-trader','settings'].includes(page)?page:'dashboard'; }
 function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','config','journal','algo-trader','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
 function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
 async function af(path, options={}, onError) { return apiRequest(path, options, (message, details)=>onError ? onError(message, details) : showA(message,'error')); }

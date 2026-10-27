@@ -15,7 +15,7 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
         const api = await import(pathToFileURL(path.join(tempDir, 'modules', 'api.js')).href);
         const hostile = '<img src=x onerror="alert(1)">';
         assert.equal(escape.escapeHtml(hostile).includes('<img'), false);
-        for (const module of ['charts', 'dashboard', 'config', 'trading']) {
+        for (const module of ['charts', 'dashboard', 'config']) {
             await import(pathToFileURL(path.join(tempDir, 'modules', `${module}.js`)).href);
         }
         const journal = await import(pathToFileURL(path.join(tempDir, 'modules', 'journal.js')).href);
@@ -32,10 +32,10 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
         assert.match(longPagination, /aria-label="Page 14"/);
         const originalFetch = globalThis.fetch;
         try {
-            globalThis.fetch = async () => ({ ok: false, json: async () => ({ error: 'Rejected', code: 'ORDER_SAFETY_GATE', failed_gates: ['account_selected'] }) });
+            globalThis.fetch = async () => ({ ok: false, json: async () => ({ error: 'Rejected', code: 'REQUEST_REJECTED', failed_gates: ['example_gate'] }) });
             let received;
             assert.equal(await api.apiRequest('/test', {}, (message, details) => { received = { message, details }; }), null);
-            assert.deepEqual(received, { message: 'Rejected', details: { error: 'Rejected', code: 'ORDER_SAFETY_GATE', failed_gates: ['account_selected'] } });
+            assert.deepEqual(received, { message: 'Rejected', details: { error: 'Rejected', code: 'REQUEST_REJECTED', failed_gates: ['example_gate'] } });
         } finally { globalThis.fetch = originalFetch; }
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -105,7 +105,7 @@ test('Dashboard refreshes only open history panels once per minute while visible
     assert.match(dashboard, /window\.clearInterval\(chartRefreshTimer\)/);
 });
 
-test('broker Trading screen is not exposed while it is disabled', () => {
+test('broker Trading screen and order UI are removed', () => {
     const root = path.join(__dirname, '..', 'www');
     const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
@@ -113,7 +113,8 @@ test('broker Trading screen is not exposed while it is disabled', () => {
 
     assert.doesNotMatch(index, /href="#\/trading"/);
     assert.doesNotMatch(index, /id="page-trading"/);
-    assert.match(app, /const ENABLE_TRADING = false/);
+    assert.doesNotMatch(app, /ENABLE_TRADING|modules\/trading/);
+    assert.equal(fs.existsSync(path.join(root, 'modules', 'trading.js')), false);
     assert.doesNotMatch(serviceWorker, /\.\/modules\/trading\.js/);
 });
 

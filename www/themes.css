@@ -303,8 +303,7 @@ html[data-theme]:not([data-theme="openstock"]) .algo-run-detail,
 html[data-theme]:not([data-theme="openstock"]) .algo-optimizer-strategy,
 html[data-theme]:not([data-theme="openstock"]) .algo-options-config-section,
 html[data-theme]:not([data-theme="openstock"]) .algo-config-toggle,
-html[data-theme]:not([data-theme="openstock"]) .journal-kpi,
-html[data-theme]:not([data-theme="openstock"]) .trading-account-summary span {
+html[data-theme]:not([data-theme="openstock"]) .journal-kpi {
   background: var(--os-surface);
   border-color: var(--os-border);
   color: var(--os-text);
@@ -485,7 +484,6 @@ html[data-theme-mode="light"] .algo-history-filters,
 html[data-theme-mode="light"] .algo-options-config-section,
 html[data-theme-mode="light"] .algo-config-toggle,
 html[data-theme-mode="light"] .journal-kpi,
-html[data-theme-mode="light"] .trading-account-summary span,
 html[data-theme-mode="light"] .history-popover,
 html[data-theme-mode="light"] .settings-theme-option,
 html[data-theme-mode="light"] .settings-appearance-panel {
