@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Callable
 from zoneinfo import ZoneInfo
 
+from market.calendar import extended_session_name
+
 
 @dataclass(frozen=True)
 class BatchHooks:
@@ -25,6 +27,37 @@ class BatchHooks:
     get_market_schedule: Callable | None = None
 
 
+def _extended_limit_trade(trade: dict) -> bool:
+    """Extended-hours entries and exits must be plain limit orders with a positive limit."""
+    try:
+        limit_price = float(trade.get("limit_price") or 0)
+    except (TypeError, ValueError):
+        return False
+    return (
+        bool(trade.get("extended_hours"))
+        and str(trade.get("order_type") or "").lower() == "limit"
+        and str(trade.get("action") or "").lower() in {"buy", "sell", "cover"}
+        and math.isfinite(limit_price) and limit_price > 0
+    )
+
+
+def _off_hours_row(trade: dict, reason: str, rule: str) -> dict:
+    action = str(trade.get("action") or "").lower()
+    row = {
+        "ticker": trade.get("ticker"),
+        "action": action,
+        "qty": trade.get("qty"),
+        "status": "failed" if action in {"sell", "cover"} else "blocked",
+        "reason": reason,
+        "rule": rule,
+        "strategy": trade.get("strategy"),
+        "client_order_id": trade.get("client_order_id"),
+    }
+    if action in {"sell", "cover"}:
+        row["safe_to_retry"] = True
+    return row
+
+
 def execute_trade_batch(
     trades: list[dict],
     decision_digest: str,
@@ -41,38 +74,38 @@ def execute_trade_batch(
 
     # Fail closed before the batch can cancel a bracket or submit any order.
     # The scan layer also suppresses off-hours proposals, but this protects
-    # direct executor calls and races across the regular-session boundary.
+    # direct executor calls and races across the session boundary. Extended
+    # sessions admit only plain limit orders, which never carry broker
+    # protection, so no bracket is cancelled for them.
     if mode == "algo" and trades:
+        extended_session = None
         try:
             schedule = (
                 hooks.get_market_schedule(mode="algo")
                 if hooks.get_market_schedule is not None else None
             )
-            regular_open = bool(
-                schedule is not None
-                and schedule.market_open(datetime.now(hooks.market_tz))
-            )
+            now = datetime.now(hooks.market_tz)
+            regular_open = bool(schedule is not None and schedule.market_open(now))
+            if not regular_open and hooks.get_market_schedule is not None:
+                extended_session = extended_session_name(
+                    now,
+                    lambda on_date: hooks.get_market_schedule(on_date=on_date, mode="algo"),
+                )
             session_error = None
         except Exception as exc:
             regular_open = False
             session_error = f"regular-session verification failed: {type(exc).__name__}: {exc}"
-        if not regular_open:
+        if not regular_open and session_error is None and extended_session is not None:
+            results.extend(
+                _off_hours_row(trade, "Algo extended-hours orders must be limit orders", "extended_hours_limit_only")
+                for trade in trades if not _extended_limit_trade(trade)
+            )
+            trades = [trade for trade in trades if _extended_limit_trade(trade)]
+            if not trades:
+                return results, submitted_count, would_execute_count
+        elif not regular_open:
             reason = session_error or "Algo order actions are restricted to regular market hours"
-            for trade in trades:
-                action = str(trade.get("action") or "").lower()
-                row = {
-                    "ticker": trade.get("ticker"),
-                    "action": action,
-                    "qty": trade.get("qty"),
-                    "status": "failed" if action in {"sell", "cover"} else "blocked",
-                    "reason": reason,
-                    "rule": "regular_hours_only",
-                    "strategy": trade.get("strategy"),
-                    "client_order_id": trade.get("client_order_id"),
-                }
-                if action in {"sell", "cover"}:
-                    row["safe_to_retry"] = True
-                results.append(row)
+            results.extend(_off_hours_row(trade, reason, "regular_hours_only") for trade in trades)
             return results, submitted_count, would_execute_count
 
     # The risk validator counts and validates entries against staged portfolio

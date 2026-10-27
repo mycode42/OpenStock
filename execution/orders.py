@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from execution.broker import API_BASE
+from market.calendar import extended_session_name
 
 
 MARKET_TZ = ZoneInfo("America/New_York")
@@ -71,6 +72,18 @@ def replay_matches_order(
     return len(stops) == 1 and len(targets) == 1 and prices_equal(stops[0].get("stop_price"), stop_requested) and prices_equal(targets[0].get("limit_price"), target_requested)
 
 
+def _is_extended_limit_payload(order: dict) -> bool:
+    """Alpaca accepts only plain extended-hours limit orders: DAY or GTC, no bracket or OCO legs."""
+    return (
+        order.get("extended_hours") is True
+        and order.get("type") == "limit"
+        and order.get("time_in_force") in {"day", "gtc"}
+        and not order.get("order_class")
+        and not order.get("stop_loss")
+        and not order.get("take_profit")
+    )
+
+
 def submit_broker_order(
     order: dict,
     order_type: str,
@@ -89,15 +102,23 @@ def submit_broker_order(
             now = datetime.now(MARKET_TZ)
             schedule = hooks.get_market_schedule(mode="algo")
             regular_open = schedule is not None and schedule.market_open(now)
+            extended_session = None if regular_open else extended_session_name(
+                now, lambda on_date: hooks.get_market_schedule(on_date=on_date, mode="algo"),
+            )
         except Exception as exc:
             return {
                 "success": False,
                 "error": f"Algo regular-session verification unavailable: {type(exc).__name__}: {exc}",
             }
-        if not regular_open:
+        if not regular_open and extended_session is None:
             return {
                 "success": False,
                 "error": "Algo order submissions are restricted to regular market hours",
+            }
+        if not regular_open and not _is_extended_limit_payload(order):
+            return {
+                "success": False,
+                "error": "Algo extended-hours orders must be plain limit DAY or GTC orders without broker protection",
             }
     try:
         response = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
@@ -214,8 +235,6 @@ def place_order(
     mode = hooks.mode
     if action not in {"buy", "sell", "short", "cover"}:
         return {"success": False, "error": f"Unsupported trade action: {action}"}
-    if mode == "algo" and extended_hours:
-        return {"success": False, "error": "Algo orders are restricted to regular market hours"}
     if order_type not in {"market", "limit", "bracket", "stop", "oco", "trailing_stop"}:
         return {"success": False, "error": f"Unsupported order type: {order_type}"}
     if action == "short" and not hooks.get_mode_config(mode)["risk"].get("allow_short_positions", False):

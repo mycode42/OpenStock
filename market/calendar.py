@@ -2,7 +2,7 @@
 
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -25,6 +25,32 @@ class MarketSchedule:
     def market_open(self, now: datetime) -> bool:
         local_now = now.astimezone(MARKET_TZ)
         return self.opens_at <= local_now < self.closes_at
+
+
+EXTENDED_SESSIONS = frozenset({"premarket", "after_hours", "overnight"})
+
+
+def extended_session_name(now: datetime, schedule_for) -> str | None:
+    """Name the open Alpaca extended session at ``now``, or ``None``.
+
+    ``schedule_for(on_date)`` returns the regular-session window for a trading
+    date, or ``None`` on an exchange holiday. Overnight 20:00-04:00 ET belongs
+    to the following trading date, as in ``market.sessions.get_trading_window``.
+    """
+    local = now.astimezone(MARKET_TZ)
+    day = local.date()
+    if local.time() < time(4, 0):
+        return "overnight" if schedule_for(day) is not None else None
+    if local.time() >= time(20, 0):
+        return "overnight" if schedule_for(day + timedelta(days=1)) is not None else None
+    schedule = schedule_for(day)
+    if schedule is None:
+        return None
+    if local < schedule.opens_at:
+        return "premarket"
+    if local >= schedule.closes_at:
+        return "after_hours"
+    return None
 
 
 def _wall_time(value: str, trading_date: date) -> datetime:

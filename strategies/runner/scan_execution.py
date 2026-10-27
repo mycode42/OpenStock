@@ -8,6 +8,7 @@ import logging
 
 from options.risk import load_options_delta_overlay
 from strategies.catalog import CORE_STRATEGIES
+from market.calendar import EXTENDED_SESSIONS
 from portfolio.config import STRATEGY_CONFIG
 from strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES,
@@ -131,8 +132,8 @@ def execute_scan_candidates(
         if item.get("suppressed_reason"):
             continue
         action = str(item.get("action", "")).lower()
-        if scope.mode == "algo" and scope.session_name != "regular":
-            item["suppressed_reason"] = "Algo order actions are restricted to regular market hours"
+        if scope.mode == "algo" and scope.session_name not in {"regular", *EXTENDED_SESSIONS}:
+            item["suppressed_reason"] = "Algo order actions are restricted to Alpaca trading sessions"
             continue
         strategy = str(item.get("strategy", ""))
         if action in {"buy", "short"}:

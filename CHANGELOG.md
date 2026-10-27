@@ -2,7 +2,10 @@
 
 ## Unreleased
 
-_No changes yet._
+### Changed
+
+- Algo extended-hours trading is re-enabled for plain limit DAY or GTC orders during premarket, after-hours, and overnight sessions. Extended-hours entries and exits never carry a broker bracket or OCO; software stops protect them, and broker protection is attached at the next regular open.
+- Overnight Algo entries are enabled by default (`overnight_entries_enabled`).
 
 ## [3.0.0] - 2026-10-20
 

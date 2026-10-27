@@ -85,7 +85,7 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_event_driven"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 4
     config = get_algo_configuration()
-    assert config["general"]["overnight_entries_enabled"] is False
+    assert config["general"]["overnight_entries_enabled"] is True
     assert config["strategies"]["intraday_trend_following"]["enabled"] is True
     assert config["strategies"]["intraday_momentum"]["enabled"] is True
     assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["swing_trend_following"] > 0.05

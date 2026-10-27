@@ -396,7 +396,7 @@ def test_extended_hours_exit_rejects_market_order_without_broker_submission(monk
     )
 
     assert not result["success"]
-    assert "restricted to regular market hours" in result["error"]
+    assert "Extended-hours orders require a buy/sell/cover limit order" in result["error"]
 
 
 def test_off_hours_batch_is_blocked_before_order_cancellation_or_submission():
@@ -413,7 +413,7 @@ def test_off_hours_batch_is_blocked_before_order_cancellation_or_submission():
         place_order=lambda *args, **kwargs: pytest.fail("off-hours order reached"),
         market_tz=ET,
         log=logging.getLogger("test"),
-        get_market_schedule=lambda **kwargs: SimpleNamespace(market_open=lambda now: False),
+        get_market_schedule=lambda on_date=None, mode="algo": SimpleNamespace(market_open=lambda now: False) if on_date is None else None,
     )
 
     results, submitted, would_execute = execute_trade_batch(
@@ -432,12 +432,62 @@ def test_off_hours_batch_is_blocked_before_order_cancellation_or_submission():
     assert results[0]["safe_to_retry"] is True
 
 
+def test_extended_hours_batch_blocks_market_and_bracket_trades_before_any_order(monkeypatch):
+    from execution import batch
+
+    class PremarketClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            frozen = datetime(2026, 10, 8, 5, 0, tzinfo=ET)
+            return frozen if tz is None else frozen.astimezone(tz)
+
+    monkeypatch.setattr(batch, "datetime", PremarketClock)
+    hooks = BatchHooks(
+        risk_validator_available=True,
+        rm_validate_trade=lambda **kwargs: None,
+        rm_stage_approved_trade=lambda *args, **kwargs: None,
+        get_latest_ask=lambda *args, **kwargs: 100,
+        get_latest_bid=lambda *args, **kwargs: 100,
+        get_latest_price=lambda *args, **kwargs: 100,
+        validate_position_reduction=lambda *args, **kwargs: (True, ""),
+        cancel_open_orders_for_symbol=lambda *args, **kwargs: pytest.fail("extended batch cancelled protection"),
+        get_positions=lambda *args, **kwargs: {},
+        place_order=lambda *args, **kwargs: pytest.fail("unsupported extended-hours order reached placement"),
+        market_tz=ET,
+        log=logging.getLogger("test"),
+        get_market_schedule=lambda on_date=None, mode="algo": (
+            market_calendar.MarketSchedule(
+                date(2026, 10, 8),
+                datetime(2026, 10, 8, 9, 30, tzinfo=ET),
+                datetime(2026, 10, 8, 16, 0, tzinfo=ET),
+            ) if (on_date or date(2026, 10, 8)) == date(2026, 10, 8) else None
+        ),
+    )
+
+    results, submitted, would_execute = execute_trade_batch(
+        trades=[
+            {"ticker": "AAPL", "action": "buy", "qty": 1, "order_type": "market", "extended_hours": True, "limit_price": 100},
+            {"ticker": "MSFT", "action": "buy", "qty": 1, "order_type": "bracket", "extended_hours": True, "limit_price": 100, "stop_price": 95, "take_profit": 110},
+        ],
+        decision_digest="test",
+        args=SimpleNamespace(dry_run=False),
+        mode="algo",
+        positions={},
+        rm_portfolio_state=None,
+        hooks=hooks,
+    )
+
+    assert submitted == 0
+    assert would_execute == 0
+    assert [row["rule"] for row in results] == ["extended_hours_limit_only", "extended_hours_limit_only"]
+
+
 def test_off_hours_order_submission_fails_closed_before_post(monkeypatch):
     monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "_headers", lambda *_: {})
     monkeypatch.setattr(
         execution_runner, "get_market_schedule",
-        lambda **kwargs: SimpleNamespace(market_open=lambda now: False),
+        lambda on_date=None, mode="algo": SimpleNamespace(market_open=lambda now: False) if on_date is None else None,
     )
     monkeypatch.setattr(
         execution_runner.requests, "post",

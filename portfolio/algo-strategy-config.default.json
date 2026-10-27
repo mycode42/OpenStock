@@ -1,6 +1,6 @@
 {
   "general": {
-    "overnight_entries_enabled": false,
+    "overnight_entries_enabled": true,
     "regime_engine": "committee",
     "regime_feature_set": "marketwide",
     "model_diagnostics_enabled": true,

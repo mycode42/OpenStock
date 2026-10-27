@@ -160,10 +160,11 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
     assert result["data_status"]["historical_bars"] == "ok"
     assert result["entries_paused"] is False
     assert result["entry_pause_reasons"] == []
-    assert result["trades"] == []
-    assert result["signals"][0]["suppressed_reason"] == (
-        "Algo order actions are restricted to regular market hours"
-    )
+    [trade] = result["trades"]
+    assert trade["action"] == "buy"
+    assert trade["order_type"] == "limit"
+    assert trade["extended_hours"] is True
+    assert not result["signals"][0].get("suppressed_reason")
 
 
 def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
@@ -234,7 +235,7 @@ def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(mon
     assert intent["retryable"] is True
     assert result["signals"][0]["software_protection"] is True
     assert result["signals"][0]["suppressed_reason"] == (
-        "Algo order actions are restricted to regular market hours"
+        "persisted strategy exit deferred until regular hours"
     )
 
 
@@ -313,7 +314,7 @@ def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
         assert intent["status"] == "deferred_until_regular_hours"
         assert intent["retryable"] is True
         assert result["signals"][0]["suppressed_reason"] == (
-            "Algo order actions are restricted to regular market hours"
+            "persisted strategy exit deferred until regular hours"
         )
     else:
         assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
