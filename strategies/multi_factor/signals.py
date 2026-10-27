@@ -342,6 +342,14 @@ class SignalGenerator:
         })
         result = []
         rows_by_symbol = {row["symbol"]: row for row in ranked}
+        # The regime only gates new entries. When it switched a side off, a held
+        # name is judged by the same rank rule it would face in a neutral regime.
+        regime_filtered = volatile_disabled or self.config.direction_mode == "regime_dependent"
+        neutral_longs = {row["symbol"] for row in long_candidates} if regime_filtered else set()
+        neutral_shorts = (
+            {row["symbol"] for row in short_candidates}
+            if regime_filtered and self.config.direction_mode != "long_only" else set()
+        )
         for row in ranked:
             symbol = row["symbol"]
             desired_direction = "long" if symbol in long_targets else "short" if symbol in short_targets else "flat"
@@ -350,9 +358,13 @@ class SignalGenerator:
                 quantity = float(holding.get("qty", 1) or 0)
                 current_direction = "short" if quantity < 0 else "long"
                 held_for = held_sessions(clean_daily_bars(bars_by_symbol.get(symbol, [])), holding.get("entry_at"))
+                held_desired = (
+                    "long" if symbol in long_targets | neutral_longs
+                    else "short" if symbol in short_targets | neutral_shorts else "flat"
+                )
                 if held_for is not None and held_for >= self.config.maximum_holding_sessions:
                     action, direction = ("cover" if quantity < 0 else "sell"), "flat"
-                elif desired_direction == current_direction or (
+                elif held_desired == current_direction or (
                     held_for is not None and held_for < self.config.minimum_hold_sessions
                 ):
                     action, direction = "hold", current_direction

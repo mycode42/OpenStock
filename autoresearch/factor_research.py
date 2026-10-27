@@ -6,6 +6,7 @@ or submits orders.
 """
 
 from __future__ import annotations
+from autoresearch.costs import EQUITY_COMMISSION_PER_SHARE, EQUITY_SLIPPAGE_BPS
 
 import math
 import statistics
@@ -370,8 +371,8 @@ def train_factor_model(
     fundamentals_data_version: str | None = None,
     data_version: str | None = None,
     spread_bps: float = 3.0,
-    slippage_bps: float = 5.0,
-    commission_per_share: float = 0.005,
+    slippage_bps: float = EQUITY_SLIPPAGE_BPS,
+    commission_per_share: float = EQUITY_COMMISSION_PER_SHARE,
     short_borrow_annual_pct: float = 3.0,
 ) -> dict:
     """Evaluate recent factor weights with a trailing, purged walk-forward fit.

@@ -41,7 +41,7 @@ def load_options_config(path: str | Path | None = None) -> dict:
     for section, fields in {
         "risk": ("max_risk_per_trade_pct", "max_total_defined_risk_pct", "max_daily_loss_pct", "max_delta_notional_pct", "max_vega_per_vol_point_pct", "max_gamma_1pct_loss_pct", "max_theta_loss_per_day_pct", "max_margin_pct"),
         "vrp": ("min_iv_minus_rv", "short_delta_min", "short_delta_max", "wing_delta_max"),
-        "event_driven": ("min_llm_confidence",),
+        "llm_driven": ("min_llm_confidence",),
         "directional_overlay": (
             "long_delta", "short_delta", "min_signal_confidence",
             "max_spread_pct", "max_risk_per_trade_pct", "profit_target_pct",
@@ -59,6 +59,33 @@ def load_options_config(path: str | Path | None = None) -> dict:
                 raise ValueError(f"{section}.{field} must be a finite non-negative number")
     if config["risk"]["max_risk_per_trade_pct"] <= 0 or config["risk"]["max_contracts_per_trade"] < 1:
         raise ValueError("risk budget and max_contracts_per_trade must be positive")
+    risk_shocks = config["risk"]["stress_spot_shocks"]
+    if not isinstance(risk_shocks, list) or len(risk_shocks) != 2 or any(
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < 1
+        for value in risk_shocks
+    ) or not risk_shocks[0] < risk_shocks[1]:
+        raise ValueError("risk.stress_spot_shocks must be two ascending fractions in (0, 1)")
+    costs = config["costs"]
+    if not 0 <= costs["slippage_fraction_of_spread"] <= 2 or any(
+        isinstance(costs[key], bool) or not isinstance(costs[key], (int, float)) or not math.isfinite(costs[key])
+        or costs[key] < 0
+        for key in ("slippage_per_contract_usd", "max_slippage_per_contract_usd", "slippage_fraction_of_spread")
+    ):
+        raise ValueError("costs slippage settings must be finite non-negative numbers")
+    if costs["max_slippage_per_contract_usd"] < costs["slippage_per_contract_usd"]:
+        raise ValueError("costs.max_slippage_per_contract_usd must be at least slippage_per_contract_usd")
+    dividend_yields = config.get("dividend_yields", {})
+    if not isinstance(dividend_yields, dict) or any(
+        not isinstance(symbol, str) or symbol != symbol.upper() or not symbol
+        or isinstance(value, bool) or not isinstance(value, (int, float))
+        or not math.isfinite(value) or not 0 <= value < 1
+        for symbol, value in dividend_yields.items()
+    ):
+        raise ValueError("dividend_yields must map uppercase symbols to yields in [0, 1)")
+    for field in ("stress_iv_shock", "stress_gate_loss_pct"):
+        value = config["risk"][field]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 1:
+            raise ValueError(f"risk.{field} must be in (0, 1]")
     if config["vrp"]["short_delta_min"] > config["vrp"]["short_delta_max"]:
         raise ValueError("VRP short delta range is inverted")
     if config["vrp"]["max_dte"] < config["vrp"]["min_dte"]:
@@ -78,19 +105,19 @@ def load_options_config(path: str | Path | None = None) -> dict:
         or vrp["max_entries_per_day"] < 1
     ):
         raise ValueError("vrp.max_entries_per_day must be a positive integer")
-    event = config["event_driven"]
+    event = config["llm_driven"]
     for field in ("min_dte", "max_dte", "target_dte", "max_symbols_per_cycle", "min_open_interest"):
         value = event[field]
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ValueError(f"event_driven.{field} must be a non-negative integer")
+            raise ValueError(f"llm_driven.{field} must be a non-negative integer")
     if event["max_dte"] < event["min_dte"]:
-        raise ValueError("event-driven DTE range is inverted")
+        raise ValueError("LLM-driven DTE range is inverted")
     if event["min_dte"] < 1:
-        raise ValueError("event-driven minimum DTE must be at least one day")
+        raise ValueError("LLM-driven minimum DTE must be at least one day")
     if not event["min_dte"] <= event["target_dte"] <= event["max_dte"]:
-        raise ValueError("event-driven target_dte must be within its DTE range")
+        raise ValueError("LLM-driven target_dte must be within its DTE range")
     if event["min_llm_confidence"] > 1:
-        raise ValueError("event-driven min_llm_confidence must be in [0, 1]")
+        raise ValueError("llm_driven.min_llm_confidence must be in [0, 1]")
     directional = config["directional_overlay"]
     if not isinstance(directional.get("enabled"), bool):
         raise ValueError("directional_overlay.enabled must be a boolean")

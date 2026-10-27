@@ -20,7 +20,7 @@ from portfolio.config import get_algo_regime_config
 from market.store import SQLiteBarStore
 from autoresearch.cpu import available_cpu_count
 from strategies.catalog import STRATEGY_CATALOG
-from strategies.event_driven import EventCalendar
+from strategies.llm_driven import EventCalendar
 from strategies.multi_factor.features import aggregate_intraday_bars
 from portfolio.config import get_algo_runtime_settings
 
@@ -74,7 +74,7 @@ def run_coordinated_portfolio(args) -> dict:
     if not Path(db).is_file():
         raise ValueError(f"Market database recorded by artifacts does not exist: {db}")
 
-    event_requested = runtime_settings.swing_event_driven_enabled
+    event_requested = runtime_settings.swing_llm_driven_enabled
     event_report = {"status": "disabled_by_live_config"}
     event_path = None
     if args.event_calendar:
@@ -84,7 +84,7 @@ def run_coordinated_portfolio(args) -> dict:
         event_calendar = EventCalendar.from_csv(event_path)
         event_report = {"status": "loaded_from_argument", **event_calendar.diagnostics()}
     elif event_requested:
-        # Build a point-in-time calendar for the same interval so Event Driven
+        # Build a point-in-time calendar for the same interval so LLM-driven
         # participates as an independent swing strategy in the portfolio replay.
         from ..data import _prepare_event_calendar
 
@@ -95,10 +95,10 @@ def run_coordinated_portfolio(args) -> dict:
         )
         if event_calendar is not None:
             event_path = event_report.get("calendar_path")
-    event_enabled = event_requested and bool(event_path)
+    llm_enabled = event_requested and bool(event_path)
     enabled_strategies = list(strategies)
-    if event_enabled:
-        enabled_strategies.append("swing_event_driven")
+    if llm_enabled:
+        enabled_strategies.append("swing_llm_driven")
 
     fold_profiles = []
     for index in range(len(folds)):
@@ -120,8 +120,8 @@ def run_coordinated_portfolio(args) -> dict:
                 raise ValueError("Strategy artifacts have different portfolio research controls")
             selected_profiles[strategy] = selected.get("selected_profile")
 
-        if event_enabled:
-            parameters["swing_event_driven"] = {"enabled": True}
+        if llm_enabled:
+            parameters["swing_llm_driven"] = {"enabled": True}
         fold_profiles.append({
             "index": index,
             "window": {key: folds[index][key] for key in (
@@ -330,11 +330,11 @@ def run_coordinated_portfolio(args) -> dict:
         },
         "selection_policy": (
             "Each adaptive strategy contributes its training-window profile on the shared test fold. "
-            "When enabled, Event Driven contributes its configured daily event rules and point-in-time "
+            "When enabled, LLM-driven contributes its configured daily event rules and point-in-time "
             "calendar as an independent swing strategy."
         ),
-        "event_strategy": {
-            "enabled": event_enabled,
+        "llm_strategy": {
+            "enabled": llm_enabled,
             "event_calendar": event_path,
             "event_calendar_report": event_report,
         },
@@ -375,9 +375,9 @@ def run_coordinated_portfolio(args) -> dict:
             "A strategy's promotion gate is reported but does not suppress research-only "
             "portfolio simulation.",
             "The final artifact does not alter live settings or authorize deployment.",
-            *(["Event Driven was enabled by the live setting but omitted because a point-in-time "
+            *(["LLM-driven was enabled by the live setting but omitted because a point-in-time "
                "historical event calendar could not be built."]
-              if event_requested and not event_enabled else []),
+              if event_requested and not llm_enabled else []),
         ],
     }
 

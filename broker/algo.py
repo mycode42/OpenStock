@@ -38,11 +38,6 @@ class AlgoAlpaca:
         response.raise_for_status()
         return response.json()
 
-    def _post(self, url: str, payload: dict):
-        response = self.session.post(url, headers=self.headers, json=payload, timeout=10)
-        response.raise_for_status()
-        return response.json()
-
     def _patch(self, url: str, payload: dict):
         response = self.session.patch(url, headers=self.headers, json=payload, timeout=10)
         response.raise_for_status()
@@ -147,52 +142,17 @@ class AlgoAlpaca:
         response.raise_for_status()
         return response.json()
 
-    def submit_market_order(self, symbol: str, side: str, qty: int, client_order_id: str) -> dict:
-        if side not in {"buy", "sell"} or qty <= 0:
-            raise ValueError("Invalid Algo order")
-        return self._post(f"{PAPER_BASE}/orders", {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": side,
-            "type": "market",
-            "time_in_force": "day",
-            "client_order_id": client_order_id,
-        })
-
-    def submit_limit_order(
-        self, symbol: str, side: str, qty: int, limit_price: float,
-        client_order_id: str, *, extended_hours: bool,
-    ) -> dict:
-        if side not in {"buy", "sell"} or qty <= 0 or limit_price <= 0:
-            raise ValueError("Invalid Algo limit order")
-        return self._post(f"{PAPER_BASE}/orders", {
-            "symbol": symbol,
-            "qty": str(qty),
-            "side": side,
-            "type": "limit",
-            "time_in_force": "day",
-            "limit_price": str(round(float(limit_price), 2)),
-            "extended_hours": bool(extended_hours),
-            "client_order_id": client_order_id,
-        })
-
     def order(self, order_id: str, *, nested: bool = False) -> dict:
         url = f"{PAPER_BASE}/orders/{order_id}"
         return self._get(url, params={"nested": "true"}) if nested else self._get(url)
 
-    def replace_stop_order(self, order_id: str, stop_price: object) -> dict:
-        """Replace a stop leg on a bracket/OCO order in the Algo Paper account."""
-        from decimal import Decimal, InvalidOperation
-
-        try:
-            price = Decimal(str(stop_price))
-        except (InvalidOperation, TypeError, ValueError) as exc:
-            raise ValueError("Invalid Algo replacement stop price") from exc
-        if not order_id or not price.is_finite() or price <= 0:
-            raise ValueError("Invalid Algo replacement stop order")
-        if price != price.quantize(Decimal("0.01")):
-            raise ValueError("Algo replacement stop price must be rounded to cents")
-        return self._patch(f"{PAPER_BASE}/orders/{order_id}", {"stop_price": str(price)})
+    def cancel_order(self, order_id: str) -> None:
+        """Cancel one open order in the Algo Paper account; used only by the protection migration."""
+        if not order_id:
+            raise ValueError("Algo cancellation requires an order ID")
+        response = self.session.delete(f"{PAPER_BASE}/orders/{order_id}", headers=self.headers, timeout=10)
+        if response.status_code not in (200, 204):
+            response.raise_for_status()
 
     @staticmethod
     def current_utc() -> datetime:

@@ -13,17 +13,37 @@ NOW = datetime(2026, 10, 8, 14, 0, tzinfo=timezone.utc)  # 10:00 ET
 CALENDAR = [{"date": "2026-10-08", "open": "09:30", "close": "16:00"}]
 
 class FakeStore:
-    def __init__(self, portfolio=None, market_state="REGULAR", error=None):
+    def __init__(self, portfolio=None, market_state="REGULAR", error=None, protection=None, heartbeat="default"):
         self.portfolio = portfolio
         self.market_state = market_state
         self.error = error
         self.reads = 0
+        self._protection = protection
+        self._heartbeat = heartbeat
 
     def read(self):
         self.reads += 1
         if self.error:
             raise self.error
         return self.market_state, self.portfolio
+
+    def read_protection(self):
+        if self._protection is not None:
+            return self._protection
+        rows = {}
+        for ticker, owner in ((self.portfolio or {}).get("position_owners") or {}).items():
+            state = ((self.portfolio.get("strategy_states") or {}).get(owner) or {}).get(ticker) or {}
+            if state.get("stop_price") is not None and state.get("take_profit") is not None:
+                rows[ticker] = {
+                    "phase": "open", "initial_stop": state["stop_price"], "trailing_stop": state["stop_price"],
+                    "target": state["take_profit"],
+                }
+        return rows
+
+    def read_heartbeat(self):
+        if self._heartbeat != "default":
+            return self._heartbeat
+        return {"scanned_at": (self.portfolio or {}).get("last_scan_at"), "session": "regular", "pid": 1}
 
 class FakeBroker:
     def __init__(self, *, calendar=CALENDAR, positions=None, orders=None, exact_orders=None,
@@ -73,7 +93,7 @@ def portfolio(now=NOW):
         "entry_pause_reasons": [],
         "position_owners": {"AAPL": "swing_momentum"},
         "strategy_states": {"swing_momentum": {"AAPL": {
-            "phase": "open", "entry_order_id": "entry-1", "stop_price": 95,
+            "phase": "open", "entry_order_id": "entry-1", "stop_price": 95, "take_profit": 110,
         }}},
         "startup_reconciliation": {"status": "verified"},
     }
@@ -81,7 +101,7 @@ def portfolio(now=NOW):
 def _codes(report):
     return {item["code"] for item in report["problems"]}
 
-def test_healthy_active_session_verifies_sqlite_broker_owner_and_bracket_stop():
+def test_healthy_active_session_verifies_sqlite_broker_owner_and_software_protection():
     diagnostic = {
         "symbol": "AAPL", "feed": "boats", "status": "fresh",
         "quote_timestamp": "2026-10-08T13:59:00+00:00",
@@ -90,24 +110,15 @@ def test_healthy_active_session_verifies_sqlite_broker_owner_and_bracket_stop():
     state = portfolio()
     state["data_status"] = {"owned_position_quote_diagnostics": [diagnostic]}
     store = FakeStore(state)
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}],
-        orders=[{
-            "id": "entry-1", "symbol": "AAPL", "order_class": "bracket", "legs": [
-                {"side": "sell", "type": "stop", "status": "held", "qty": "10", "filled_qty": "0"},
-                {"side": "sell", "type": "limit", "status": "new", "qty": "10"},
-            ],
-        }],
-    )
+    broker = FakeBroker(positions=[{"symbol": "AAPL", "qty": "10"}])
 
     report = build_report(now=NOW, store=store, broker=broker, service_active=True)
 
     assert report["ok"] is True
     assert report["market_session"] == "regular"
-    assert report["bracket_entries_checked"] == 1
+    assert report["protection_row_gaps"] == []
     assert report["broker_position_count"] == 1
     assert report["owned_position_quote_diagnostics"] == [diagnostic]
-    assert broker.calls == ["account", "calendar", "positions", ("orders", "all", True), ("order", "entry-1", True)]
     assert store.reads == 1
 
 @pytest.mark.parametrize("quote_status", ["session_limited", "degraded"])
@@ -157,41 +168,6 @@ def test_extended_session_quote_request_failure_remains_a_problem():
     assert {"scan_degraded", "entries_paused"} <= _codes(report)
     assert not report["warnings"]
 
-
-def test_capped_history_page_uses_exact_nested_entry_lookup():
-    entry = {
-        "id": "entry-1", "symbol": "AAPL", "order_class": "bracket",
-        "legs": [{"side": "sell", "type": "stop", "status": "held", "qty": "10", "filled_qty": "0"}],
-    }
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}],
-        orders=[{"id": f"recent-{number}", "symbol": "OTHER"} for number in range(500)],
-        exact_orders={"entry-1": entry},
-    )
-
-    report = build_report(now=NOW, store=FakeStore(portfolio()), broker=broker, service_active=True)
-
-    assert report["ok"] is True
-    assert report["broker_stop_coverage_unknown"] == []
-    assert report["bracket_entries_checked"] == 1
-    assert ("order", "entry-1", True) in broker.calls
-
-def test_failed_exact_entry_lookup_cannot_fall_back_to_capped_history_row():
-    entry = {
-        "id": "entry-1", "symbol": "AAPL", "order_class": "bracket",
-        "legs": [{"side": "sell", "type": "stop", "status": "held", "qty": "10", "filled_qty": "0"}],
-    }
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}], orders=[entry],
-        exact_order_errors={"entry-1": RuntimeError("exact broker lookup timed out")},
-    )
-
-    report = build_report(now=NOW, store=FakeStore(portfolio()), broker=broker, service_active=True)
-
-    assert report["ok"] is False
-    assert "orders_unavailable" in _codes(report)
-    assert report["broker_stop_coverage_unknown"] == ["AAPL"]
-    assert report["bracket_entries_checked"] == 0
 
 def test_closed_market_does_not_alert_on_old_scan_or_stale_pause():
     saturday = datetime(2026, 10, 10, 16, 0, tzinfo=timezone.utc)
@@ -292,18 +268,15 @@ def test_empty_premarket_free_feed_pause_is_visible_without_false_health_alert()
     assert "open_orders_without_positions" in _codes(conflict)
     assert conflict["market_data_idle"] is False
 
-def test_intraday_bar_warmup_does_not_hide_missing_broker_stop():
+def test_intraday_bar_warmup_does_not_hide_missing_software_protection():
     now = datetime(2026, 10, 8, 0, 10, tzinfo=timezone.utc)
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}],
-        orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "bracket", "legs": []}],
-    )
+    broker = FakeBroker(positions=[{"symbol": "AAPL", "qty": "10"}])
 
     report = build_report(
-        now=now, store=FakeStore(_warming_portfolio(now)), broker=broker, service_active=True,
+        now=now, store=FakeStore(_warming_portfolio(now), protection={}), broker=broker, service_active=True,
     )
 
-    assert "broker_bracket_stops_missing" in _codes(report)
+    assert "software_protection_missing" in _codes(report)
     assert "scan_degraded" not in _codes(report)
     assert "entries_paused" not in _codes(report)
 
@@ -331,77 +304,67 @@ def test_new_session_gets_scan_grace_but_inactive_service_still_alerts():
 
     assert _codes(report) == {"service_inactive"}
 
-def test_live_unowned_holding_and_unprotected_known_bracket_alert():
+def test_live_unowned_holding_and_unprotected_owned_position_alert():
     state = portfolio()
     state["strategy_states"]["swing_momentum"]["AAPL"]["stop_price"] = None
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}, {"symbol": "TSLA", "qty": "2"}],
-        orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "bracket", "legs": []}],
-    )
+    broker = FakeBroker(positions=[{"symbol": "AAPL", "qty": "10"}, {"symbol": "TSLA", "qty": "2"}])
 
     report = build_report(now=NOW, store=FakeStore(state), broker=broker, service_active=True)
 
     assert report["ok"] is False
-    assert {"unowned_positions", "software_stops_missing", "broker_bracket_stops_missing"} <= _codes(report)
+    assert {"unowned_positions", "software_stops_missing", "software_protection_missing"} <= _codes(report)
     assert report["unowned_positions"] == ["TSLA"]
-    assert report["broker_bracket_stops_missing"] == ["AAPL"]
+    assert report["protection_row_gaps"] == ["AAPL"]
 
 def test_overnight_simple_entry_relies_on_software_stop():
     now = datetime(2026, 10, 8, 0, 10, tzinfo=timezone.utc)  # 20:10 ET prior day
     state = portfolio(now)
     state["strategy_states"]["swing_momentum"]["AAPL"].update({"ticker": "AAPL", "take_profit": 105})
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}],
-        orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "simple", "legs": []}],
-    )
+    broker = FakeBroker(positions=[{"symbol": "AAPL", "qty": "10"}])
 
     report = build_report(now=now, store=FakeStore(state, market_state="OVERNIGHT"), broker=broker, service_active=True)
 
     assert report["ok"] is True
     assert report["market_session"] == "overnight"
-    assert report["bracket_entries_checked"] == 0
-    assert report["broker_bracket_stops_missing"] == []
+    assert report["protection_row_gaps"] == []
 
-def test_canceled_bracket_stops_and_pending_cancel_profit_legs_alert_even_with_software_stops():
+def test_owned_positions_without_protection_rows_alert_even_with_state_levels():
     state = portfolio()
     state["position_owners"] = {"CRM": "swing_momentum", "EEM": "swing_momentum"}
     state["strategy_states"] = {"swing_momentum": {
-        "CRM": {"phase": "open", "entry_order_id": "crm-entry", "stop_price": 195},
-        "EEM": {"phase": "open", "entry_order_id": "eem-entry", "stop_price": 51},
+        "CRM": {"phase": "open", "entry_order_id": "crm-entry", "stop_price": 195, "take_profit": 210},
+        "EEM": {"phase": "open", "entry_order_id": "eem-entry", "stop_price": 51, "take_profit": 60},
     }}
-    broker = FakeBroker(
-        positions=[{"symbol": "CRM", "qty": "10"}, {"symbol": "EEM", "qty": "20"}],
-        orders=[
-            {"id": "crm-entry", "symbol": "CRM", "order_class": "bracket", "legs": [
-                {"side": "sell", "type": "stop", "status": "canceled", "qty": "10"},
-                {"side": "sell", "type": "limit", "status": "pending_cancel", "qty": "10"},
-            ]},
-            {"id": "eem-entry", "symbol": "EEM", "order_class": "bracket", "legs": [
-                {"side": "sell", "type": "stop", "status": "pending_cancel", "qty": "20"},
-                {"side": "sell", "type": "limit", "status": "pending_cancel", "qty": "20"},
-            ]},
-        ],
-    )
+    store = FakeStore(state, protection={"CRM": {"phase": "open", "initial_stop": 195, "trailing_stop": 195, "target": 210}})
+    broker = FakeBroker(positions=[{"symbol": "CRM", "qty": "10"}, {"symbol": "EEM", "qty": "20"}])
 
-    report = build_report(now=NOW, store=FakeStore(state), broker=broker, service_active=True)
+    report = build_report(now=NOW, store=store, broker=broker, service_active=True)
 
     assert report["ok"] is False
-    assert "software_stops_missing" not in _codes(report)
-    assert {"broker_bracket_stops_missing", "broker_exit_pending_cancel"} <= _codes(report)
-    assert report["broker_bracket_stops_missing"] == ["CRM", "EEM"]
-    assert report["broker_pending_cancel_exits"] == ["CRM:limit", "EEM:limit", "EEM:stop"]
+    assert "software_protection_missing" in _codes(report)
+    assert report["protection_row_gaps"] == ["EEM"]
 
-def test_partial_bracket_stop_quantity_does_not_count_as_full_protection():
-    broker = FakeBroker(
-        positions=[{"symbol": "AAPL", "qty": "10"}],
-        orders=[{"id": "entry-1", "symbol": "AAPL", "order_class": "bracket", "legs": [
-            {"side": "sell", "type": "stop", "status": "held", "qty": "10", "filled_qty": "3"},
-        ]}],
-    )
+def test_stale_daemon_heartbeat_with_open_positions_raises_alarm():
+    state = portfolio()
+    stale = {"scanned_at": (NOW - timedelta(hours=1)).isoformat(), "session": "regular", "pid": 1}
+    broker = FakeBroker(positions=[{"symbol": "AAPL", "qty": "10"}])
 
-    report = build_report(now=NOW, store=FakeStore(portfolio()), broker=broker, service_active=True)
+    report = build_report(now=NOW, store=FakeStore(state, heartbeat=stale), broker=broker, service_active=True)
 
-    assert report["broker_bracket_stops_missing"] == ["AAPL"]
+    assert report["ok"] is False
+    assert "daemon_heartbeat_stale" in _codes(report)
+    assert report["daemon_heartbeat_alarm"]["kind"] == "daemon_heartbeat_stale"
+
+def test_stale_daemon_heartbeat_without_open_positions_is_quiet():
+    state = portfolio()
+    state["position_owners"] = {}
+    state["strategy_states"] = {}
+    stale = {"scanned_at": (NOW - timedelta(hours=1)).isoformat(), "session": "regular", "pid": 1}
+    broker = FakeBroker(positions=[])
+
+    report = build_report(now=NOW, store=FakeStore(state, heartbeat=stale), broker=broker, service_active=True)
+
+    assert "daemon_heartbeat_stale" not in _codes(report)
 
 def test_missing_authoritative_sqlite_fails_closed_and_does_not_initialize_it():
     store = FakeStore(error=StateStoreError("database missing"))

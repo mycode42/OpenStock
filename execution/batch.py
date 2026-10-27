@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 from execution.risk_models import ValidationResult
 from market.calendar import extended_session_name
+from portfolio.config import CASH_RESERVE, is_cash_proxy
+from portfolio.protection.software import exit_limit_price, exit_order_policy
 
 
 @dataclass(frozen=True)
@@ -20,7 +22,7 @@ class BatchHooks:
     get_latest_bid: Callable
     get_latest_price: Callable
     validate_position_reduction: Callable
-    cancel_open_orders_for_symbol: Callable
+    open_exit_orders_for_symbol: Callable
     get_positions: Callable
     place_order: Callable
     market_tz: ZoneInfo
@@ -43,6 +45,52 @@ def _extended_limit_trade(trade: dict) -> bool:
 
 
 _CASH_RESERVE_APPROVAL = ValidationResult(approved=True, reason="cash reserve: idle-cash storage, not risk-gated")
+
+
+def _cash_reserve_bypass(trade: dict, action: str, qty: int, reference_price: float, positions: dict, rm_portfolio_state: dict | None) -> bool:
+    """Only the reserve ETF may skip the risk gate, and only within its size cap.
+
+    A buy is capped at the reserve's maximum share of equity; a sell cannot
+    exceed the proxy shares held. Any other trade, even one flagged
+    cash_reserve, goes through the normal risk validator.
+    """
+    ticker = str(trade.get("ticker") or "")
+    if not trade.get("cash_reserve") or not is_cash_proxy(ticker) or action not in {"buy", "sell"}:
+        return False
+    if action == "sell":
+        held = float((positions.get(ticker) or {}).get("qty", 0) or 0)
+        return 0 < qty <= held
+    equity = float((rm_portfolio_state or {}).get("equity") or 0)
+    return (
+        math.isfinite(reference_price) and reference_price > 0 and equity > 0
+        and qty * reference_price <= float(CASH_RESERVE["max_proxy_pct"]) * equity
+    )
+
+
+def _extended_exit_trade(trade: dict, session_name: str, hooks: BatchHooks, mode: str) -> tuple[dict | None, str | None]:
+    """Price a sell or cover for an extended session as a marketable limit.
+
+    Market orders are not accepted outside regular hours, so the limit is set
+    beyond the closing side of the quote. Returns (trade, None) or (None, reason).
+    """
+    action = str(trade.get("action") or "").lower()
+    if _extended_limit_trade(trade):
+        return trade, None
+    policy = exit_order_policy(session_name)
+    try:
+        closing_quote = (
+            hooks.get_latest_bid(trade["ticker"], mode=mode) if action == "sell"
+            else hooks.get_latest_ask(trade["ticker"], mode=mode)
+        )
+        limit_price = exit_limit_price(action, closing_quote, closing_quote, session_name)
+    except Exception as exc:
+        return None, f"Extended-hours exit quote unavailable: {type(exc).__name__}: {exc}"
+    return {
+        **trade,
+        "order_type": policy["order_type"],
+        "limit_price": limit_price,
+        "extended_hours": True,
+    }, None
 
 
 def _off_hours_row(trade: dict, reason: str, rule: str) -> dict:
@@ -75,12 +123,13 @@ def execute_trade_batch(
     submitted_count = 0
     would_execute_count = 0
     seen_client_order_ids: set[str] = set()
+    extended_exit_session = None
 
-    # Fail closed before the batch can cancel a bracket or submit any order.
+    # Fail closed before the batch can submit any order outside its session.
     # The scan layer also suppresses off-hours proposals, but this protects
     # direct executor calls and races across the session boundary. Extended
     # sessions admit only plain limit orders, which never carry broker
-    # protection, so no bracket is cancelled for them.
+    # protection, so they are priced as marketable limits in _extended_exit_trade.
     if mode == "algo" and trades:
         extended_session = None
         try:
@@ -100,11 +149,17 @@ def execute_trade_batch(
             regular_open = False
             session_error = f"regular-session verification failed: {type(exc).__name__}: {exc}"
         if not regular_open and session_error is None and extended_session is not None:
-            results.extend(
-                _off_hours_row(trade, "Algo extended-hours orders must be limit orders", "extended_hours_limit_only")
-                for trade in trades if not _extended_limit_trade(trade)
-            )
-            trades = [trade for trade in trades if _extended_limit_trade(trade)]
+            # Entries stay limit-only. Exits are priced as limits in the loop
+            # so that a protected position can always be reduced.
+            kept = []
+            for trade in trades:
+                action = str(trade.get("action") or "").lower()
+                if _extended_limit_trade(trade) or action in {"sell", "cover"}:
+                    kept.append(trade)
+                else:
+                    results.append(_off_hours_row(trade, "Algo extended-hours orders must be limit orders", "extended_hours_limit_only"))
+            trades = kept
+            extended_exit_session = extended_session
             if not trades:
                 return results, submitted_count, would_execute_count
         elif not regular_open:
@@ -116,6 +171,21 @@ def execute_trade_batch(
     # state. Do not truncate this list: exits later in the batch must still be
     # allowed after the day's entry quota is full.
     for trade_index, trade in enumerate(trades):
+        if extended_exit_session and str(trade.get("action") or "").lower() in {"sell", "cover"}:
+            priced_trade, pricing_error = _extended_exit_trade(trade, extended_exit_session, hooks, mode)
+            if priced_trade is None:
+                results.append({
+                    "ticker": trade["ticker"],
+                    "action": str(trade.get("action") or "").lower(),
+                    "qty": trade.get("qty"),
+                    "status": "failed",
+                    "reason": pricing_error,
+                    "strategy": trade.get("strategy"),
+                    "client_order_id": trade.get("client_order_id"),
+                    "safe_to_retry": True,
+                })
+                continue
+            trade = priced_trade
         ticker = trade["ticker"]
         action = trade["action"].lower()
         qty = int(trade.get("qty", 0))
@@ -183,7 +253,7 @@ def execute_trade_batch(
                 limit_reference = 0.0
             if not math.isfinite(limit_reference) or limit_reference <= 0:
                 limit_reference = 0.0
-            has_buy_limit = order_type == "limit" or (order_type == "bracket" and limit_price is not None)
+            has_buy_limit = order_type == "limit"
             if not args.dry_run and action == "buy" and has_buy_limit:
                 # A buy limit caps the actual fill price. Use that ceiling
                 # even when the signal supplies a much lower stale mark.
@@ -271,7 +341,9 @@ def execute_trade_batch(
                         }
                     )
                     continue
-            rm_result = _CASH_RESERVE_APPROVAL if trade.get("cash_reserve") else hooks.rm_validate_trade(
+            rm_result = _CASH_RESERVE_APPROVAL if _cash_reserve_bypass(
+                trade, action, qty, float(ref_price), positions, rm_portfolio_state,
+            ) else hooks.rm_validate_trade(
                 ticker=ticker,
                 action=action,
                 qty=qty,
@@ -313,7 +385,9 @@ def execute_trade_batch(
         elif action in ("sell", "cover") and hooks.risk_validator_available:
             # The central validator explicitly allows exits; route them through
             # it too so every submitted signal uses the same policy boundary.
-            rm_result = _CASH_RESERVE_APPROVAL if trade.get("cash_reserve") else hooks.rm_validate_trade(
+            rm_result = _CASH_RESERVE_APPROVAL if _cash_reserve_bypass(
+                trade, action, qty, float(entry_price or 0), positions, rm_portfolio_state,
+            ) else hooks.rm_validate_trade(
                 ticker=ticker,
                 action=action,
                 qty=qty,
@@ -385,29 +459,42 @@ def execute_trade_batch(
                     mode=mode,
                 )
         else:
-            if action in {"sell", "cover"} and (trade.get("cancel_open_orders") or order_type in {"market", "limit"}):
-                cancel_result = hooks.cancel_open_orders_for_symbol(
-                    ticker,
-                    mode=mode,
-                    allow_protective=bool(trade.get("coordinator_force_flatten") or trade.get("software_protection") or trade.get("cancel_open_orders")),
-                )
-                if not cancel_result.get("success"):
+            # Exits never cancel broker orders: protection is software-managed,
+            # so the broker holds no stop legs to remove. An exit already open
+            # at the broker blocks a second exit for the same symbol.
+            if action in {"sell", "cover"}:
+                try:
+                    open_exits = hooks.open_exit_orders_for_symbol(ticker, mode=mode, action=action)
+                except Exception as exc:
                     results.append(
                         {
                             "ticker": ticker,
                             "action": action,
                             "qty": qty,
                             "status": "failed",
-                            "reason": cancel_result.get("error"),
+                            "reason": f"Could not verify open exit orders: {type(exc).__name__}: {exc}",
                             "strategy": strategy,
                             "client_order_id": client_order_id,
-                            "safe_to_retry": bool(cancel_result.get("safe_to_retry")),
+                            "safe_to_retry": True,
                         }
                     )
                     continue
-                if cancel_result.get("cancelled"):
-                    hooks.log.info("Cancelled %d open order(s) for %s before strategy exit", len(cancel_result["cancelled"]), ticker)
-                # An order may fill while being cancelled. Never use the
+                if open_exits:
+                    results.append(
+                        {
+                            "ticker": ticker,
+                            "action": action,
+                            "qty": qty,
+                            "status": "failed",
+                            "reason": "An exit order is already open at the broker; no duplicate exit is submitted",
+                            "rule": "exit_in_progress",
+                            "strategy": strategy,
+                            "client_order_id": client_order_id,
+                            "safe_to_retry": True,
+                        }
+                    )
+                    continue
+                # An order may fill after the scan snapshot. Never use the
                 # earlier position quantity to submit a reducing order.
                 try:
                     positions = hooks.get_positions()
@@ -421,6 +508,7 @@ def execute_trade_batch(
                             "reason": f"Could not reconcile exit position: {exc}",
                             "strategy": strategy,
                             "client_order_id": client_order_id,
+                            "safe_to_retry": True,
                         }
                     )
                     continue

@@ -2,12 +2,14 @@
 """Algo account performance, benchmark comparison, and broker-fill reports."""
 
 import argparse
+from bisect import bisect_left
+from collections import defaultdict
 import fcntl
 import json
 import logging
 import math
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -19,6 +21,7 @@ import requests
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 from market.calendar import get_market_schedule
 from reporting.fills import FillHistoryError, get_account_fill_report
+from autoresearch.validation.drift_monitor import LIVE_FEED_SCHEMA
 from reporting.journal import dedupe_journal_entries
 from runtime.atomic import atomic_write_json
 
@@ -113,27 +116,45 @@ def _snapshot_dir(mode: str) -> Path:
 
 def load_snapshots(days: int | None = None, mode: str = "algo", account_id: str | None = None) -> list[dict]:
     """Load snapshots for one broker account and mode when its ID is given."""
+    snapshots, _ = load_snapshots_with_skips(days=days, mode=mode, account_id=account_id)
+    return snapshots
+
+
+def load_snapshots_with_skips(
+    days: int | None = None, mode: str = "algo", account_id: str | None = None,
+) -> tuple[list[dict], int]:
+    """Load snapshots and count the files skipped because they were unreadable."""
     snapshot_dir = _snapshot_dir(mode)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     files = sorted(snapshot_dir.glob("*.json"))
     snapshots = []
+    skipped = 0
     for f in files:
         try:
             with open(f) as fp:
                 snapshot = json.load(fp)
-                if account_id is None or (
-                    snapshot.get("account_id") == account_id
-                    and snapshot.get("trading_mode") == mode
-                ):
-                    snapshots.append(snapshot)
-        except Exception:
+        except (OSError, ValueError) as exc:
+            # json.JSONDecodeError and UnicodeDecodeError are both ValueError.
+            skipped += 1
+            log.warning("Skipping unreadable snapshot %s: %s", f.name, exc)
             continue
+        if not isinstance(snapshot, dict):
+            skipped += 1
+            log.warning("Skipping snapshot %s: not a JSON object", f.name)
+            continue
+        if account_id is None or (
+            snapshot.get("account_id") == account_id
+            and snapshot.get("trading_mode") == mode
+        ):
+            snapshots.append(snapshot)
 
+    if skipped:
+        log.warning("Skipped %d of %d snapshot file(s) in %s", skipped, len(files), snapshot_dir)
     if days:
         cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         snapshots = [s for s in snapshots if s.get("date", "") >= cutoff]
 
-    return snapshots
+    return snapshots, skipped
 
 
 def load_trade_journal(mode: str = "algo", account_id: str | None = None) -> list[dict]:
@@ -406,6 +427,111 @@ def compute_performance(snapshots: list[dict]) -> dict | None:
     }
 
 
+def build_strategy_daily_returns(events: list[dict], snapshots: list[dict]) -> dict:
+    """Daily per-strategy returns from fill-level realized P&L.
+
+    ``events`` are the covered realized-fill events from
+    ``reporting.fills.get_account_fill_report``. Each fill is counted once and
+    split by the strategy that owns its lots. A fill is booked to the first
+    snapshot session on or after its market date, and the return divides that
+    P&L by account equity at the prior session's snapshot. Sessions without
+    realized P&L are zero for any strategy that has realized P&L by then.
+    """
+    equity_by_day: dict[str, float] = {}
+    for snapshot in snapshots:
+        day = str(snapshot.get("date") or "")[:10]
+        equity = _finite_float(snapshot.get("equity"))
+        if day and equity is not None and equity > 0:
+            equity_by_day[day] = equity
+    sessions = sorted(equity_by_day)
+    pnl: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+    skipped = {
+        "uncovered_fills": 0, "unreadable_time": 0,
+        "after_last_snapshot": 0, "before_prior_session": 0,
+    }
+    for event in events:
+        if event.get("basis_status") != "covered":
+            skipped["uncovered_fills"] += 1
+            continue
+        day = _market_day(event.get("transaction_time"))
+        if day is None:
+            skipped["unreadable_time"] += 1
+            continue
+        index = bisect_left(sessions, day)
+        if index >= len(sessions):
+            skipped["after_last_snapshot"] += 1
+            continue
+        if index == 0:
+            skipped["before_prior_session"] += 1
+            continue
+        for strategy, amount in (event.get("strategy_pnl") or {}).items():
+            value = _finite_float(amount)
+            if strategy and value is not None:
+                pnl[str(strategy)][index] += value
+
+    strategies = {}
+    for strategy, by_index in sorted(pnl.items()):
+        rows = []
+        for index in range(min(by_index), len(sessions)):
+            base = equity_by_day[sessions[index - 1]]
+            rows.append({
+                "date": sessions[index],
+                "return": round(by_index.get(index, 0.0) / base, 8),
+            })
+        strategies[strategy] = rows
+    return {"strategies": strategies, "sessions": len(sessions), "skipped": skipped}
+
+
+def write_live_drift_feed(path: Path, returns_report: dict) -> None:
+    """Write the per-strategy return series that the drift monitor consumes."""
+    atomic_write_json(
+        Path(path),
+        {
+            "schema": LIVE_FEED_SCHEMA,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "sessions": returns_report["sessions"],
+            "skipped": returns_report["skipped"],
+            "strategies": returns_report["strategies"],
+        },
+        indent=2, sort_keys=True,
+    )
+
+
+def write_live_drift_feed_for_account(path: Path, *, mode: str, account_id: str) -> dict:
+    """Build and atomically write the live drift feed for one broker account.
+
+    Same inputs and builders as ``--drift-feed``; used by the daemon's nightly job.
+    """
+    trades = load_trade_journal(mode=mode, account_id=account_id)
+    trades, _ = reconcile_trade_orders(trades, mode=mode)
+    fill_report = get_account_fill_report(mode, trades)
+    all_snapshots, _ = load_snapshots_with_skips(mode=mode, account_id=account_id)
+    feed = build_strategy_daily_returns(fill_report.get("realized_fills") or [], all_snapshots)
+    write_live_drift_feed(Path(path), feed)
+    return {
+        "sessions": feed["sessions"],
+        "realized_pnl_complete": bool(fill_report.get("realized_pnl_complete")),
+    }
+
+
+def _finite_float(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _market_day(value) -> str | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(MARKET_TZ).date().isoformat()
+
+
 # ---------------------------------------------------------------------------
 # Snapshot
 # ---------------------------------------------------------------------------
@@ -536,15 +662,21 @@ def take_snapshot(
 # Output
 # ---------------------------------------------------------------------------
 
-def terminal_report(perf: dict, trade_stats: dict, mode: str = "algo") -> None:
+def terminal_report(
+    perf: dict, trade_stats: dict, mode: str = "algo", skipped_snapshots: int = 0,
+) -> None:
     """Pretty-print performance summary to stdout."""
     if not perf:
         print("No performance data yet. Run --snapshot first.")
+        if skipped_snapshots:
+            print(f"  {skipped_snapshots} snapshot file(s) were skipped as unreadable.")
         return
 
     print(f"{'='*65}")
     print(f"  ALGO TRADER — {mode.upper()} PERFORMANCE TRACKER ({perf.get('account_name', mode.title())})")
     print(f"  {perf['period_start']} → {perf['period_end']}  ({perf['snapshots_count']} snapshots)")
+    if skipped_snapshots:
+        print(f"  {skipped_snapshots} snapshot file(s) skipped as unreadable; figures exclude them.")
     print(f"{'='*65}")
     print(f"  Starting Equity:    ${perf['starting_equity']:>13,.2f}")
     print(f"  Current Equity:     ${perf['current_equity']:>13,.2f}")
@@ -615,6 +747,8 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="JSON output")
     parser.add_argument("--fill-report", action="store_true",
                         help="Reconcile gross realized P&L from broker FILL activities")
+    parser.add_argument("--drift-feed", type=Path,
+                        help="Write per-strategy daily realized returns from broker FILL activities for drift monitoring")
     parser.add_argument("--days", type=int, help="Limit to last N days")
     parser.add_argument("--mode", choices=["algo"], default="algo",
                         help="Account route (only the Algo paper account is supported)")
@@ -623,6 +757,8 @@ def main() -> int:
         parser.error("--snapshot-kind requires --snapshot")
     if args.fill_report and args.snapshot:
         parser.error("--fill-report cannot be combined with --snapshot")
+    if args.drift_feed and args.snapshot:
+        parser.error("--drift-feed cannot be combined with --snapshot")
 
     if args.snapshot:
         try:
@@ -650,22 +786,31 @@ def main() -> int:
     except (requests.RequestException, ValueError) as exc:
         log.error("Cannot verify current %s account for reporting: %s", args.mode, exc)
         return 1
-    snapshots = load_snapshots(days=args.days, mode=args.mode, account_id=current_account_id)
+    snapshots, skipped_snapshots = load_snapshots_with_skips(
+        days=args.days, mode=args.mode, account_id=current_account_id,
+    )
     trades = load_trade_journal(mode=args.mode, account_id=current_account_id)
     trades, order_reconciliation = reconcile_trade_orders(trades, mode=args.mode)
     perf = compute_performance(snapshots)
     trade_stats = compute_trade_stats(trades)
     strategy_stats = compute_strategy_stats(trades)
     fill_report = None
-    if args.fill_report:
+    if args.fill_report or args.drift_feed:
         try:
             fill_report = get_account_fill_report(args.mode, trades)
         except (requests.RequestException, FillHistoryError, ValueError) as exc:
             log.error("Cannot reconcile %s broker fills: %s", args.mode, exc)
             return 1
+        if args.drift_feed:
+            # The drift feed uses every snapshot, not the --days window.
+            all_snapshots, _ = load_snapshots_with_skips(mode=args.mode, account_id=current_account_id)
+            feed = build_strategy_daily_returns(fill_report.get("realized_fills") or [], all_snapshots)
+            write_live_drift_feed(args.drift_feed, feed)
         # The summary is concise enough for cron reports. Full per-fill
         # details remain available through reporting.fills directly.
         fill_report.pop("realized_fills", None)
+        if not args.fill_report:
+            fill_report = None
 
     if args.json:
         output = {
@@ -674,12 +819,13 @@ def main() -> int:
             "trade_stats": trade_stats,
             "strategy_stats": strategy_stats,
             "order_reconciliation": order_reconciliation,
+            "snapshot_files_skipped": skipped_snapshots,
         }
         if fill_report is not None:
             output["fill_report"] = fill_report
         print(json.dumps(output, indent=2, default=str))
     elif args.report or not args.json:
-        terminal_report(perf, trade_stats, mode=args.mode)
+        terminal_report(perf, trade_stats, mode=args.mode, skipped_snapshots=skipped_snapshots)
         if strategy_stats:
             print("  STRATEGY ATTRIBUTION:")
             for name, values in strategy_stats.items():

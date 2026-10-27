@@ -25,7 +25,10 @@ from broker.algo import AlgoAlpaca
 from broker.options import OptionsPaperClient
 from options.config import load_options_config
 from options.costs import OptionsCostModel
-from options.data import AlpacaOptionDataProvider, OptionChain, parse_snapshot_quote
+from options.data import AlpacaOptionDataProvider, OptionChain, market_pair, parse_snapshot_quote
+from options.market_inputs import (
+    MarketInputs, configured_dividend_symbols, refresh_dividend_yields, refresh_market_inputs,
+)
 from options.journal import OptionsJournal
 from options.iv_history import seed_theta_iv_history
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
@@ -42,14 +45,14 @@ from options.symbols import parse_occ_symbol
 from portfolio.config import ALGO_SERVICE_CONFIG
 from portfolio.state_store import AlgoStateStore, StateStoreError
 from runtime.paths import DATA_DIR, ROOT
-from strategies.event_driven.ai import AIEventSignalBook
+from strategies.llm_driven.ai import LLMSignalBook
 from strategies.options.base import OptionsStrategyContext
 from strategies.options.base import regime_risk_multiplier
 from strategies.options.directional_overlay import (
     DirectionalOverlayStrategy,
     directional_overlay_exit_reason,
 )
-from strategies.options.event_driven import EventDrivenOptionsStrategy
+from strategies.options.llm_driven import LlmDrivenOptionsStrategy
 from strategies.options.long_volatility import (
     LongVolatilitySleeve,
     atm_implied_volatility,
@@ -59,6 +62,7 @@ from strategies.options.long_volatility import (
 from strategies.options.vrp import VolatilityRiskPremiumStrategy
 
 
+LOG = logging.getLogger(__name__)
 _OCC_LIKE = re.compile(r"^[A-Z0-9.]{1,6}\d{6}[CP]\d{8}$")
 _US_EQUITY_TZ = ZoneInfo("America/New_York")
 
@@ -186,7 +190,7 @@ def _load_directional_equity_signals(
 
 
 def _load_ai_recommendations(tickers: set[str] | None = None) -> tuple[dict, dict]:
-    book = AIEventSignalBook()
+    book = LLMSignalBook()
     results = {}
     for ticker in (tickers if tickers is not None else set(book.universe)):
         recommendation = book.recommendation(ticker, universe=set(book.universe))
@@ -227,6 +231,7 @@ def _option_position_exposures(
     feed: str,
     config: dict,
     maintenance_margin: float = 0.0,
+    market_inputs: MarketInputs | None = None,
 ) -> tuple[list[PositionExposure], list[dict], int, list[str]]:
     option_rows = [
         row for row in positions
@@ -288,10 +293,14 @@ def _option_position_exposures(
             )
             spot = client.underlying_price(contract.underlying)
             quote_as_of = max(as_of.astimezone(timezone.utc), datetime.now(timezone.utc))
+            rate, dividend_yield = market_pair(
+                contract.underlying, quote_as_of, market_inputs=market_inputs,
+                rate=float(config["rate"]), dividend_yield=float(config["dividend_yield"]),
+            )
             quote = parse_snapshot_quote(
                 contract, snapshots.get(symbol) or {}, spot=spot, as_of=quote_as_of,
-                feed=feed, rate=float(config["rate"]),
-                dividend_yield=float(config["dividend_yield"]),
+                feed=feed, rate=rate,
+                dividend_yield=dividend_yield,
                 max_quote_age_seconds=int(config["max_quote_age_seconds"]),
             )
             if quote is None:
@@ -320,6 +329,10 @@ def _option_position_exposures(
                 max_loss=market_value if quantity > 0 else covered_short_risk.get(symbol, 0.0),
                 margin=(covered_short_risk.get(symbol, 0.0) if quantity < 0 and maintenance_margin <= 0 else 0.0),
                 assignment_shares=assignment_shares,
+                short_call_shares=(
+                    abs(int(quantity)) * contract.multiplier
+                    if quantity < 0 and contract.right == "call" else 0
+                ),
                 source="broker_option_position",
             ))
             if simulated_assignment:
@@ -876,6 +889,14 @@ def run_paper_cycle(
         raise ValueError("cycle time must be timezone-aware")
     session_date = now.astimezone(_US_EQUITY_TZ).date().isoformat()
     client = options_client or OptionsPaperClient()
+    # Once per session, before scanning. Failures fall back to cached or configured inputs.
+    session_day = datetime.fromisoformat(session_date).date()
+    market_refresh = refresh_market_inputs(config, today=session_day)
+    dividend_refresh = refresh_dividend_yields(
+        configured_dividend_symbols(config), as_of=session_day,
+        headers=getattr(client, "headers", None) or {},
+    )
+    market_inputs = MarketInputs(config)
     account = client.verify_account()
     algo = algo_client or AlgoAlpaca()
     algo_account = algo.account()
@@ -914,6 +935,7 @@ def run_paper_cycle(
         max_quote_age_seconds=int(config["max_quote_age_seconds"]),
         rate=float(config["rate"]),
         dividend_yield=float(config["dividend_yield"]),
+        market_inputs=market_inputs,
     )
     journal = OptionsJournal(client.account_id)
     for order in all_orders:
@@ -940,6 +962,7 @@ def run_paper_cycle(
         "combined_daily_pnl_pct": combined_daily_pnl_pct,
     }
     diagnostics["options_entries_today"] = entries_today
+    diagnostics["market_inputs"] = {"rate_refresh": market_refresh, "dividend_refresh": dividend_refresh}
     long_volatility_config = {
         **config["long_volatility"],
         "min_open_interest": config["long_volatility"].get("min_open_interest", config["min_open_interest"]),
@@ -966,6 +989,7 @@ def run_paper_cycle(
                     config=long_volatility_config,
                     rate=float(config.get("rate", 0.04)),
                     dividend_yield=float(config.get("dividend_yield", 0.015)),
+                    market_inputs=market_inputs,
                 )
             except Exception as exc:
                 iv_history_bootstrap[symbol] = {
@@ -1191,10 +1215,10 @@ def run_paper_cycle(
 
     recommendations, ai_status = _load_ai_recommendations()
     event_config = {
-        **config["event_driven"],
+        **config["llm_driven"],
         "regime_risk_multipliers": config.get("regime_risk_multipliers", {}),
     }
-    min_confidence = float(event_config.get("min_llm_confidence", 0.60))
+    min_confidence = float(event_config.get("min_llm_confidence", 0.80))
     eligible_recommendations = [
         recommendation
         for recommendation in recommendations.values()
@@ -1204,17 +1228,17 @@ def run_paper_cycle(
     eligible_recommendations.sort(key=lambda item: (-item.confidence, item.ticker))
     max_symbols = max(0, int(event_config.get("max_symbols_per_cycle", 3)))
     selected_recommendations = eligible_recommendations[:max_symbols]
-    diagnostics["event_driven"] = {
-        "signal_source": "event_driven_llm_briefing",
+    diagnostics["llm_driven"] = {
+        "signal_source": "llm_driven_briefing",
         "ai_signal_book": ai_status,
         "eligible_recommendations": len(eligible_recommendations),
         "selected_symbols": [item.ticker for item in selected_recommendations],
         "max_symbols_per_cycle": max_symbols,
     }
     event_regime_weight = regime_risk_multiplier(event_config, regime)
-    diagnostics["event_driven"]["regime_risk_multiplier"] = event_regime_weight
-    if not exclusive_long_volatility and config["event_driven"].get("enabled", True) and event_regime_weight > 0:
-        strategy = EventDrivenOptionsStrategy(event_config)
+    diagnostics["llm_driven"]["regime_risk_multiplier"] = event_regime_weight
+    if not exclusive_long_volatility and config["llm_driven"].get("enabled", True) and event_regime_weight > 0:
+        strategy = LlmDrivenOptionsStrategy(event_config)
         event_errors = []
         for recommendation in selected_recommendations:
             symbol = recommendation.ticker
@@ -1240,10 +1264,10 @@ def run_paper_cycle(
                     candidates.append((replace(signal, structure=structure), chain, []))
             except Exception as exc:
                 event_errors.append({"underlying": symbol, "error": type(exc).__name__})
-                LOG.warning("Options event sleeve could not build %s from LLM briefing: %s", symbol, type(exc).__name__)
-        diagnostics["event_driven"]["chain_errors"] = event_errors
+                LOG.warning("Options LLM sleeve could not build %s from LLM briefing: %s", symbol, type(exc).__name__)
+        diagnostics["llm_driven"]["chain_errors"] = event_errors
     elif event_regime_weight <= 0:
-        diagnostics["event_driven"]["entries_disabled_for_regime"] = True
+        diagnostics["llm_driven"]["entries_disabled_for_regime"] = True
 
     open_option_order_exposure = [
         order for order in open_orders
@@ -1260,11 +1284,12 @@ def run_paper_cycle(
     options_positions, position_audit, existing_structures, data_quality = _option_position_exposures(
         client, option_positions_all, as_of=now, feed=feed, config=config,
         maintenance_margin=_safe_number(account.get("maintenance_margin")),
+        market_inputs=market_inputs,
     )
     pending_options_positions, _pending_audit, _pending_structure_count, pending_data_quality = (
         _option_position_exposures(
             client, pending_position_rows, as_of=now, feed=feed, config=config,
-            maintenance_margin=0.0,
+            maintenance_margin=0.0, market_inputs=market_inputs,
         )
     )
     diagnostics["pending_open_option_orders"] = {
@@ -1502,7 +1527,7 @@ def run_paper_cycle(
     # positions are managed before new strategy entries are considered.
     candidates.sort(key=lambda entry: (
         0 if entry[0].strategy == LongVolatilitySleeve.strategy_id
-        else 1 if entry[0].strategy == "options_event_driven"
+        else 1 if entry[0].strategy == LlmDrivenOptionsStrategy.strategy_id
         else 2 if entry[0].strategy == DirectionalOverlayStrategy.strategy_id
         else 3,
         -float(entry[0].confidence or 0.0)
@@ -1743,11 +1768,16 @@ def run_paper_cycle(
     published_rows = [*options_positions, *pending_options_positions, *option_account_stock_exposures]
     if submit:
         published_rows.extend(submitted_exposure)
+    stress_kwargs = {
+        "stress_spot_shocks": config["risk"]["stress_spot_shocks"],
+        "stress_iv_shock": float(config["risk"]["stress_iv_shock"]),
+    }
     option_only = summarize_portfolio(
         combined_equity=combined_equity,
         options_equity=option_account_equity,
         positions=published_rows,
         data_quality=data_quality,
+        **stress_kwargs,
     )
     publish_risk_snapshot(option_only, account_id=account_id)
     full_summary = summarize_portfolio(
@@ -1755,6 +1785,7 @@ def run_paper_cycle(
         options_equity=option_account_equity,
         positions=[*equity_exposures, *published_rows],
         data_quality=data_quality,
+        **stress_kwargs,
     )
     daily = {
         "account_id": account_id,

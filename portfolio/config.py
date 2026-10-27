@@ -32,13 +32,13 @@ class AlgoRuntimeSettings:
     enable_intraday_trend_following: bool = True
     enable_intraday_momentum: bool = True
     swing_multi_factor_enabled: bool = True
-    swing_event_driven_enabled: bool = True
+    swing_llm_driven_enabled: bool = True
 
     def __post_init__(self) -> None:
         for name in (
             "overnight_entries_enabled", "enable_intraday_trend_following",
             "enable_intraday_momentum", "swing_multi_factor_enabled",
-            "swing_event_driven_enabled",
+            "swing_llm_driven_enabled",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise ValueError(f"{name} must be boolean")
@@ -141,7 +141,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 0.06,
             "swing_momentum": 0.06,
             "swing_multi_factor": 0.06,
-            "swing_event_driven": 0.04,
+            "swing_llm_driven": 0.04,
             "swing_mean_reversion": 0.07,
             "intraday_trend_following": 0.011,
             "intraday_momentum": 0.011,
@@ -151,7 +151,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 0.045,
             "swing_momentum": 0.045,
             "swing_multi_factor": 0.045,
-            "swing_event_driven": 0.03,
+            "swing_llm_driven": 0.03,
             "swing_mean_reversion": 0.05,
             "intraday_trend_following": 0.008,
             "intraday_momentum": 0.008,
@@ -161,7 +161,7 @@ ALGO_MODE_CONFIG = {
             "swing_trend_following": 0.02,
             "swing_momentum": 0.02,
             "swing_multi_factor": 0.02,
-            "swing_event_driven": 0.02,
+            "swing_llm_driven": 0.02,
             "swing_mean_reversion": 0.02,
             "intraday_trend_following": 0.005,
             "intraday_momentum": 0.005,
@@ -174,7 +174,7 @@ ALGO_MODE_CONFIG = {
         "max_positions_per_strategy": 7,
         "max_positions_per_strategy_by_strategy": {
             "swing_trend_following": 7, "swing_momentum": 7, "swing_mean_reversion": 7,
-            "swing_multi_factor": 7, "swing_event_driven": 7, "intraday_mean_reversion": 7,
+            "swing_multi_factor": 7, "swing_llm_driven": 7, "intraday_mean_reversion": 7,
             "intraday_trend_following": 7, "intraday_momentum": 7,
         },
         "max_short_positions": 5,
@@ -188,7 +188,7 @@ ALGO_MODE_CONFIG = {
             "swing_mean_reversion": 0,
             "intraday_trend_following": 20,
             "intraday_momentum": 20,
-            "swing_multi_factor": 0, "swing_event_driven": 0,
+            "swing_multi_factor": 0, "swing_llm_driven": 0,
         },
         "cooldown_minutes_by_strategy": {
             "intraday_mean_reversion": 90,
@@ -198,14 +198,14 @@ ALGO_MODE_CONFIG = {
             "intraday_trend_following": 60,
             "intraday_momentum": 60,
             "swing_multi_factor": 5 * 24 * 60,
-            "swing_event_driven": 5 * 24 * 60,
+            "swing_llm_driven": 5 * 24 * 60,
         },
         "max_entries_per_strategy_per_day": {
             "intraday_mean_reversion": 4,
             "swing_trend_following": 2,
             "swing_momentum": 2,
             "swing_multi_factor": 2,
-            "swing_event_driven": 5,
+            "swing_llm_driven": 5,
             "swing_mean_reversion": 2,
             "intraday_trend_following": 1,
             "intraday_momentum": 1,
@@ -224,7 +224,6 @@ ALGO_MODE_CONFIG = {
         "max_tactical_pct": 0.10,
         "max_tactical_positions": 3,
         "flatten_eod": False,
-        "allow_leveraged_etfs": False,
     },
 }
 
@@ -264,19 +263,8 @@ ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
         "core_tech": 0.40,
         "diversifiers": 0.30,
         "hedge": 0.20,
-        "tactical": 0.04,
+        "tactical": 0.10,
     },
-}
-
-ALGO_REGIME_CONFIG = {
-    # The supervised feature rule controls entries. HMM/GMM remain side-by-side
-    # diagnostics until forward replay establishes stable incremental value.
-    "engine": "rule",
-    "feature_set": "marketwide",
-    "strategy_policy": "configured",
-    "include_models": True,
-    "min_model_confidence": 0.50,
-    "model_training_window": 756,
 }
 
 # Idle cash is parked in a cash-proxy ETF. The proxy is invisible to the risk
@@ -323,7 +311,7 @@ STRATEGY_CONFIG = {
     "extended_quote_stale_seconds": 300,
     "extended_hours_max_spread_pct": 0.02,
     "risk_per_trade_pct": 0.005,
-    "max_strategy_position_pct": 0.05,
+    "max_strategy_position_pct": 0.07,
     "take_profit_r_multiple": 2.0,
     # Regular-session entries are limit orders this far from the decision price.
     "entry_limit_band_bps": 10,
@@ -399,6 +387,11 @@ def get_algo_regime_config() -> dict:
             name: bool(settings["enabled"])
             for name, settings in config["strategies"].items()
         },
+        # Route weights pick eligible strategies; risk_scale alone sets their size.
+        "strategy_risk_scales": {
+            name: float(settings.get("risk_scale", 1.0))
+            for name, settings in config["strategies"].items()
+        },
         "volatile_policy_risk_multiplier": general["volatile_policy_risk_multiplier"],
         "volatility_risk_scales": dict(general["volatility_risk_scales"]),
     }
@@ -434,7 +427,7 @@ def get_algo_runtime_settings() -> AlgoRuntimeSettings:
         enable_intraday_trend_following=strategies["intraday_trend_following"]["enabled"],
         enable_intraday_momentum=strategies["intraday_momentum"]["enabled"],
         swing_multi_factor_enabled=strategies["swing_multi_factor"]["enabled"],
-        swing_event_driven_enabled=strategies["swing_event_driven"]["enabled"],
+        swing_llm_driven_enabled=strategies["swing_llm_driven"]["enabled"],
     )
 
 
@@ -469,7 +462,6 @@ def get_mode_config(mode: str | None = None) -> dict:
         "max_tactical_pct": portfolio["max_tactical_pct"],
         "max_tactical_positions": portfolio["max_tactical_positions"],
         "flatten_eod": portfolio["flatten_eod"],
-        "allow_leveraged_etfs": portfolio["allow_leveraged_etfs"],
         "range_regime_short_risk_multiplier": portfolio["range_regime_short_risk_multiplier"],
         "min_cash_pct": portfolio["min_cash_pct"],
         "risk_per_trade_pct": general["risk_per_trade_pct"],

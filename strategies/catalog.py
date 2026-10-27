@@ -55,9 +55,9 @@ _STRATEGIES = {
         "swing_multi_factor", "1Day", "swing", "core", "swing", "swing_core", "cross_sectional",
         research_workflows=("nightly_swing",),
     ),
-    "swing_event_driven": StrategySpec(
-        "swing_event_driven", "1Day", "swing", "core", "swing", "swing_core", "event",
-        research_workflows=("event_research",),
+    "swing_llm_driven": StrategySpec(
+        "swing_llm_driven", "1Day", "swing", "core", "swing", "swing_core", "llm",
+        research_workflows=("llm_research",),
     ),
 }
 
@@ -70,7 +70,6 @@ STRATEGY_ID_ALIASES = MappingProxyType({
     "momentum": "swing_momentum",
     "intraday_trend": "intraday_trend_following",
     "multi_factor": "swing_multi_factor",
-    "event_driven": "swing_event_driven",
 })
 
 

@@ -39,7 +39,7 @@ forward trial still pairs it with the current profile and applies the separate
 prospective sample and promotion gates. A weak candidate remains in the archive
 with its fold evidence while it remains in the bounded archive; it does not
 replace a stronger candidate merely because it had a higher score on one
-discovery window. The final holdout remains outside these repeated searches and
+discovery window. Holdout sessions stay outside these repeated searches and
 checks.
 
 The nightly pipeline also runs rolling out-of-sample verification over the
@@ -67,13 +67,34 @@ candidate iteration order.
 
 A candidate needs at least 30 closed trades entered in its target regime,
 20 distinct exit sessions, and 15 distinct target-regime entry sessions. A
-trial expires after 180 calendar days if it does not collect that sample. Once
-the sample is met, promotion requires all of the following:
+trial expires after 180 calendar days if it does not collect that sample.
 
-- Positive realized P&L after modeled costs on target-regime trades.
-- Higher target-regime realized P&L than the paired current-profile replay.
-- Positive end-of-replay marked P&L after estimated exit costs, and higher
-  marked P&L than the paired current-profile replay.
+Once the sample is met, the forward window is split in time: the first two
+thirds are the search window and the last third is the holdout. Acceptance runs
+in four steps:
+
+1. Search gate, for every trial. It uses search-window sessions only and needs
+   at least 20 of them, a positive mean excess return over the benchmark, a
+   margin of at least 5 bps per session over the paired current profile, at
+   least 60% of purged folds positive, a drawdown of the excess no more than
+   1.2 times the incumbent's, and a Deflated Sharpe Ratio of at least 0.95
+   (see "Multiple-testing deflation").
+2. Cohort winner. Candidates staged together compete only among those that
+   passed the search gate. The winner has the highest compounded search-window
+   return; ties go to discovery fitness, then candidate ID. Holdout results do
+   not rank candidates.
+3. Holdout gate, for the chosen candidate only. The holdout needs at least 20
+   sessions and a positive mean excess return. A winner that fails it is not
+   promoted, and no other cohort member is substituted.
+4. Promotion cap. At most `max_promotions_per_cycle` promotions run per cycle
+   and at most `max_promotions_per_strategy_per_cycle` per strategy (both
+   default to 1). Queued promotions are ranked by search-window return before
+   anything is written. Any over the cap are marked `skipped` with a reason and
+   may be staged again later.
+
+Realized P&L after modeled costs and marked equity against the paired profile
+are still computed and stored as `legacy_gate_pass` for comparison. They do not
+decide promotion.
 
 The forward replay uses SIP regular-session five-minute bars plus stored SIP
 pre-market/after-hours bars and BOATS overnight bars when available. The
@@ -93,12 +114,108 @@ overnight fills are approximated by the replay's next-bar model; the simulation
 does not have quote-level spreads, queue position, or session-specific fill
 rules, so its results are not a live 24/5 execution estimate.
 
-On promotion, the candidate is atomically written to
-`data/research/algo-auto/promoted-profile.json`. The Algo scanner reloads that
-manifest each scan and applies signal parameters for the matching regime;
-portfolio risk limits are not promoted. The trial history and last cycle live
-in `data/research/algo-auto/forward-validation.json`. Discovery, verification,
-and trial artifacts remain under `data/research/algo-auto/`.
+On promotion, the candidate becomes the active profile version for its strategy
+and regime (see "Profile versions, promotion history, and revert" below) and is
+atomically projected into `data/research/algo-auto/promoted-profile.json`. The
+Algo scanner reloads that manifest each scan and applies signal parameters for
+the matching regime; portfolio risk limits are not promoted. The trial history
+and last cycle live in `data/research/algo-auto/forward-validation.json`.
+Discovery, verification, and trial artifacts remain under
+`data/research/algo-auto/`.
+
+## Multiple-testing deflation
+
+Selecting the best of many evaluated candidates inflates the apparent Sharpe
+ratio. The forward gate deflates each candidate by the number of trials
+evaluated, using the Deflated Sharpe Ratio of Bailey and Lopez de Prado (2014).
+
+The trial count N is the number of distinct evaluations recorded for the
+strategy across all regimes. It is stored in the `trial_evaluation` table of
+`data/research/algo-auto/research.sqlite3`. Discovery contributes each distinct
+non-baseline parameter set it evaluated in any window attempt, read from the
+`evaluated_candidate_ids` list in each discovery artifact. Forward trials
+contribute one row per trial ID. Rows are insert-only, and the count also
+includes forward trials already in the `forward_trial` ledger table, so the
+count cannot shrink when the state file trims its history.
+
+For a candidate with search-window per-session Sharpe `SR`, `T` search sessions,
+skewness `g3`, and non-excess kurtosis `g4` (3 for normal returns):
+
+    V      = (1 - g3*SR + (g4 - 1)/4 * SR^2) / (T - 1)
+    E[max] = sqrt(V) * ((1 - g) * Phi^-1(1 - 1/N) + g * Phi^-1(1 - 1/(N*e)))
+    DSR    = Phi((SR - E[max]) * sqrt(T - 1) / sqrt(1 - g3*SR + (g4 - 1)/4 * SR^2))
+
+Here `g` is the Euler-Mascheroni constant (0.5772), `Phi` is the standard normal
+CDF, and `e` is Euler's number. `E[max]` is the Sharpe a zero-skill search over N
+trials would be expected to reach by chance. With N = 1 it is zero, and it rises
+slowly with N. The gate requires DSR >= 0.95 (`min_deflated_sharpe` in
+`FORWARD_ACCEPTANCE_POLICY`). `V` uses the candidate's own estimator variance,
+not the dispersion across trials, so it is an approximation.
+
+Measured as `SR * sqrt(T - 1)` over the shape term, which is close to a
+t-statistic, the requirement is the expected maximum for N plus 1.645 (the 0.95
+quantile). The bar does not depend on T. It is 1.6 for N = 1, 2.2 for N = 2,
+3.2 for N = 10, 4.2 for N = 100, and 4.9 for N = 1000. It therefore rises as
+candidates accumulate for a strategy.
+
+The earlier max-of-noise bound, sqrt(2 ln N), was replaced by this formula. It
+was not a Deflated Sharpe Ratio.
+
+## Profile versions, promotion history, and revert
+
+Every profile that has been live is a row in the `profile_versions` table of
+`data/research/algo-auto/research.sqlite3`, and every promotion, revert, and
+backfill is a row in `profile_events`. A version records its parameters in
+canonical JSON, the forward evidence behind a promotion (`fitness_json`: net and
+marked P&L, the Deflated Sharpe Ratio, closed trades and sessions, the
+acceptance decision, and the deflation trial count), its `parent_version_id`,
+and its release ID. `status` is `pending`, `active`, `superseded` (replaced by a
+promotion), `reverted` (removed by an operator revert), or `abandoned` (a
+crash-interrupted promotion that never went live). A partial unique index allows
+at most one `active` version per strategy and regime. Base parameters, which
+are not regime-specific, use the regime `*`.
+
+Write order and crash behavior. Forward validation holds the same flock as
+before. A promotion first inserts the new version as `pending`, then atomically
+writes `promoted-profile.json`, then in one transaction marks the previous
+version `superseded`, marks the new one `active`, and writes the promote event
+with the replaced parameters. The JSON is the live projection; the database is
+the record. Each forward cycle runs `reconcile` before it stages anything: a
+pending row whose candidate the JSON already names is activated, and any other
+pending row is marked `abandoned`, which lets that candidate be promoted again.
+A candidate is promoted at most once per strategy and regime, so a replayed
+trial after a crash cannot create a second release. The deflation trial count
+comes from the `trial_evaluation` table (see "Multiple-testing deflation"), so
+trimming the state file's history never lowers it.
+
+Inspect and restore with the CLI; a read-only listing needs no lock:
+
+```bash
+poetry run python -m autoresearch.profile_versions list --strategy swing_momentum
+poetry run python -m autoresearch.profile_versions history --strategy swing_momentum --regime range_bound
+poetry run python -m autoresearch.profile_versions compare --a <version> --b <version>
+poetry run python -m autoresearch.profile_versions revert --strategy swing_momentum --regime range_bound --to <version> --dry-run
+poetry run python -m autoresearch.profile_versions revert --strategy swing_momentum --regime range_bound --to <version> --reason "why"
+```
+
+`revert` validates the target with the registry validator and refuses pending,
+abandoned, or invalid versions. It takes the forward-validation flock, so it
+waits for a running forward cycle. It inserts a new `source=revert` version that
+copies the target's parameters and points to it through `restores_version_id`,
+then writes the JSON and activates the new version. The previously active
+version becomes `reverted`, and the revert event records the replaced
+parameters. The target row keeps its original promotion provenance. A revert is an operator
+action and is not blocked by a cohort holdout. It does not supersede the
+holdout, so the live profile can then differ from the frozen record. Supersede
+the holdout explicitly if that is intended. The scanner
+reads the JSON on every scan, so a revert takes effect on the next scan without
+a restart.
+
+`backfill` imports the live `promoted-profile.json` and its legacy history once,
+as `source=backfill`. It is idempotent and supports `--dry-run`. A history record
+that describes the live profile (same candidate) is attached to that version
+rather than duplicated. Legacy records without full parameters are stored with
+no parameters and cannot be reverted to.
 
 ## Durable run and candidate lineage
 
@@ -208,8 +325,9 @@ Discovery retains a planned one-feature cohort for each family before adding
 other parameter proposals. Candidate metrics report after-cost return,
 drawdown, trade count, turnover, and regime-specific outcomes so baseline,
 single-feature, and combined variants can be compared on the same future
-window. Historical discovery can nominate a candidate for the cohort, but the
-prospective promotion gate remains unchanged.
+window. Historical discovery can nominate a candidate for the cohort. The prospective
+gate, with its search rules, Deflated Sharpe Ratio, and holdout, applies
+unchanged.
 
 ## Walk-forward discipline and robustness
 
@@ -241,44 +359,53 @@ The forward drift monitor starts with a cursor at the latest existing stitched
 OOS date, then consumes only newly appended sessions. After 63 reference
 sessions it applies a one-sided Page-Hinkley-style detector to standardized
 after-cost daily returns. A warning pauses profile promotion until 20 healthy
-sessions clear it. Drift alerts never change live sizing. When a prospective
-holdout is scored, its sessions are skipped by the drift monitor so they do
-not become an input to later adaptation.
+sessions clear it. Drift alerts never change live sizing.
 
 Coordinator-level, regime-conditioned exponential weighting remains a shadow
 diagnostic. Strategy weights are learned only from prior-day, after-cost sleeve
 results and clipped to 0.5x–1.5x, with a neutral 20-session warm-up for each
-regime. Forward candidate trials also exclude all sessions through the final
-holdout end date from their promotion sample. Any later fill-level coordinator
+regime. Forward candidate trials score only sessions after their staging date. Any later fill-level coordinator
 experiment must go through the same rolling folds and costs before it can be
 considered for promotion; the current report does not deploy these weights.
 
-## Prospective final holdout
+## Prospective cohort holdouts
 
-The first complete coordinator verification freezes the latest training-
-selected profile, strategy set, cost model, risk/coordinator policy, regime
-configuration, source artifact hashes, and a data cutoff in
-`final-holdout.json`. The holdout begins strictly after that cutoff. It is
-scored once, after at least 252 SPY sessions and three distinct rule-based
-regimes. The result reports overall and by-regime portfolio returns, drawdown,
-trades, benchmark comparison, and a block-bootstrap distribution. Sparse event
-driven overlays are excluded from this first frozen profile.
+Each live strategy and regime pair is a cohort. `initialize` freezes one
+holdout per cohort into the `final_holdout` table of
+`data/research/algo-auto/research.sqlite3`. The record stores the window, which
+starts the session after the freeze date and is open-ended. It also stores the
+live profile versions for the pair (version IDs, candidate IDs, and parameters)
+and the SHA-256 of those frozen parameters. Initialize is idempotent. A pair
+that already has an active holdout is left unchanged, even if its live profile
+has since moved.
 
-While the holdout is collecting, market bars continue to refresh, but
-discovery, rolling verification, factor fitting, coordinator replay, forward
-trial staging, and promotions remain capped at the frozen cutoff. This fence
-keeps the accumulating holdout from leaking into candidate selection. The
-frozen portfolio is replayed only when its session and regime gates are met.
-The drift monitor also stays at the cutoff, then begins its next reference
-period after the scored holdout end date.
-If live risk, coordinator, runtime, research-control, regime settings, or the
-database path change before scoring, the holdout is marked invalidated rather
-than silently replayed under a different policy. After the one-time score, new
-research can use accumulated bars; the frozen result is retained and never
-recomputed.
+While a pair's holdout is active, promotions for that pair are paused. Its
+candidates can still be staged and scored, but the live profile for that pair
+does not change. Other pairs are unaffected.
+
+Nothing in the nightly run supersedes a holdout. The nightly report only reads
+holdout status. A holdout ends only through the CLI. Supersede requires a reason
+and writes one `final_holdout_event` per retired holdout:
+
+```bash
+poetry run python -m autoresearch.validation.final_holdout initialize [--frozen-on YYYY-MM-DD]
+poetry run python -m autoresearch.validation.final_holdout status
+poetry run python -m autoresearch.validation.final_holdout supersede --reason "why" [--strategy S] [--regime R]
+```
+
+Holdout windows are recorded but not scored by the pipeline. Promotion for a
+frozen pair waits for an explicit supersede. Holdout sessions are never used to
+rank candidates; the holdout third of each forward window is evaluated only for
+the chosen candidate.
+
+`data/research/algo-auto/final-holdout.json` is the earlier whole-profile
+manifest. It remains on disk as an audit record and is no longer created or
+updated. Its frozen profile records `llm_driven_overlay_included`. A manifest
+without that key reads as `false`.
+
 # Ridge learned factor-weight replay
 
-Multi Factor candidates can select `factor_weight_mode: ridge_walk_forward`. AutoResearch fits a dated Ridge weight timeline before discovery, rolling verification, coordinator replay, and forward trials. Every replay uses the latest snapshot whose training labels had ended by that feature date. The final holdout freezes the timeline available at its cutoff, so its profile and learned factor weights are scored together. The fit is positive-coefficient Ridge weights normalized to sum to one, with an equal-weight fallback when all fitted coefficients are non-positive.
+Multi Factor candidates can select `factor_weight_mode: ridge_walk_forward`. AutoResearch fits a dated Ridge weight timeline before discovery, rolling verification, coordinator replay, and forward trials. Every replay uses the latest snapshot whose training labels had ended by that feature date. The legacy whole-profile manifest froze the timeline available at its cutoff. Cohort holdouts record only the live profile versions. The fit is positive-coefficient Ridge weights normalized to sum to one, with an equal-weight fallback when all fitted coefficients are non-positive.
 
 Live ranking reads `current_candidate_weights` from the latest research report only after a candidate carrying this mode has passed the existing forward promotion gate. A missing, future-dated, or more than seven calendar days old model fails closed for this mode and is exposed in multi-factor diagnostics. Static candidates continue to use their configured weights. Promotion therefore selects the weight mode; the nightly research artifact supplies the point-in-time weights.
 

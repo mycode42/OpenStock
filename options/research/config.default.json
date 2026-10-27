@@ -7,7 +7,7 @@
     "enabled": true,
     "strategies": ["vrp", "long_volatility"],
     "excluded_strategies": {
-      "event_driven": "Historical chain archives do not contain point-in-time event_recommendations.",
+      "llm_driven": "Historical chain archives do not contain point-in-time event_recommendations.",
       "directional_overlay": "Historical chain archives do not contain point-in-time equity_signals."
     },
     "eligibility": {
@@ -37,14 +37,18 @@
   },
   "execution": {
     "spread_fraction_per_leg": 0.50,
+    "slippage_per_contract_usd": 5.0,
+    "max_slippage_per_contract_usd": 25.0,
     "commission_per_contract_usd": 0.65,
     "exercise_fee_per_contract_usd": 0.15,
     "stock_commission_per_share_usd": 0.005,
     "base_fill_probability": 0.80,
     "multi_leg_fill_probability": 0.80,
     "risk_free_rate": 0.04,
+    "dividend_snapshot_path": "options/research/dividend_yields_2026-10-27.json",
     "dividend_yield": 0.015,
-    "max_risk_per_trade_pct": 0.005,
+    "dividend_yields": {"GLD": 0.0},
+    "max_risk_per_trade_pct": 0.07,
     "max_total_defined_risk_pct": 0.10,
     "maximum_contracts_per_trade": 1,
     "pin_risk_threshold_dollars": 0.02,
@@ -55,7 +59,7 @@
     "max_abs_gamma_pnl_1pct_pct_equity": 0.005,
     "max_abs_vega_per_vol_point_pct_equity": 0.01,
     "max_abs_theta_per_day_pct_equity": 0.001,
-    "max_assignment_shares": 200
+    "max_assignment_shares": 300
   },
   "walk_forward": {
     "rolling_train_sessions": 252,
@@ -98,7 +102,7 @@
         "short_delta_min": [0.10, 0.12],
         "wing_delta_max": [0.05, 0.07]
       },
-      "event_driven": {
+      "llm_driven": {
         "min_llm_confidence": [0.60, 0.75],
         "target_dte": [14, 21, 28]
       },
@@ -115,7 +119,8 @@
         "profit_target_pct": [0.30, 0.40, 0.50],
         "stop_loss_pct": [0.35, 0.50, 0.65],
         "max_premium_per_trade_usd": [500, 1000, 1500],
-        "max_risk_per_trade_pct": [0.0025, 0.005],
+        "max_risk_per_trade_pct": [0.01,
+          0.02],
         "underlyings": [["SPY"], ["SPX"]],
         "max_spread_pct": [0.10, 0.15, 0.20],
         "min_open_interest": [100, 500],
@@ -136,7 +141,7 @@
   },
   "strategy_defaults": {
     "vrp": {"min_dte": 25, "max_dte": 45, "realized_lookback_sessions": 20, "short_delta_max": 0.20},
-    "event_driven": {"min_dte": 3, "max_dte": 35, "target_dte": 21},
+    "llm_driven": {"min_dte": 3, "max_dte": 35, "target_dte": 21},
     "directional_overlay": {"min_dte": 25, "max_dte": 60, "target_dte": 40, "short_delta": 0.25},
     "long_volatility": {"min_dte": 7, "max_dte": 45, "target_dte": 30, "iv_percentile_lookback_sessions": 252}
   }

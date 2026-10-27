@@ -6,16 +6,15 @@ Input: JSON on stdin or --file with format:
 {
   "trades": [
     {"ticker": "NVDA", "action": "buy", "qty": 50, "reasoning": "..."},
-    {"ticker": "NVDA", "action": "buy", "qty": 20, "order_type": "bracket", "stop_price": 900, "take_profit": 1050, "reasoning": "..."},
+    {"ticker": "NVDA", "action": "buy", "qty": 20, "stop_price": 900, "take_profit": 1050, "reasoning": "software stop and target"},
     {"ticker": "NVDA", "action": "buy", "qty": 10, "order_type": "limit", "limit_price": 920, "reasoning": "..."},
-    {"ticker": "NVDA", "action": "sell", "qty": 10, "order_type": "stop", "stop_price": 880, "reasoning": "stop-loss on existing"},
-    {"ticker": "NVDA", "action": "sell", "qty": 10, "order_type": "oco", "stop_price": 880, "take_profit": 1050, "reasoning": "exit bracket on existing"},
-    {"ticker": "NVDA", "action": "sell", "qty": 10, "order_type": "trailing_stop", "trail_percent": 2.0, "reasoning": "lock in gains"},
+    {"ticker": "NVDA", "action": "sell", "qty": 10, "reasoning": "exit existing position"},
     {"ticker": "NVDA", "action": "short", "qty": 10, "stop_price": 920, "take_profit": 850, "reasoning": "breakdown below VWAP"}
   ]
 }
 
-Order types: market (default), limit, bracket, stop, oco, trailing_stop
+Order types: market (default), limit. Stops, targets, and trailing stops are
+software-managed; no bracket, OCO, or stop order is sent to the broker.
 Actions: buy, sell, hold, short, cover
 
 Usage:
@@ -270,25 +269,14 @@ def place_order(
     )
 
 
-def cancel_open_orders_for_symbol(
-    ticker: str,
-    mode: str = None,
-    *,
-    allow_protective: bool = False,
-) -> dict:
-    if mode == "algo" and not _regular_market_open():
-        return {
-            "success": False,
-            "error": "Algo order cancellations are restricted to regular market hours",
-            "cancelled": [],
-            "safe_to_retry": True,
-        }
-    return liquidation.cancel_open_orders_for_symbol(
-        ticker,
-        mode or _active_mode,
-        _liquidation_hooks(),
-        allow_protective=allow_protective,
-    )
+def open_exit_orders_for_symbol(ticker: str, *, mode: str, action: str) -> list[dict]:
+    """Open broker orders on the closing side of a position, used to block duplicate exits."""
+    closing_side = "sell" if action == "sell" else "buy"
+    return [
+        order for order in _list_open_orders(_headers(mode))
+        if str(order.get("symbol", "")).upper() == str(ticker).upper()
+        and str(order.get("side", "")).lower() == closing_side
+    ]
 
 
 def get_daily_pnl(account: dict) -> float:
@@ -401,7 +389,7 @@ def _run_main(args: argparse.Namespace, mode: str) -> int:
             get_latest_bid=get_latest_bid,
             get_latest_price=get_latest_price,
             validate_position_reduction=validate_position_reduction,
-            cancel_open_orders_for_symbol=cancel_open_orders_for_symbol,
+            open_exit_orders_for_symbol=open_exit_orders_for_symbol,
             get_positions=get_positions,
             place_order=place_order,
             market_tz=MARKET_TZ,

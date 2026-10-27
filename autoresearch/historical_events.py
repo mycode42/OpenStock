@@ -28,8 +28,8 @@ from market.sec import (
     SEC_ARCHIVE_URL, SEC_SUBMISSIONS_URL,
     get_sec_json, get_sec_response, tickers_to_ciks,
 )
-from strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
-from strategies.event_driven.models import ScheduledEvent
+from strategies.llm_driven.calendar import CSV_FIELDS, EventCalendar
+from strategies.llm_driven.models import ScheduledEvent
 from strategies.universe import configured_universe
 
 

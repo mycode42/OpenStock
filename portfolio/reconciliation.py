@@ -13,7 +13,6 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from portfolio.incidents import open_incident_symbols, resolve_incident
-from portfolio.protection.evidence import recovery_oco_order, verified_recovery_oco
 from strategies.catalog import canonical_strategy_id
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
 from strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, RuleStrategyStateMachine
@@ -240,40 +239,13 @@ def _resolve_execution_incidents(
                 resolve_incident(portfolio, kind=kind, ticker=symbol)
             continue
         if kind == "oco_repair":
+            # Broker OCO repair no longer exists. A legacy incident clears once
+            # the owned position has software stop and target levels.
             owner = (portfolio.get("position_owners") or {}).get(symbol)
             state = ((portfolio.get("strategy_states") or {}).get(owner) or {}).get(symbol, {}) if owner else {}
-            try:
-                quantity = _decimal(positions[symbol].get("qty"))
-            except ValueError:
-                continue
-            bracket_stop, _ = _bracket_levels(str(state.get("entry_order_id") or ""), nested_orders, quantity)
-            if regular_session and (bracket_stop is not None or verified_recovery_oco(nested_orders, state, quantity)):
+            if state.get("stop_price") is not None and state.get("take_profit") is not None:
                 resolve_incident(portfolio, kind=kind, ticker=symbol)
             continue
-        if kind == "exit_submission" and regular_session:
-            owner = (portfolio.get("position_owners") or {}).get(symbol)
-            state = ((portfolio.get("strategy_states") or {}).get(owner) or {}).get(symbol, {}) if owner else {}
-            try:
-                quantity = _decimal(positions[symbol].get("qty"))
-            except ValueError:
-                continue
-            recovery_order = recovery_oco_order(nested_orders, state, quantity)
-            allowed_order_ids = {
-                str(order.get("id") or "")
-                for order in [recovery_order, *((recovery_order or {}).get("legs") or [])]
-                if isinstance(order, dict) and order.get("id")
-            }
-            other_open_orders = [
-                order for order in open_orders
-                if isinstance(order, dict)
-                and str(order.get("symbol") or "").upper() == symbol
-                and str(order.get("status") or "").lower()
-                in (OPEN_ORDER_STATUSES | {"pending_cancel", "pending_replace"})
-                and str(order.get("id") or "") not in allowed_order_ids
-            ]
-            if recovery_order is not None and not other_open_orders:
-                resolve_incident(portfolio, kind=kind, ticker=symbol)
-                continue
         client_id = event.get("client_order_id")
         order_id = event.get("order_id")
         if not client_id:
@@ -477,12 +449,9 @@ def reconcile_startup(
         # A remembered software stop is not evidence that Alpaca still has
         # the bracket stop. A canceled child can otherwise leave a position
         # looking protected after a restart.
-        replacement_oco = regular_session and verified_recovery_oco(nested_orders, state, qty)
-        broker_stop_missing = (
-            (entry_class == "bracket" and stop is None and not replacement_oco)
-            or (require_broker_stops and entry_class == "simple" and not replacement_oco)
-        )
-        if state.get("stop_price") is None or broker_stop_missing:
+        # Protection is the software row (stop and target in the state). A
+        # position without both levels is unprotected and keeps entries paused.
+        if state.get("stop_price") is None or state.get("take_profit") is None:
             unprotected.append(ticker)
 
     machine.reconcile(live_positions, open_orders)

@@ -153,6 +153,6 @@ def test_extended_hours_bracket_and_market_orders_never_reach_broker(monkeypatch
     )
 
     assert not bracket["success"]
-    assert "Extended-hours orders require" in bracket["error"]
+    assert "Unsupported order type" in bracket["error"]
     assert not market["success"]
     assert "Extended-hours orders require" in market["error"]

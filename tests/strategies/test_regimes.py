@@ -53,11 +53,11 @@ def test_rule_hysteresis_and_high_volatility_mean_reversion_mapping():
     assert volatility == ["calm", "extreme", "extreme"]
     assert set(_strategy_weights(
         "volatile", strategy_policy="high_vol_mean_reversion",
-        event_enabled=False, event_disable_in_volatile=True,
+        llm_enabled=False, llm_disable_in_volatile=True,
     )) == {"intraday_mean_reversion", "swing_mean_reversion"}
     assert _strategy_weights(
         "range_bound", strategy_policy="high_vol_mean_reversion",
-        event_enabled=False, event_disable_in_volatile=True,
+        llm_enabled=False, llm_disable_in_volatile=True,
     ) == {}
 
 

@@ -215,7 +215,10 @@ def evaluate_rule_signal(
         runtime_setting = STRATEGY_CATALOG[name].runtime_setting
         if runtime_enabled is None and runtime_setting:
             runtime_enabled = getattr(get_algo_runtime_settings(), runtime_setting)
-        if not runtime_enabled:
+        if position_qty:
+            # Holdings keep their own exit rules when entries are switched off.
+            runtime_enabled = True
+        elif not runtime_enabled:
             return None
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
     # Stop distances are live risk settings, not research-tunable signal
@@ -268,7 +271,7 @@ def evaluate_rule_signal(
         if confirmation > 1 or params.get("minimum_slope_pct", 0) > 0:
             # The five-minute rule remains explicitly opt-in at both config
             # and runner level; a disabled call cannot emit a signal.
-            if not params.get("enabled", False):
+            if not position_qty and not params.get("enabled", False):
                 return None
             legacy_params = {key: value for key, value in params.items() if key != "enabled"}
             signal = _confirmed_trend(ticker, bars, legacy_params, confirmation)
@@ -280,7 +283,7 @@ def evaluate_rule_signal(
     signal = evaluate_strategy(name, "algo", ticker, bars, position_qty, **evaluation_kwargs)
     if signal is None or name not in {"intraday_trend_following", "intraday_momentum"}:
         return signal
-    if not params.get("enabled", False):
+    if not position_qty and not params.get("enabled", False):
         return None
     max_extension = float(params.get("max_extension_pct", 0)) if name == "intraday_momentum" else 0
     if max_extension > 0:

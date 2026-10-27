@@ -272,7 +272,7 @@ def _research_summary(report: dict) -> dict:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Profile a bounded options research run")
-    parser.add_argument("--strategy", choices=("vrp", "event_driven", "directional_overlay", "long_volatility"), default="long_volatility")
+    parser.add_argument("--strategy", choices=("vrp", "llm_driven", "directional_overlay", "long_volatility"), default="long_volatility")
     parser.add_argument("--underlying", default="GLD")
     parser.add_argument("--data-path", help="historical JSONL archive or SQLite history store; defaults to the configured ticker archive")
     parser.add_argument("--mode", choices=("full", "load"), default="full")

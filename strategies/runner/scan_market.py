@@ -1,10 +1,8 @@
-"""Load point-in-time bars, event inputs, and market regime for Algo scans."""
+"""Load point-in-time bars, LLM signal inputs, and market regime for Algo scans."""
 
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-import os
-from pathlib import Path
 from threading import RLock
 
 from market.data import historical_delay_seconds, regular_feed
@@ -14,8 +12,6 @@ from portfolio.config import (
     ALGO_SIGNAL_DATA_CONFIG,
     get_algo_regime_config,
 )
-from runtime.paths import DATA_DIR
-from strategies.event_driven import EventCalendar, EventSignalGenerator
 from strategies.regime import rank_strategies
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, parameters_for_regime
 from strategies.runner.data import (
@@ -35,7 +31,7 @@ _DAILY_BAR_CACHE: dict[tuple, dict[str, list[dict]]] = {}
 
 
 def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
-    """Fetch completed bars and derive the regime and enabled event context."""
+    """Fetch completed bars and derive the regime and enabled LLM signal context."""
     now_utc = scope.now_utc or datetime.now(timezone.utc)
     factor_config_values = dict(ALGO_DEFAULT_PARAMETERS.get("swing_multi_factor") or {})
     factor_config_values.update(scope.multi_factor_parameters)
@@ -178,20 +174,15 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
         if historical_status == "ok":
             historical_status = "stale"
 
-    calendar_path = DATA_DIR / "event_calendar.csv"
-    calendar_path = Path(os.environ.get("ALGO_EVENT_CALENDAR", str(calendar_path)))
-    from .event_context import load_event_context
+    from .llm_context import load_llm_context
 
-    event_context = load_event_context(
-        enabled=scope.event_strategy_enabled,
-        owned_event_position="swing_event_driven" in set(scope.owner_map.values()),
-        event_config=scope.event_config,
-        calendar_path=calendar_path,
+    llm_context = load_llm_context(
+        enabled=scope.llm_strategy_enabled,
+        owned_llm_position="swing_llm_driven" in set(scope.owner_map.values()),
+        llm_config=scope.llm_config,
         checked_at=lambda: datetime.now(timezone.utc),
-        calendar_type=EventCalendar,
-        generator_type=EventSignalGenerator,
     )
-    scope.scan_errors.extend(event_context.errors)
+    scope.scan_errors.extend(llm_context.errors)
 
     regime_macro_series = {}
     regime_macro_diagnostics = {"status": "not_loaded"}
@@ -204,8 +195,8 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
     try:
         regime = rank_strategies(
             daily_bars.get("SPY", []), mode=scope.mode,
-            event_enabled=event_context.available,
-            event_disable_in_volatile=scope.event_config.disable_in_volatile,
+            llm_enabled=llm_context.available,
+            llm_disable_in_volatile=scope.llm_config.disable_in_volatile,
             intraday_trend_enabled=scope.runtime_settings.enable_intraday_trend_following,
             intraday_momentum_enabled=scope.runtime_settings.enable_intraday_momentum,
             feature_set=regime_config["feature_set"],
@@ -218,6 +209,7 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
             model_min_confidence=regime_config["min_model_confidence"],
             strategy_regime_weights=regime_config["strategy_regime_weights"],
             strategy_enabled=regime_config["strategy_enabled"],
+            strategy_risk_scales=regime_config["strategy_risk_scales"],
             volatile_policy_risk_multiplier=regime_config["volatile_policy_risk_multiplier"],
             volatility_risk_scales=regime_config["volatility_risk_scales"],
         )
@@ -251,10 +243,9 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
         overnight_swing_signal_bar_symbols=overnight_swing_signal_bar_symbols,
         spy_last_completed_date=spy_last_completed_date,
         spy_daily_age_days=spy_daily_age_days,
-        event_generator=event_context.generator,
-        event_strategy_available=event_context.available,
-        event_calendar_diagnostics=event_context.diagnostics,
-        event_calendar_status=event_context.calendar_status,
+        llm_generator=llm_context.generator,
+        llm_signal_diagnostics=llm_context.diagnostics,
+        llm_signal_status=llm_context.signal_status,
         regime=regime,
         regime_name=regime_name,
         multi_factor_parameters=multi_factor_parameters,

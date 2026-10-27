@@ -347,8 +347,8 @@ class ReplaySignalsMixin:
         result = self._regime_ranker(
             completed,
             mode="algo",
-            event_enabled=self.event_strategy_enabled,
-            event_disable_in_volatile=self.event_config.disable_in_volatile,
+            llm_enabled=self.llm_strategy_enabled,
+            llm_disable_in_volatile=self.event_config.disable_in_volatile,
             intraday_trend_enabled=bool(self.research_runtime_overrides.get(
                 "intraday_trend_following", self.runtime_settings.enable_intraday_trend_following,
             )),
@@ -505,12 +505,12 @@ class ReplaySignalsMixin:
 
         event_signal = None
         if (
-            (self.event_strategy_enabled or (held is not None and held.strategy == "swing_event_driven"))
-            and (self.strategy_filter is None or "swing_event_driven" in self.strategy_filter)
-            and (held is None or held.strategy == "swing_event_driven")
+            (self.llm_strategy_enabled or (held is not None and held.strategy == "swing_llm_driven"))
+            and (self.strategy_filter is None or "swing_llm_driven" in self.strategy_filter)
+            and (held is None or held.strategy == "swing_llm_driven")
             and (
-                (held is not None and held.strategy == "swing_event_driven")
-                or "swing_event_driven" in active
+                (held is not None and held.strategy == "swing_llm_driven")
+                or "swing_llm_driven" in active
             )
         ):
             try:
@@ -521,29 +521,29 @@ class ReplaySignalsMixin:
                     as_of=signal_as_of,
                     universe=set(self.symbols_on(self._trading_date(timestamp))),
                     regime=str(self._current_regime.get("regime", "unknown")),
-                    strategy_state=self.event_strategy_state,
-                    position_qty=position_qty if held and held.strategy == "swing_event_driven" else 0,
-                    entry_at=held.entry_at if held and held.strategy == "swing_event_driven" else None,
-                    entry_price=held.entry_price if held and held.strategy == "swing_event_driven" else None,
+                    strategy_state=self.llm_strategy_state,
+                    position_qty=position_qty if held and held.strategy == "swing_llm_driven" else 0,
+                    entry_at=held.entry_at if held and held.strategy == "swing_llm_driven" else None,
+                    entry_price=held.entry_price if held and held.strategy == "swing_llm_driven" else None,
                 )
             except Exception as exc:
-                self.rejections[f"signal_error:event_driven:{type(exc).__name__}"] += 1
+                self.rejections[f"signal_error:llm_driven:{type(exc).__name__}"] += 1
         if event_signal is not None:
             event_evidence = event_signal.to_dict()
-            self.signal_events_by_strategy[(self.day_key or "", "swing_event_driven")] += 1
+            self.signal_events_by_strategy[(self.day_key or "", "swing_llm_driven")] += 1
             if not position_qty and event_signal.action in {"buy", "short"}:
                 options.append({
                     **event_evidence,
-                    "rank_score": ranked.get("swing_event_driven", 0),
+                    "rank_score": ranked.get("swing_llm_driven", 0),
                     "timeframe": "1Day",
                 })
             elif (
-                position_qty and held is not None and held.strategy == "swing_event_driven"
+                position_qty and held is not None and held.strategy == "swing_llm_driven"
                 and event_signal.action in {"sell", "cover"}
             ):
                 options.append({
                     **event_evidence,
-                    "rank_score": ranked.get("swing_event_driven", 0),
+                    "rank_score": ranked.get("swing_llm_driven", 0),
                     "timeframe": "1Day",
                 })
 
@@ -719,10 +719,10 @@ class ReplaySignalsMixin:
             "signal_at": signal_at,
             "delay_bars_remaining": int(getattr(self, "execution_delay_bars", 0)),
         }
-        if strategy == "swing_event_driven":
+        if strategy == "swing_llm_driven":
             self.event_signal_generator.record_proposal(
                 signal, as_of=timestamp + timedelta(minutes=BAR_MINUTES),
-                strategy_state=self.event_strategy_state,
+                strategy_state=self.llm_strategy_state,
             )
         self.entry_counts[self.day_key] += 1
         self.entry_counts_by_strategy[(self.day_key, strategy)] += 1

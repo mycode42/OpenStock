@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 import math
 
 from strategies.indicators import average_true_range
+from strategies.retired_profile_keys import drop_retired_profile_keys
 from strategies.swing_common import (
     CachedDailyBarHistory, SwingSignal, clean_daily_bars, held_sessions,
     position_entry_price,
@@ -31,9 +32,6 @@ class SwingTrendConfig:
     atr_max_stop_pct: float = 0.15
     trailing_stop_pct: float = 0.07
     trailing_activation_pct: float = 0.05
-    cooldown_days: int = 5
-    max_positions: int = 7
-    max_entries_per_day: int = 2
     max_position_pct: float = 0.04
     risk_multiplier: float = 0.75
 
@@ -41,7 +39,7 @@ class SwingTrendConfig:
     def from_dict(cls, values: dict | None = None) -> "SwingTrendConfig":
         if values is not None and not isinstance(values, dict):
             raise ValueError("trend_following settings must be an object")
-        supplied = dict(values or {})
+        supplied = drop_retired_profile_keys("swing_trend_following", dict(values or {}))
         unknown = set(supplied) - set(cls.__dataclass_fields__)
         if unknown:
             raise ValueError(f"Unsupported trend_following setting(s): {', '.join(sorted(unknown))}")
@@ -67,8 +65,7 @@ class SwingTrendConfig:
             ("fast_period", 5, 40), ("slow_period", 30, 100),
             ("atr_period", 7, 28),
             ("slope_lookback_days", 3, 15), ("minimum_hold_sessions", 2, 5),
-            ("maximum_holding_sessions", 10, 20), ("cooldown_days", 3, 10),
-            ("max_positions", 3, 7), ("max_entries_per_day", 1, 2),
+            ("maximum_holding_sessions", 10, 20),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:

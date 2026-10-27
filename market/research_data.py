@@ -110,8 +110,29 @@ def _get_company_facts_sec(cik: str) -> dict | None:
     return None
 
 
-def _extract_xbrl_values(facts: dict, concept: str, namespace: str = "us-gaap", unit: str = "USD", period: str = "quarterly") -> list[dict]:
-    """Extract values for a given XBRL concept from companyfacts."""
+# Accepted flow-fact durations in days. "ttm" uses 12-month facts (no quarterly sums).
+# Instant facts (balances, no start date) are not duration-filtered.
+_DURATION_DAYS = {"quarterly": (80, 100), "annual": (350, 380), "ttm": (350, 380)}
+
+
+def _fact_days(start: str, end: str) -> int | None:
+    try:
+        return (datetime.date.fromisoformat(end) - datetime.date.fromisoformat(start)).days
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_xbrl_values(
+    facts: dict, concept: str, namespace: str = "us-gaap", unit: str = "USD",
+    period: str = "quarterly", as_of: str | None = None,
+) -> list[dict]:
+    """Extract values for a given XBRL concept from companyfacts.
+
+    Point-in-time: with as_of, only facts filed on or before that date are used.
+    Flow facts must span the duration implied by period, so 3-month, YTD and
+    12-month facts ending on the same date never mix. When several filings
+    report the same fact, the latest filing known by as_of wins.
+    """
     try:
         ns_data = facts.get("facts", {}).get(namespace, {})
         concept_data = ns_data.get(concept, {})
@@ -123,7 +144,8 @@ def _extract_xbrl_values(facts: dict, concept: str, namespace: str = "us-gaap", 
                 entries = v
                 break
 
-        results = []
+        bounds = _DURATION_DAYS.get(period)
+        latest: dict[tuple[str | None, str], dict] = {}
         for e in entries:
             # Filter by form type for quarterly/annual
             form = e.get("form", "")
@@ -131,14 +153,28 @@ def _extract_xbrl_values(facts: dict, concept: str, namespace: str = "us-gaap", 
                 continue
             if period == "annual" and form != "10-K":
                 continue
-            results.append({
-                "value": e.get("val"),
-                "end": e.get("end"),
-                "filed": e.get("filed"),
-                "form": form,
-                "fp": e.get("fp"),
-            })
-        return sorted(results, key=lambda x: x.get("end", ""), reverse=True)
+            filed = e.get("filed") or ""
+            if as_of is not None and (not filed or filed > as_of):
+                continue
+            end = e.get("end")
+            if not end:
+                continue
+            start = e.get("start")
+            if start is not None:
+                days = _fact_days(start, end)
+                if days is None or (bounds and not bounds[0] <= days <= bounds[1]):
+                    continue
+            key = (start, end)
+            if key not in latest or filed > latest[key]["filed"]:
+                latest[key] = {
+                    "value": e.get("val"),
+                    "start": start,
+                    "end": end,
+                    "filed": filed,
+                    "form": form,
+                    "fp": e.get("fp"),
+                }
+        return sorted(latest.values(), key=lambda x: x.get("end", ""), reverse=True)
     except Exception:
         return []
 
@@ -208,6 +244,15 @@ def get_financial_metrics(
         return [FinancialMetrics(**m) for m in disk]
 
     try:
+        if _is_past_as_of(end_date):
+            # yfinance info and statements hold today's values only. A past
+            # as-of date gets filed-by-then SEC facts or the missing marker [].
+            metrics_list = _point_in_time_metrics(ticker, end_date, period, limit)
+            if metrics_list:
+                _cache.set_financial_metrics(cache_key, metrics_list)
+                _disk_cache_set("metrics", cache_key, metrics_list)
+            return [FinancialMetrics(**m) for m in metrics_list]
+
         yf_ticker = _get_yf_ticker(ticker)
         info = yf_ticker.info or {}
 
@@ -276,7 +321,7 @@ def get_financial_metrics(
         # Build a single metrics entry from yfinance info + statements
         metric = {
             "ticker": ticker,
-            "report_period": end_date,
+            "report_period": _statement_period_end(inc_stmt) or end_date,
             "period": period,
             "currency": info.get("currency", "USD"),
             "market_cap": info.get("marketCap"),
@@ -377,15 +422,36 @@ def _extract_statement_value(df, *row_names):
     return None, None
 
 
+def _is_past_as_of(end_date: str) -> bool:
+    return end_date < datetime.date.today().isoformat()
+
+
+def _statement_period_end(df) -> str | None:
+    """Period-end date of the latest column of a yfinance statement, if any."""
+    if df is None or df.empty:
+        return None
+    return str(df.columns[0])[:10]
+
+
+def _point_in_time_metrics(ticker: str, end_date: str, period: str, limit: int) -> list[dict]:
+    """Historical metrics known by end_date, from SEC facts filed by then only."""
+    cik = _resolve_cik(ticker)
+    facts = _get_company_facts_sec(cik) if cik else None
+    if not facts:
+        return []
+    return _build_historical_metrics(ticker, facts, end_date, period, limit)
+
+
 def _build_historical_metrics(ticker: str, facts: dict, end_date: str, period: str, limit: int) -> list[dict]:
-    """Build historical FinancialMetrics from SEC EDGAR XBRL data."""
+    """Build historical FinancialMetrics from SEC EDGAR XBRL data as known at end_date."""
     # Map concept names to metric fields
-    revenue_vals = _extract_xbrl_values(facts, "Revenues", period=period) or _extract_xbrl_values(facts, "RevenueFromContractWithCustomerExcludingAssessedTax", period=period)
-    net_income_vals = _extract_xbrl_values(facts, "NetIncomeLoss", period=period)
-    total_assets_vals = _extract_xbrl_values(facts, "Assets", period=period)
-    total_equity_vals = _extract_xbrl_values(facts, "StockholdersEquity", period=period)
-    total_debt_vals = _extract_xbrl_values(facts, "LongTermDebt", period=period)
-    eps_vals = _extract_xbrl_values(facts, "EarningsPerShareBasic", period=period)
+    as_of = end_date
+    revenue_vals = _extract_xbrl_values(facts, "Revenues", period=period, as_of=as_of) or _extract_xbrl_values(facts, "RevenueFromContractWithCustomerExcludingAssessedTax", period=period, as_of=as_of)
+    net_income_vals = _extract_xbrl_values(facts, "NetIncomeLoss", period=period, as_of=as_of)
+    total_assets_vals = _extract_xbrl_values(facts, "Assets", period=period, as_of=as_of)
+    total_equity_vals = _extract_xbrl_values(facts, "StockholdersEquity", period=period, as_of=as_of)
+    total_debt_vals = _extract_xbrl_values(facts, "LongTermDebt", period=period, as_of=as_of)
+    eps_vals = _extract_xbrl_values(facts, "EarningsPerShareBasic", period=period, as_of=as_of)
 
     # Collect unique report periods
     periods_seen = set()
@@ -545,7 +611,9 @@ def search_line_items(
     for item_name in line_items:
         concepts = LINE_ITEM_MAP.get(item_name.lower(), [item_name])
         for concept in concepts:
-            vals = _extract_xbrl_values(facts, concept, period="quarterly" if period != "annual" else "annual")
+            vals = _extract_xbrl_values(
+                facts, concept, period="quarterly" if period != "annual" else "annual", as_of=end_date,
+            )
             if vals:
                 for v in vals:
                     rp = v.get("end", "")
@@ -829,6 +897,8 @@ def get_market_cap(
     api_key: str = None,
 ) -> float | None:
     """Fetch market cap using yfinance."""
+    if _is_past_as_of(end_date):
+        return None  # yfinance holds today's market cap, not the value at end_date
     try:
         yf_ticker = _get_yf_ticker(ticker)
         info = yf_ticker.info or {}

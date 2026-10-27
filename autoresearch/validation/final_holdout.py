@@ -1,13 +1,35 @@
-"""One-time prospective holdout for a frozen coordinator profile."""
+"""Prospective holdouts for research cohorts and the legacy frozen-profile scorer.
+
+Cohort holdouts: one active holdout per (strategy, regime) is frozen by
+``initialize``. Each row records its window (sessions after the freeze date),
+the live profile versions it froze, and a SHA-256 of those frozen parameters.
+While a cohort holdout is active, promotions for that pair are paused. Nothing
+in the nightly run supersedes a holdout; only the CLI does, and every
+supersede writes an event:
+
+    python -m autoresearch.validation.final_holdout initialize [--frozen-on DATE]
+    python -m autoresearch.validation.final_holdout status
+    python -m autoresearch.validation.final_holdout supersede --reason "why" [--strategy S --regime R]
+
+The JSON functions below (``initialize_final_holdout``, ``advance_final_holdout``)
+are the earlier whole-profile scorer. Nothing calls them now; the manifest is
+read only for audit.
+"""
 
 from __future__ import annotations
+from autoresearch.costs import EQUITY_COMMISSION_PER_SHARE
 
+from contextlib import closing
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+import argparse
 import hashlib
 import json
 import statistics
+import sqlite3
 from pathlib import Path
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from autoresearch.backtest import (
     DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days,
@@ -24,8 +46,10 @@ from strategies.regime_features import compute_regime_feature_history
 from strategies.multi_factor.features import aggregate_intraday_bars
 from portfolio.config import get_algo_runtime_settings
 
+from portfolio.profile_store import RESEARCH_ROOT
 from ..artifacts.files import _atomic_json
 from ..artifacts.live_manifest import live_configuration_manifest
+from ..profile_versions import ACTIVE, BASE_REGIME, ProfileStore
 from .robustness import bootstrap_daily_equity, bootstrap_trade_sequence
 from ..settings import (
     ADJUSTMENT, FINAL_HOLDOUT_MIN_REGIMES, FINAL_HOLDOUT_MIN_SESSIONS, FEED,
@@ -33,12 +57,43 @@ from ..settings import (
 )
 
 
+ET = ZoneInfo("America/New_York")
 FINAL_HOLDOUT_SCHEMA = "swarm_algo_final_holdout_v1"
 FINAL_HOLDOUT_FILENAME = "final-holdout.json"
+HOLDOUT_REGIMES = ("trending_up", "trending_down", "range_bound", "volatile")
 POLICY_KEYS = (
     "entry_limits", "runtime", "coordinator", "risk", "research_controls",
     "strategy_defaults", "regime_profiles", "regime_profile_ids",
 )
+_COHORT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS final_holdout (
+    holdout_id TEXT PRIMARY KEY,
+    strategy TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'superseded')),
+    frozen_on TEXT NOT NULL,
+    window_start TEXT NOT NULL,
+    window_end TEXT,
+    parameters_sha256 TEXT NOT NULL,
+    frozen_payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    superseded_at TEXT,
+    superseded_reason TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS final_holdout_one_active
+    ON final_holdout(strategy, regime) WHERE status = 'active';
+CREATE TABLE IF NOT EXISTS final_holdout_event (
+    event_id TEXT PRIMARY KEY,
+    holdout_id TEXT NOT NULL REFERENCES final_holdout(holdout_id),
+    strategy TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('initialize', 'supersede')),
+    reason TEXT,
+    actor TEXT,
+    created_at TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+"""
 
 
 def read_final_holdout_state(output_dir: str | Path) -> dict | None:
@@ -52,38 +107,6 @@ def read_final_holdout_state(output_dir: str | Path) -> dict | None:
     if not isinstance(value, dict) or value.get("schema") != FINAL_HOLDOUT_SCHEMA:
         raise ValueError(f"unsupported or malformed final holdout manifest: {path}")
     return value
-
-
-def holdout_is_quarantining(output_dir: str | Path) -> bool:
-    state = read_final_holdout_state(output_dir)
-    return bool(state and state.get("status") == "collecting")
-
-
-def supersede_final_holdout(
-    *, output_dir: str | Path,
-    reason: str = "Replaced by rolling walk-forward research and versioned forward challenger trials",
-) -> dict:
-    """Retire the legacy global holdout without deleting its audit record."""
-    state = read_final_holdout_state(output_dir)
-    if not state:
-        return {
-            "status": "disabled", "research_only": True,
-            "live_configuration_changed": False, "trade_or_order_actions": 0,
-            "holdout_quarantining": False, "result": None,
-            "superseded_reason": reason,
-        }
-    if state.get("status") != "superseded":
-        now = datetime.now(timezone.utc).isoformat()
-        state.update({
-            "prior_status": state.get("status"),
-            "status": "superseded",
-            "superseded_at": now,
-            "superseded_reason": reason,
-            "research_quarantine": "superseded; rolling research now advances through the latest completed session",
-            "updated_at": now,
-        })
-        _write_state(output_dir, state)
-    return _public_status(state)
 
 
 def advance_final_holdout(
@@ -209,10 +232,7 @@ def advance_final_holdout(
         "scored_at": datetime.now(timezone.utc).isoformat(),
         "frozen_profile_sha256": state["frozen_profile"]["profile_sha256"],
         "frozen_replay_sha256": state["frozen_profile"]["frozen_replay_sha256"],
-        "event_strategy_included": state["frozen_profile"].get(
-            "event_strategy_included",
-            state["frozen_profile"].get("event_driven_overlay_included", False),
-        ),
+        "llm_driven_overlay_included": state["frozen_profile"].get("llm_driven_overlay_included", False),
         "holdout_range": {"start": min(holdout_dates), "end": latest_end.isoformat()},
         "qualification": qualification,
         "replay_regime_session_counts": replay_regimes,
@@ -253,7 +273,7 @@ def initialize_final_holdout(
     *, verification: dict, database: str, symbols: list[str], frozen_data_end: date,
     output_dir: str | Path, factor_weight_timeline: list[dict] | None = None,
 ) -> dict:
-    """Freeze latest training-selected coordinator profile; never replace an existing holdout."""
+    """Legacy whole-profile freeze; never replace an existing manifest."""
     existing = read_final_holdout_state(output_dir)
     if existing:
         return _public_status(existing)
@@ -345,7 +365,7 @@ def initialize_final_holdout(
         "source_artifact_sha256": artifact_hashes,
         "selection_source": "latest_training_selection_per_strategy",
         "selection_cutoff": frozen_data_end.isoformat(),
-        "event_strategy_included": False,
+        "llm_driven_overlay_included": False,
     }
     frozen_profile["frozen_replay_sha256"] = _hash(frozen_profile)
     state = {
@@ -403,7 +423,7 @@ def _run_frozen_replay(*, store: SQLiteBarStore, state: dict, start: str, end: d
         regime_profiles=frozen["regime_profiles"],
         slippage_bps=cost.get("slippage_bps_each_side", 5),
         spread_bps=cost.get("spread_bps", 3),
-        commission_per_share=cost.get("commission_per_share_each_side", 0.005),
+        commission_per_share=cost.get("commission_per_share_each_side", EQUITY_COMMISSION_PER_SHARE),
         short_borrow_annual_pct=cost.get("short_borrow_annual_pct", 3) / 100,
         unknown_borrow_penalty_bps=cost.get("unknown_borrow_adverse_fill_penalty_bps", 25),
         borrow_availability=read_borrow_availability(None),
@@ -482,18 +502,249 @@ def _public_status(state: dict) -> dict:
                 "factor_weight_timeline_sha256", "source_artifact_sha256",
             )
         } if state.get("frozen_profile") else None,
-        "event_strategy_included": (
-            (state.get("frozen_profile") or {}).get(
-                "event_strategy_included",
-                (state.get("frozen_profile") or {}).get("event_driven_overlay_included", False),
-            )
+        "llm_driven_overlay_included": (state.get("frozen_profile") or {}).get(
+            "llm_driven_overlay_included", False,
         ),
         "manifest_path": state.get("manifest_path"),
         "invalidation_reason": state.get("invalidation_reason"),
     }
 
 
+# Cohort holdouts -------------------------------------------------------------
+
+def default_research_database() -> Path:
+    return RESEARCH_ROOT / "research.sqlite3"
+
+
+def _cohort_connection(database: str | Path) -> sqlite3.Connection:
+    path = Path(database)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=30, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout=30000")
+    connection.executescript(_COHORT_SCHEMA)
+    return connection
+
+
+def _frozen_cohort_payload(store: ProfileStore, strategy: str, regime: str) -> dict:
+    """The live profile versions a cohort holdout freezes (regime version and base)."""
+    active = {
+        row["regime"]: row for row in store.active_versions(strategy)
+        if row["status"] == ACTIVE
+    }
+    regime_row = active.get(regime)
+    base_row = active.get(BASE_REGIME)
+    return {
+        "strategy": strategy, "regime": regime,
+        "regime_version_id": (regime_row or {}).get("version_id"),
+        "regime_candidate_id": (regime_row or {}).get("candidate_id"),
+        "regime_parameters": (regime_row or {}).get("parameters"),
+        "base_version_id": (base_row or {}).get("version_id"),
+        "base_parameters": (base_row or {}).get("parameters"),
+    }
+
+
+def _pair_label(row: dict) -> str:
+    return f"{row['strategy']}:{row['regime']}"
+
+
+def initialize_cohort_holdouts(*, database: str | Path, frozen_on: date, actor: str = "cli") -> dict:
+    """Freeze one holdout per strategy and regime cohort. Idempotent.
+
+    A pair that already has an active holdout is left unchanged, even if its
+    live profile has moved since; the frozen record is the one that counts.
+    """
+    payloads = {}
+    store = ProfileStore(database)
+    for strategy in LIVE_RESEARCH_STRATEGIES:
+        for regime in HOLDOUT_REGIMES:
+            payloads[(strategy, regime)] = _frozen_cohort_payload(store, strategy, regime)
+    stamp = datetime.now(timezone.utc).isoformat()
+    window_start = (frozen_on + timedelta(days=1)).isoformat()
+    created, existing = [], []
+    with closing(_cohort_connection(database)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            for (strategy, regime), payload in payloads.items():
+                row = connection.execute(
+                    "SELECT holdout_id FROM final_holdout WHERE strategy=? AND regime=? AND status='active'",
+                    (strategy, regime),
+                ).fetchone()
+                if row is not None:
+                    existing.append(f"{strategy}:{regime}")
+                    continue
+                parameters_sha256 = _hash(payload)
+                holdout_id = uuid4().hex
+                connection.execute(
+                    """INSERT INTO final_holdout
+                       (holdout_id, strategy, regime, status, frozen_on, window_start, window_end,
+                        parameters_sha256, frozen_payload_json, created_at)
+                       VALUES (?, ?, ?, 'active', ?, ?, NULL, ?, ?, ?)""",
+                    (holdout_id, strategy, regime, frozen_on.isoformat(), window_start,
+                     parameters_sha256, json.dumps(payload, sort_keys=True, default=str), stamp),
+                )
+                connection.execute(
+                    """INSERT INTO final_holdout_event
+                       (event_id, holdout_id, strategy, regime, action, reason, actor, created_at, details_json)
+                       VALUES (?, ?, ?, ?, 'initialize', 'cohort holdout frozen', ?, ?, ?)""",
+                    (uuid4().hex, holdout_id, strategy, regime, actor, stamp,
+                     json.dumps({"parameters_sha256": parameters_sha256, "window_start": window_start},
+                                sort_keys=True)),
+                )
+                created.append(f"{strategy}:{regime}")
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
+    return {
+        "status": "initialized", "frozen_on": frozen_on.isoformat(), "window_start": window_start,
+        "created": created, "already_active": existing,
+        "research_only": True, "live_configuration_changed": False, "trade_or_order_actions": 0,
+    }
+
+
+def cohort_holdout_status(database: str | Path) -> dict:
+    """Active and superseded cohort holdouts. Creates the tables if absent; never changes a row."""
+    if not Path(database).exists():
+        return {"active": [], "superseded_count": 0}
+    with closing(_cohort_connection(database)) as connection:
+        rows = [dict(row) for row in connection.execute(
+            "SELECT * FROM final_holdout ORDER BY strategy, regime, created_at",
+        ).fetchall()]
+    active = [row for row in rows if row["status"] == "active"]
+    return {
+        "active": active,
+        "superseded_count": sum(row["status"] == "superseded" for row in rows),
+    }
+
+
+def active_holdout_pairs(database: str | Path) -> set[tuple[str, str]]:
+    """(strategy, regime) pairs whose promotions are paused by an active holdout."""
+    if not Path(database).exists():
+        return set()
+    with closing(sqlite3.connect(database, timeout=30)) as connection:
+        has_table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='final_holdout'",
+        ).fetchone()
+        if not has_table:
+            return set()
+        return {
+            (str(row[0]), str(row[1])) for row in connection.execute(
+                "SELECT strategy, regime FROM final_holdout WHERE status='active'",
+            )
+        }
+
+
+def supersede_cohort_holdouts(
+    *, database: str | Path, reason: str, strategy: str | None = None,
+    regime: str | None = None, actor: str = "cli",
+) -> dict:
+    """Retire active cohort holdouts. Explicit operator action only; writes one event each."""
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValueError("supersede requires a non-empty --reason")
+    stamp = datetime.now(timezone.utc).isoformat()
+    clauses, values = ["status='active'"], []
+    if strategy:
+        clauses.append("strategy=?")
+        values.append(strategy)
+    if regime:
+        clauses.append("regime=?")
+        values.append(regime)
+    superseded = []
+    with closing(_cohort_connection(database)) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            rows = [dict(row) for row in connection.execute(
+                f"SELECT * FROM final_holdout WHERE {' AND '.join(clauses)} ORDER BY strategy, regime",
+                values,
+            ).fetchall()]
+            for row in rows:
+                connection.execute(
+                    "UPDATE final_holdout SET status='superseded', superseded_at=?, superseded_reason=? "
+                    "WHERE holdout_id=?",
+                    (stamp, reason, row["holdout_id"]),
+                )
+                connection.execute(
+                    """INSERT INTO final_holdout_event
+                       (event_id, holdout_id, strategy, regime, action, reason, actor, created_at, details_json)
+                       VALUES (?, ?, ?, ?, 'supersede', ?, ?, ?, ?)""",
+                    (uuid4().hex, row["holdout_id"], row["strategy"], row["regime"], reason, actor, stamp,
+                     json.dumps({"frozen_on": row["frozen_on"], "window_start": row["window_start"],
+                                 "parameters_sha256": row["parameters_sha256"]}, sort_keys=True)),
+                )
+                superseded.append(_pair_label(row))
+            connection.execute("COMMIT")
+        except BaseException:
+            connection.execute("ROLLBACK")
+            raise
+    return {
+        "status": "superseded", "superseded": superseded, "reason": reason,
+        "research_only": True, "live_configuration_changed": False, "trade_or_order_actions": 0,
+    }
+
+
+def holdout_report(*, database: str | Path, output_dir: str | Path | None = None) -> dict:
+    """Holdout state for the nightly report. Never changes a holdout."""
+    cohorts = cohort_holdout_status(database)
+    legacy = read_final_holdout_state(output_dir) if output_dir else None
+    active = cohorts["active"]
+    return {
+        "status": "active" if active else "none",
+        "research_only": True, "live_configuration_changed": False, "trade_or_order_actions": 0,
+        "active_holdout_count": len(active),
+        "promotion_paused_pairs": sorted(_pair_label(row) for row in active),
+        "superseded_holdout_count": cohorts["superseded_count"],
+        "legacy_manifest_status": (legacy or {}).get("status"),
+    }
+
+
+# Command line -----------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m autoresearch.validation.final_holdout",
+        description="Initialize, inspect, and supersede prospective cohort holdouts.",
+    )
+    parser.add_argument("--database", default=str(default_research_database()))
+    commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("initialize", help="freeze a holdout for every strategy and regime cohort")
+    init.add_argument("--frozen-on", type=date.fromisoformat, default=None,
+                      help="freeze date (YYYY-MM-DD); the window starts the next day; default today in ET")
+    commands.add_parser("status", help="active and superseded cohort holdouts")
+    supersede = commands.add_parser("supersede", help="retire active holdouts (explicit action only)")
+    supersede.add_argument("--reason", required=True)
+    supersede.add_argument("--strategy")
+    supersede.add_argument("--regime")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        if args.command == "initialize":
+            frozen_on = args.frozen_on or datetime.now(ET).date()
+            result = initialize_cohort_holdouts(database=args.database, frozen_on=frozen_on)
+        elif args.command == "status":
+            result = cohort_holdout_status(args.database)
+        else:
+            result = supersede_cohort_holdouts(
+                database=args.database, reason=args.reason,
+                strategy=args.strategy, regime=args.regime,
+            )
+    except ValueError as exc:
+        print(f"refused: {exc}")
+        return 2
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    return 0
+
+
 __all__ = [
-    "FINAL_HOLDOUT_SCHEMA", "advance_final_holdout", "holdout_is_quarantining",
-    "initialize_final_holdout", "read_final_holdout_state", "supersede_final_holdout",
+    "FINAL_HOLDOUT_SCHEMA", "active_holdout_pairs", "advance_final_holdout",
+    "cohort_holdout_status", "holdout_report", "initialize_cohort_holdouts",
+    "initialize_final_holdout", "read_final_holdout_state", "supersede_cohort_holdouts",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

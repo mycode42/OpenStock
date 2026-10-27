@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 
 from autoresearch.event_calendar_refresh import _earnings_event, _macro_events
-from strategies.event_driven.config import EventStrategyConfig
+from strategies.llm_driven.config import LLMStrategyConfig
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
 
 
@@ -32,9 +32,9 @@ def test_unspecified_earnings_timing_is_not_guessed():
     assert event is None
 
 
-def test_algo_event_strategy_is_enabled_but_standalone_default_is_off():
-    assert EventStrategyConfig().enabled is False
-    assert ALGO_DEFAULT_PARAMETERS["swing_event_driven"]["enabled"] is True
+def test_algo_llm_strategy_is_enabled_but_standalone_default_is_off():
+    assert LLMStrategyConfig().enabled is False
+    assert ALGO_DEFAULT_PARAMETERS["swing_llm_driven"]["enabled"] is True
 
 
 def test_published_macro_events_are_point_in_time_visible_and_spy_targeted():

@@ -20,7 +20,6 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from runtime.paths import DATA_DIR, ROOT
-from strategies.event_driven.calendar import EventCalendar
 from options.research.history_store import OptionsHistoryStore
 
 
@@ -288,45 +287,6 @@ def _sector_scores(
     return scores
 
 
-def _earnings_reasons(
-    symbols: list[str], *, as_of_date: str, rules: dict, calendar: EventCalendar | None,
-) -> tuple[dict[str, str], dict]:
-    settings = rules.get("earnings_blackout", {})
-    if not settings.get("enabled"):
-        return {}, {"enabled": False, "status": "disabled"}
-    if calendar is None:
-        return {symbol: "earnings_calendar_missing" for symbol in symbols}, {
-            "enabled": True, "status": "missing",
-        }
-    now = datetime.now(ET)
-    freshness = calendar.freshness(
-        now, max_age=timedelta(hours=float(settings.get("calendar_max_age_hours", 96))),
-    )
-    if settings.get("require_fresh_calendar", True) and not freshness["fresh"]:
-        return {symbol: "earnings_calendar_stale" for symbol in symbols}, {
-            "enabled": True, "status": "stale", "freshness": freshness,
-        }
-
-    cutoff = datetime.combine(date.fromisoformat(as_of_date), time(16, 0), tzinfo=ET)
-    visible = calendar.known_by(cutoff)
-    before = int(settings.get("days_before", 3))
-    after = int(settings.get("days_after", 1))
-    reasons = {}
-    for symbol in symbols:
-        for event in visible:
-            if event.ticker != symbol or not event.is_earnings:
-                continue
-            days = (event.scheduled_at.date() - cutoff.date()).days
-            if -after <= days <= before:
-                reasons[symbol] = "earnings_blackout"
-                break
-    return reasons, {
-        "enabled": True, "status": "active" if freshness["fresh"] else "stale_allowed",
-        "freshness": freshness, "known_events": len(visible),
-        "blackout_days_before": before, "blackout_days_after": after,
-    }
-
-
 def _apply_sector_overlay(
     hard_rows: list[dict], *, history: dict[str, list[dict]], as_of_date: str,
     rules: dict, universe: dict, ignore_regime: bool = False,
@@ -504,7 +464,6 @@ def apply_portfolio_caps(
 def build_eligible_cache(
     *, database: str | Path = DEFAULT_DATABASE, as_of_date: str | None = None,
     rules_path: str | Path | None = None,
-    event_calendar_path: str | Path | None = None,
 ) -> dict:
     """Compute one timestamped cache that all research strategies can share."""
     rules = load_rules(rules_path)
@@ -535,16 +494,6 @@ def build_eligible_cache(
         for symbol in symbols
     ]
     hard_rows = [row for row in raw_metrics if row["hard_eligible"]]
-    event_path = Path(event_calendar_path) if event_calendar_path else ROOT / "data/event_calendar.csv"
-    calendar = EventCalendar.from_csv(event_path) if event_path.is_file() else None
-    event_reasons, event_status = _earnings_reasons(
-        [row["ticker"] for row in hard_rows], as_of_date=target,
-        rules=rules, calendar=calendar,
-    )
-    for row in hard_rows:
-        if row["ticker"] in event_reasons:
-            row["hard_eligible"] = False
-            row["hard_reasons"].append(event_reasons[row["ticker"]])
     hard_rows = [row for row in hard_rows if row["hard_eligible"]]
     selected, overlay = _apply_sector_overlay(
         hard_rows, history=history, as_of_date=target, rules=rules, universe=universe_payload,
@@ -574,13 +523,11 @@ def build_eligible_cache(
         "rules_sha256": _rules_hash(rules),
         "rules_path": str(Path(rules_path or DEFAULT_RULES_PATH).resolve()),
         "status": "ready" if selected_symbols else "no_eligible_tickers",
-        "event_calendar": event_status,
         "sector_overlay": overlay,
         "portfolio_cap_preview": caps,
         "ticker_decisions": sorted(raw_metrics, key=lambda row: row["ticker"]),
         "limitations": [
             "Underlying NBBO spread history is not currently stored; the enabled spread gate uses option quote spreads.",
-            "Earnings blackout is configurable and defaults off until a fresh point-in-time calendar is available.",
             "The sector and exposure rules are research filters; they do not alter live portfolios or orders.",
         ],
     }
@@ -895,24 +842,7 @@ def simulate_selection_walk_forward(
         and coverage["spread_sessions"] >= lookback
     ]
     minimum_sessions = int(rules.get("walk_forward", {}).get("minimum_sessions", 100))
-    if rules.get("earnings_blackout", {}).get("enabled"):
-        result = {
-            "schema": "options_selection_walk_forward_v1",
-            "status": "insufficient_event_history",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "rules_sha256": _rules_hash(rules),
-            "universe_scope": universe_scope,
-            "universe_size": len(symbols),
-            "session_count": len(dates),
-            "ready_symbol_count": len(ready_symbols),
-            "minimum_ready_symbol_count": minimum_ready_symbols,
-            "data_coverage": coverage_report,
-            "message": (
-                "Earnings blackout is enabled, but point-in-time event-calendar snapshots do not cover "
-                "the full evaluation history. The historical simulation is withheld to avoid event lookahead."
-            ),
-        }
-    elif len(dates) < minimum_sessions or len(ready_symbols) < minimum_ready_symbols:
+    if len(dates) < minimum_sessions or len(ready_symbols) < minimum_ready_symbols:
         enough_sessions = len(dates) >= minimum_sessions
         status = "insufficient_liquidity_history" if enough_sessions else "insufficient_history"
         result = {
@@ -1090,7 +1020,6 @@ def simulate_selection_walk_forward(
                 "Excess returns subtract, for the same hold, the equal-weight average of the scope universe and SPY. Transaction costs are not modeled.",
                 "The grid changes one parameter at a time and reports every result; it does not select or promote a winner.",
                 "Regime composition compares the configured selector with an otherwise identical counterfactual that ignores only trend/volatility bucket restrictions.",
-                "Historical earnings blackouts require point-in-time event snapshots; the current calendar has limited historical coverage.",
             ],
         }
     if output_path is None:
@@ -1118,12 +1047,10 @@ def main() -> int:
         "--universe-scope", choices=("original_24", "history_117"),
         help="walk-forward ticker subset (defaults to the rule file's scope)",
     )
-    parser.add_argument("--event-calendar", help="point-in-time event calendar CSV")
     args = parser.parse_args()
     if args.mode == "cache":
         result = build_eligible_cache(
             database=args.database, as_of_date=args.as_of_date, rules_path=args.rules,
-            event_calendar_path=args.event_calendar,
         )
         print(json.dumps({
             "status": result["status"], "as_of_date": result["as_of_date"],

@@ -32,8 +32,8 @@ class ScanScope:
     multi_factor_parameter_source: Any
     universe: dict
     selected_symbols: list[str]
-    event_config: Any
-    event_strategy_enabled: bool
+    llm_config: Any
+    llm_strategy_enabled: bool
     track_owners: bool
     owner_map: dict[str, str]
     risk_config: dict
@@ -55,7 +55,7 @@ class ScanScope:
 
 @dataclass
 class MarketSnapshot:
-    """Bars, regime, and event-calendar inputs prepared for a scan."""
+    """Bars, regime, and LLM signal inputs prepared for a scan."""
 
     daily_bars: dict[str, list[dict]]
     bars_by_symbol: dict[str, list[dict]]
@@ -68,10 +68,9 @@ class MarketSnapshot:
     overnight_swing_signal_bar_symbols: set[str]
     spy_last_completed_date: str | None
     spy_daily_age_days: int | None
-    event_generator: Any
-    event_strategy_available: bool
-    event_calendar_diagnostics: dict
-    event_calendar_status: str
+    llm_generator: Any
+    llm_signal_diagnostics: dict
+    llm_signal_status: str
     regime: dict
     regime_name: str
     multi_factor_parameters: dict

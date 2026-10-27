@@ -18,7 +18,7 @@ remain under the Algo coordinator; options orders use the dedicated
 | `options/paper.py` | Independent paper scan, order intent, reconciliation, and per-account journal |
 | `options/daemon.py` | Market-hours scans using the same account lock and paper risk path |
 | `strategies/options/vrp.py` | Rule-based SPY IV-versus-realized-volatility iron condor |
-| `strategies/options/event_driven.py` | Event-driven LLM briefing signals expressed as defined-risk debit spreads |
+| `strategies/options/llm_driven.py` | LLM briefing signals expressed as defined-risk debit spreads |
 | `strategies/options/directional_overlay.py` | Frozen equity signal expressed as a defined-risk debit vertical |
 | `options/research/` | Separate options search, purged walk-forward validation, costs, assignment, and reports |
 
@@ -84,8 +84,8 @@ read model is `data/options/risk_snapshot.json`.
 - VRP uses SPY options with 25–45 DTE by default. It compares ATM IV against
   annualized realized volatility, requires an approved regime, then selects a
   1:1 defined-risk iron condor from short-delta and wing-delta bands.
-- Event options consume the fresh point-in-time briefing produced by the
-  existing event-driven LLM strategy. A `buy` recommendation becomes a call
+- LLM-driven options consume the fresh point-in-time briefing produced by the
+  existing llm-driven LLM strategy. A `buy` recommendation becomes a call
   debit spread and a `sell` recommendation becomes a put debit spread. The
   options expression does not require or generate the legacy scheduled-event
   calendar, and it does not invoke or optimize the LLM core.
@@ -106,9 +106,23 @@ read model is `data/options/risk_snapshot.json`.
   for model work. Historical/modeled runs can inject an IV surface and closes;
   the real underlying-specific surface, borrow curve, discrete dividends, and
   exchange-specific early-exercise probabilities still need vendor data.
-- Commissions default to $0.65 and additional slippage to $5 per option leg and
-  contract. These are conservative editable estimates, not a statement of
-  Alpaca's current fee schedule or a guarantee of paper fills.
+- Commissions default to $0.65 per option leg and contract. Slippage per leg is
+  `slippage_fraction_of_spread` (default 0.5) times the quoted bid-ask spread
+  times 100 per contract, floored at `slippage_per_contract_usd` ($5) and capped
+  at `max_slippage_per_contract_usd` ($25). Live limit prices, risk cost
+  estimates, and research fills all use `options/costs.py`. Position-management
+  exit limits still use the flat floor because those paths only see broker
+  positions, not leg quotes. These are conservative editable estimates, not a
+  statement of Alpaca's current fee schedule or a guarantee of paper fills.
+- Dividend yields are the trailing 12-month sum of Alpaca cash dividends (ex-dates
+  in the last 365 days) divided by the latest close. Symbols Alpaca cannot price
+  fall back to yfinance `trailingAnnualDividendYield`, then to the per-symbol
+  config map, then to the scalar `dividend_yield` (0.015) as a last resort. Live
+  values are cached in `data/options/market_inputs.json`. Research reads the dated
+  snapshot named by `execution.dividend_snapshot_path` and never calls the network.
+- Vendor vega and rho are per 1% move and vendor theta is per day. This was checked
+  against Black-Scholes on six SPY snapshots (vega and rho ratio 0.0100, theta ratio
+  0.996-1.023), and the model multiplies them by 100 accordingly.
 - Early assignment simulation flags short American options near expiry or
   short calls whose extrinsic value is below a configured dividend. It is a
   deterministic risk warning; the broker's clearing process remains authoritative.

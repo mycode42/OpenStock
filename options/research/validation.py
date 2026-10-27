@@ -28,7 +28,7 @@ def longest_strategy_lookback_sessions(strategy: str, section: dict, config: dic
         ):
             lookbacks.append(int(section.get("realized_lookback_sessions", 20)))
         return max(lookbacks)
-    if strategy == "event_driven":
+    if strategy == "llm_driven":
         # The frozen LLM recommendation is a point-in-time dataset input; the
         # options expression does not inspect a rolling calendar history.
         return 0

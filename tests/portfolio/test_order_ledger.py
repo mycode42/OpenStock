@@ -100,12 +100,3 @@ def test_non_advancing_pagination_fails_closed(tmp_path: Path):
     with pytest.raises(OrderLedgerError, match="did not advance"):
         ledger.sync(StuckBroker([]), account_id="paper", today=date(2026, 10, 27), open_orders=[])
     assert not ledger.history_complete("paper")
-
-
-def test_protection_decision_from_an_earlier_entry_is_not_applied_to_a_new_one():
-    from portfolio.protection.evidence import current_recovery
-
-    old = {"entry_order_id": "old-entry", "client_order_id": "algo-oco-CRM-old", "order_id": "x"}
-    assert current_recovery({"entry_order_id": "new-entry", "protection_recovery": old}) is None
-    assert current_recovery({"entry_order_id": "old-entry", "protection_recovery": old}) == old
-    assert current_recovery({"entry_order_id": "new-entry", "protection_recovery": {"client_order_id": None}}) is None

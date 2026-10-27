@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass, field
 
+from strategies.retired_profile_keys import drop_retired_profile_keys
+
 
 SUPPORTED_FACTORS = {
     "momentum_1m",
@@ -101,8 +103,6 @@ class MultiFactorConfig:
     risk_multiplier: float = 0.5
     minimum_hold_sessions: int = 3
     maximum_holding_sessions: int = 15
-    cooldown_days: int = 5
-    max_positions: int = 7
     enable_intraday_tilt: bool = False
 
     def __post_init__(self) -> None:
@@ -126,7 +126,7 @@ class MultiFactorConfig:
     def from_dict(cls, values: dict | None = None) -> "MultiFactorConfig":
         if values is not None and not isinstance(values, dict):
             raise ValueError("multi-factor settings must be an object")
-        values = dict(values or {})
+        values = drop_retired_profile_keys("swing_multi_factor", dict(values or {}))
         allowed = set(cls.__dataclass_fields__)
         unknown = set(values) - allowed
         if unknown:
@@ -243,7 +243,6 @@ class MultiFactorConfig:
                 raise ValueError(f"invalid factor weights for regime {regime}")
         for name, low, high in (
             ("minimum_hold_sessions", 1, 5), ("maximum_holding_sessions", 5, 20),
-            ("cooldown_days", 1, 15), ("max_positions", 3, 7),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:

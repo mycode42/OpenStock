@@ -246,7 +246,11 @@ def _get_open_orders(mode: str, *, api: ApiRequest) -> list[dict]:
 
 
 def _pending_buy_exposure(open_orders: list[dict], positions: dict[str, dict]) -> dict[str, float]:
-    """Reserve the still-unfilled value of every open buy order.
+    """Reserve the still-unfilled value of every open opening buy order.
+
+    Buy-to-cover orders (including the protective stop/target legs of a short)
+    are skipped: they reduce a short whose exposure is already counted in
+    positions, so reserving them again would double count it.
 
     For a market buy without a usable broker price, the amount is unknown; the
     caller must block new entries rather than assume that the order costs zero.
@@ -258,6 +262,12 @@ def _pending_buy_exposure(open_orders: list[dict], positions: dict[str, dict]) -
         symbol = str(order.get("symbol") or "").upper()
         if not symbol:
             raise ValueError("Open buy order has no symbol")
+        intent = str(order.get("position_intent") or "").lower()
+        position_qty = float((positions.get(symbol) or {}).get("qty", 0) or 0)
+        if intent == "buy_to_close" or (not intent and position_qty < 0 and (
+            order.get("parent_order_id") or str(order.get("order_class") or "").lower() in {"bracket", "oco"}
+        )):
+            continue
         filled_qty = max(0.0, float(order.get("filled_qty") or 0))
         raw_qty = order.get("qty")
         if raw_qty not in (None, ""):

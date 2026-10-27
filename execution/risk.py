@@ -36,7 +36,7 @@ from runtime.http import get_session
 
 from portfolio.config import get_mode_config, is_cash_proxy
 from execution.risk_models import RejectionReason, ValidationResult
-from execution.risk_policy import LEVERAGED_ETFS, MOONSHOTS, build_universe_maps
+from execution.risk_policy import MOONSHOTS, build_universe_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -477,13 +477,6 @@ def validate_trade(
             "pending_exposure_unavailable",
         )
 
-    # ── Rule 1: Leveraged ETFs ──────────────────────────────────────────────
-    # Leveraged ETFs are not eligible for this Algo account.
-    if ticker.upper() in LEVERAGED_ETFS and not risk["allow_leveraged_etfs"]:
-        msg = f"BLOCKED: {ticker} is a leveraged ETF — not allowed in {mode} mode."
-        log.warning(msg)
-        return ValidationResult(approved=False, reason=msg, rule="no_leveraged_etfs")
-
     # ── Rule 2: Moonshots hard-blocked ──────────────────────────────────────
     if ticker.upper() in MOONSHOTS:
         msg = f"BLOCKED: {ticker} is on the moonshot blocklist (removed in V2)."
@@ -768,7 +761,6 @@ def print_status(portfolio_state: dict, mode: str = "algo") -> None:
 
 
 __all__ = [
-    "LEVERAGED_ETFS",
     "MOONSHOTS",
     "RejectionReason",
     "ValidationResult",

@@ -225,7 +225,7 @@ def test_pending_coordinator_entry_recovers_by_persisted_client_id_if_journal_wr
     portfolio["strategy_states"] = {"swing_momentum": {"AAPL": {
         "phase": ENTRY_PENDING, "strategy": "swing_momentum", "ticker": "AAPL",
         "owner": "swing_momentum", "client_order_id": "client-entry-1",
-        "entry_client_order_id": "client-entry-1", "stop_price": 95.0,
+        "entry_client_order_id": "client-entry-1", "stop_price": 95.0, "take_profit": 110.0,
     }}}
     entry = _order("entry-1", "AAPL", "buy", 10, "2026-10-08T14:00:00Z", 100)
 
@@ -241,7 +241,7 @@ def test_pending_coordinator_entry_recovers_by_persisted_client_id_if_journal_wr
     assert state["entry_order_id"] == "entry-1"
     assert state["entry_source"] == "persisted_pending_client_id"
 
-def test_reconciliation_does_not_treat_old_software_stop_as_live_bracket_stop(tmp_path):
+def test_reconciliation_keeps_software_levels_when_broker_legs_are_gone(tmp_path):
     journal = tmp_path / "trade_journal.jsonl"
     journal.write_text(json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
@@ -265,8 +265,9 @@ def test_reconciliation_does_not_treat_old_software_stop_as_live_bracket_stop(tm
         open_orders=[], journal_path=journal,
     )
 
-    assert report["status"] == "degraded"
-    assert report["unprotected_positions"] == ["AAPL"]
+    # Protection is the persisted software stop and target, not broker legs.
+    assert report["status"] == "verified"
+    assert report["unprotected_positions"] == []
     assert portfolio["strategy_states"]["swing_momentum"]["AAPL"]["stop_price"] == 95.0
 
 @pytest.mark.parametrize("submission_status,client_id", [
@@ -591,3 +592,110 @@ def test_daemon_refuses_state_from_a_different_paper_account(tmp_path, monkeypat
     market_state, persisted = AlgoStateStore(snapshot).read()
     assert market_state == "CONFIG_ERROR"
     assert persisted["account_id"] == "old-account"
+
+
+def _exit_scan_window():
+    return SimpleNamespace(
+        name="regular", trade_date="2026-10-08", extended_hours=False,
+        bar_feed="sip", quote_feed="sip", regular_open=None, regular_close=None,
+    )
+
+
+def _exit_scan_report():
+    return {
+        "market_regime": {"regime": "trending_up", "active": ["swing_momentum"]},
+        "signals": [], "scan_errors": [], "entries_paused": False,
+        "entry_pause_reasons": [], "unowned_positions": [],
+        "data_status": {"historical_bars": "ok"},
+        "trades": [
+            {"ticker": "AAPL", "strategy": "swing_momentum", "action": "sell", "client_order_id": "sell-aapl"},
+            {"ticker": "MSFT", "strategy": "swing_momentum", "action": "buy", "client_order_id": "buy-msft"},
+        ],
+    }
+
+
+def test_retryable_exit_refusal_keeps_entries_open_and_persists_retry_intent(monkeypatch):
+    portfolio = _owned_portfolio()
+    portfolio["startup_reconciliation"] = {"status": "verified", "entries_paused": False}
+    portfolio["universe"] = {"tickers": ["AAPL", "MSFT"], "overnight_tradable_tickers": []}
+    monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **_kwargs: _exit_scan_report())
+    monkeypatch.setattr(
+        daemon, "execute_strategy_trades",
+        lambda trades, **_kwargs: {"results": [{
+            "ticker": "AAPL", "action": "sell", "client_order_id": "sell-aapl",
+            "status": "failed", "reason": "Protective broker orders can only be cancelled in regular market hours",
+            "safe_to_retry": True,
+        }]},
+    )
+
+    daemon._scan_strategy_portfolio(portfolio, window=_exit_scan_window())
+
+    assert portfolio["entries_paused"] is False
+    assert not any("exit submission" in reason for reason in portfolio["entry_pause_reasons"])
+    assert not (portfolio.get("execution_incident") or {}).get("events")
+    intent = portfolio["strategy_states"]["swing_momentum"]["AAPL"]["pending_exit_intent"]
+    assert intent["retryable"] is True
+    assert intent["status"] == "retryable_pre_submission"
+
+
+def test_failed_exit_submission_opens_incident_and_pauses_entries(monkeypatch):
+    portfolio = _owned_portfolio()
+    portfolio["startup_reconciliation"] = {"status": "verified", "entries_paused": False, "unprotected_positions": []}
+    portfolio["universe"] = {"tickers": ["AAPL", "MSFT"], "overnight_tradable_tickers": []}
+    monkeypatch.setattr(daemon, "scan_strategy_portfolio", lambda **_kwargs: _exit_scan_report())
+    monkeypatch.setattr(
+        daemon, "execute_strategy_trades",
+        lambda trades, **_kwargs: {"results": [{
+            "ticker": "AAPL", "action": "sell", "client_order_id": "sell-aapl",
+            "status": "failed", "reason": "broker rejected the exit",
+        }]},
+    )
+
+    daemon._scan_strategy_portfolio(portfolio, window=_exit_scan_window())
+
+    assert portfolio["startup_reconciliation"]["unprotected_positions"] == []
+    assert portfolio["entries_paused"] is True
+    assert portfolio["execution_incident"]["events"]["exit_submission:AAPL"]["client_order_id"] == "sell-aapl"
+
+def test_status_command_reports_bound_state_without_name_error(monkeypatch, tmp_path, capsys):
+    from portfolio import daemon as daemon_module
+
+    state = {"runtime_mode": "algo", "universe": {"tickers": ["AAPL", "MSFT"]}}
+    monkeypatch.setattr(daemon_module.AlgoStateStore, "read", lambda self: ("REGULAR", state))
+    monkeypatch.setattr(
+        daemon_module.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+    daemon_module._status(tmp_path / "algo_state.sqlite3")
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["market_state"] == "REGULAR"
+    assert printed["service_active"] is True
+    assert printed["universe"] == ["AAPL", "MSFT"]
+    assert printed["portfolio"] == state
+    assert printed["state_error"] is None
+
+
+def test_status_command_reports_unreadable_state_instead_of_crashing(monkeypatch, tmp_path, capsys):
+    from portfolio import daemon as daemon_module
+    from portfolio.state_store import StateStoreError
+
+    def unreadable(self):
+        raise StateStoreError("state is corrupt")
+
+    monkeypatch.setattr(daemon_module.AlgoStateStore, "read", unreadable)
+    monkeypatch.setattr(
+        daemon_module.subprocess, "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no systemctl")),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        daemon_module._status(tmp_path / "algo_state.sqlite3")
+
+    assert exit_info.value.code == 2
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["market_state"] == "STATE_ERROR"
+    assert printed["state_error"] == "state is corrupt"
+    assert printed["service_active"] is None
+    assert printed["universe"] == []

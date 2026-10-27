@@ -25,7 +25,9 @@ from .adaptive_search import (
     _profile_for, _run_iterative_discovery_search, _trading_sessions,
 )
 from .adaptive_candidates import _extend_space_from_archived_parents
-from ..settings import FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES, RESEARCH_WARMUP_DAYS
+from ..settings import (
+    ADAPTIVE_DISCOVERY_NIGHTLY_EVALUATIONS, FEED, MULTI_FACTOR_MIN_UNIVERSE_VALUES, RESEARCH_WARMUP_DAYS,
+)
 
 def run_discovery(args, *, search_func=None) -> dict:
     """Run short-window discovery only and persist detailed plus summary JSON."""
@@ -134,7 +136,13 @@ def run_window_ladder_discovery(
     )
     attempts = []
     reports = []
+    evaluations_used = 0
     for window_days in ordered:
+        # Window attempts share one nightly evaluation budget per strategy.
+        remaining = ADAPTIVE_DISCOVERY_NIGHTLY_EVALUATIONS - evaluations_used
+        iterations_allowed = min(args.search_iterations, remaining // max(1, args.candidates))
+        if iterations_allowed < 1:
+            break
         trial_output = Path(args.output_dir) / args.strategy / "window-search" / f"{end.isoformat()}-{window_days}"
         trial_output.mkdir(parents=True, exist_ok=True)
         previous_canonical, _ = _read_json_file(canonical)
@@ -143,6 +151,7 @@ def run_window_ladder_discovery(
         trial_args = argparse.Namespace(**vars(args))
         trial_args.output_dir = str(trial_output)
         trial_args.window_days = window_days
+        trial_args.search_iterations = iterations_allowed
         trial_args.excluded_candidate_ids = sorted(seen_candidate_ids)
         report = run_discovery(trial_args, search_func=search_func)
         detail, _ = _read_json_file(Path(report["latest_detail_artifact"]))
@@ -173,6 +182,7 @@ def run_window_ladder_discovery(
             "improved": bool(comparison.get("improved")),
             "detail_artifact": report["latest_detail_artifact"],
         }
+        evaluations_used += args.candidates * iterations_allowed
         attempts.append(attempt)
         reports.append((report, detail, attempt))
         if attempt["improved"]:

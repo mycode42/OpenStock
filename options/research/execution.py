@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
+from options.costs import DEFAULT_MAX_SLIPPAGE_PER_CONTRACT_USD, adverse_slippage_per_share
 from options.data import ChainQuote
 from options.models import OptionStructure
 
@@ -21,6 +22,8 @@ class LiquidityDecision:
 @dataclass(frozen=True)
 class ExecutionAssumptions:
     spread_fraction_per_leg: float = 0.50
+    slippage_per_contract_usd: float = 5.0
+    max_slippage_per_contract_usd: float = DEFAULT_MAX_SLIPPAGE_PER_CONTRACT_USD
     commission_per_contract_usd: float = 0.65
     exercise_fee_per_contract_usd: float = 0.15
     stock_commission_per_share_usd: float = 0.005
@@ -29,7 +32,8 @@ class ExecutionAssumptions:
 
     def __post_init__(self) -> None:
         numeric = (
-            self.spread_fraction_per_leg, self.commission_per_contract_usd,
+            self.spread_fraction_per_leg, self.slippage_per_contract_usd, self.max_slippage_per_contract_usd,
+            self.commission_per_contract_usd,
             self.exercise_fee_per_contract_usd, self.stock_commission_per_share_usd,
             self.base_fill_probability, self.multi_leg_fill_probability,
         )
@@ -44,6 +48,10 @@ class ExecutionAssumptions:
     def from_dict(cls, values: dict) -> "ExecutionAssumptions":
         return cls(
             spread_fraction_per_leg=float(values.get("spread_fraction_per_leg", 0.5)),
+            slippage_per_contract_usd=float(values.get("slippage_per_contract_usd", 5.0)),
+            max_slippage_per_contract_usd=float(
+                values.get("max_slippage_per_contract_usd", DEFAULT_MAX_SLIPPAGE_PER_CONTRACT_USD)
+            ),
             commission_per_contract_usd=float(values.get("commission_per_contract_usd", 0.65)),
             exercise_fee_per_contract_usd=float(values.get("exercise_fee_per_contract_usd", 0.15)),
             stock_commission_per_share_usd=float(values.get("stock_commission_per_share_usd", 0.005)),
@@ -74,9 +82,15 @@ class ExecutionAssumptions:
         if side not in {"buy", "sell"} or quote.bid <= 0 or quote.ask < quote.bid:
             raise ValueError("two-sided positive quotes are required for research fills")
         midpoint = (quote.bid + quote.ask) / 2.0
-        adverse = (quote.ask - quote.bid) * self.spread_fraction_per_leg
-        # Fractions above 0.5 deliberately model fills worse than the displayed
-        # ask/bid in stress runs; this is not an execution guarantee.
+        # Same per-leg slippage as live limit prices (options.costs). Fractions above
+        # 0.5 deliberately model fills worse than the displayed ask/bid in stress runs.
+        adverse = adverse_slippage_per_share(
+            quote.bid, quote.ask,
+            fraction=self.spread_fraction_per_leg,
+            floor_per_contract_usd=self.slippage_per_contract_usd,
+            cap_per_contract_usd=self.max_slippage_per_contract_usd,
+            multiplier=quote.contract.multiplier,
+        )
         price = midpoint + adverse if side == "buy" else midpoint - adverse
         return max(0.0, price)
 

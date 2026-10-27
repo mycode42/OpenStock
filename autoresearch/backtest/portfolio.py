@@ -1,6 +1,7 @@
 """Portfolio replay state and construction."""
 
 from __future__ import annotations
+from autoresearch.costs import EQUITY_COMMISSION_PER_SHARE
 
 from collections import Counter, defaultdict
 from copy import deepcopy
@@ -25,8 +26,8 @@ except ImportError:
     from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin
 from .replay import ReplayLoopMixin
-from strategies.event_driven import (
-    EventCalendar, EventSignalGenerator, EventStrategyConfig,
+from strategies.llm_driven import (
+    EventCalendar, LLMSignalGenerator, LLMStrategyConfig,
 )
 from strategies.multi_factor.config import MultiFactorConfig
 from strategies.multi_factor.features import aggregate_intraday_bars
@@ -75,7 +76,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         regime_profiles: dict[str, dict[str, dict]] | None = None,
         event_calendar: EventCalendar | None = None,
         spread_bps: float = 3.0,
-        commission_per_share: float = 0.005,
+        commission_per_share: float = EQUITY_COMMISSION_PER_SHARE,
         short_borrow_annual_pct: float = 0.03,
         unknown_borrow_penalty_bps: float = 25.0,
         borrow_availability: dict[tuple[str, str], bool] | None = None,
@@ -181,15 +182,15 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.runtime_settings = runtime_settings
         self.research_controls = validate_research_controls(research_controls)
         self.event_calendar = event_calendar or EventCalendar()
-        event_values = dict(self.profile.get("swing_event_driven") or {})
+        event_values = dict(self.profile.get("swing_llm_driven") or {})
         event_values["disable_in_volatile"] = False
-        self.event_config = EventStrategyConfig.from_dict(event_values)
-        self.event_strategy_enabled = (
-            self.event_config.enabled and runtime_settings.swing_event_driven_enabled
-            and (self.strategy_filter is None or "swing_event_driven" in self.strategy_filter)
+        self.event_config = LLMStrategyConfig.from_dict(event_values)
+        self.llm_strategy_enabled = (
+            self.event_config.enabled and runtime_settings.swing_llm_driven_enabled
+            and (self.strategy_filter is None or "swing_llm_driven" in self.strategy_filter)
         )
-        self.event_signal_generator = EventSignalGenerator(self.event_calendar, self.event_config)
-        self.event_strategy_state: dict = {}
+        self.event_signal_generator = LLMSignalGenerator(self.event_calendar, self.event_config)
+        self.llm_strategy_state: dict = {}
         self.multi_factor_enabled = (
             runtime_settings.swing_multi_factor_enabled
             and (self.strategy_filter is None or "swing_multi_factor" in self.strategy_filter)

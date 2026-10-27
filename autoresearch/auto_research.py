@@ -148,12 +148,13 @@ def run_daily_research(args) -> dict:
             f"is {latest_age_days} calendar days old"
         )
 
-    from .validation.final_holdout import supersede_final_holdout
+    from .validation.final_holdout import holdout_report as read_holdout_report
 
-    # Retain the former holdout manifest for audit, but let all research stages
-    # use the latest completed common session. Each staged candidate is then
-    # evaluated only on sessions after its own immutable staging date.
-    holdout_report = supersede_final_holdout(output_dir=output_dir)
+    # Read-only: a nightly run never supersedes a cohort holdout; only the
+    # final_holdout CLI can retire one. Research stages use the latest completed
+    # common session, and each staged candidate is evaluated only on sessions
+    # after its own immutable staging date.
+    holdout_report = read_holdout_report(database=ledger_path, output_dir=output_dir)
     cohort_end = latest_end
     warmup_start = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
     logger.info("Computing research data fingerprint for the configured universe")
@@ -209,7 +210,7 @@ def run_daily_research(args) -> dict:
         "regime_macro_data_version": stable_hash(macro_series),
         "fundamentals_data_version": fundamentals_data_version,
     })
-    live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "swing_multi_factor", "swing_event_driven"])
+    live_snapshot = live_configuration_manifest([*RESEARCHABLE_STRATEGIES, "swing_multi_factor", "swing_llm_driven"])
     context = {
         "pipeline_version": AUTO_RESEARCH_PIPELINE_VERSION,
         "cohort_id": None,
@@ -267,9 +268,9 @@ def run_daily_research(args) -> dict:
         "live_configuration_sha256": live_snapshot["sha256"],
         "portfolio_strategies": list(RESEARCHABLE_STRATEGIES),
         "swing_multi_factor_enabled": runtime_settings.swing_multi_factor_enabled,
-        "swing_event_driven_enabled": runtime_settings.swing_event_driven_enabled,
+        "swing_llm_driven_enabled": runtime_settings.swing_llm_driven_enabled,
         "factor_only": bool(args.factor_only),
-        "final_holdout_quarantine": False,
+        "final_holdout_quarantine": bool(holdout_report.get("promotion_paused_pairs")),
         "final_holdout_status": holdout_report.get("status"),
         "research_cutoff_policy": "latest_completed_common_market_session",
         "historical_validation_policy": "rolling_walk_forward_with_outcome_horizon_purge",
@@ -491,10 +492,19 @@ def run_daily_research(args) -> dict:
         "Rolling verification finished: %s in %.1fs",
         adaptive_verification.get("status"), adaptive_verification_seconds,
     )
-    from .validation.drift_monitor import update_research_drift_monitor
+    from .validation.drift_monitor import (
+        apply_drift_demotions, load_live_drift_feed, update_research_drift_monitor,
+    )
+    from .profile_versions import ProfileStore
 
+    # The live feed is written by `reporting.performance --drift-feed` on a
+    # schedule; the nightly run only reads it. Absent feed = backtest-only check.
+    live_feed = load_live_drift_feed(output_dir / "live-drift-feed.json")
     drift_report = update_research_drift_monitor(
-        adaptive_verification, output_dir=output_dir,
+        adaptive_verification, output_dir=output_dir, live_returns=live_feed,
+    )
+    drift_report["demotion"] = apply_drift_demotions(
+        drift_report, output_dir=output_dir, store=ProfileStore(ledger_path),
     )
     stage_progress("drift_monitor", "completed", drift_report)
     promotion_pause_reasons = []

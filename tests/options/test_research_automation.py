@@ -10,7 +10,7 @@ def _write_config(tmp_path, *, data_path, strategies=None):
         "output_dir": str(tmp_path / "runs"),
         "automation": {
             "enabled": True,
-            "strategies": strategies or ["vrp", "event_driven"],
+            "strategies": strategies or ["vrp", "llm_driven"],
             "checkpoint_database": str(tmp_path / "history.sqlite3"),
         },
     }), encoding="utf-8")
@@ -24,7 +24,7 @@ def test_missing_chain_dataset_generates_separate_waiting_report(tmp_path):
 
     assert report["status"] == "waiting_for_data"
     assert report["dataset_available"] is False
-    assert set(report["strategies"]) == {"vrp", "event_driven"}
+    assert set(report["strategies"]) == {"vrp", "llm_driven"}
     assert all(item["status"] == "skipped_missing_dataset" for item in report["strategies"].values())
     report_dir = tmp_path / "automation"
     assert json.loads((report_dir / "latest.json").read_text(encoding="utf-8"))["status"] == "waiting_for_data"
@@ -42,7 +42,7 @@ def test_missing_chain_dataset_generates_separate_waiting_report(tmp_path):
 def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path):
     dataset_path = tmp_path / "chains.jsonl"
     dataset_path.write_text("placeholder", encoding="utf-8")
-    config_path = _write_config(tmp_path, data_path=dataset_path, strategies=["event_driven"])
+    config_path = _write_config(tmp_path, data_path=dataset_path, strategies=["llm_driven"])
     calls = []
 
     def fake_run_research(strategy, *, config_path, data_path, underlying, parallel_workers):
@@ -60,7 +60,7 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
 
     report = automation.run_automated_options_research(config_path=config_path)
 
-    assert calls == [("event_driven", config_path.resolve(), dataset_path.resolve(), "SPY")]
+    assert calls == [("llm_driven", config_path.resolve(), dataset_path.resolve(), "SPY")]
     assert report["status"] == "completed"
-    assert report["strategies"]["event_driven"]["walk_forward"]["trade_count"] == 10
-    assert report["strategies"]["event_driven"]["approved"] is False
+    assert report["strategies"]["llm_driven"]["walk_forward"]["trade_count"] == 10
+    assert report["strategies"]["llm_driven"]["approved"] is False

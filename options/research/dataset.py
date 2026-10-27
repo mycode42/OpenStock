@@ -18,7 +18,7 @@ from typing import Any
 
 from autoresearch.cpu import available_cpu_count
 from options.data import HistoricalChainSnapshotProvider, ModelSurfaceDataProvider, OptionChain, OptionDataProvider
-from strategies.event_driven.models import ScheduledEvent
+from strategies.llm_driven.models import ScheduledEvent
 
 
 _CHAIN_PREPARATION_CONTEXT: dict[str, Any] = {}

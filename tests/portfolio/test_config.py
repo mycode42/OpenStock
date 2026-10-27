@@ -46,13 +46,13 @@ def test_catalog_groups_preserve_risk_and_coordinator_membership():
 
     assert groups["swing"]["strategies"] == [
         "swing_trend_following", "swing_momentum", "swing_mean_reversion",
-        "swing_multi_factor", "swing_event_driven",
+        "swing_multi_factor", "swing_llm_driven",
     ]
     assert groups["intraday_core"]["strategies"] == [
         "intraday_mean_reversion", "intraday_trend_following", "intraday_momentum",
     ]
     assert set(PortfolioCoordinatorConfig().swing_core_strategy_ids) == {
-        "swing_trend_following", "swing_momentum", "swing_mean_reversion", "swing_multi_factor", "swing_event_driven",
+        "swing_trend_following", "swing_momentum", "swing_mean_reversion", "swing_multi_factor", "swing_llm_driven",
     }
 
 

@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from autoresearch.cpu import available_cpu_count
 
+from ..costs import EQUITY_COMMISSION_PER_SHARE, EQUITY_SLIPPAGE_BPS, EQUITY_SPREAD_BPS
 from ..artifacts.artifact_cache import read_json, stable_hash
 from ..artifacts.files import _atomic_json
 from ..artifacts.live_manifest import live_configuration_manifest
@@ -33,9 +34,9 @@ from ..settings import (
 ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v19-validated-champion-seeding-2026"
 ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v14-champion-live-validation-2026"
 _ADAPTIVE_COST_MODEL = {
-    "slippage_bps": 5.0,
-    "spread_bps": 3.0,
-    "commission_per_share": 0.005,
+    "slippage_bps": EQUITY_SLIPPAGE_BPS,
+    "spread_bps": EQUITY_SPREAD_BPS,
+    "commission_per_share": EQUITY_COMMISSION_PER_SHARE,
     "short_borrow_annual_pct": 3.0,
     "unknown_borrow_penalty_bps": 25.0,
 }
@@ -200,7 +201,8 @@ def _run_adaptive_discovery_job(payload: tuple) -> dict:
         seed=seed, archive_dir=str(archive_dir), archive_sequence=sequence,
         search_space=None, fitness_weights=None, min_trades=3, capital=100_000.0,
         data_version=data_version,
-        slippage_bps=5.0, spread_bps=3.0, commission_per_share=0.005,
+        slippage_bps=EQUITY_SLIPPAGE_BPS, spread_bps=EQUITY_SPREAD_BPS,
+        commission_per_share=EQUITY_COMMISSION_PER_SHARE,
         short_borrow_annual_pct=3.0, unknown_borrow_penalty_bps=25.0,
         borrow_availability=None, start=None, end=latest_end.isoformat(),
         window_days=options[len(options) // 2], output_dir=str(output_dir),
@@ -529,7 +531,8 @@ def _run_adaptive_verification_job(payload: tuple) -> dict:
         candidates=ADAPTIVE_VERIFICATION_CANDIDATES,
         seed=sum(map(ord, strategy)),
         search_space=None, fitness_weights=None, min_trades=3, capital=100_000.0,
-        slippage_bps=5.0, spread_bps=3.0, commission_per_share=0.005,
+        slippage_bps=EQUITY_SLIPPAGE_BPS, spread_bps=EQUITY_SPREAD_BPS,
+        commission_per_share=EQUITY_COMMISSION_PER_SHARE,
         short_borrow_annual_pct=3.0, unknown_borrow_penalty_bps=25.0,
         borrow_availability=None, start=start.isoformat(), end=end.isoformat(),
         train_days=max(max(values) for values in ADAPTIVE_WINDOW_DAYS.values()),

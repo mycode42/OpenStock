@@ -1,6 +1,6 @@
 [project]
 name = "algo-trader"
-version = "3.0.0"
+version = "3.1.0"
 description = "Coordinated paper trading and research for equity and options strategies"
 authors = [{ name = "Algo Trader maintainers" }]
 readme = "README.md"
@@ -22,8 +22,8 @@ packages = [
 ]
 include = [
     { path = "scripts/build-extension.py", format = ["sdist", "wheel"] },
-    { path = "strategies/event_driven/analysis/api_models.json", format = ["sdist", "wheel"] },
-    { path = "strategies/event_driven/analysis/ollama_models.json", format = ["sdist", "wheel"] },
+    { path = "strategies/llm_driven/analysis/api_models.json", format = ["sdist", "wheel"] },
+    { path = "strategies/llm_driven/analysis/ollama_models.json", format = ["sdist", "wheel"] },
     { path = "options/config.default.json", format = ["sdist", "wheel"] },
     { path = "options/research/config.default.json", format = ["sdist", "wheel"] },
     { path = "options/_pricing_cy.pyx", format = "sdist" },

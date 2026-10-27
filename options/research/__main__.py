@@ -12,7 +12,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Purged walk-forward options strategy research")
     parser.add_argument(
         "--strategy", required=True,
-        choices=("vrp", "event_driven", "directional_overlay", "long_volatility"),
+        choices=("vrp", "llm_driven", "directional_overlay", "long_volatility"),
     )
     parser.add_argument("--data", help="JSON/JSONL historical chain dataset (overrides config)")
     parser.add_argument("--config", help="research JSON config override")

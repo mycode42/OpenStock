@@ -59,6 +59,33 @@ cpdef double european_price(
     )
 
 
+cdef tuple _european_delta_gamma_vega(
+    double spot,
+    double strike,
+    double years,
+    double rate,
+    double volatility,
+    int is_call,
+    double dividend_yield,
+):
+    cdef double root_t, d1, discount_q, density, delta, gamma, vega
+    if spot <= 0.0 or strike <= 0.0 or years <= 0.0 or volatility <= 0.0:
+        if (is_call and spot > strike) or (not is_call and spot < strike):
+            return (1.0 if is_call else -1.0), 0.0, 0.0
+        return 0.0, 0.0, 0.0
+    root_t = sqrt(years)
+    d1 = (log(spot / strike) + (rate - dividend_yield + 0.5 * volatility**2) * years) / (volatility * root_t)
+    discount_q = exp(-dividend_yield * years)
+    density = exp(-0.5 * d1 * d1) / sqrt(2.0 * 3.141592653589793)
+    if is_call:
+        delta = discount_q * _normal_cdf(d1)
+    else:
+        delta = discount_q * (_normal_cdf(d1) - 1.0)
+    gamma = discount_q * density / (spot * volatility * root_t)
+    vega = spot * discount_q * density * root_t
+    return delta, gamma, vega
+
+
 cpdef tuple european_model_greeks(
     double spot,
     double strike,
@@ -69,26 +96,18 @@ cpdef tuple european_model_greeks(
     double dividend_yield=0.0,
 ):
     cdef int is_call = _right_code(right)
-    cdef double price, d_s, up, down, delta, gamma, d_vol
-    cdef double vol_up, vol_down, vega, d_t, theta, d_r, rho
+    cdef double price, delta, gamma, vega, d_t, theta, d_r, rho
     price = _black_scholes_price(spot, strike, years, rate, volatility, is_call, dividend_yield)
-    d_s = max(0.01, spot * 0.001)
-    up = _black_scholes_price(spot + d_s, strike, years, rate, volatility, is_call, dividend_yield)
-    down = _black_scholes_price(max(1e-6, spot - d_s), strike, years, rate, volatility, is_call, dividend_yield)
-    delta = (up - down) / (2.0 * d_s)
-    gamma = (up - 2.0 * price + down) / (d_s**2)
-    d_vol = 0.01
-    vol_up = _black_scholes_price(spot, strike, years, rate, volatility + d_vol, is_call, dividend_yield)
-    vol_down = _black_scholes_price(spot, strike, years, rate, max(1e-6, volatility - d_vol), is_call, dividend_yield)
-    vega = (vol_up - vol_down) / (2.0 * d_vol)
+    delta, gamma, vega = _european_delta_gamma_vega(spot, strike, years, rate, volatility, is_call, dividend_yield)
     d_t = min(1.0 / 365.0, years / 2.0)
     if years <= d_t:
         theta = 0.0
     else:
+        # Per calendar day: -dP/dT over a 2*d_t window, scaled from years to days.
         theta = (
             _black_scholes_price(spot, strike, years - d_t, rate, volatility, is_call, dividend_yield)
             - _black_scholes_price(spot, strike, years + d_t, rate, volatility, is_call, dividend_yield)
-        ) / 2.0
+        ) / (2.0 * d_t) / 365.0
     d_r = 0.0001
     rho = (
         _black_scholes_price(spot, strike, years, rate + d_r, volatility, is_call, dividend_yield)

@@ -6,6 +6,7 @@
   "min_open_interest": 100,
   "rate": 0.04,
   "dividend_yield": 0.015,
+  "dividend_yields": {"GLD": 0.0},
   "assignment_extrinsic_threshold": 0.02,
   "dividends": {},
   "regime_risk_multipliers": {
@@ -17,10 +18,12 @@
   },
   "costs": {
     "commission_per_contract_usd": 0.65,
-    "slippage_per_contract_usd": 5.0
+    "slippage_per_contract_usd": 5.0,
+    "slippage_fraction_of_spread": 0.5,
+    "max_slippage_per_contract_usd": 25.0
   },
   "risk": {
-    "max_risk_per_trade_pct": 0.01,
+    "max_risk_per_trade_pct": 0.07,
     "max_total_defined_risk_pct": 0.10,
     "max_open_structures": 4,
     "max_entries_per_day": 10,
@@ -33,7 +36,8 @@
     "max_assignment_shares": 300,
     "max_margin_pct": 0.15,
     "stress_spot_shocks": [0.05, 0.10],
-    "stress_iv_shock": 0.10
+    "stress_iv_shock": 0.10,
+    "stress_gate_loss_pct": 0.20
   },
   "vrp": {
     "enabled": true,
@@ -48,9 +52,9 @@
     "allowed_regimes": ["range_bound", "trending_up", "trending_down"],
     "max_entries_per_day": 1
   },
-  "event_driven": {
+  "llm_driven": {
     "enabled": true,
-    "min_llm_confidence": 0.60,
+    "min_llm_confidence": 0.80,
     "min_dte": 3,
     "max_dte": 35,
     "target_dte": 21,
@@ -74,7 +78,7 @@
     "max_signal_age_seconds": 900,
     "max_spread_pct": 0.20,
     "min_open_interest": 100,
-    "max_risk_per_trade_pct": 0.005,
+    "max_risk_per_trade_pct": 0.07,
     "max_entries_per_day": 24,
     "max_holding_days": 21,
     "close_dte": 5,
@@ -100,7 +104,7 @@
     "atm_delta_tolerance": 0.20,
     "bootstrap_iv_history_from_theta": true,
     "iv_percentile_ceiling": 75.0,
-    "max_risk_per_trade_pct": 0.01,
+    "max_risk_per_trade_pct": 0.07,
     "realized_lookback_sessions": 20,
     "max_iv_to_realized_ratio": null,
     "max_spread_pct": 0.15,
@@ -110,7 +114,7 @@
     "stop_loss_pct": 0.50,
     "close_dte": 3,
     "max_holding_days": 14,
-    "close_on_regime_exit": true,
+    "close_on_regime_exit": false,
     "max_entries_per_day": 1
   }
 }

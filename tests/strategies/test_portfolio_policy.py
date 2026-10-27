@@ -81,8 +81,8 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 4
     assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_multi_factor"] == 7
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_multi_factor"] == 2
-    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_event_driven"] == 7
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_event_driven"] == 5
+    assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_llm_driven"] == 7
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_llm_driven"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 4
     config = get_algo_configuration()
     assert config["general"]["overnight_entries_enabled"] is True
@@ -269,14 +269,14 @@ def test_algo_risk_validator_blocks_the_tenth_shared_daily_entry():
 
 
 @pytest.mark.parametrize("action", ["buy", "short"])
-def test_risk_validator_allows_event_driven_to_own_a_position(action):
+def test_risk_validator_allows_llm_driven_to_own_a_position(action):
     state = _portfolio_state(
         shortability_available=True,
         easy_to_borrow_symbols=["AAPL"],
         account_shorting_enabled=True,
     )
     result = risk_validator.validate_trade(
-        "AAPL", action, 1, 100, state, mode="algo", strategy="swing_event_driven",
+        "AAPL", action, 1, 100, state, mode="algo", strategy="swing_llm_driven",
     )
 
     assert result.approved
@@ -412,8 +412,9 @@ def test_intraday_strategies_use_configured_enable_and_risk_limits(name, monkeyp
     assert signal is not None
     assert signal.strategy == name
     assert signal.strategy_group == "intraday_core"
-    assert signal.target_weight == pytest.approx(0.02)
-    assert signal.risk_multiplier == pytest.approx(0.25)
+    configured = portfolio_config.get_algo_strategy_settings(name)
+    assert signal.target_weight == pytest.approx(configured["max_position_pct"])
+    assert signal.risk_multiplier == pytest.approx(configured["risk_multiplier"])
 
 
 def test_state_machine_owns_pending_and_open_positions_until_reconciled():
@@ -490,3 +491,97 @@ def test_strategy_state_machine_persists_software_stop_and_target():
 
     assert states["intraday_mean_reversion"]["AAPL"]["stop_price"] == 98.0
     assert states["intraday_mean_reversion"]["AAPL"]["take_profit"] == 104.0
+
+
+def test_registry_drops_profile_keys_the_signal_does_not_accept(monkeypatch, caplog):
+    import logging
+    from strategies import registry
+
+    seen = []
+
+    def fake_signal(ticker, bars, *, position_qty=0, fast_period=20, allow_long=True, allow_short=False):
+        seen.append({"fast_period": fast_period, "allow_long": allow_long})
+        return None
+
+    monkeypatch.setattr(registry.ALGO_RULE_MODULES["intraday_trend_following"], "signal", fake_signal)
+    registry._DROPPED_PROFILE_KEYS_LOGGED.clear()
+    profile = {
+        "enabled": True, "fast_period": 9, "confirmation_bars": 3,
+        "minimum_slope_pct": 0.1, "bogus_setting": 1,
+    }
+
+    with caplog.at_level(logging.WARNING, logger="strategies.registry"):
+        registry.evaluate("intraday_trend_following", "algo", "AAPL", [], parameters=profile, runtime_enabled_override=True)
+        registry.evaluate("intraday_trend_following", "algo", "AAPL", [], parameters=profile, runtime_enabled_override=True)
+
+    assert seen == [{"fast_period": 9, "allow_long": True}] * 2
+    dropped_warnings = [r for r in caplog.records if "bogus_setting" in r.getMessage()]
+    assert len(dropped_warnings) == 1
+
+
+def test_promoted_profile_with_unknown_and_confirmation_keys_does_not_raise_on_real_signal():
+    from strategies import registry
+
+    profile = {
+        "enabled": True, "fast_period": 9, "slow_period": 21,
+        "confirmation_bars": 2, "minimum_slope_pct": 0.05, "unknown_key": "x",
+    }
+
+    assert registry.evaluate(
+        "intraday_trend_following", "algo", "AAPL", [], parameters=profile, runtime_enabled_override=True,
+    ) is None
+
+
+def test_accepted_profile_keys_pass_through_unchanged():
+    from strategies import registry
+    from strategies.trend_following.intraday import signal as intraday_signal
+
+    values = {"fast_period": 9, "slow_period": 21, "allow_long": False, "unknown": 1}
+
+    accepted = registry._accepted_signal_kwargs(intraday_signal, values, "intraday_trend_following")
+
+    assert accepted == {"fast_period": 9, "slow_period": 21, "allow_long": False}
+
+
+@pytest.mark.parametrize(
+    "config_cls_path",
+    [
+        "strategies.trend_following.swing:SwingTrendConfig",
+        "strategies.momentum.swing:SwingMomentumConfig",
+        "strategies.mean_reversion.swing:SwingMeanReversionConfig",
+        "strategies.multi_factor.config:MultiFactorConfig",
+    ],
+)
+def test_retired_profile_fields_are_gone_from_defaults(config_cls_path):
+    import importlib
+    from strategies.retired_profile_keys import RETIRED_PROFILE_KEYS
+
+    module_name, class_name = config_cls_path.split(":")
+    config_cls = getattr(importlib.import_module(module_name), class_name)
+
+    assert not (RETIRED_PROFILE_KEYS & set(config_cls().to_dict()))
+
+
+def test_stored_profiles_with_retired_fields_still_load_with_one_warning(caplog):
+    import logging
+    from strategies import registry
+    from strategies import retired_profile_keys
+    from strategies.mean_reversion.swing import SwingMeanReversionConfig
+
+    retired_profile_keys._WARNED.clear()
+    legacy = {
+        "swing_trend_following": {"cooldown_days": 5, "max_positions": 7, "max_entries_per_day": 2, "fast_period": 20},
+        "swing_mean_reversion": {"cooldown_days": 5, "max_positions": 7, "max_entries_per_day": 2, "lookback_days": 15},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="strategies.retired_profile_keys"):
+        first = registry.validate_parameter_profile(legacy)
+        second = registry.validate_parameter_profile(legacy)
+
+    assert first["swing_trend_following"]["fast_period"] == 20
+    assert "cooldown_days" not in first["swing_trend_following"]
+    assert "max_entries_per_day" not in first["swing_mean_reversion"]
+    assert first == second
+    warnings = [r for r in caplog.records if "retired" in r.getMessage()]
+    assert len(warnings) == 2
+    assert SwingMeanReversionConfig.from_dict({"cooldown_days": 4, "lookback_days": 15}).lookback_days == 15

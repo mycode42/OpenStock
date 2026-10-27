@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+import logging
 from copy import deepcopy
 from dataclasses import replace
 
@@ -10,8 +12,9 @@ from strategies.catalog import STRATEGY_CATALOG, STRATEGY_IDS, canonical_strateg
 from strategies.mean_reversion import swing as swing_mean_reversion
 from strategies.momentum import swing as swing_momentum
 from strategies.trend_following import swing as swing_trend_following
-from strategies.event_driven.config import EventStrategyConfig
+from strategies.llm_driven.config import LLMStrategyConfig
 from strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
+from strategies.retired_profile_keys import drop_retired_profile_keys
 from strategies.mean_reversion.swing import SwingMeanReversionConfig
 from strategies.momentum.swing import SwingMomentumConfig
 from strategies.trend_following.swing import SwingTrendConfig
@@ -34,9 +37,9 @@ ALGO_RULE_MODULES = {
     "intraday_trend_following": trend_following,
     "intraday_momentum": momentum,
 }
-# Enable the conservative, risk-capped event strategy in Algo mode. The
-# strategy class itself remains disabled by default for standalone use.
-EVENT_DEFAULT_CONFIG = EventStrategyConfig(enabled=True).to_dict()
+# Enable the LLM-signal strategy in Algo mode. The config class itself remains
+# disabled by default for standalone use.
+LLM_DEFAULT_CONFIG = LLMStrategyConfig(enabled=True).to_dict()
 SWING_MEAN_REVERSION_DEFAULT_CONFIG = SwingMeanReversionConfig().to_dict()
 DAY_DEFAULT_PARAMETERS = {
     "trend_following": {"fast_period": 9, "slow_period": 21, "allow_long": True, "allow_short": True},
@@ -74,7 +77,7 @@ ALGO_DEFAULT_PARAMETERS = {
         "allow_short": True,
     },
     "swing_multi_factor": MULTI_FACTOR_DEFAULT_CONFIG.to_dict(),
-    "swing_event_driven": EVENT_DEFAULT_CONFIG,
+    "swing_llm_driven": LLM_DEFAULT_CONFIG,
     "swing_mean_reversion": SWING_MEAN_REVERSION_DEFAULT_CONFIG,
     "intraday_trend_following": {"enabled": True, **DAY_DEFAULT_PARAMETERS["trend_following"]},
     "intraday_momentum": {"enabled": True, **DAY_DEFAULT_PARAMETERS["momentum"]},
@@ -104,7 +107,7 @@ PARAMETER_KEYS = {
         "high_volatility_ratio",
     },
     "swing_multi_factor": set(MULTI_FACTOR_DEFAULT_CONFIG.to_dict()),
-    "swing_event_driven": set(EVENT_DEFAULT_CONFIG),
+    "swing_llm_driven": set(LLM_DEFAULT_CONFIG),
     "swing_mean_reversion": set(SWING_MEAN_REVERSION_DEFAULT_CONFIG),
     "intraday_trend_following": {
         "enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "allow_long", "allow_short",
@@ -133,6 +136,7 @@ def validate_parameter_profile(profile: dict) -> dict:
             raise ValueError(f"Profile contains both legacy and canonical IDs for {strategy}")
         if strategy not in PARAMETER_KEYS or not isinstance(values, dict):
             raise ValueError(f"Unknown or malformed strategy profile: {supplied_strategy}")
+        values = drop_retired_profile_keys(strategy, values)
         unknown = set(values) - PARAMETER_KEYS[strategy]
         if unknown:
             raise ValueError(f"Unsupported {strategy} parameter(s): {', '.join(sorted(unknown))}")
@@ -140,8 +144,8 @@ def validate_parameter_profile(profile: dict) -> dict:
             from strategies.multi_factor.config import MultiFactorConfig
             normalized[strategy] = MultiFactorConfig.from_dict(values).to_dict()
             continue
-        if strategy == "swing_event_driven":
-            normalized[strategy] = EventStrategyConfig.from_dict(values).to_dict()
+        if strategy == "swing_llm_driven":
+            normalized[strategy] = LLMStrategyConfig.from_dict(values).to_dict()
             continue
         if strategy == "swing_mean_reversion":
             normalized[strategy] = SwingMeanReversionConfig.from_dict(values).to_dict()
@@ -218,10 +222,39 @@ def validate_parameter_profile(profile: dict) -> dict:
     return normalized
 
 
+LOG = logging.getLogger(__name__)
+_DROPPED_PROFILE_KEYS_LOGGED: set[tuple[str, str]] = set()
+_SIGNAL_RESERVED_ARGUMENTS = {"ticker", "bars", "position_qty"}
+
+
+def _accepted_signal_kwargs(func, values: dict, strategy: str) -> dict:
+    """Keep only the profile keys that a signal function accepts as keywords.
+
+    A promoted profile may carry a key that the signal function does not take.
+    Such keys are dropped, and each is logged once per scan (the dedupe set is
+    cleared by refresh_active_parameter_profile, which runs at scan start).
+    """
+    parameters = inspect.signature(func).parameters.values()
+    if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return dict(values)
+    accepted_names = {
+        param.name for param in parameters
+        if param.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    } - _SIGNAL_RESERVED_ARGUMENTS
+    accepted = {key: value for key, value in values.items() if key in accepted_names}
+    for key in sorted(set(values) - set(accepted)):
+        marker = (strategy, key)
+        if marker not in _DROPPED_PROFILE_KEYS_LOGGED:
+            _DROPPED_PROFILE_KEYS_LOGGED.add(marker)
+            LOG.warning("Ignoring profile parameter %s for %s; the signal function does not accept it", key, strategy)
+    return accepted
+
+
 def refresh_active_parameter_profile() -> dict:
     """Reload promoted parameter manifests into the shared registry."""
     from portfolio.profile_store import effective_profile_metadata
 
+    _DROPPED_PROFILE_KEYS_LOGGED.clear()
     metadata = effective_profile_metadata()
     # Promoted profiles created before the ID cleanup remain usable.
     for section in ("parameters", "regime_profiles", "profile_ids"):
@@ -315,13 +348,15 @@ def evaluate(
         runtime_enabled = runtime_enabled_override
         if runtime_enabled is None and flag:
             runtime_enabled = getattr(get_algo_runtime_settings(), flag)
-        if not runtime_enabled:
+        # Holdings keep their own exit rules when entries are switched off.
+        if not runtime_enabled and not position_qty:
             return None
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
-        if not values.get("enabled", False):
+        if not position_qty and not values.get("enabled", False):
             return None
         module = ALGO_RULE_MODULES[name]
         call_values = {key: value for key, value in values.items() if key != "enabled"}
+        call_values = _accepted_signal_kwargs(module.signal, call_values, name)
         signal = module.signal(ticker, bars, position_qty=position_qty, **call_values)
         return replace(signal, strategy=name) if signal is not None else None
 
@@ -338,6 +373,7 @@ def evaluate(
         if name == "intraday_mean_reversion":
             kwargs = dict(ALGO_DEFAULT_PARAMETERS[name])
     kwargs.update(parameters or {})
+    kwargs = _accepted_signal_kwargs(module.signal, kwargs, name)
     if kwargs:
         return module.signal(ticker, bars, position_qty=position_qty, **kwargs)
     return module.signal(ticker, bars, position_qty=position_qty)

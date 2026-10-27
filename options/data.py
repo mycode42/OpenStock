@@ -10,6 +10,7 @@ import math
 from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
 from market.quotes import QuoteParseError, parse_quote
+from options.market_inputs import MarketInputs
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
 from options.pricing import implied_volatility, model_greeks, years_to_expiration
 
@@ -172,6 +173,54 @@ def _parse_chain_snapshot(
     return OptionChain(underlying.upper(), float(spot), as_of, tuple(output), feed, tuple(sorted(quality)))
 
 
+def market_pair(
+    underlying: str, as_of: datetime, *,
+    market_inputs: MarketInputs | None, rate: float, dividend_yield: float,
+) -> tuple[float, float]:
+    """Per-underlying (rate, dividend yield); scalar arguments are the fallback when no inputs are supplied."""
+    if market_inputs is None:
+        return rate, dividend_yield
+    day = as_of.date()
+    return market_inputs.rate(day).value, market_inputs.dividend_yield(underlying, day).value
+
+
+# Vendor Greeks are used when complete. Verified on 2026-10-27 against six SPY
+# option snapshots (tests/fixtures/options/alpaca_spy_snapshot_2026-10-27.json):
+# vendor vega / Black-Scholes vega per unit vol = 0.0100 and vendor rho /
+# Black-Scholes rho per unit rate = 0.0100, so vendor vega is per vol point and
+# vendor rho is per rate point. Vendor theta / Black-Scholes theta per calendar
+# day = 0.996-1.023, so theta is per day. The model uses per-unit vol and rate,
+# so vega and rho are multiplied by 100. Gamma and delta were not rescaled.
+VENDOR_VEGA_PER_VOL_POINT_SCALE = 100.0
+VENDOR_RHO_PER_RATE_POINT_SCALE = 100.0
+VENDOR_THETA_PER_DAY_SCALE = 1.0
+_VENDOR_GREEK_SCALE = {
+    "delta": 1.0,
+    "gamma": 1.0,
+    "theta": VENDOR_THETA_PER_DAY_SCALE,
+    "vega": VENDOR_VEGA_PER_VOL_POINT_SCALE,
+    "rho": VENDOR_RHO_PER_RATE_POINT_SCALE,
+}
+
+
+def _vendor_greeks(raw: object) -> dict[str, float] | None:
+    """Vendor Greeks in model units, or None unless every field is present and plausible."""
+    if not isinstance(raw, dict):
+        return None
+    output: dict[str, float] = {}
+    for name, scale in _VENDOR_GREEK_SCALE.items():
+        try:
+            value = float(raw.get(name))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        output[name] = value * scale
+    if not -1.0 <= output["delta"] <= 1.0 or output["gamma"] < 0 or output["vega"] < 0:
+        return None
+    return output
+
+
 def parse_snapshot_quote(
     contract: OptionContract,
     raw: dict,
@@ -217,16 +266,24 @@ def parse_snapshot_quote(
             contract.right, dividend_yield=dividend_yield,
             american=american_model and contract.exercise_style == "american",
         )
-    model = model_greeks(
-        spot, contract.strike, years, rate, iv, contract.right,
-        dividend_yield=dividend_yield,
-        american=american_model and contract.exercise_style == "american",
-    )
-    greeks = GreeksSnapshot(
-        delta=model.delta, gamma=model.gamma, theta=model.theta,
-        vega=model.vega, rho=model.rho, implied_volatility=iv,
-        observed_at=parsed["timestamp"], source="crr_iv_surface",
-    )
+    vendor = _vendor_greeks(raw_greeks)
+    if vendor is not None:
+        greeks = GreeksSnapshot(
+            delta=vendor["delta"], gamma=vendor["gamma"], theta=vendor["theta"],
+            vega=vendor["vega"], rho=vendor["rho"], implied_volatility=iv,
+            observed_at=parsed["timestamp"], source="vendor_snapshot_greeks",
+        )
+    else:
+        model = model_greeks(
+            spot, contract.strike, years, rate, iv, contract.right,
+            dividend_yield=dividend_yield,
+            american=american_model and contract.exercise_style == "american",
+        )
+        greeks = GreeksSnapshot(
+            delta=model.delta, gamma=model.gamma, theta=model.theta,
+            vega=model.vega, rho=model.rho, implied_volatility=iv,
+            observed_at=parsed["timestamp"], source="crr_iv_surface",
+        )
     return ChainQuote(contract, parsed["bid"], parsed["ask"], greeks, parsed["timestamp"], feed)
 
 
@@ -241,6 +298,7 @@ class AlpacaOptionDataProvider:
         max_quote_age_seconds: int = 120,
         rate: float = 0.04,
         dividend_yield: float = 0.015,
+        market_inputs: MarketInputs | None = None,
     ) -> None:
         if feed not in {"opra", "indicative"}:
             raise ValueError("options feed must be opra or indicative")
@@ -249,6 +307,7 @@ class AlpacaOptionDataProvider:
         self.max_quote_age_seconds = int(max_quote_age_seconds)
         self.rate = float(rate)
         self.dividend_yield = float(dividend_yield)
+        self.market_inputs = market_inputs
 
     def get_chain(
         self,
@@ -289,9 +348,13 @@ class AlpacaOptionDataProvider:
         # quote freshness to the time the snapshots were received, while
         # historical replay keeps its strict snapshot timestamp checks.
         quote_as_of = max(as_of.astimezone(timezone.utc), datetime.now(timezone.utc))
+        rate, dividend_yield = market_pair(
+            underlying, as_of, market_inputs=self.market_inputs,
+            rate=self.rate, dividend_yield=self.dividend_yield,
+        )
         return _parse_chain_snapshot(
             underlying, spot, quote_as_of, contracts, snapshot_rows, feed=self.feed,
-            rate=self.rate, dividend_yield=self.dividend_yield,
+            rate=rate, dividend_yield=dividend_yield,
             max_quote_age_seconds=self.max_quote_age_seconds,
         )
 
@@ -326,8 +389,10 @@ class HistoricalChainSnapshotProvider:
         *,
         rate: float = 0.04,
         dividend_yield: float = 0.015,
+        market_inputs: MarketInputs | None = None,
     ) -> None:
         self.snapshots = tuple(snapshots)
+        self.market_inputs = market_inputs
         indexed: dict[str, list[tuple[datetime, dict]]] = {}
         for row in self.snapshots:
             symbol = str(row.get("underlying", "")).upper()
@@ -362,10 +427,14 @@ class HistoricalChainSnapshotProvider:
             if not min_dte <= dte <= max_dte:
                 continue
             contracts.append(row)
+        rate, dividend_yield = market_pair(
+            underlying, stamp, market_inputs=self.market_inputs,
+            rate=self.rate, dividend_yield=self.dividend_yield,
+        )
         return _parse_chain_snapshot(
             underlying, float(snapshot["spot"]), stamp, contracts, None,
             feed=str(snapshot.get("feed", "historical")),
-            rate=self.rate, dividend_yield=self.dividend_yield,
+            rate=rate, dividend_yield=dividend_yield,
             max_quote_age_seconds=10**9,
         )
 
@@ -394,7 +463,9 @@ class ModelSurfaceDataProvider:
         synthetic_spread_pct: float = 0.04,
         exercise_style: str = "american",
         underlying_closes_provider: Callable[[str, datetime, int], Sequence[tuple[date, float]]] | None = None,
+        market_inputs: MarketInputs | None = None,
     ) -> None:
+        self.market_inputs = market_inputs
         self.spot_provider = spot_provider
         self.iv_surface = iv_surface
         self.expirations_provider = expirations_provider
@@ -410,6 +481,10 @@ class ModelSurfaceDataProvider:
         spot = float(self.spot_provider(underlying.upper(), as_of))
         if spot <= 0 or not math.isfinite(spot):
             raise ValueError("model provider received invalid spot")
+        rate, dividend_yield = market_pair(
+            underlying, as_of, market_inputs=self.market_inputs,
+            rate=self.rate, dividend_yield=self.dividend_yield,
+        )
         rows = []
         for expiration in self.expirations_provider(underlying.upper(), as_of, min_dte, max_dte):
             dte = (expiration - as_of.date()).days
@@ -425,8 +500,8 @@ class ModelSurfaceDataProvider:
                 for right in ("put", "call"):
                     iv = float(self.iv_surface(underlying.upper(), expiration, strike, right, as_of))
                     greeks = model_greeks(
-                        spot, strike, years, self.rate, iv, right,
-                        dividend_yield=self.dividend_yield,
+                        spot, strike, years, rate, iv, right,
+                        dividend_yield=dividend_yield,
                         american=self.exercise_style == "american",
                     )
                     half = max(0.01, greeks.price * self.synthetic_spread_pct / 2.0)

@@ -12,6 +12,7 @@ from statistics import mean, median, pstdev
 
 from options.assignment import simulate_early_assignment
 from options.data import ChainQuote, OptionChain
+from options.market_inputs import research_market_inputs
 from options.models import GreeksSnapshot, OptionLeg, OptionSignal
 from options.research.dataset import OptionsResearchDataset, ResearchObservation
 from options.research.execution import (
@@ -199,13 +200,16 @@ def simulate_options_strategy(
                 "min_open_interest", "atm_delta_tolerance",
             )
         )
+        cache_underlying = dataset.observations[0].underlying.upper() if dataset.observations else ""
+        research_inputs = research_market_inputs(config.get("execution", {}))
+        input_day = date.today()
         cache_key = (
             dataset.source_sha256,
-            dataset.observations[0].underlying.upper() if dataset.observations else "",
+            cache_underlying,
             iv_settings,
             int(market.get("maximum_snapshot_age_sessions", 1)),
-            float(config.get("execution", {}).get("risk_free_rate", 0.04)),
-            float(config.get("execution", {}).get("dividend_yield", 0.015)),
+            research_inputs.rate(input_day).value,
+            research_inputs.dividend_yield(cache_underlying, input_day).value,
         )
         cached_history = _LONG_VOL_IV_HISTORY_CACHE.get(cache_key)
         if cached_history is None:

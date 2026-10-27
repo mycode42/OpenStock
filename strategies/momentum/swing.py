@@ -7,6 +7,7 @@ from datetime import date
 import math
 from statistics import mean
 
+from strategies.retired_profile_keys import drop_retired_profile_keys
 from strategies.swing_common import SwingSignal, clean_daily_bars, held_sessions, position_entry_price
 
 
@@ -26,9 +27,6 @@ class SwingMomentumConfig:
     hard_stop_pct: float = 0.08
     trailing_stop_pct: float = 0.06
     trailing_activation_pct: float = 0.05
-    cooldown_days: int = 5
-    max_positions: int = 7
-    max_entries_per_day: int = 2
     max_position_pct: float = 0.04
     risk_multiplier: float = 0.75
 
@@ -36,7 +34,7 @@ class SwingMomentumConfig:
     def from_dict(cls, values: dict | None = None) -> "SwingMomentumConfig":
         if values is not None and not isinstance(values, dict):
             raise ValueError("momentum settings must be an object")
-        supplied = dict(values or {})
+        supplied = drop_retired_profile_keys("swing_momentum", dict(values or {}))
         if "lookbacks" in supplied:
             supplied["lookbacks"] = tuple(supplied["lookbacks"])
         unknown = set(supplied) - set(cls.__dataclass_fields__)
@@ -65,8 +63,7 @@ class SwingMomentumConfig:
         for name, low, high in (
             ("top_n", 1, 5), ("minimum_hold_sessions", 2, 5),
             ("minimum_universe", 5, 30),
-            ("maximum_holding_sessions", 10, 20), ("cooldown_days", 3, 10),
-            ("max_positions", 3, 7), ("max_entries_per_day", 1, 2),
+            ("maximum_holding_sessions", 10, 20),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
@@ -143,6 +140,11 @@ def generate_signals(
         spread_ok = len(ranked) >= minimum_universe and spread >= config.minimum_score_spread
         selected_longs = {ticker for ticker, _ in ranked[-config.top_n:]} if spread_ok and allow_long else set()
         selected_shorts = {ticker for ticker, _ in ranked[:config.top_n]} if spread_ok and allow_short else set()
+        # Entries use top_n; holdings are kept until they rank outside twice that
+        # band. A failed spread gate or a short list blocks entries, never exits.
+        exit_band = 2 * config.top_n
+        retained_longs = {ticker for ticker, _ in ranked[-exit_band:]} if allow_long else set()
+        retained_shorts = {ticker for ticker, _ in ranked[:exit_band]} if allow_short else set()
     else:
         positive = sorted(
             ((ticker, score) for ticker, score in ranked if score > 0 and score >= config.minimum_time_series_return),
@@ -156,8 +158,21 @@ def generate_signals(
         selected_longs = {ticker for ticker, _ in positive[:config.top_n]} if universe_ready and allow_long else set()
         selected_shorts = {ticker for ticker, _ in negative[:config.top_n]} if universe_ready and allow_short else set()
         spread_ok = bool(universe_ready and (selected_longs or selected_shorts))
+        retained_longs, retained_shorts = selected_longs, selected_shorts
 
     signals: dict[str, SwingSignal] = {}
+
+    def left_selection(ticker: str, is_short: bool) -> bool:
+        """True when a holding ranks outside its retained band.
+
+        A cross-sectional holding without a score is not ranked out; its stops
+        and time limits still apply.
+        """
+        if config.momentum_mode == "cross_sectional" and ticker not in scores:
+            return False
+        retained = retained_shorts if is_short else retained_longs
+        return ticker not in retained
+
     held_positions = {str(key).upper(): value for key, value in (held_positions or {}).items()}
     for ticker, holding in held_positions.items():
         qty = float(holding.get("qty", 0) or 0)
@@ -187,7 +202,7 @@ def generate_signals(
                 reason = "daily momentum trailing stop"
             elif held >= config.maximum_holding_sessions:
                 reason = f"maximum {config.maximum_holding_sessions}-session momentum hold reached"
-            elif held >= config.minimum_hold_sessions and ticker not in (selected_shorts if is_short else selected_longs):
+            elif held >= config.minimum_hold_sessions and left_selection(ticker, is_short):
                 reason = "ticker left the daily cross-sectional momentum selection"
             else:
                 continue

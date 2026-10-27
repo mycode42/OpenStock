@@ -17,7 +17,7 @@ from .settings import (
 from .artifacts.files import _atomic_json
 from autoresearch.backtest import _regular_session_bars
 from market.store import SQLiteBarStore, fetch_alpaca_bars
-from strategies.event_driven import EventCalendar
+from strategies.llm_driven import EventCalendar
 from strategies.multi_factor.features import aggregate_intraday_bars
 from strategies.universe import configured_universe
 from market.data import data_tier, regular_feed

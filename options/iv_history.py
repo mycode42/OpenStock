@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from broker.options import OptionsPaperClient
 from options.config import load_options_config
 from options.data import HistoricalChainSnapshotProvider
+from options.market_inputs import MarketInputs
 from options.journal import OptionsJournal
 from runtime.atomic import atomic_write_json
 from runtime.paths import DATA_DIR
@@ -248,6 +249,7 @@ def seed_theta_iv_history(
     rate: float = 0.04,
     dividend_yield: float = 0.015,
     archive_path: Path | None = None,
+    market_inputs: MarketInputs | None = None,
 ) -> dict:
     """Seed missing IV sessions from Theta EOD chains and supersede Cboe rows."""
     symbol = str(underlying).upper()
@@ -331,6 +333,7 @@ def seed_theta_iv_history(
 
                     provider = HistoricalChainSnapshotProvider(
                         [snapshot], rate=rate, dividend_yield=dividend_yield,
+                        market_inputs=market_inputs,
                     )
                     chain = provider.get_chain(
                         symbol, as_of=as_of, min_dte=min_dte, max_dte=max_dte,
@@ -420,6 +423,7 @@ def main() -> int:
             config=long_volatility,
             rate=float(config.get("rate", 0.04)),
             dividend_yield=float(config.get("dividend_yield", 0.015)),
+            market_inputs=MarketInputs(config),
         )
         print(json.dumps(result, sort_keys=True))
     return 0

@@ -367,9 +367,9 @@ class ReplayLoopMixin:
                 "allow_intraday_overnight": self.coordinator.config.allow_intraday_overnight,
             },
             "regime_diagnostics": self._regime_report(),
-            "event_strategy_diagnostics": {
+            "llm_strategy_diagnostics": {
                 **event_diagnostics,
-                "enabled": self.event_strategy_enabled,
+                "enabled": self.llm_strategy_enabled,
                 "configured_enabled": self.event_config.enabled,
             },
             "average_holding_minutes": round(statistics.mean(closed_holds), 2) if closed_holds else None,

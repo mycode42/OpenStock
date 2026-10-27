@@ -15,17 +15,17 @@ def build_scan_response(
     execution: ExecutionResult,
 ) -> dict:
     """Build the stable scan response consumed by the service and dashboard."""
-    if market.event_generator is not None:
-        event_diagnostics = {
-            **market.event_generator.diagnostics(datetime.now(timezone.utc)),
-            "signal_status": market.event_calendar_status,
+    if market.llm_generator is not None:
+        llm_diagnostics = {
+            **market.llm_generator.diagnostics(datetime.now(timezone.utc)),
+            "signal_status": market.llm_signal_status,
         }
     else:
-        event_diagnostics = {
-            **market.event_calendar_diagnostics,
+        llm_diagnostics = {
+            **market.llm_signal_diagnostics,
             "enabled": False,
-            "configured_enabled": scope.event_config.enabled,
-            "status": market.event_calendar_status,
+            "configured_enabled": scope.llm_config.enabled,
+            "status": market.llm_signal_status,
         }
     return {
         "timestamp": scope.now.isoformat(),
@@ -35,7 +35,7 @@ def build_scan_response(
         "multi_factor_diagnostics": signals.multi_factor_diagnostics,
         "multi_factor_parameter_profile": scope.multi_factor_parameter_source,
         "multi_factor_execution_mode": "live",
-        "event_strategy_diagnostics": event_diagnostics,
+        "llm_strategy_diagnostics": llm_diagnostics,
         "signals": signals.generated,
         "portfolio_coordinator": {
             "enabled": True,

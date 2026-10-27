@@ -7,6 +7,7 @@ import hashlib
 import math
 from typing import Iterable
 
+from options.costs import OptionsCostModel
 from options.models import GreeksSnapshot, OptionContract, OptionLeg, OptionStructure, RiskMetrics
 
 
@@ -179,7 +180,7 @@ def iron_condor(
                       premium_at_risk=0.0, metadata={"net_credit_per_share": credit})
 
 
-def straddle(call: OptionLeg, put: OptionLeg, *, direction: str = "long", name: str = "event_driven") -> OptionStructure:
+def straddle(call: OptionLeg, put: OptionLeg, *, direction: str = "long", name: str = "llm_driven") -> OptionStructure:
     if call.contract.right != "call" or put.contract.right != "put":
         raise ValueError("straddle requires one call and one put")
     if call.contract.strike != put.contract.strike or call.contract.expiration != put.contract.expiration:
@@ -204,7 +205,7 @@ def straddle(call: OptionLeg, put: OptionLeg, *, direction: str = "long", name: 
                       premium_at_risk=0.0, defined_risk=False)
 
 
-def strangle(put: OptionLeg, call: OptionLeg, *, direction: str = "long", name: str = "event_driven") -> OptionStructure:
+def strangle(put: OptionLeg, call: OptionLeg, *, direction: str = "long", name: str = "llm_driven") -> OptionStructure:
     if put.contract.right != "put" or call.contract.right != "call":
         raise ValueError("strangle requires one put and one call")
     if put.contract.strike >= call.contract.strike or put.contract.expiration != call.contract.expiration:
@@ -277,19 +278,20 @@ def collar(
                       metadata={"requires_preexisting_shares": shares})
 
 
-def structure_limit_price(structure: OptionStructure, *, slippage_per_contract: float, contracts: int = 1) -> float:
+def structure_limit_price(structure: OptionStructure, *, costs: "OptionsCostModel", contracts: int = 1) -> float:
     """Net debit limit per spread; positive debit, negative credit.
 
+    Each leg adds its spread-aware adverse slippage from the shared cost model.
     The added cost moves every trade against the strategy, including credits.
     Alpaca MLeg uses positive net debit and negative net credit notation.
     """
-    if slippage_per_contract < 0 or contracts <= 0:
-        raise ValueError("slippage and contracts must be non-negative/positive")
-    multiplier = structure.legs[0].contract.multiplier
-    leg_units = sum(leg.ratio_qty for leg in structure.legs)
-    per_share_slippage = slippage_per_contract * leg_units / multiplier
+    if contracts <= 0:
+        raise ValueError("contracts must be positive")
+    per_share_slippage = sum(
+        leg.ratio_qty * costs.leg_slippage_per_share(leg.bid, leg.ask, multiplier=leg.contract.multiplier)
+        for leg in structure.legs
+    )
     return round(structure.net_debit_per_share + per_share_slippage, 2)
-
 
 __all__ = [
     "aggregate_greeks", "net_debit_per_share", "vertical_spread", "iron_condor",

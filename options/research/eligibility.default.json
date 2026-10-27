@@ -12,13 +12,6 @@
     "max_median_option_spread_fraction": 0.25,
     "max_equity_spread_fraction": null
   },
-  "earnings_blackout": {
-    "enabled": false,
-    "days_before": 3,
-    "days_after": 1,
-    "require_fresh_calendar": true,
-    "calendar_max_age_hours": 96
-  },
   "regime": {
     "trend_lookback_sessions": 200,
     "sector_momentum_lookback_sessions": 20,

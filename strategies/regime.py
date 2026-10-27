@@ -61,8 +61,8 @@ def _cached_feature_history(
 
 
 def _legacy_rank(
-    spy_daily_bars: list[dict], mode: str, *, event_enabled: bool,
-    event_disable_in_volatile: bool, intraday_trend_enabled: bool,
+    spy_daily_bars: list[dict], mode: str, *, llm_enabled: bool,
+    llm_disable_in_volatile: bool, intraday_trend_enabled: bool,
     intraday_momentum_enabled: bool,
 ) -> dict:
     """Retain the existing selector for baseline comparisons and migration."""
@@ -81,26 +81,26 @@ def _legacy_rank(
     return_20d = values[-1] / values[-21] - 1
     if volatility >= 0.025:
         regime = "volatile"
-        weights = {"swing_event_driven": 0.56} if event_enabled and not event_disable_in_volatile else {}
+        weights = {"swing_llm_driven": 0.56} if llm_enabled and not llm_disable_in_volatile else {}
         reason = f"20-day daily volatility {volatility:.1%} exceeds 2.5%"
     elif sma20 and values[-1] > sma20 and return_20d >= 0.01:
         regime = "trending_up"
-        weights = {"swing_trend_following": 1.0, "swing_momentum": 0.9, "swing_multi_factor": 0.8, "swing_event_driven": 0.58, "intraday_mean_reversion": 0.25, "swing_mean_reversion": 0.15}
+        weights = {"swing_trend_following": 1.0, "swing_momentum": 0.9, "swing_multi_factor": 0.8, "swing_llm_driven": 0.58, "intraday_mean_reversion": 0.25, "swing_mean_reversion": 0.15}
         reason = f"SPY above 20-day average with {return_20d:.1%} 20-day return"
     elif sma20 and values[-1] < sma20 and return_20d <= -0.01:
         regime = "trending_down"
-        weights = {"swing_trend_following": 0.72, "swing_momentum": 0.65, "swing_multi_factor": 0.62, "swing_event_driven": 0.56, "intraday_mean_reversion": 0.58, "swing_mean_reversion": 0.15}
+        weights = {"swing_trend_following": 0.72, "swing_momentum": 0.65, "swing_multi_factor": 0.62, "swing_llm_driven": 0.56, "intraday_mean_reversion": 0.58, "swing_mean_reversion": 0.15}
         reason = f"SPY below 20-day average with {return_20d:.1%} 20-day return"
     else:
         regime = "range_bound"
-        weights = {"intraday_mean_reversion": 1.0, "swing_mean_reversion": 0.78, "swing_multi_factor": 0.65, "swing_event_driven": 0.58, "swing_trend_following": 0.4, "swing_momentum": 0.4}
+        weights = {"intraday_mean_reversion": 1.0, "swing_mean_reversion": 0.78, "swing_multi_factor": 0.65, "swing_llm_driven": 0.58, "swing_trend_following": 0.4, "swing_momentum": 0.4}
         reason = f"SPY 20-day return {return_20d:.1%}; no directional trend"
 
     available = {"swing_trend_following", "swing_momentum", "intraday_mean_reversion"}
     if mode == "algo":
         available.update({"swing_multi_factor", "swing_mean_reversion"})
-        if event_enabled:
-            available.add("swing_event_driven")
+        if llm_enabled:
+            available.add("swing_llm_driven")
         if intraday_trend_enabled:
             weights["intraday_trend_following"] = 0.3 if regime == "range_bound" else 0.58
             available.add("intraday_trend_following")
@@ -110,8 +110,8 @@ def _legacy_rank(
     ranked = sorted(weights.items(), key=lambda item: item[1], reverse=True)
     active = [
         name for name, score in ranked if name in available
-        and (regime != "volatile" or name == "swing_event_driven")
-        and (name != "swing_event_driven" or score >= 0.55)
+        and (regime != "volatile" or name == "swing_llm_driven")
+        and (name != "swing_llm_driven" or score >= 0.55)
     ]
     return {
         "regime": regime, "reason": reason,
@@ -352,12 +352,12 @@ def _apply_hysteresis(raw_states: list[str]) -> list[str]:
 
 
 def _strategy_weights(
-    regime: str, *, strategy_policy: str, event_enabled: bool,
-    event_disable_in_volatile: bool,
+    regime: str, *, strategy_policy: str, llm_enabled: bool,
+    llm_disable_in_volatile: bool,
 ) -> dict[str, float]:
     trend = {
         "swing_trend_following": 1.0, "swing_momentum": 0.9, "swing_multi_factor": 0.75,
-        "swing_event_driven": 0.58,
+        "swing_llm_driven": 0.58,
     }
     if strategy_policy == "legacy":
         return {}
@@ -368,20 +368,20 @@ def _strategy_weights(
     if regime == "volatile":
         if strategy_policy == "high_vol_mean_reversion":
             return {"intraday_mean_reversion": 1.0, "swing_mean_reversion": 0.9}
-        if event_enabled and not event_disable_in_volatile:
-            return {"swing_event_driven": 0.56}
+        if llm_enabled and not llm_disable_in_volatile:
+            return {"swing_llm_driven": 0.56}
     return {}
 
 
 def _available_strategies(
-    weights: dict[str, float], mode: str, *, event_enabled: bool,
+    weights: dict[str, float], mode: str, *, llm_enabled: bool,
     intraday_trend_enabled: bool, intraday_momentum_enabled: bool,
 ) -> set[str]:
     available = {"swing_trend_following", "swing_momentum", "intraday_mean_reversion"}
     if mode == "algo":
         available.update({"swing_multi_factor", "swing_mean_reversion"})
-        if event_enabled:
-            available.add("swing_event_driven")
+        if llm_enabled:
+            available.add("swing_llm_driven")
         if intraday_trend_enabled:
             available.add("intraday_trend_following")
         if intraday_momentum_enabled:
@@ -389,9 +389,15 @@ def _available_strategies(
     return available
 
 
+def _risk_scale_value(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 < value <= 1.5:
+        raise ValueError(f"{name} risk_scale must be a finite number in (0, 1.5]")
+    return float(value)
+
+
 def rank_strategies(
     spy_daily_bars: list[dict], mode: str = "algo", *,
-    event_enabled: bool = False, event_disable_in_volatile: bool = True,
+    llm_enabled: bool = False, llm_disable_in_volatile: bool = True,
     intraday_trend_enabled: bool = False, intraday_momentum_enabled: bool = False,
     feature_set: str = "legacy", engine: str = "legacy",
     strategy_policy: str = "legacy", context_bars: dict[str, list[dict]] | None = None,
@@ -399,6 +405,7 @@ def rank_strategies(
     model_training_window: int = 756, model_min_confidence: float = 0.50,
     strategy_regime_weights: dict[str, dict[str, float]] | None = None,
     strategy_enabled: dict[str, bool] | None = None,
+    strategy_risk_scales: dict[str, float] | None = None,
     volatile_policy_risk_multiplier: float = 0.25,
     volatility_risk_scales: dict[str, float] | None = None,
     precomputed_features: list[dict] | None = None,
@@ -430,8 +437,8 @@ def rank_strategies(
         raise ValueError("model_min_confidence must be a finite fraction in [0, 1]")
     if engine == "legacy" and feature_set == "legacy" and strategy_policy == "legacy" and not include_models:
         return _legacy_rank(
-            spy_daily_bars, mode, event_enabled=event_enabled,
-            event_disable_in_volatile=event_disable_in_volatile,
+            spy_daily_bars, mode, llm_enabled=llm_enabled,
+            llm_disable_in_volatile=llm_disable_in_volatile,
             intraday_trend_enabled=intraday_trend_enabled,
             intraday_momentum_enabled=intraday_momentum_enabled,
         )
@@ -444,8 +451,8 @@ def rank_strategies(
         return {"regime": "unknown", "reason": "insufficient completed daily bars", "ranked": [], "active": []}
 
     legacy = _legacy_rank(
-        spy_daily_bars, mode, event_enabled=event_enabled,
-        event_disable_in_volatile=event_disable_in_volatile,
+        spy_daily_bars, mode, llm_enabled=llm_enabled,
+        llm_disable_in_volatile=llm_disable_in_volatile,
         intraday_trend_enabled=intraday_trend_enabled,
         intraday_momentum_enabled=intraday_momentum_enabled,
     )
@@ -533,18 +540,18 @@ def rank_strategies(
     elif strategy_policy == "legacy":
         weights = _strategy_weights(
             selected, strategy_policy="structural",
-            event_enabled=event_enabled,
-            event_disable_in_volatile=event_disable_in_volatile,
+            llm_enabled=llm_enabled,
+            llm_disable_in_volatile=llm_disable_in_volatile,
         )
     else:
         weights = _strategy_weights(
             selected, strategy_policy=strategy_policy,
-            event_enabled=event_enabled,
-            event_disable_in_volatile=event_disable_in_volatile,
+            llm_enabled=llm_enabled,
+            llm_disable_in_volatile=llm_disable_in_volatile,
         )
 
     available = _available_strategies(
-        weights, mode, event_enabled=event_enabled,
+        weights, mode, llm_enabled=llm_enabled,
         intraday_trend_enabled=intraday_trend_enabled,
         intraday_momentum_enabled=intraday_momentum_enabled,
     )
@@ -554,7 +561,7 @@ def rank_strategies(
         if intraday_momentum_enabled and selected in {"trending_up", "trending_down"}:
             weights["intraday_momentum"] = 0.55
         available = _available_strategies(
-            weights, mode, event_enabled=event_enabled,
+            weights, mode, llm_enabled=llm_enabled,
             intraday_trend_enabled=intraday_trend_enabled,
             intraday_momentum_enabled=intraday_momentum_enabled,
         )
@@ -563,7 +570,7 @@ def rank_strategies(
         name for name, score in ranked
         if name in available and (
             strategy_regime_weights is not None
-            or name != "swing_event_driven"
+            or name != "swing_llm_driven"
             or score >= 0.55
         )
     ]
@@ -579,8 +586,15 @@ def rank_strategies(
         # A zero scale is a deliberate pause for this volatility state. Keep
         # route weights in diagnostics, but don't advertise strategies as live.
         active = []
+    # Route weights decide eligibility on a configured route table; size comes
+    # from each strategy's risk_scale. Derived legacy weights still size trades.
+    if strategy_regime_weights is None:
+        size_factors = {name: float(weights.get(name, 1.0)) for name in active}
+    else:
+        scales = strategy_risk_scales or {}
+        size_factors = {name: _risk_scale_value(scales.get(name, 1.0), name) for name in active}
     risk_multipliers = {
-        name: round(min(1.5, risk_scale * policy_scale * float(weights.get(name, 1.0))), 4)
+        name: round(min(1.5, risk_scale * policy_scale * size_factors[name]), 4)
         for name in active
     }
 

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 
 from options.costs import OptionsCostModel
 from options.models import GreeksSnapshot, OptionSignal, OptionStructure, PortfolioRiskSummary
@@ -30,6 +30,8 @@ class PositionExposure:
     max_loss: float = 0.0
     margin: float = 0.0
     assignment_shares: int = 0
+    # Shares of the underlying committed to short calls (contracts x multiplier).
+    short_call_shares: int = 0
     source: str = "unknown"
 
 
@@ -59,7 +61,12 @@ def summarize_portfolio(
     options_equity: float,
     positions: Iterable[PositionExposure],
     data_quality: Iterable[str] = (),
+    stress_spot_shocks: Sequence[float],
+    stress_iv_shock: float,
 ) -> PortfolioRiskSummary:
+    shocks = tuple(float(value) for value in stress_spot_shocks)
+    if len(shocks) != 2:
+        raise ValueError("stress_spot_shocks must contain exactly two shocks")
     if not math.isfinite(combined_equity) or combined_equity <= 0:
         raise ValueError("combined portfolio equity must be positive")
     if not math.isfinite(options_equity) or options_equity <= 0:
@@ -87,8 +94,8 @@ def summarize_portfolio(
         symbol: 0.5 * value * (next(row.spot for row in rows if row.underlying.upper() == symbol) * 0.01) ** 2
         for symbol, value in gamma.items()
     }
-    stress_results: dict[float, float] = {}
-    for shock in (0.05, 0.10):
+    stress_results: list[float] = []
+    for shock in shocks:
         scenario_pnls = []
         for direction in (-1, 1):
             pnl = 0.0
@@ -96,9 +103,9 @@ def summarize_portfolio(
                 move = direction * shock * row.spot
                 pnl += row.delta_shares * move + 0.5 * row.gamma * move * move + row.theta_per_day
                 # Volatility shocks are applied adversely to each position's vega.
-                pnl -= abs(row.vega_per_volatility) * 0.10
+                pnl -= abs(row.vega_per_volatility) * stress_iv_shock
             scenario_pnls.append(pnl)
-        stress_results[shock] = max(0.0, -min(scenario_pnls))
+        stress_results.append(max(0.0, -min(scenario_pnls)))
     return PortfolioRiskSummary(
         equity=combined_equity,
         options_equity=options_equity,
@@ -110,8 +117,9 @@ def summarize_portfolio(
         max_loss_at_risk=max_loss,
         estimated_margin=margin,
         assignment_shares=assignment_shares,
-        stress_loss_5pct=stress_results[0.05],
-        stress_loss_10pct=stress_results[0.10],
+        # Field names are legacy labels: they hold the first and second configured shocks.
+        stress_loss_5pct=stress_results[0],
+        stress_loss_10pct=stress_results[1],
         data_quality=tuple(sorted(set(data_quality))),
     )
 
@@ -142,11 +150,17 @@ class PortfolioRiskManager:
     ) -> RiskDecision:
         limits = self.config
         options_equity_positions = list(options_equity_positions)
-        base = list(equity_positions) + options_equity_positions + list(option_positions)
+        option_positions = list(option_positions)
+        base = list(equity_positions) + options_equity_positions + option_positions
+        stress_kwargs = {
+            "stress_spot_shocks": limits["stress_spot_shocks"],
+            "stress_iv_shock": float(limits["stress_iv_shock"]),
+        }
         current = summarize_portfolio(
             combined_equity=combined_equity,
             options_equity=options_equity,
             positions=base,
+            **stress_kwargs,
         )
         structure = signal.structure
         if not structure.risk.defined_risk or not math.isfinite(structure.risk.max_loss):
@@ -155,11 +169,18 @@ class PortfolioRiskManager:
         if structure.structure_type in {"protective_put", "collar"}:
             if structure.underlying_shares <= 0:
                 return self._reject("covered structure is missing its required share quantity", signal)
-            covered_shares = sum(
+            held_shares = sum(
                 max(0.0, position.delta_shares)
                 for position in options_equity_positions
                 if position.underlying == structure.underlying
             )
+            # Shares already pledged to open short calls (including collars) cannot cover a new call.
+            committed_shares = sum(
+                position.short_call_shares
+                for position in option_positions
+                if position.underlying == structure.underlying
+            )
+            covered_shares = held_shares - committed_shares
             if covered_shares < structure.underlying_shares:
                 return self._reject("shares required to cover this structure are not held in the options account", signal)
             covered_structure_units = int(covered_shares // structure.underlying_shares)
@@ -218,6 +239,7 @@ class PortfolioRiskManager:
             combined_equity=combined_equity,
             options_equity=options_equity,
             positions=[*base, candidate],
+            **stress_kwargs,
         )
         if max((abs(v) for v in projected.delta_notional_by_underlying.values()), default=0.0) > combined_equity * float(limits.get("max_delta_notional_pct", 0.75)):
             return self._reject("combined per-underlying delta-notional limit would be exceeded", signal)
@@ -234,14 +256,10 @@ class PortfolioRiskManager:
             return self._reject("combined daily theta-loss limit would be exceeded", signal)
         if projected.assignment_shares > int(limits.get("max_assignment_shares", 200)):
             return self._reject("early-assignment share exposure limit would be exceeded", signal)
-        if projected.stress_loss_10pct > combined_equity * 0.20:
-            return self._reject("combined 10% underlying stress loss exceeds 20% of equity", signal)
+        if projected.stress_loss_10pct > combined_equity * float(limits["stress_gate_loss_pct"]):
+            return self._reject("combined underlying stress loss exceeds the configured equity limit", signal)
 
-        order_price = structure_limit_price(
-            structure,
-            slippage_per_contract=self.costs.slippage_per_contract_usd,
-            contracts=contracts,
-        )
+        order_price = structure_limit_price(structure, costs=self.costs, contracts=contracts)
         # A credit structure must remain a credit after conservative slippage.
         # Crossing zero would silently turn a credit entry into a net debit.
         if structure.net_debit_per_share < 0 and order_price >= 0:
@@ -268,6 +286,10 @@ class PortfolioRiskManager:
         # The spot is supplied by paper runner before risk evaluation.
         if spot <= 0:
             spot = float(structure.metadata.get("reference_price", 0) or 0)
+        short_call_shares = sum(
+            leg.ratio_qty * leg.contract.multiplier
+            for leg in legs if leg.side == "sell" and leg.contract.right == "call"
+        ) * contracts
         return PositionExposure(
             underlying=structure.underlying,
             spot=spot,
@@ -278,6 +300,7 @@ class PortfolioRiskManager:
             max_loss=structure.risk.max_loss * contracts,
             margin=structure.risk.estimated_margin * contracts,
             assignment_shares=structure.risk.assignment_share_exposure * contracts,
+            short_call_shares=int(short_call_shares),
             source="options_proposal",
         )
 

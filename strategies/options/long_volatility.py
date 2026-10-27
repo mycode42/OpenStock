@@ -170,7 +170,7 @@ def long_volatility_exit_reason(
     if entry_debit <= 0 or not math.isfinite(entry_debit) or not math.isfinite(current_value):
         return None
     if (
-        bool(config.get("close_on_regime_exit", True))
+        bool(config.get("close_on_regime_exit", False))
         and str(entry_regime).lower() == "volatile"
         and str(regime).lower() != "volatile"
     ):

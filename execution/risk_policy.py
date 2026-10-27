@@ -4,12 +4,6 @@ from __future__ import annotations
 
 from portfolio.config import risk_universe
 
-# Leveraged ETFs blocked by the Algo portfolio policy.
-LEVERAGED_ETFS = {
-    "TQQQ", "SOXL", "UPRO", "SPXL", "TECL", "LABU", "SOXS", "TECS",
-    "SPXS", "SQQQ", "SDOW", "UDOW", "NAIL", "CURE", "HIBL", "HIBS",
-}
-
 # Moonshots are blocked in every mode and excluded from all configured universes.
 MOONSHOTS = {"RGTI", "SOUN", "LUNR"}
 
@@ -32,4 +26,4 @@ def build_universe_maps(mode: str, config_loader, cache: dict) -> tuple[dict, di
     return cache[mode]
 
 
-__all__ = ["LEVERAGED_ETFS", "MOONSHOTS", "build_universe_maps"]
+__all__ = ["MOONSHOTS", "build_universe_maps"]

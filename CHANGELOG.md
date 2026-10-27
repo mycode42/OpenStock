@@ -8,6 +8,75 @@
 - Overnight Algo entries are enabled by default (`overnight_entries_enabled`).
 - Extended-session quotes are fresh for 300 seconds instead of 90, so overnight and premarket entries and protective updates are not paused by indicative BOATS quotes. Regular-session quotes keep the 90-second window.
 
+## [3.1.0] - 2026-10-27
+
+Release: software-managed protection replaces broker brackets, the
+equity and options LLM sleeve is renamed `llm_driven`, and research
+integrity gates are tightened.
+
+### Added
+
+- Software-managed protection: stops, targets and trailing state live in the
+  `position_protection` table and are evaluated every scan in every session.
+  A daemon heartbeat raises an alarm when positions are open and the daemon
+  has stopped scanning.
+- Protection migration (`portfolio.protection.migration`): dry run by default;
+  writes protection rows before cancelling any broker exit legs.
+- Versioned profile store (`autoresearch.profile_versions`): every promotion
+  and revert is recorded with parameters, fitness and lineage, plus a
+  `revert` command.
+- Final holdout registry with `initialize`, `status` and `supersede`
+  commands. The nightly run only reads holdout status.
+- Deflated Sharpe Ratio promotion gate, with a rolling 28-day trial count and
+  a nightly discovery cap of 60 evaluations per strategy.
+- Live drift feed written by the daemon after each regular close. The nightly
+  run reads it and can revert flagged profiles (dry run by default).
+- Options: Alpaca trailing-12-month dividend yields with a dated research
+  snapshot; FRED DGS3MO risk-free rate cache; spread-aware option slippage
+  shared by live pricing and research fills.
+- Strategy rename migration (`strategies.migrations.rename_llm_driven`):
+  dry run by default, backs up before writing.
+
+### Changed
+
+- Broker bracket and OCO orders are no longer submitted. Extended-hours,
+  overnight and regular-session exits use software triggers.
+- Regime changes block new entries only; held positions exit through their
+  own stop, trailing, target or time rules.
+- Renamed `event_driven` to `llm_driven` for the equity strategy
+  (`swing_llm_driven`) and the options sleeve (`options_llm_driven`).
+  Calendar-reaction entries were removed; LLM signals are the only entry path.
+- Leveraged ETFs are tradable (the `allow_leveraged_etfs` gate is removed).
+- Earnings blackout removed from options universe selection.
+- Equity: `risk_per_trade_pct` 2%, per-strategy `max_position_pct` 7%,
+  tactical sector cap 10%.
+- Options: per-trade risk 7% for the VRP, long-volatility and directional
+  sleeves; `min_llm_confidence` 0.80; `close_on_regime_exit` false by default.
+- Momentum exits use per-name rank hysteresis (exit outside 2 x top_n).
+- Route weights and risk scales are separate (`risk_scale` per strategy).
+- Equity cost constants are shared in `autoresearch/costs.py`.
+
+### Fixed
+
+- Pending buy reservations no longer count cover legs of shorts.
+- Retryable exit refusals no longer pause entries.
+- `--status` NameError in the portfolio daemon.
+- Covered-call sizing no longer double-counts shares committed to open calls.
+- Option theta is per calendar day for the final two days before expiry.
+- Research gamma uses closed-form European values instead of noisy tree
+  finite differences.
+- Vendor option vega, rho and theta scales verified against Alpaca snapshots.
+- Options paper sleeve error path NameError (`LOG`).
+- Monitor report crash when the state store changed.
+
+### Upgrade notes
+
+- Stop `algo-trader` and `options-paper`, run the strategy rename migration
+  with `--apply`, then the protection migration (dry run first), then start
+  both services.
+- Run `openstock` after updating its configuration keys to the `llm_driven`
+  names.
+
 ## [3.0.0] - 2026-10-20
 
 Major release: independent options paper trading and validation join the
@@ -15,7 +84,7 @@ coordinated Algo equity portfolio.
 
 ### Added
 
-- A dedicated Alpaca Paper options route with VRP, event-driven, and optional
+- A dedicated Alpaca Paper options route with VRP, llm-driven, and optional
   directional strategy sleeves, separate order/fill journals, and combined
   equity/options risk checks.
 - Options-specific rolling walk-forward research with realistic execution

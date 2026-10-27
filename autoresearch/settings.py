@@ -37,7 +37,7 @@ REGIME_CONTEXT_WARMUP_DAYS = 450
 INTRADAY_STRATEGIES = strategy_ids_for_research_workflow("nightly_intraday")
 SWING_STRATEGIES = strategy_ids_for_research_workflow("nightly_swing")
 RESEARCHABLE_STRATEGIES = (*SWING_STRATEGIES, *INTRADAY_STRATEGIES)
-EVENT_RESEARCH_STRATEGIES = strategy_ids_for_research_workflow("event_research")
+LLM_RESEARCH_STRATEGIES = strategy_ids_for_research_workflow("llm_research")
 LIVE_RESEARCH_STRATEGIES = tuple(
     strategy for strategy in RESEARCHABLE_STRATEGIES
     if (
@@ -48,7 +48,7 @@ LIVE_RESEARCH_STRATEGIES = tuple(
 
 STRATEGY_FLAVORS = {
     strategy: STRATEGY_CATALOG[strategy].horizon
-    for strategy in (*INTRADAY_STRATEGIES, *SWING_STRATEGIES, *EVENT_RESEARCH_STRATEGIES)
+    for strategy in (*INTRADAY_STRATEGIES, *SWING_STRATEGIES, *LLM_RESEARCH_STRATEGIES)
 }
 
 CORE_RESEARCH_CONTROLS = get_algo_research_controls()
@@ -61,8 +61,10 @@ ADAPTIVE_WINDOW_DAYS = {
     "intraday": (10, 20, 30),
     "swing": (30, 60, 90),
 }
-ADAPTIVE_DISCOVERY_CANDIDATES = 16
-ADAPTIVE_DISCOVERY_ITERATIONS = 5
+ADAPTIVE_DISCOVERY_CANDIDATES = 8
+ADAPTIVE_DISCOVERY_ITERATIONS = 4
+# New discovery evaluations per strategy per night, across all window attempts.
+ADAPTIVE_DISCOVERY_NIGHTLY_EVALUATIONS = 60
 ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION = 0.35
 ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS = 2
 ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP = 2

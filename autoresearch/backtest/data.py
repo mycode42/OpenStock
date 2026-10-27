@@ -1,6 +1,7 @@
 """Dataset loading and command handlers for Algo replay."""
 
 from __future__ import annotations
+from autoresearch.costs import EQUITY_COMMISSION_PER_SHARE
 
 import argparse
 import csv
@@ -14,7 +15,7 @@ import requests
 from .config import REGIME_WARMUP_DAYS, ET
 from .config import multi_factor_warmup_days, validate_research_controls, validate_strategy_filter
 from market.store import SQLiteBarStore, fetch_alpaca_bars
-from strategies.event_driven import EventCalendar
+from strategies.llm_driven import EventCalendar
 from strategies.registry import validate_parameter_profile
 from portfolio.config import candidate_pool_tickers
 from portfolio.config import get_algo_regime_config
@@ -118,7 +119,7 @@ def fetch_dataset(args) -> dict:
     store = SQLiteBarStore(args.db)
     selected_strategies = _read_strategy_filter(getattr(args, "strategies", None))
     needs_factor_warmup = selected_strategies is None or "swing_multi_factor" in selected_strategies
-    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "swing_event_driven" in selected_strategies
+    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "swing_llm_driven" in selected_strategies
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     warmup_days = multi_factor_warmup_days(_read_profile(getattr(args, "profile", None))) if needs_factor_warmup else 0
     context_symbols = list(dict.fromkeys(
@@ -168,7 +169,7 @@ def run_backtest(args) -> dict:
     store = SQLiteBarStore(args.db)
     selected_strategies = _read_strategy_filter(getattr(args, "strategies", None))
     needs_factor_warmup = selected_strategies is None or "swing_multi_factor" in selected_strategies
-    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "swing_event_driven" in selected_strategies
+    needs_split_adjustment = needs_factor_warmup or selected_strategies is None or "swing_llm_driven" in selected_strategies
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     profile = _read_profile(args.profile)
     warmup_days = multi_factor_warmup_days(profile) if needs_factor_warmup else 0
@@ -198,7 +199,7 @@ def run_backtest(args) -> dict:
         data_adjustment=adjustment, initial_capital=args.capital,
         slippage_bps=args.slippage_bps, profile=profile,
         spread_bps=getattr(args, "spread_bps", 3.0),
-        commission_per_share=getattr(args, "commission_per_share", 0.005),
+        commission_per_share=getattr(args, "commission_per_share", EQUITY_COMMISSION_PER_SHARE),
         short_borrow_annual_pct=getattr(args, "short_borrow_annual_pct", 3.0) / 100,
         unknown_borrow_penalty_bps=getattr(args, "unknown_borrow_penalty_bps", 25.0),
         borrow_availability=read_borrow_availability(getattr(args, "borrow_availability", None)),

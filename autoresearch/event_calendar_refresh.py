@@ -23,8 +23,8 @@ import requests
 from dotenv import load_dotenv
 
 from broker.algo import AlgoAlpaca
-from strategies.event_driven.calendar import CSV_FIELDS, EventCalendar
-from strategies.event_driven.models import ScheduledEvent
+from strategies.llm_driven.calendar import CSV_FIELDS, EventCalendar
+from strategies.llm_driven.models import ScheduledEvent
 from strategies.universe import configured_universe
 
 

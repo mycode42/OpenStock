@@ -16,8 +16,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from broker.algo import AlgoAlpaca
-from portfolio.protection.evidence import broker_prices_match, verified_recovery_oco
-from portfolio.reconciliation import OPEN_ORDER_STATUSES
+from portfolio.protection.software import heartbeat_alarm
 from market.sessions import ET, TradingWindow, get_trading_window
 from portfolio.state_store import AlgoStateStore, StateStoreError
 from portfolio.config import ALGO_SERVICE_CONFIG, ALGO_SIGNAL_DATA_CONFIG, CASH_RESERVE, STRATEGY_CONFIG, is_cash_proxy
@@ -96,52 +95,6 @@ def _quantity(value: object) -> Decimal | None:
     """Parse a nonnegative order quantity; broker position quantities may be signed."""
     number = _signed_quantity(value)
     return number if number is not None and number >= 0 else None
-
-
-def _exact_nested_orders(
-    broker: AlgoAlpaca, nested_orders: list[dict], positions: dict[str, dict], portfolio: dict,
-) -> tuple[list[dict], list[str]]:
-    """Replace capped history rows with exact nested reads for live holdings."""
-    owners = portfolio.get("position_owners") or {}
-    states = portfolio.get("strategy_states") or {}
-    symbols_by_id: dict[str, set[str]] = {}
-    for symbol in sorted(positions):
-        owner = owners.get(symbol)
-        if not owner:
-            continue
-        state = (states.get(owner) or {}).get(symbol) or {}
-        recovery = state.get("protection_recovery") or {}
-        order_ids = [state.get("entry_order_id")]
-        if isinstance(recovery, dict):
-            order_ids.append(recovery.get("order_id"))
-        for raw_id in order_ids:
-            if raw_id:
-                symbols_by_id.setdefault(str(raw_id), set()).add(symbol)
-
-    # A failed exact read must never fall back to a stale or incomplete row
-    # from the broker's capped history page.
-    exact_ids = set(symbols_by_id)
-    verified = [
-        order for order in nested_orders
-        if not isinstance(order, dict) or str(order.get("id") or "") not in exact_ids
-    ]
-    errors: list[str] = []
-    for order_id, symbols in sorted(symbols_by_id.items()):
-        if len(symbols) != 1:
-            errors.append(f"Persisted broker order {order_id} belongs to multiple live symbols")
-            continue
-        symbol = next(iter(symbols))
-        try:
-            order = broker.order(order_id, nested=True)
-            if not isinstance(order, dict) or str(order.get("id") or "") != order_id:
-                raise ValueError("exact lookup returned an incorrect order ID")
-            if str(order.get("symbol") or "").upper() != symbol:
-                raise ValueError("exact lookup returned an incorrect symbol")
-        except Exception as exc:
-            errors.append(f"{symbol} order {order_id}: {type(exc).__name__}: {exc}")
-            continue
-        verified.append(order)
-    return verified, errors
 
 
 def _expected_data_warmup(
@@ -251,87 +204,20 @@ def _expected_empty_extended_data(
     )
 
 
-def _bracket_stop_gaps(
-    positions: dict[str, dict], owners: dict[str, str], states: dict,
-    nested_orders: list[dict], *, regular_session: bool,
-) -> tuple[list[str], list[str], list[str], int]:
-    """Check bracket stops and regular-session simple-entry OCO protection."""
-    by_id = {
-        str(order["id"]): order for order in nested_orders
-        if isinstance(order, dict) and order.get("id")
-    }
+def _protection_row_gaps(positions: dict[str, dict], owners: dict[str, str], rows: dict[str, dict]) -> list[str]:
+    """Owned, held positions lacking a complete software protection row."""
     gaps: list[str] = []
-    unknown: list[str] = []
-    pending_cancel: set[str] = set()
-    checked = 0
-    for symbol, position in positions.items():
-        owner = owners.get(symbol)
-        if not owner:
+    for symbol in positions:
+        if symbol not in owners:
             continue
-        state = (states.get(owner) or {}).get(symbol) or {}
-        entry_id = state.get("entry_order_id")
-        parent = by_id.get(str(entry_id)) if entry_id else None
-        if parent is None:
-            unknown.append(symbol)
-            continue
-        order_class = str(parent.get("order_class") or "simple").lower()
-        position_qty = _signed_quantity(position.get("qty"))
-        position_size = abs(position_qty) if position_qty is not None else None
-        exit_side = "buy" if position_qty is not None and position_qty < 0 else "sell"
-        if order_class == "simple":
-            if regular_session and (
-                position_qty is None
-                or not verified_recovery_oco(nested_orders, state, position_qty)
-            ):
-                gaps.append(symbol)
-            continue
-        if order_class != "bracket":
+        row = rows.get(symbol)
+        if not row or row.get("phase") not in {"open", "exit_pending"}:
             gaps.append(symbol)
             continue
-        checked += 1
-        active_stops = []
-        for leg in parent.get("legs") or []:
-            if not isinstance(leg, dict):
-                continue
-            if (
-                str(leg.get("side", "")).lower() == exit_side
-                and str(leg.get("status", "")).lower() == "pending_cancel"
-            ):
-                pending_cancel.add(f"{symbol}:{str(leg.get('type') or 'unknown').lower()}")
-            if (
-                str(leg.get("side", "")).lower() != exit_side
-                or str(leg.get("type", "")).lower() not in {"stop", "stop_limit", "trailing_stop"}
-                or str(leg.get("status", "")).lower() not in OPEN_ORDER_STATUSES
-            ):
-                continue
-            qty = _quantity(leg.get("qty"))
-            filled = _quantity(leg.get("filled_qty") or 0)
-            if qty is not None and filled is not None and qty >= filled:
-                active_stops.append((qty - filled, _quantity(leg.get("stop_price"))))
-        state = (states.get(owner) or {}).get(symbol, {})
-        expected_stop = _quantity(state.get("stop_price"))
-        actual_stop = active_stops[0][1] if len(active_stops) == 1 else None
-        # Existing state files predate broker_stop_price metadata. Once a stop
-        # has been synchronized, require the broker leg to match the live trail.
-        stop_level_matches = (
-            state.get("broker_stop_price") is None
-            or (expected_stop is not None and broker_prices_match(actual_stop, expected_stop))
-        )
-        bracket_stop_covers_position = (
-            position_size is not None
-            and len(active_stops) == 1
-            and active_stops[0][0] == position_size
-            and stop_level_matches
-        )
-        replacement_oco_covers_position = (
-            not bracket_stop_covers_position
-            and regular_session
-            and position_qty is not None
-            and verified_recovery_oco(nested_orders, state, position_qty)
-        )
-        if not bracket_stop_covers_position and not replacement_oco_covers_position:
+        active_stop = row.get("trailing_stop") or row.get("initial_stop")
+        if not _positive(active_stop) or not _positive(row.get("target")):
             gaps.append(symbol)
-    return sorted(gaps), sorted(unknown), sorted(pending_cancel), checked
+    return sorted(gaps)
 
 
 def build_report(
@@ -362,6 +248,17 @@ def build_report(
         state_available = True
     except (StateStoreError, OSError, ValueError) as exc:
         problems.append(_problem("sqlite_state_unavailable", f"Cannot read authoritative Algo SQLite state: {exc}"))
+    protection_rows: dict[str, dict] = {}
+    heartbeat: dict | None = None
+    protection_available = False
+    if state_available:
+        try:
+            database = store or AlgoStateStore(STATE_PATH)
+            protection_rows = database.read_protection()
+            heartbeat = database.read_heartbeat()
+            protection_available = True
+        except (StateStoreError, OSError, ValueError) as exc:
+            problems.append(_problem("sqlite_state_unavailable", f"Cannot read Algo protection rows or heartbeat: {exc}"))
     if market_state in {"CONFIG_ERROR", "DEGRADED", "STATE_ERROR"}:
         problems.append(_problem("coordinator_degraded", f"Persisted Algo coordinator state is {market_state}"))
     incident = portfolio.get("execution_incident") or {}
@@ -405,7 +302,6 @@ def build_report(
     calendar_available = False
     positions: dict[str, dict] | None = None
     open_orders: list[dict] | None = None
-    nested_orders: list[dict] | None = None
     try:
         broker = broker or AlgoAlpaca()
         broker_account = broker.account()  # Binds these credentials to the configured Algo account.
@@ -462,25 +358,6 @@ def build_report(
             except Exception as exc:
                 problems.append(_problem("orders_unavailable", f"Cannot verify Algo open orders: {type(exc).__name__}: {exc}"))
 
-        if positions:
-            try:
-                nested_orders = broker.orders("all", nested=True)
-                if not isinstance(nested_orders, list):
-                    raise ValueError("Broker order history is not a list")
-            except Exception as exc:
-                problems.append(_problem("orders_unavailable", f"Cannot verify Algo broker stop orders: {type(exc).__name__}: {exc}"))
-            else:
-                if state_available:
-                    try:
-                        nested_orders, lookup_errors = _exact_nested_orders(
-                            broker, nested_orders, positions, portfolio,
-                        )
-                    except Exception as exc:
-                        nested_orders = None
-                        problems.append(_problem("orders_unavailable", f"Cannot verify exact nested Algo orders: {type(exc).__name__}: {exc}"))
-                    else:
-                        for detail in lookup_errors:
-                            problems.append(_problem("orders_unavailable", f"Cannot verify exact nested Algo order: {detail}"))
 
     scan_at = _timestamp(portfolio.get("last_scan_at")) if state_available else None
     raw_scan_age = int((now - scan_at).total_seconds()) if scan_at else None
@@ -575,10 +452,7 @@ def build_report(
     unsupported_positions: list[str] = []
     unproven_positions: list[str] = []
     software_stop_gaps: list[str] = []
-    broker_stop_gaps: list[str] = []
-    broker_stop_unknown: list[str] = []
-    pending_cancel_exits: list[str] = []
-    brackets_checked = 0
+    protection_gaps: list[str] = []
     if positions is not None:
         unsupported_positions = sorted(
             symbol for symbol, position in positions.items()
@@ -605,19 +479,23 @@ def build_report(
         )
         if software_stop_gaps:
             problems.append(_problem("software_stops_missing", "Owned positions have no valid software stop: " + ", ".join(software_stop_gaps)))
-        if nested_orders is not None:
-            broker_stop_gaps, broker_stop_unknown, pending_cancel_exits, brackets_checked = _bracket_stop_gaps(
-                positions, owners, states, nested_orders,
-                regular_session=window is not None and window.name == "regular",
-            )
-            if broker_stop_gaps:
-                problems.append(_problem("broker_bracket_stops_missing", "Known entries lack an active full-size broker stop: " + ", ".join(broker_stop_gaps)))
-            if pending_cancel_exits:
-                problems.append(_problem("broker_exit_pending_cancel", "Bracket exit legs remain pending cancellation: " + ", ".join(pending_cancel_exits)))
+        protection_gaps = _protection_row_gaps(positions, owners, protection_rows) if protection_available else []
+        if protection_gaps:
+            problems.append(_problem("software_protection_missing", "Owned positions lack a complete software protection row: " + ", ".join(protection_gaps)))
         startup = portfolio.get("startup_reconciliation") or {}
         if positions and startup.get("status") in {"degraded", "error"}:
             problems.append(_problem("startup_reconciliation_degraded", "Broker attribution or protection did not verify at coordinator startup"))
 
+    heartbeat_detail = None
+    if protection_available:
+        open_count = len(positions) if positions is not None else len(protection_rows)
+        heartbeat_detail = heartbeat_alarm(heartbeat=heartbeat, open_position_count=open_count, now=now)
+        if heartbeat_detail:
+            problems.append(_problem(
+                "daemon_heartbeat_stale",
+                f"Algo daemon has not scanned while {heartbeat_detail['open_positions']} position(s) are open "
+                f"({heartbeat_detail['kind']}, age {heartbeat_detail['age_seconds']}s, limit {heartbeat_detail['limit_seconds']}s)",
+            ))
     data_status = portfolio.get("data_status") if state_available else {}
     if not isinstance(data_status, dict):
         data_status = {}
@@ -651,10 +529,9 @@ def build_report(
         "entry_provenance_missing": unproven_positions,
         "software_stops_missing": software_stop_gaps,
         "owned_position_quote_diagnostics": quote_diagnostics,
-        "bracket_entries_checked": brackets_checked,
-        "broker_bracket_stops_missing": broker_stop_gaps,
-        "broker_pending_cancel_exits": pending_cancel_exits,
-        "broker_stop_coverage_unknown": broker_stop_unknown,
+        "protection_row_gaps": protection_gaps,
+        "daemon_heartbeat": heartbeat,
+        "daemon_heartbeat_alarm": heartbeat_detail,
         "warnings": warnings,
         "problems": problems,
     }

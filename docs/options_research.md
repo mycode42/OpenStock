@@ -1,8 +1,8 @@
 # Options research and validation
 
 Options sleeves use a separate research loop from the equity autoresearch
-pipeline. Each run evaluates one expression module: `vrp`, `event_driven`, or
-`directional_overlay`. The event-driven run consumes frozen point-in-time event
+pipeline. Each run evaluates one expression module: `vrp`, `llm_driven`, or
+`directional_overlay`. The LLM-driven run consumes frozen point-in-time event
 recommendations; it never searches or invokes the LLM analyst itself.
 
 ## Run one sleeve
@@ -91,12 +91,7 @@ normalized history store. The Theta EOD collector reads the resumable monthly
 archives and writes the refreshed snapshots and liquidity summaries directly
 to SQLite. Until summary coverage exists, the selector fails closed and returns
 no eligible tickers. Underlying historical NBBO spread
-is not stored, so the hard spread gate currently uses option spreads. The
-earnings blackout is configurable but defaults off because the current event
-calendar does not yet provide adequate fresh point-in-time history.
-If the earnings gate is enabled before historical calendar snapshots cover the
-walk-forward range, the simulation reports `insufficient_event_history` and
-withholds performance results.
+is not stored, so the hard spread gate currently uses option spreads.
 
 After the history import is current, store a dated selector snapshot and run the
 separate selection walk-forward report:
@@ -290,7 +285,7 @@ close proxy and the report marks that weaker data mode. To supply a separate
 historical close series, a JSON object may include `underlying_history`, keyed
 by symbol, with `[date, close]` rows.
 
-For `event_driven`, include the frozen output from the existing event-driven
+For `llm_driven`, include the frozen output from the existing llm-driven
 LLM briefing in `event_recommendations`, keyed by ticker or as an array. Each
 signal should include `action`, `confidence`, `known_at`, `run_id`, and
 `reason`. The options search only varies the expression layer (confidence
@@ -325,8 +320,9 @@ exercise style (defaults to American for SPY and European for SPX).
 - The untouched tail holdout must cover the configured number of distinct
   market regimes and several high-volatility sessions. It is evaluated only
   after the fold selections and final parameter consensus are fixed.
-- Per-leg fills cross the configured fraction of the observed spread and pay
-  commissions on entry and exit. Sensitivity runs widen displayed spreads and
+- Per-leg fills cross the configured fraction of the observed spread, floored at
+  `slippage_per_contract_usd` and capped at `max_slippage_per_contract_usd`
+  (the same function live limit prices use), and pay commissions on entry and exit. Sensitivity runs widen displayed spreads and
   increase spread-crossing slippage; contracts that then fail spread/liquidity
   filters are skipped. Multi-leg structures are modeled as atomic package
   orders with a separate, lower completion probability; partial leg fills are

@@ -391,6 +391,13 @@ def _run_iterative_discovery_search(
             row["fitness"], -float(row["metrics"].get("max_drawdown_pct") or 0),
         ),
     )
+    # Every non-baseline parameter set evaluated in any iteration. These are the
+    # trials the multiple-testing deflation counts for this strategy.
+    evaluated_trial_ids = sorted({
+        candidate_id(strategy, row["parameters"]) for row in candidates
+        if isinstance(row.get("parameters"), dict)
+        and not (str(row.get("name", "")) == "baseline" or str(row.get("name", "")).endswith(":baseline"))
+    })
     return {
         "strategy": strategy, "method": method,
         "candidate_count_requested": count * iterations,
@@ -399,6 +406,7 @@ def _run_iterative_discovery_search(
         "search_iterations": len(iteration_summaries),
         "configured_search_iterations": iterations,
         "candidate_count_evaluated": len(candidates),
+        "evaluated_candidate_ids": evaluated_trial_ids,
         "min_trades_for_selection": min_trades,
         "selection_status": (
             "eligible_positive_candidate" if eligible_rows else

@@ -17,6 +17,7 @@ import statistics
 from typing import Any
 
 from autoresearch.cpu import available_cpu_count
+from options.market_inputs import research_market_inputs
 from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.dataset import load_options_research_dataset
 from options.research.reporting import write_research_report
@@ -390,7 +391,7 @@ def run_research(
 ) -> dict:
     """Research one options expression module; it never reads credentials or submits orders."""
     strategy = str(strategy).strip().lower()
-    supported = {"vrp", "event_driven", "directional_overlay", "long_volatility"}
+    supported = {"vrp", "llm_driven", "directional_overlay", "long_volatility"}
     if strategy not in supported:
         raise ValueError(f"strategy must be one of {', '.join(sorted(supported))}")
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
@@ -419,10 +420,10 @@ def run_research(
         Path(__file__).parents[1] / "data.py", Path(__file__).parents[1] / "pricing.py",
         Path(__file__).parents[1] / "models.py", Path(__file__).parents[1] / "structures.py",
         Path(__file__).parents[1] / "assignment.py", live_config_path,
-        ROOT / "strategies/options/vrp.py", ROOT / "strategies/options/event_driven.py",
+        ROOT / "strategies/options/vrp.py", ROOT / "strategies/options/llm_driven.py",
         ROOT / "strategies/options/directional_overlay.py", ROOT / "strategies/options/long_volatility.py",
         ROOT / "strategies/options/base.py",
-        ROOT / "strategies/event_driven/models.py",
+        ROOT / "strategies/llm_driven/models.py",
     ])
     section = deepcopy(base_config[strategy])
     section.update(research_config.get("strategy_defaults", {}).get(strategy, {}))
@@ -458,10 +459,12 @@ def run_research(
             f"with {loader_worker_count} worker(s)",
             flush=True,
         )
+        research_inputs = research_market_inputs(research_config.get("execution", {}))
+        input_day = datetime.now(timezone.utc).date()
         dataset = load_options_research_dataset(
             selected_data_path, underlying=underlying,
-            rate=float(research_config.get("execution", {}).get("risk_free_rate", 0.04)),
-            dividend_yield=float(research_config.get("execution", {}).get("dividend_yield", 0.015)),
+            rate=research_inputs.rate(input_day).value,
+            dividend_yield=research_inputs.dividend_yield(underlying, input_day).value,
             data_mode=str(research_config.get("data_mode", "auto")),
             model_surface_config=research_config.get("model_surface", {}),
             workers=loader_worker_count,

@@ -14,6 +14,7 @@ from statistics import mean
 from typing import Any
 
 from strategies.indicators import adx, efficiency_ratio, population_std, rsi
+from strategies.retired_profile_keys import drop_retired_profile_keys
 from strategies.signals import Signal
 from strategies.swing_common import SwingSignal, clean_daily_bars, entry_session, position_entry_price
 
@@ -45,9 +46,6 @@ class SwingMeanReversionConfig:
     hard_stop_pct: float = 0.07
     trailing_stop_pct: float = 0.06
     trailing_activation_pct: float = 0.04
-    cooldown_days: int = 5
-    max_positions: int = 7
-    max_entries_per_day: int = 2
     max_position_pct: float = 0.04
     risk_multiplier: float = 0.75
 
@@ -55,7 +53,7 @@ class SwingMeanReversionConfig:
     def from_dict(cls, values: dict | None = None) -> "SwingMeanReversionConfig":
         if values is not None and not isinstance(values, dict):
             raise ValueError("swing_mean_reversion settings must be an object")
-        supplied = dict(values or {})
+        supplied = drop_retired_profile_keys("swing_mean_reversion", dict(values or {}))
         unknown = set(supplied) - set(cls.__dataclass_fields__)
         if unknown:
             raise ValueError(f"Unsupported swing_mean_reversion setting(s): {', '.join(sorted(unknown))}")
@@ -82,8 +80,7 @@ class SwingMeanReversionConfig:
             "volatility_lookback_days": (10, 40), "efficiency_ratio_period": (10, 40),
             "adx_period": (7, 28),
             "slope_lookback_days": (3, 15), "minimum_hold_sessions": (1, 3),
-            "maximum_holding_sessions": (5, 15), "cooldown_days": (3, 10),
-            "max_positions": (3, 7), "max_entries_per_day": (1, 2),
+            "maximum_holding_sessions": (5, 15),
         }
         for key, (low, high) in integer_bounds.items():
             value = getattr(self, key)

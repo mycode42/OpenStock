@@ -17,6 +17,7 @@ from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from portfolio.protection.software import ensure_protection_schema
 from strategies.catalog import STRATEGY_IDS, canonical_strategy_id
 from strategies.state_machine import ACTIVE_PHASES, PHASES
 
@@ -256,6 +257,7 @@ class AlgoStateStore:
                 BEGIN SELECT RAISE(ABORT, 'entry provenance is immutable'); END;
             PRAGMA user_version=1;
         """)
+        ensure_protection_schema(connection)
 
     @staticmethod
     def _check_schema(connection: sqlite3.Connection) -> None:
@@ -389,6 +391,134 @@ class AlgoStateStore:
                 self._write_rows(connection, market_state, portfolio)
         except sqlite3.DatabaseError as exc:
             raise StateStoreError(f"Cannot persist Algo SQLite state: {exc}") from exc
+
+    def sync_protection(self, rows: list[dict]) -> None:
+        """Upsert protection levels and drop rows for positions no longer held.
+
+        Exit-in-progress markers are not part of ``rows`` and are preserved.
+        """
+        columns = (
+            "ticker", "strategy", "side", "quantity", "entry_price", "entry_order_id",
+            "initial_stop", "target", "hard_stop_pct", "trailing_stop_pct",
+            "trailing_activation_pct", "trailing_stop", "best_price", "phase",
+            "last_evaluated_at", "updated_at",
+        )
+        assignments = ", ".join(f"{name}=excluded.{name}" for name in columns[1:])
+        placeholders = ", ".join("?" for _ in columns)
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    tickers = [row["ticker"] for row in rows]
+                    for row in rows:
+                        connection.execute(
+                            f"INSERT INTO position_protection ({', '.join(columns)}) VALUES ({placeholders}) "
+                            f"ON CONFLICT(ticker) DO UPDATE SET {assignments}",
+                            tuple(row.get(name) for name in columns),
+                        )
+                    if tickers:
+                        marks = ", ".join("?" for _ in tickers)
+                        connection.execute(f"DELETE FROM position_protection WHERE ticker NOT IN ({marks})", tickers)
+                    else:
+                        connection.execute("DELETE FROM position_protection")
+                    connection.execute("COMMIT")
+                except Exception:
+                    connection.execute("ROLLBACK")
+                    raise
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot persist protection rows: {exc}") from exc
+
+    def upsert_protection(self, row: dict) -> None:
+        """Insert or replace one protection row without touching other positions."""
+        columns = (
+            "ticker", "strategy", "side", "quantity", "entry_price", "entry_order_id",
+            "initial_stop", "target", "hard_stop_pct", "trailing_stop_pct",
+            "trailing_activation_pct", "trailing_stop", "best_price", "phase",
+            "last_evaluated_at", "updated_at",
+        )
+        assignments = ", ".join(f"{name}=excluded.{name}" for name in columns[1:])
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                connection.execute(
+                    f"INSERT INTO position_protection ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) "
+                    f"ON CONFLICT(ticker) DO UPDATE SET {assignments}",
+                    tuple(row.get(name) for name in columns),
+                )
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot persist protection row: {exc}") from exc
+
+    def read_protection(self) -> dict[str, dict]:
+        """Return protection rows keyed by ticker; empty when none exist."""
+        if not self.db_path.is_file():
+            raise StateStoreError(f"Algo SQLite state is missing: {self.db_path}")
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                return {
+                    row["ticker"]: dict(row)
+                    for row in connection.execute("SELECT * FROM position_protection")
+                }
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot read protection rows: {exc}") from exc
+
+    def set_exit_marker(self, ticker: str, client_order_id: str, order_id: str | None, submitted_at: str) -> None:
+        """Record an in-progress exit so later scans do not submit a duplicate."""
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                connection.execute(
+                    "UPDATE position_protection SET phase='exit_pending', exit_client_order_id=?, "
+                    "exit_order_id=?, exit_submitted_at=? WHERE ticker=?",
+                    (client_order_id, order_id, submitted_at, ticker),
+                )
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot record protection exit marker: {exc}") from exc
+
+    def clear_exit_marker(self, ticker: str) -> None:
+        """Release an exit marker once its order is terminal and the position is still held."""
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                connection.execute(
+                    "UPDATE position_protection SET phase='open', exit_client_order_id=NULL, "
+                    "exit_order_id=NULL, exit_submitted_at=NULL WHERE ticker=?",
+                    (ticker,),
+                )
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot clear protection exit marker: {exc}") from exc
+
+    def write_heartbeat(self, scanned_at: datetime, session: str | None, pid: int) -> None:
+        """Record that the daemon completed a scan."""
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                connection.execute(
+                    "INSERT OR REPLACE INTO daemon_heartbeat (id, scanned_at, session, pid) VALUES (1, ?, ?, ?)",
+                    (scanned_at.isoformat(), session, int(pid)),
+                )
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot write daemon heartbeat: {exc}") from exc
+
+    def read_heartbeat(self) -> dict | None:
+        """Return the last scan heartbeat, or None when the daemon never wrote one."""
+        if not self.db_path.is_file():
+            raise StateStoreError(f"Algo SQLite state is missing: {self.db_path}")
+        try:
+            with closing(self._connect()) as connection:
+                self._check_schema(connection)
+                ensure_protection_schema(connection)
+                row = connection.execute("SELECT scanned_at, session, pid FROM daemon_heartbeat WHERE id=1").fetchone()
+                return dict(row) if row is not None else None
+        except sqlite3.DatabaseError as exc:
+            raise StateStoreError(f"Cannot read daemon heartbeat: {exc}") from exc
 
     def backup_daily(self, backup_dir: Path, day: date, keep: int = 30) -> Path | None:
         """Write one consistent copy per day via SQLite's online backup API.

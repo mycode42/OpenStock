@@ -301,15 +301,6 @@ def execute_scan_candidates(
             )
         if item.get("event_id"):
             trade["event_id"] = item["event_id"]
-        if item.get("strategy") == "swing_event_driven" and market.event_generator is not None:
-            try:
-                market.event_generator.record_proposal(
-                    item, as_of=now_utc,
-                    strategy_state=scope.strategy_states.setdefault("swing_event_driven", {}),
-                )
-            except (TypeError, ValueError):
-                scope.scan_errors.append("event strategy cooldown state could not be recorded")
-
         item_orders = scope.pending_by_symbol.get(item["ticker"], [])
         held_qty = float((scope.positions.get(item["ticker"]) or {}).get("qty", 0) or 0)
         protective_exit = any(_is_protective_sell_order(order, held_qty) for order in item_orders)

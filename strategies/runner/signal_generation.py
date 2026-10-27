@@ -39,8 +39,8 @@ class SignalGenerationContext:
     session_name: str | None
     regime: dict
     multi_factor_target_signals: dict[str, Any]
-    event_generator: Any
-    event_strategy_enabled: bool
+    llm_generator: Any
+    llm_strategy_enabled: bool
     strategy_states: dict
     daily_bars: dict[str, list[dict]]
     now_utc: datetime
@@ -90,7 +90,7 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
         return []
 
     candidates = _strategy_candidates(context, ticker, owner, position_qty)
-    event_signal = _event_signal(context, ticker, owner, position, position_qty, candidates)
+    llm_signal = _llm_signal(context, ticker, owner, position, position_qty, candidates)
     options = _protective_exit_option(
         context, ticker, owner, position, position_qty, symbol_bars,
     )
@@ -104,7 +104,7 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
             position,
             position_qty,
             symbol_bars,
-            event_signal,
+            llm_signal,
         )
         if option is not None:
             options.append(option)
@@ -207,7 +207,7 @@ def _strategy_candidates(
     return list(dict.fromkeys(candidates))
 
 
-def _event_signal(
+def _llm_signal(
     context: SignalGenerationContext,
     ticker: str,
     owner: str | None,
@@ -217,32 +217,32 @@ def _event_signal(
 ) -> Any | None:
     if not (
         context.mode == "algo"
-        and context.event_generator is not None
-        and (context.event_strategy_enabled or owner == "swing_event_driven")
+        and context.llm_generator is not None
+        and (context.llm_strategy_enabled or owner == "swing_llm_driven")
         and context.session_name in {None, "regular"}
-        and "swing_event_driven" in candidates
+        and "swing_llm_driven" in candidates
     ):
         return None
 
     try:
-        event_state = context.strategy_states.setdefault("swing_event_driven", {})
-        return context.event_generator.generate(
+        llm_state = context.strategy_states.setdefault("swing_llm_driven", {})
+        return context.llm_generator.generate(
             ticker,
             context.daily_bars.get(ticker, []),
             as_of=context.now_utc,
             universe=set(context.selected_symbols) | ({"SPY"} if ticker == "SPY" else set()),
             regime=str(context.regime.get("regime", "unknown")),
-            strategy_state=event_state,
-            position_qty=position_qty if owner == "swing_event_driven" else 0,
+            strategy_state=llm_state,
+            position_qty=position_qty if owner == "swing_llm_driven" else 0,
             entry_at=(
-                event_state.get(ticker, {}).get("opened_at")
-                if owner == "swing_event_driven" else None
+                llm_state.get(ticker, {}).get("opened_at")
+                if owner == "swing_llm_driven" else None
             ),
-            entry_price=(position.get("avg_entry_price") if owner == "swing_event_driven" else None),
+            entry_price=(position.get("avg_entry_price") if owner == "swing_llm_driven" else None),
         )
     except (KeyError, TypeError, ValueError) as exc:
         context.scan_errors.append(
-            f"daily event strategy signal {ticker}: {type(exc).__name__}: {exc}"
+            f"daily LLM strategy signal {ticker}: {type(exc).__name__}: {exc}"
         )
         return None
 
@@ -314,9 +314,9 @@ def _strategy_option(
     position: dict,
     position_qty: float,
     symbol_bars: list[dict],
-    event_signal: Any | None,
+    llm_signal: Any | None,
 ) -> dict | None:
-    if strategy_name == "swing_event_driven" and (
+    if strategy_name == "swing_llm_driven" and (
         context.mode != "algo" or context.session_name not in {None, "regular"}
     ):
         return None
@@ -332,7 +332,7 @@ def _strategy_option(
             if signal_bars else None
         )
 
-    signal = _provided_signal(context, strategy_name, ticker, owner, position_qty, event_signal)
+    signal = _provided_signal(context, strategy_name, ticker, owner, position_qty, llm_signal)
     if context.lifecycle:
         context.lifecycle.observe(strategy_name, ticker, signal_bar_time)
 
@@ -341,9 +341,12 @@ def _strategy_option(
             if context.mode == "algo":
                 if strategy_name == "swing_momentum":
                     return None
+                # A strategy switched off for new entries still manages its
+                # own holdings; the switch only gates the entry path.
                 if (
                     strategy_spec is not None
                     and strategy_spec.runtime_setting
+                    and not position_qty
                     and not getattr(context.runtime_settings, strategy_spec.runtime_setting)
                 ):
                     return None
@@ -400,7 +403,7 @@ def _provided_signal(
     ticker: str,
     owner: str | None,
     position_qty: float,
-    event_signal: Any | None,
+    llm_signal: Any | None,
 ) -> Any | None:
     if strategy_name == "swing_multi_factor":
         signal = context.multi_factor_signals.get(ticker)
@@ -411,8 +414,8 @@ def _provided_signal(
             else getattr(signal, "action", None)
         )
         return signal if signal is not None and signal_action in {"buy", "short", "sell", "cover"} else None
-    if strategy_name == "swing_event_driven":
-        return event_signal
+    if strategy_name == "swing_llm_driven":
+        return llm_signal
     if strategy_name == "swing_momentum":
         return context.momentum_signals.get(ticker)
     return None

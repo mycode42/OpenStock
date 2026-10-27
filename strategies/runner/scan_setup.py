@@ -13,7 +13,7 @@ from portfolio.config import (
     get_algo_strategy_settings,
     get_mode_config,
 )
-from strategies.event_driven import EventStrategyConfig
+from strategies.llm_driven import LLMStrategyConfig
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
 from strategies.runner.factors import multi_factor_parameters_for_session
 from strategies.portfolio_coordinator import PortfolioCoordinatorConfig
@@ -65,15 +65,15 @@ def prepare_scan_scope(
     multi_factor_parameters, multi_factor_parameter_source = multi_factor_parameters_for_session()
     universe = universe_result if universe_result is not None else load_algo_universe()
     selected_symbols = [str(symbol).upper() for symbol in universe.get("tickers", [])]
-    event_parameters = dict(ALGO_DEFAULT_PARAMETERS.get("swing_event_driven") or {})
-    event_parameters["minimum_confidence"] = get_algo_strategy_settings(
-        "swing_event_driven",
+    llm_parameters = dict(ALGO_DEFAULT_PARAMETERS.get("swing_llm_driven") or {})
+    llm_parameters["minimum_confidence"] = get_algo_strategy_settings(
+        "swing_llm_driven",
     )["minimum_confidence"]
     # Regime eligibility is controlled by the editable per-strategy route table.
-    event_parameters["disable_in_volatile"] = False
-    event_config = EventStrategyConfig.from_dict(event_parameters)
-    event_strategy_enabled = (
-        event_config.enabled and runtime_settings.swing_event_driven_enabled
+    llm_parameters["disable_in_volatile"] = False
+    llm_config = LLMStrategyConfig.from_dict(llm_parameters)
+    llm_strategy_enabled = (
+        llm_config.enabled and runtime_settings.swing_llm_driven_enabled
     )
     owner_map = position_owners
     track_owners = True
@@ -122,9 +122,6 @@ def prepare_scan_scope(
     strategy_symbols = list(dict.fromkeys(
         [symbol for symbol in selected_symbols if symbol not in excluded] + held_symbols
     ))
-    # SPY remains available to macro event signals outside the configured universe.
-    if event_strategy_enabled and "SPY" not in strategy_symbols:
-        strategy_symbols.append("SPY")
     # Regime context uses the same candidate pool as research, so both see one universe.
     regime_context_symbols = candidate_pool_tickers() + ["HYG", "LQD"]
     symbols_for_bars = list(dict.fromkeys(
@@ -153,8 +150,8 @@ def prepare_scan_scope(
         multi_factor_parameter_source=multi_factor_parameter_source,
         universe=universe,
         selected_symbols=selected_symbols,
-        event_config=event_config,
-        event_strategy_enabled=event_strategy_enabled,
+        llm_config=llm_config,
+        llm_strategy_enabled=llm_strategy_enabled,
         track_owners=track_owners,
         owner_map=owner_map,
         risk_config=risk_config,
