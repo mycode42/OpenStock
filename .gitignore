@@ -1,6 +1,9 @@
 .env
 /private/
 node_modules/
+/data/auth.json
+/data/*.log
+/data/*.pid
 /AGENTS.md
 /IDENTITY.md
 /SOUL.md
