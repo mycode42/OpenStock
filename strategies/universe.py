@@ -66,6 +66,13 @@ def _overnight_tradable(asset: dict | None) -> bool:
     return bool(asset.get("overnight_tradable") or listed) and not bool(asset.get("overnight_halted"))
 
 
+def current_selector_rules_sha256() -> str:
+    """Hash of the selector rules in force now; a change forces a universe reload."""
+    from options.research.universe_selection import _rules_hash, load_rules
+
+    return _rules_hash(load_rules())
+
+
 def selected_universe(now: datetime | None = None) -> dict:
     """Live membership: the selector's eligible subset of the 117-name pool.
 

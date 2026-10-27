@@ -31,7 +31,7 @@ from portfolio.config import STRATEGY_CONFIG
 from execution.strategy import execute_strategy_trades
 from strategies.runner.scan import scan as scan_strategy_portfolio
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
-from strategies.universe import load_algo_universe
+from strategies.universe import current_selector_rules_sha256, load_algo_universe
 from reporting.performance import take_snapshot
 
 
@@ -654,6 +654,7 @@ def run_loop(
                 universe_due = (
                     universe.get("selection_date") != session_day
                     or universe.get("source") != "eligible_universe"
+                    or universe.get("selector_rules_sha256") != current_selector_rules_sha256()
                     or bool(universe.get("error"))
                 )
                 universe_retry_due = (
