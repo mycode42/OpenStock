@@ -371,7 +371,7 @@ def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
         return {"SPY": [{"t": "2026-10-07T00:00:00Z", "c": 100}]}
 
     stale_quote = _quote(100)
-    stale_quote["timestamp"] = FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=91)
+    stale_quote["timestamp"] = FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=301)
     monkeypatch.setattr(runner, "_fetch_bars", fetch_bars)
     monkeypatch.setattr(
         runner, "_fetch_latest_quotes",
@@ -399,8 +399,8 @@ def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
     assert diagnostic == {
         "symbol": "AAPL", "feed": "boats", "status": "stale",
         "quote_availability": "session_limited", "overnight_tradable": False,
-        "quote_timestamp": (FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=91)).isoformat(),
-        "age_seconds": 91.0, "freshness_limit_seconds": 90,
+        "quote_timestamp": (FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=301)).isoformat(),
+        "age_seconds": 301.0, "freshness_limit_seconds": 300,
     }
     assert result["data_status"]["quotes"] == "session_limited"
     assert result["data_status"]["quote_request_status"] == "succeeded"

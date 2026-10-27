@@ -275,6 +275,9 @@ STRATEGY_CONFIG = {
     "portfolio_scan_seconds": 60,
     "universe_retry_seconds": 300,
     "quote_stale_seconds": 90,
+    # Overnight and extended-hours quotes are indicative and sparse; a 90s window
+    # paused entries and skipped protective updates on live Alpaca data.
+    "extended_quote_stale_seconds": 300,
     "extended_hours_max_spread_pct": 0.02,
     "regime_llm_advisor_enabled": True,
     "regime_llm_default_model": "gpt-6-luna",
@@ -283,6 +286,13 @@ STRATEGY_CONFIG = {
     "max_strategy_position_pct": 0.05,
     "take_profit_r_multiple": 2.0,
 }
+
+
+def quote_stale_limit_seconds(session_name: str | None) -> int:
+    """Quote freshness window for a session; extended sessions use the wider limit."""
+    if session_name in {"premarket", "after_hours", "overnight"}:
+        return int(STRATEGY_CONFIG["extended_quote_stale_seconds"])
+    return int(STRATEGY_CONFIG["quote_stale_seconds"])
 
 
 def _merge_configuration(base: dict, override: dict) -> dict:

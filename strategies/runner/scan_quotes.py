@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from portfolio.config import STRATEGY_CONFIG
+from portfolio.config import quote_stale_limit_seconds
 from strategies.runner.data import fetch_latest_quotes
 from strategies.runner.sizing import _positive_price_level
 
@@ -22,7 +22,7 @@ def load_quote_snapshot(scope: ScanScope, market: MarketSnapshot) -> QuoteSnapsh
         errors=quote_errors,
         diagnostics=quote_fetch_diagnostics,
     )
-    freshness_limit = int(STRATEGY_CONFIG["quote_stale_seconds"])
+    freshness_limit = quote_stale_limit_seconds(scope.session_name)
     quote_checked_at = datetime.now(timezone.utc)
     fresh_quote_symbols = {
         ticker for ticker, quote in latest_quotes.items()

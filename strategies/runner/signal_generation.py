@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from portfolio.config import STRATEGY_CONFIG
+from portfolio.config import quote_stale_limit_seconds
 from strategies.catalog import CORE_STRATEGIES, INTRADAY_STRATEGIES, STRATEGY_CATALOG
 from strategies.portfolio_coordinator import choose_priority
 from strategies.registry import (
@@ -264,7 +264,7 @@ def _protective_exit_option(
     current_price = float(quote.get("ask" if position_qty < 0 else "bid", quote["price"]))
     protective_state = (context.strategy_states or {}).get(owner, {}).get(ticker, {})
     stop_price = _positive_price_level(protective_state.get("stop_price"))
-    is_fresh = 0 <= quote_age <= int(STRATEGY_CONFIG["quote_stale_seconds"])
+    is_fresh = 0 <= quote_age <= quote_stale_limit_seconds(context.session_name)
     if is_fresh:
         stop_price = _update_trailing_stop(
             protective_state,
