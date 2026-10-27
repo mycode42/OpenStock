@@ -175,7 +175,7 @@ const EQUITY_STRATEGY_ALIASES = Object.freeze({
     momentum: 'swing_momentum',
     intraday_trend: 'intraday_trend_following',
     multi_factor: 'swing_multi_factor',
-    event_driven: 'swing_event_driven',
+    llm_driven: 'swing_llm_driven',
 });
 
 const EQUITY_STRATEGY_LABELS = Object.freeze({
@@ -186,18 +186,18 @@ const EQUITY_STRATEGY_LABELS = Object.freeze({
     intraday_trend_following: 'Intraday Trend Following',
     intraday_momentum: 'Intraday Momentum',
     swing_multi_factor: 'Swing Multi-Factor',
-    swing_event_driven: 'Swing Event-Driven',
+    swing_llm_driven: 'Swing LLM-Driven',
 });
 const OPTIONS_STRATEGY_ALIASES = Object.freeze({
     vrp: 'options_vrp',
-    event_driven: 'options_event_driven',
+    llm_driven: 'options_llm_driven',
     directional_overlay: 'options_directional_overlay',
     long_volatility: 'options_long_volatility_sleeve',
     options_long_volatility: 'options_long_volatility_sleeve',
 });
 const OPTIONS_STRATEGY_LABELS = Object.freeze({
     options_vrp: 'Volatility Risk Premium (VRP)',
-    options_event_driven: 'Event-Driven',
+    options_llm_driven: 'LLM-Driven',
     options_directional_overlay: 'Directional Overlay',
     options_long_volatility_sleeve: 'Long Volatility',
 });
@@ -366,12 +366,12 @@ function equitySettingSections(settings) {
     const fractionPath = path => path.endsWith('_pct');
     const humanize = path => path.includes('.regime_weights.')
         ? path.split('.').at(-1).replaceAll('_', ' ') + ' route and risk weight'
-        : path === 'strategies.swing_event_driven.minimum_confidence'
+        : path === 'strategies.swing_llm_driven.minimum_confidence'
             ? 'minimum event confidence'
         : path.split('.').at(-1).replaceAll('_', ' ');
     const valueInput = (path, value) => {
         const label = humanize(path);
-        const eventConfidence = path === 'strategies.swing_event_driven.minimum_confidence';
+        const eventConfidence = path === 'strategies.swing_llm_driven.minimum_confidence';
         if (typeof value === 'boolean') {
             return '<label class="algo-config-toggle"><input type="checkbox" data-setting-path="' + escapeHtml(path) + '"' + (value ? ' checked' : '') + '><span><strong>' + escapeHtml(label) + '</strong></span><i></i></label>';
         }

@@ -12,13 +12,13 @@ const STRATEGY_PNL_CACHE_MS = 90_000;
 const USD_EUR_CACHE_MS = 60 * 60_000;
 const OPTIONS_STRATEGY_IDS = Object.freeze([
     'options_vrp',
-    'options_event_driven',
+    'options_llm_driven',
     'options_directional_overlay',
     'options_long_volatility_sleeve',
 ]);
 const OPTIONS_STRATEGY_ALIASES = Object.freeze({
     vrp: 'options_vrp',
-    event_driven: 'options_event_driven',
+    llm_driven: 'options_llm_driven',
     directional_overlay: 'options_directional_overlay',
     long_volatility: 'options_long_volatility_sleeve',
     options_long_volatility: 'options_long_volatility_sleeve',
@@ -743,9 +743,9 @@ function validateSettings(value, defaults = FALLBACK_DEFAULT_SETTINGS) {
             }
         }
     }
-    const eventConfidence = settings.strategies.swing_event_driven.minimum_confidence;
+    const eventConfidence = settings.strategies.swing_llm_driven.minimum_confidence;
     if (!Number.isInteger(eventConfidence) || eventConfidence < 0 || eventConfidence > 100) {
-        throw new Error('strategies.swing_event_driven.minimum_confidence must be an integer between 0 and 100');
+        throw new Error('strategies.swing_llm_driven.minimum_confidence must be an integer between 0 and 100');
     }
     for (const [name, value] of Object.entries(settings.portfolio.regime_gross_caps)) {
         if (!Number.isFinite(value) || value <= 0 || value > portfolio.max_gross_pct) {
@@ -1264,7 +1264,7 @@ function validateOptionsConfig(config) {
         ['risk', 'max_delta_notional_pct'], ['risk', 'max_vega_per_vol_point_pct'], ['risk', 'max_gamma_1pct_loss_pct'],
         ['risk', 'max_theta_loss_per_day_pct'], ['risk', 'max_margin_pct'], ['vrp', 'min_iv_minus_rv'],
         ['vrp', 'short_delta_min'], ['vrp', 'short_delta_max'], ['vrp', 'wing_delta_max'],
-        ['event_driven', 'min_move_edge_pct'], ['event_driven', 'min_llm_confidence'],
+        ['llm_driven', 'min_move_edge_pct'], ['llm_driven', 'min_llm_confidence'],
     ];
     for (const [section, key] of nonNegative) {
         if (config[section][key] < 0) throw new Error(`${section}.${key} must be non-negative`);
@@ -1439,8 +1439,8 @@ function optionsStrategiesForRegime(settings, regime) {
     const longVolatility = safeObject(settings.long_volatility);
     const exclusiveLongVolatility = longVolatility.enabled === true && longVolatility.mode === 'exclusive';
 
-    if (!exclusiveLongVolatility && safeObject(settings.event_driven).enabled !== false
-        && regimeWeight(settings.event_driven)) {
+    if (!exclusiveLongVolatility && safeObject(settings.llm_driven).enabled !== false
+        && regimeWeight(settings.llm_driven)) {
         strategies.push('Event Driven');
     }
 

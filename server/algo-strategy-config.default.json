@@ -1,12 +1,12 @@
 {
   "general": {
-    "overnight_entries_enabled": false,
+    "overnight_entries_enabled": true,
     "regime_engine": "committee",
     "regime_feature_set": "marketwide",
     "model_diagnostics_enabled": true,
     "model_min_confidence": 0.5,
     "model_training_window": 756,
-    "risk_per_trade_pct": 0.005,
+    "risk_per_trade_pct": 0.02,
     "take_profit_r_multiple": 2,
     "volatile_policy_risk_multiplier": 0.25,
     "volatility_risk_scales": {
@@ -62,12 +62,11 @@
       "core_tech": 0.4,
       "diversifiers": 0.3,
       "hedge": 0.2,
-      "tactical": 0.04
+      "tactical": 0.1
     },
     "max_tactical_pct": 0.1,
     "max_tactical_positions": 3,
-    "flatten_eod": false,
-    "allow_leveraged_etfs": false
+    "flatten_eod": false
   },
   "strategies": {
     "intraday_mean_reversion": {
@@ -80,8 +79,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.02,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.25,
+      "risk_scale": 1.0,
       "hard_stop_pct": 0.011,
       "trailing_stop_pct": 0.008,
       "trailing_activation_pct": 0.005,
@@ -102,8 +102,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.04,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.75,
+      "risk_scale": 1.0,
       "hard_stop_pct": 0.06,
       "trailing_stop_pct": 0.045,
       "trailing_activation_pct": 0.02,
@@ -124,8 +125,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.04,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.75,
+      "risk_scale": 0.9,
       "hard_stop_pct": 0.06,
       "trailing_stop_pct": 0.045,
       "trailing_activation_pct": 0.02,
@@ -146,8 +148,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.04,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.75,
+      "risk_scale": 0.9,
       "hard_stop_pct": 0.07,
       "trailing_stop_pct": 0.05,
       "trailing_activation_pct": 0.02,
@@ -168,8 +171,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.02,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.25,
+      "risk_scale": 0.6,
       "hard_stop_pct": 0.011,
       "trailing_stop_pct": 0.008,
       "trailing_activation_pct": 0.005,
@@ -190,8 +194,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.02,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.25,
+      "risk_scale": 0.55,
       "hard_stop_pct": 0.011,
       "trailing_stop_pct": 0.008,
       "trailing_activation_pct": 0.005,
@@ -212,8 +217,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.02,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.5,
+      "risk_scale": 0.65,
       "hard_stop_pct": 0.06,
       "trailing_stop_pct": 0.045,
       "trailing_activation_pct": 0.02,
@@ -224,7 +230,7 @@
       "horizon": "swing",
       "bar_interval": "1Day"
     },
-    "swing_event_driven": {
+    "swing_llm_driven": {
       "enabled": true,
       "minimum_confidence": 75,
       "regime_weights": {
@@ -235,8 +241,9 @@
         "ambiguous": 0,
         "unknown": 0
       },
-      "max_position_pct": 0.04,
+      "max_position_pct": 0.07,
       "risk_multiplier": 0.5,
+      "risk_scale": 0.58,
       "hard_stop_pct": 0.04,
       "trailing_stop_pct": 0.03,
       "trailing_activation_pct": 0.02,
