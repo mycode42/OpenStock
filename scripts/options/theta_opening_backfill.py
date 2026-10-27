@@ -26,18 +26,17 @@ from scripts.options.theta_historical_backfill import (
     _atomic_gzip_json,
     _atomic_json,
     _contract_key,
-    _download_stock_rows,
     _effective_start_date,
     _finite,
     _json_value,
     _load_gzip_rows,
+    _load_stock_rows_from_db,
     _month_chunks,
     _research_symbols,
     _read_api_key,
     _records,
     _row_date,
     _source_symbol_ranges,
-    _split_adjusted_history,
     _theta_client,
 )
 
@@ -142,29 +141,20 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
     opening_dir = archive_dir / "opening_quote"
     oi_dir = archive_dir / "open_interest"
 
-    stock_rows = _load_gzip_rows(archive_dir / "stock_eod.json.gz")
-    if not stock_rows or not any(row.get("open") is not None for row in stock_rows):
-        stock_rows = _download_stock_rows(symbol, start_date=start_date, end_date=end_date)
-        _atomic_gzip_json(archive_dir / "stock_eod.json.gz", {
-            "provider": "yfinance_daily_bars_and_split_actions",
-            "underlying": symbol,
-            "start_date": start_date.isoformat(),
-            "end_date": end_date.isoformat(),
-            "retrieved_at": datetime.now(ET).isoformat(),
-            "rows": stock_rows,
-        })
+    stock_rows = _load_stock_rows_from_db(symbol, start_date=start_date, end_date=end_date)
 
     open_by_date: dict[date, float] = {}
-    close_by_date: dict[date, float] = {}
+    adjusted_closes: dict[date, float] = {}
     for row in stock_rows:
         day = _row_date(row, "last_trade", "created", "timestamp")
-        opening, close = _finite(row.get("open")), _finite(row.get("close"))
+        opening = _finite(row.get("open"))
+        adjusted_close = _finite(row.get("split_adjusted_close"))
         if day and start_date <= day <= end_date:
             if opening and opening > 0:
                 open_by_date[day] = opening
-            if close and close > 0:
-                close_by_date[day] = close
-    adjusted_closes, split_count = _split_adjusted_history(close_by_date, stock_rows)
+            if adjusted_close and adjusted_close > 0:
+                adjusted_closes[day] = adjusted_close
+    split_count = 0
     close_labels = session_labels(adjusted_closes)
 
     open_rows_by_date: dict[date, list[dict]] = {}
@@ -293,8 +283,9 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
         "contracts_in_dataset": total_contracts,
         "contract_dte_filter": {"min": 0, "max": MAX_RESEARCH_DTE},
         "strike_range": STRIKE_RANGE,
-        "underlying_spot": "daily opening price from yfinance; quote snapshot requested at 09:35 ET",
+        "underlying_spot": "raw Alpaca daily opening price from market SQLite; quote snapshot requested at 09:35 ET",
         "underlying_close": "previous split-adjusted session close to avoid same-day lookahead",
+        "split_adjustment_source": "market_bar SQLite table (Alpaca SIP daily bars)",
         "open_interest": "prior-session end-of-day open interest to avoid same-day lookahead",
         "split_events_applied": split_count,
         "quote_date_start": snapshots[0]["as_of"][:10] if snapshots else None,
@@ -311,15 +302,7 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
     opening_dir = archive_dir / "opening_quote"
     opening_dir.mkdir(parents=True, exist_ok=True)
 
-    stock_rows = _download_stock_rows(symbol, start_date=start_date, end_date=end_date)
-    _atomic_gzip_json(archive_dir / "stock_eod.json.gz", {
-        "provider": "yfinance_daily_bars_and_split_actions",
-        "underlying": symbol,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "retrieved_at": datetime.now(ET).isoformat(),
-        "rows": stock_rows,
-    })
+    stock_rows = _load_stock_rows_from_db(symbol, start_date=start_date, end_date=end_date)
 
     chunks = list(_month_chunks(start_date, end_date, newest_first=True))
     for index, (month_start, month_end) in enumerate(chunks, start=1):

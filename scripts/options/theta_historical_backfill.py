@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from market.store import SQLiteBarStore
 from options.research.history_store import OptionsHistoryStore
 from options.research.archive import session_labels as _classify_sessions
 from options.research.universe import history_start_date, history_underlyings
@@ -262,53 +263,43 @@ def _contract_key(row: dict) -> tuple[str, float, str]:
     return expiration, strike, right
 
 
-def _download_stock_rows(symbol: str, *, start_date: date, end_date: date) -> list[dict]:
-    """Use the existing research data source for daily spot and split history."""
-    try:
-        import yfinance as yf
-    except ImportError as error:
-        raise RuntimeError("yfinance is required for underlying spot history; install the research dependency group") from error
-    frame = yf.Ticker(symbol).history(
-        start=start_date.isoformat(),
-        end=(end_date + timedelta(days=1)).isoformat(),
-        auto_adjust=False,
-        actions=True,
-        repair=True,
-        timeout=30,
-    )
+def _load_stock_rows_from_db(symbol: str, *, start_date: date, end_date: date) -> list[dict]:
+    """Read raw spots and split-adjusted closes from the shared Alpaca SQLite store."""
+    store = SQLiteBarStore()
+    query = {
+        "symbols": [symbol], "feed": "sip", "timeframe": "1Day",
+        "start": start_date.isoformat(), "end": end_date.isoformat(),
+    }
+    raw_bars = store.bars(**query, adjustment="raw").get(symbol, [])
+    split_bars = store.bars(**query, adjustment="split").get(symbol, [])
+
+    def by_day(rows: list[dict]) -> dict[date, dict]:
+        output = {}
+        for row in rows:
+            try:
+                day = date.fromisoformat(str(row.get("t") or "")[:10])
+            except ValueError:
+                continue
+            output[day] = row
+        return output
+
+    raw_by_day, split_by_day = by_day(raw_bars), by_day(split_bars)
+    if not raw_by_day:
+        raise RuntimeError(f"No raw daily equity bars in SQLite for {symbol}; run the Alpaca history backfill first")
+    missing_split = sorted(set(raw_by_day) - set(split_by_day))
+    if missing_split:
+        raise RuntimeError(f"Missing split-adjusted daily bars in SQLite for {symbol}: {missing_split[0]}")
     output = []
-    for stamp, row in frame.iterrows():
-        try:
-            day = stamp.date() if hasattr(stamp, "date") else date.fromisoformat(str(stamp)[:10])
-        except (TypeError, ValueError):
-            continue
-        close = _finite(row.get("Close"))
-        if close is None or close <= 0:
-            continue
+    for day, raw in sorted(raw_by_day.items()):
+        split = split_by_day[day]
         output.append({
-            "last_trade": datetime.combine(day, time(16, 0), tzinfo=ET).isoformat(),
-            "open": _finite(row.get("Open")),
-            "close": close,
-            "volume": _nonnegative_int(row.get("Volume")),
-            "split_ratio": _finite(row.get("Stock Splits")) or 0.0,
+            "last_trade": raw["t"],
+            "open": raw["o"],
+            "close": raw["c"],
+            "volume": raw["v"],
+            "split_adjusted_close": split["c"],
         })
     return output
-
-
-def _split_adjusted_history(
-    raw_closes: dict[date, float], stock_rows: list[dict],
-) -> tuple[dict[date, float], int]:
-    splits = []
-    for row in stock_rows:
-        split_day = _row_date(row, "last_trade", "created", "timestamp")
-        ratio = _finite(row.get("split_ratio"))
-        if split_day and ratio and ratio > 0 and ratio != 1:
-            splits.append((split_day, ratio))
-    adjusted = {}
-    for day, close in raw_closes.items():
-        factor = math.prod(ratio for split_day, ratio in splits if split_day > day)
-        adjusted[day] = close / factor if factor > 0 else close
-    return adjusted, len(splits)
 
 
 def _session_labels(closes: dict[date, float]) -> dict[date, tuple[str, str]]:
@@ -319,19 +310,21 @@ def _session_labels(closes: dict[date, float]) -> dict[date, tuple[str, str]]:
 def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
     symbol_dir = RESEARCH_DIR / symbol
     eod_dir, oi_dir = symbol_dir / "archive" / "eod", symbol_dir / "archive" / "open_interest"
-    stock_path = symbol_dir / "archive" / "stock_eod.json.gz"
-    stock_rows = _load_gzip_rows(stock_path)
+    stock_rows = _load_stock_rows_from_db(symbol, start_date=start_date, end_date=end_date)
     spot_by_date: dict[date, float] = {}
     equity_volume_by_date: dict[date, int] = {}
+    adjusted_closes: dict[date, float] = {}
     for row in stock_rows:
         day = _row_date(row, "last_trade", "created", "timestamp")
         close = _finite(row.get("close"))
+        adjusted_close = _finite(row.get("split_adjusted_close"))
         equity_volume = _nonnegative_int(row.get("volume"))
-        if day and start_date <= day <= end_date and close and close > 0:
+        if day and start_date <= day <= end_date and close and close > 0 and adjusted_close and adjusted_close > 0:
             spot_by_date[day] = close
+            adjusted_closes[day] = adjusted_close
             if equity_volume is not None:
                 equity_volume_by_date[day] = equity_volume
-    adjusted_closes, split_count = _split_adjusted_history(spot_by_date, stock_rows)
+    split_count = 0
     session_labels = _session_labels(adjusted_closes)
 
     eod_by_date: dict[date, list[dict]] = {}
@@ -475,7 +468,8 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         "contract_dte_filter": {"min": 0, "max": MAX_RESEARCH_DTE},
         "strike_range": STRIKE_RANGE,
         "split_events_applied": split_count,
-        "underlying_close_adjustment": "split_adjusted for realized volatility; raw daily close retained as spot",
+        "underlying_close_adjustment": "Alpaca split-adjusted SQLite close for realized volatility; raw close retained as spot",
+        "split_adjustment_source": "market_bar SQLite table (Alpaca SIP daily bars)",
         "regime_labels": "50/200-session trend from split-adjusted underlying closes",
         "volatility_labels": "top quartile of trailing 252-session 20-day realized volatility",
         "quote_date_start": rows[0]["as_of"][:10] if rows else None,
@@ -492,17 +486,6 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
     eod_dir, oi_dir = archive / "eod", archive / "open_interest"
     eod_dir.mkdir(parents=True, exist_ok=True)
     oi_dir.mkdir(parents=True, exist_ok=True)
-
-    stock_path = archive / "stock_eod.json.gz"
-    stock = _download_stock_rows(symbol, start_date=start_date, end_date=end_date)
-    _atomic_gzip_json(stock_path, {
-        "provider": "yfinance_daily_bars_and_split_actions",
-        "underlying": symbol,
-        "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "retrieved_at": datetime.now(ET).isoformat(),
-        "rows": stock,
-    })
 
     chunks = list(_month_chunks(start_date, end_date, newest_first=True))
     for index, (month_start, month_end) in enumerate(chunks, start=1):
