@@ -1,10 +1,13 @@
 """Alpaca's regular equity-session calendar for Algo safety checks."""
 
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 import requests
+
+from runtime.http import get_session
 
 from broker.accounts import get_account_for_mode
 
@@ -32,14 +35,37 @@ def _wall_time(value: str, trading_date: date) -> datetime:
     return datetime.combine(trading_date, parsed, tzinfo=MARKET_TZ)
 
 
+_SCHEDULE_CACHE: dict[tuple[str, date], MarketSchedule | None] = {}
+_SCHEDULE_CACHE_LOCK = threading.Lock()
+_SCHEDULE_CACHE_DAYS = 7
+
+
 def get_market_schedule(
     *,
     on_date: date | None = None,
     mode: str = "algo",
 ) -> MarketSchedule | None:
-    """Return the regular-session window, or ``None`` on an exchange holiday."""
+    """Return the regular-session window, or ``None`` on an exchange holiday.
+
+    A published calendar entry does not change for its date, so successful
+    lookups are cached for the process. Failed lookups are never cached, so an
+    outage still fails closed on the next check.
+    """
     trading_date = on_date or datetime.now(MARKET_TZ).date()
-    response = requests.get(
+    key = (mode, trading_date)
+    with _SCHEDULE_CACHE_LOCK:
+        if key in _SCHEDULE_CACHE:
+            return _SCHEDULE_CACHE[key]
+    schedule = _fetch_market_schedule(trading_date, mode)
+    with _SCHEDULE_CACHE_LOCK:
+        _SCHEDULE_CACHE[key] = schedule
+        for stale in [k for k in _SCHEDULE_CACHE if (trading_date - k[1]).days > _SCHEDULE_CACHE_DAYS]:
+            del _SCHEDULE_CACHE[stale]
+    return schedule
+
+
+def _fetch_market_schedule(trading_date: date, mode: str) -> MarketSchedule | None:
+    response = get_session().get(
         f"{API_BASE}/calendar",
         headers=get_account_for_mode(mode).headers,
         params={"start": trading_date.isoformat(), "end": trading_date.isoformat()},

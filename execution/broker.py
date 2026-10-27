@@ -6,6 +6,8 @@ from decimal import Decimal, InvalidOperation
 
 import requests
 
+from runtime.http import get_session
+
 from market.data import regular_feed
 from market.quotes import parse_price_timestamp, parse_quote
 
@@ -15,13 +17,13 @@ DATA_BASE = "https://data.alpaca.markets/v2"
 
 
 def get_account(headers: dict) -> dict:
-    response = requests.get(f"{API_BASE}/account", headers=headers, timeout=10)
+    response = get_session().get(f"{API_BASE}/account", headers=headers, timeout=10)
     response.raise_for_status()
     return response.json()
 
 
 def list_positions(headers: dict) -> list[dict]:
-    response = requests.get(f"{API_BASE}/positions", headers=headers, timeout=10)
+    response = get_session().get(f"{API_BASE}/positions", headers=headers, timeout=10)
     response.raise_for_status()
     positions = response.json()
     if not isinstance(positions, list):
@@ -35,7 +37,7 @@ def get_positions(headers: dict) -> dict[str, dict]:
 
 def get_latest_price(ticker: str, headers: dict) -> float:
     """Fetch a recent SIP trade for risk sizing."""
-    response = requests.get(
+    response = get_session().get(
         f"{DATA_BASE}/stocks/{ticker}/trades/latest",
         headers=headers,
         params={"feed": regular_feed()},
@@ -57,7 +59,7 @@ def get_latest_quote(ticker: str, side: str, headers: dict, *, feed: str | None 
     """Fetch and validate a fresh ask or bid from the selected market feed."""
     if side not in {"ask", "bid"}:
         raise ValueError("side must be ask or bid")
-    response = requests.get(
+    response = get_session().get(
         f"{DATA_BASE}/stocks/{ticker}/quotes/latest",
         headers=headers,
         params={"feed": feed or regular_feed()},
@@ -82,7 +84,7 @@ def list_open_orders(headers: dict) -> list[dict]:
         params = {"status": "open", "limit": 500, "direction": "asc"}
         if cursor:
             params["after_order_id"] = cursor
-        response = requests.get(f"{API_BASE}/orders", headers=headers, params=params, timeout=10)
+        response = get_session().get(f"{API_BASE}/orders", headers=headers, params=params, timeout=10)
         response.raise_for_status()
         page = response.json()
         if not isinstance(page, list):
@@ -110,7 +112,7 @@ def cancel_orders(headers: dict, orders: list[dict]) -> tuple[list[str], list[st
     cancelled, errors = [], []
     for order_id in open_order_ids(orders):
         try:
-            response = requests.delete(f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10)
+            response = get_session().delete(f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10)
             # 404/422 may mean the order filled or finished during cancellation.
             # The caller re-reads open orders before deciding it is gone.
             if response.status_code in (200, 202, 204, 404, 422):
@@ -185,13 +187,13 @@ def submit_flatten_order(headers: dict, position: dict) -> dict:
 
 
 def get_order_status(headers: dict, order_id: str) -> str:
-    response = requests.get(f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10)
+    response = get_session().get(f"{API_BASE}/orders/{order_id}", headers=headers, timeout=10)
     response.raise_for_status()
     return str(response.json().get("status") or "").lower()
 
 
 def lookup_client_order(headers: dict, client_order_id: str) -> dict | None:
-    response = requests.get(
+    response = get_session().get(
         f"{API_BASE}/orders:by_client_order_id",
         headers=headers,
         params={"client_order_id": client_order_id},
@@ -207,7 +209,7 @@ def lookup_client_order(headers: dict, client_order_id: str) -> dict | None:
 
 
 def get_nested_order(headers: dict, order_id: str) -> dict:
-    response = requests.get(
+    response = get_session().get(
         f"{API_BASE}/orders/{order_id}",
         headers=headers,
         params={"nested": "true"},

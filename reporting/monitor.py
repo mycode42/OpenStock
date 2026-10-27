@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from runtime.atomic import atomic_write_json
 from runtime.paths import DATA_DIR, ROOT
 from runtime.systemd import service_is_active
-load_dotenv(ROOT / ".env", override=True)
+load_dotenv(ROOT / ".env")
 
 from execution.risk import get_portfolio_state  # noqa: E402
 from broker.algo import AlgoAlpaca  # noqa: E402
@@ -27,7 +27,7 @@ from portfolio.config import (
 
 
 ET = ZoneInfo("America/New_York")
-STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
+STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_db"])
 SNAPSHOT_PATH = DATA_DIR / "algo_monitor_snapshot.json"
 ALGO_JOURNAL_MODES = {"algo"}
 EXTENDED_MARKET_STATES = {"OVERNIGHT", "PREMARKET", "AFTER_HOURS"}
@@ -211,11 +211,10 @@ def build_report() -> dict:
     today = now.astimezone(ET).date().isoformat()
     data_errors = []
     try:
-        persisted = AlgoStateStore(STATE_PATH).read_status()
+        _, portfolio = AlgoStateStore(STATE_PATH).read()
     except StateStoreError as exc:
-        persisted = {"market_state": "STATE_ERROR", "strategy_portfolio": {}}
+        portfolio = {}
         data_errors.append(f"Algo coordinator state: {exc}")
-    portfolio = persisted.get("strategy_portfolio") or {}
     previous = _read_json(SNAPSHOT_PATH)
     universe = portfolio.get("universe") or {}
     symbols = sorted({str(symbol).upper() for symbol in universe.get("tickers", [])})

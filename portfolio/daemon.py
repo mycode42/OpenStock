@@ -23,6 +23,7 @@ from portfolio.protection.recovery import recover_broker_protection
 from portfolio.protection.sync import sync_broker_stops
 from portfolio.reconciliation import reconcile_startup
 from market.sessions import ET, get_trading_window, next_session_start
+from runtime.paths import DATA_DIR
 from portfolio.state_store import AlgoStateStore, StateStoreError
 from portfolio.config import ALGO_SERVICE_CONFIG
 from portfolio.config import STRATEGY_CONFIG
@@ -37,6 +38,8 @@ LOG = logging.getLogger("algo_trader.algo")
 STOP = False
 INTRADAY_SNAPSHOT_INTERVAL_SECONDS = 15 * 60
 CLOSE_SNAPSHOT_RETRY_SECONDS = 5 * 60
+STATE_BACKUP_DIR = DATA_DIR / "backups" / "algo_state"
+STATE_BACKUP_KEEP = 30
 
 
 @dataclass(frozen=True)
@@ -48,11 +51,23 @@ class ReconciliationOrders:
 
 
 def _state_path() -> Path:
-    path = Path(ALGO_SERVICE_CONFIG["state_file"])
+    path = Path(ALGO_SERVICE_CONFIG["state_db"])
     if not path.is_absolute():
         from runtime.paths import ROOT
         path = ROOT / path
     return path
+
+
+def _backup_state_daily(store: AlgoStateStore, day) -> bool:
+    """Write the day's fail-safe copy of coordinator state; never stops trading."""
+    try:
+        written = store.backup_daily(STATE_BACKUP_DIR, day, keep=STATE_BACKUP_KEEP)
+    except Exception:
+        LOG.exception("[ALGO] Daily coordinator state backup failed; coordinator continues")
+        return False
+    if written is not None:
+        LOG.info("[ALGO] Daily coordinator state backup written: %s", written)
+    return True
 
 
 def _load_portfolio_state(path: Path) -> dict:
@@ -274,9 +289,9 @@ def _restore_pre_submit_exit_intents(
 def _status(path: Path) -> None:
     state_error = None
     try:
-        raw = AlgoStateStore(path).read_status()
+        market_state, portfolio = AlgoStateStore(path).read()
     except StateStoreError as exc:
-        raw = {"market_state": "STATE_ERROR", "strategy_portfolio": {}}
+        market_state, portfolio = "STATE_ERROR", {}
         state_error = str(exc)
     try:
         active = subprocess.run(
@@ -501,12 +516,15 @@ def run_loop(
     next_close_snapshot_attempt = 0.0
     last_window_name: str | None = None
     last_loop_error: str | None = None
+    last_backup_day = None
 
     try:
         while not STOP and (max_cycles is None or cycle < max_cycles):
             cycle += 1
             try:
                 now = datetime.now(ET)
+                if last_backup_day != now.date() and _backup_state_daily(store, now.date()):
+                    last_backup_day = now.date()
                 calendar = broker.calendar(
                     (now.date() - timedelta(days=2)).isoformat(),
                     (now.date() + timedelta(days=14)).isoformat(),

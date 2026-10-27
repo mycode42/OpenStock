@@ -304,7 +304,7 @@ def _verify_algo_execution_lease() -> None:
     """Permit Algo writes only from the currently leased coordinator process."""
     from portfolio.state_store import AlgoStateStore
 
-    state_path = Path(ALGO_SERVICE_CONFIG["state_file"])
+    state_path = Path(ALGO_SERVICE_CONFIG["state_db"])
     if not state_path.is_absolute():
         state_path = REPO_ROOT / state_path
     token = os.environ.get("ALGO_COORDINATOR_TOKEN")

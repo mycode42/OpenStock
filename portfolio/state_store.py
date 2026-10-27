@@ -1,8 +1,8 @@
 """Transactional Algo coordinator and per-strategy state storage.
 
-The SQLite database is authoritative. ``algo_state.json`` remains an atomic,
-derived snapshot for older status consumers. A missing database is initialized
-from the existing JSON only when that JSON passes structural validation.
+The SQLite database is the only persisted state. A daily online backup guards
+against corruption; restore by copying a backup over the database while the
+daemon is stopped.
 """
 
 from __future__ import annotations
@@ -14,10 +14,9 @@ import os
 import sqlite3
 import tempfile
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
-from runtime.atomic import atomic_write_json
 from strategies.catalog import STRATEGY_IDS, canonical_strategy_id
 from strategies.state_machine import ACTIVE_PHASES, PHASES
 
@@ -201,11 +200,10 @@ def validate_portfolio(portfolio: dict) -> None:
 
 
 class AlgoStateStore:
-    """One-writer SQLite store with an atomic legacy JSON read model."""
+    """One-writer SQLite store for the Algo coordinator."""
 
-    def __init__(self, snapshot_path: Path, db_path: Path | None = None) -> None:
-        self.snapshot_path = Path(snapshot_path)
-        self.db_path = Path(db_path) if db_path is not None else self.snapshot_path.with_suffix(".sqlite3")
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path)
 
     def _connect(self, path: Path | None = None) -> sqlite3.Connection:
         connection = sqlite3.connect(path or self.db_path, timeout=5, isolation_level=None)
@@ -268,34 +266,11 @@ class AlgoStateStore:
         if integrity != "ok":
             raise StateCorruptionError(f"Algo SQLite integrity check failed: {integrity}")
 
-    def _read_legacy(self) -> tuple[str, dict]:
-        try:
-            raw = json.loads(self.snapshot_path.read_text())
-        except (OSError, json.JSONDecodeError) as exc:
-            raise StateCorruptionError(f"Cannot read existing Algo JSON state: {exc}") from exc
-        if not isinstance(raw, dict) or not isinstance(raw.get("strategy_portfolio"), dict):
-            raise StateCorruptionError("Existing Algo JSON state has no strategy_portfolio")
-        portfolio = empty_portfolio()
-        portfolio.update(raw["strategy_portfolio"])
-        portfolio = _canonicalize_portfolio_strategy_ids(portfolio)
-        portfolio["runtime_mode"] = "algo"
-        portfolio["entries_paused"] = True
-        portfolio["entry_pause_reasons"] = ["startup broker reconciliation is pending"]
-        portfolio["startup_reconciliation"] = {"status": "pending"}
-        validate_portfolio(portfolio)
-        market_state = raw.get("market_state", "UNKNOWN")
-        if not isinstance(market_state, str):
-            raise StateCorruptionError("Existing Algo market state is malformed")
-        return market_state, portfolio
-
     def load(self) -> tuple[str, dict]:
-        """Load SQLite or migrate a valid legacy snapshot exactly once."""
+        """Read the database, creating an empty one on first start."""
         if self.db_path.exists():
             return self.read()
-        if self.snapshot_path.exists():
-            market_state, portfolio = self._read_legacy()
-        else:
-            market_state, portfolio = "UNKNOWN", empty_portfolio()
+        market_state, portfolio = "UNKNOWN", empty_portfolio()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{self.db_path.stem}.migrate-", suffix=".sqlite3", dir=self.db_path.parent,
@@ -356,14 +331,6 @@ class AlgoStateStore:
         except (sqlite3.DatabaseError, json.JSONDecodeError, TypeError) as exc:
             raise StateCorruptionError(f"Cannot read Algo SQLite state: {exc}") from exc
 
-    def read_status(self) -> dict:
-        """Read for status/reporting; use legacy JSON only before migration."""
-        if self.db_path.exists():
-            market_state, portfolio = self.read()
-        else:
-            market_state, portfolio = self._read_legacy()
-        return {"market_state": market_state, "strategy_portfolio": portfolio}
-
     @staticmethod
     def _write_rows(connection: sqlite3.Connection, market_state: str, portfolio: dict) -> None:
         validate_portfolio(portfolio)
@@ -413,7 +380,7 @@ class AlgoStateStore:
             raise
 
     def save(self, market_state: str, portfolio: dict) -> None:
-        """Commit all strategy and owner changes, then refresh the JSON view."""
+        """Commit all strategy and owner changes atomically."""
         if not self.db_path.exists():
             raise StateStoreError("Algo SQLite state has not been initialized")
         try:
@@ -422,7 +389,37 @@ class AlgoStateStore:
                 self._write_rows(connection, market_state, portfolio)
         except sqlite3.DatabaseError as exc:
             raise StateStoreError(f"Cannot persist Algo SQLite state: {exc}") from exc
-        self._write_snapshot(market_state, portfolio)
+
+    def backup_daily(self, backup_dir: Path, day: date, keep: int = 30) -> Path | None:
+        """Write one consistent copy per day via SQLite's online backup API.
+
+        Returns the backup path, or None when today's copy already exists.
+        Only the newest ``keep`` backups are retained.
+        """
+        target = Path(backup_dir) / f"algo_state-{day.isoformat()}.sqlite3"
+        if target.exists():
+            return None
+        backup_dir = Path(backup_dir)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".algo_state-", suffix=".tmp", dir=backup_dir,
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        try:
+            with closing(self._connect()) as source, closing(sqlite3.connect(temporary_path)) as copy:
+                source.backup(copy)
+            with closing(sqlite3.connect(temporary_path)) as copy:
+                self._check_schema(copy)
+            os.chmod(temporary_path, 0o600)
+            os.replace(temporary_path, target)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
+        backups = sorted(backup_dir.glob("algo_state-*.sqlite3"))
+        for stale in backups[:-keep]:
+            stale.unlink(missing_ok=True)
+        return target
 
     def activate_coordinator(self, token: str, parent_pid: int) -> None:
         """Bind live Algo execution to this daemon process and one run token."""
@@ -471,15 +468,6 @@ class AlgoStateStore:
                 (digest, int(parent_pid)),
             )
             connection.execute("COMMIT")
-
-    def _write_snapshot(self, market_state: str, portfolio: dict) -> None:
-        self.snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(
-            self.snapshot_path,
-            {"market_state": market_state, "strategy_portfolio": portfolio},
-            allow_nan=False,
-            mode=0o600,
-        )
 
 
 __all__ = ["AlgoStateStore", "StateStoreError", "StateCorruptionError", "empty_portfolio", "validate_portfolio"]

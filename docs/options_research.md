@@ -103,7 +103,18 @@ The simulation defaults to the original 24 tickers, using a chronological
 60/20/20 train, validation, and untouched holdout split. It reports eligible
 set size and turnover, sector exposure and cap binding, correlation exposure,
 and how often the regime filter changes the set versus a sector-momentum-only
-counterfactual. After reviewing that result, run the broader candidate pool with
+counterfactual. Every period also reports the selected basket's return minus
+the equal-weight average of the scope universe and minus SPY over the same
+hold, with a t-statistic (holds do not overlap). Transaction costs are not
+modeled.
+
+The first `history_117` run (2026-10-27, 1,713 sessions, 17 configurations)
+shows the selected basket trailing the equal-weight universe by about 0.9% per
+five-session hold (t ≈ -3.1 over all sessions, -0.3% on the holdout) and
+roughly matching SPY. Part of that gap may be style: the risk-off rules favor
+defensive buckets, which can lag in rising markets. Either way the selection adds
+no excess return over the universe, so the cached list must not be applied to
+research. The liquidity thresholds barely change the output on this history. After reviewing that result, run the broader candidate pool with
 `--universe-scope history_117`. Its parameter grid changes
 one rule at a time and reports all results; it does not pick or promote a
 winner. It evaluates selection composition rather than any strategy's option

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+import requests
 
 from execution import runner as execution_runner
 from execution.batch import BatchHooks, execute_trade_batch
@@ -59,9 +60,10 @@ def _state(**overrides):
 def test_market_schedule_uses_regular_session_hours(monkeypatch):
     monkeypatch.setattr(market_calendar, "get_account_for_mode", lambda mode: SimpleNamespace(headers={}))
     monkeypatch.setattr(
-        market_calendar.requests, "get",
-        lambda *args, **kwargs: Response([{"date": "2026-11-27", "open": "09:30", "close": "13:00"}]),
+        market_calendar, "get_session",
+        lambda: SimpleNamespace(get=lambda *args, **kwargs: Response([{"date": "2026-11-27", "open": "09:30", "close": "13:00"}])),
     )
+    monkeypatch.setattr(market_calendar, "_SCHEDULE_CACHE", {})
 
     schedule = market_calendar.get_market_schedule(on_date=date(2026, 11, 27))
 
@@ -69,6 +71,30 @@ def test_market_schedule_uses_regular_session_hours(monkeypatch):
     assert schedule.closes_at == datetime(2026, 11, 27, 13, 0, tzinfo=ET)
     assert schedule.market_open(datetime(2026, 11, 27, 12, 59, tzinfo=ET))
     assert not schedule.market_open(datetime(2026, 11, 27, 13, 0, tzinfo=ET))
+
+def test_market_schedule_caches_successes_but_retries_failures(monkeypatch):
+    monkeypatch.setattr(market_calendar, "get_account_for_mode", lambda mode: SimpleNamespace(headers={}))
+    monkeypatch.setattr(market_calendar, "_SCHEDULE_CACHE", {})
+    responses = [
+        requests.ConnectionError("calendar unreachable"),
+        Response([{"date": "2026-11-27", "open": "09:30", "close": "16:00"}]),
+    ]
+    calls = []
+
+    def fake_get(*args, **kwargs):
+        calls.append(kwargs)
+        outcome = responses.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(market_calendar, "get_session", lambda: SimpleNamespace(get=fake_get))
+
+    with pytest.raises(requests.ConnectionError):
+        market_calendar.get_market_schedule(on_date=date(2026, 11, 27))
+    assert market_calendar.get_market_schedule(on_date=date(2026, 11, 27)) is not None
+    assert market_calendar.get_market_schedule(on_date=date(2026, 11, 27)) is not None
+    assert len(calls) == 2
 
 def test_algo_weekly_baseline_uses_prior_close_and_rejects_stale_history(tmp_path, monkeypatch):
     monkeypatch.setattr(risk_validator, "_snapshot_dir", lambda mode: tmp_path)

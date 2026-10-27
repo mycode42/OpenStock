@@ -25,7 +25,7 @@ from portfolio.config import ALGO_SERVICE_CONFIG, ALGO_SIGNAL_DATA_CONFIG, STRAT
 
 from runtime.paths import ROOT
 from runtime.systemd import service_is_active
-STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_file"])
+STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_db"])
 SERVICE = "algo-trader.service"
 WARMUP_GRACE_SECONDS = {"premarket": 10 * 60, "regular": 10 * 60, "overnight": 25 * 60}
 WARMUP_PAUSE_REASONS = frozenset({
@@ -660,7 +660,7 @@ def build_report(
 
 
 def main() -> None:
-    load_dotenv(ROOT / ".env", override=True)
+    load_dotenv(ROOT / ".env")
     try:
         report = build_report()
     except Exception as exc:

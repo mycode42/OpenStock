@@ -28,9 +28,11 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv()
 
 import requests
+
+from runtime.http import get_session
 
 from portfolio.config import get_mode_config
 from execution.risk_models import RejectionReason, ValidationResult
@@ -58,7 +60,7 @@ def _get_universe_maps(mode: str) -> tuple[dict, dict, set, dict]:
 
 def _api(endpoint: str, mode: str = None) -> dict | list:
     headers = get_account_for_mode(mode).headers
-    r = requests.get(f"{API_BASE}/{endpoint}", headers=headers, timeout=10)
+    r = get_session().get(f"{API_BASE}/{endpoint}", headers=headers, timeout=10)
     r.raise_for_status()
     return r.json()
 

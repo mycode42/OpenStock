@@ -327,7 +327,7 @@ def run_automated_options_research(
     checkpoint_dir = automation_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = checkpoint_dir / f"{run_id}.json"
-    checkpoint = _read_json(checkpoint_path) or {}
+    checkpoint = (_read_json(checkpoint_path) if checkpoint_path.exists() else None) or {}
     if (
         checkpoint.get("schema") != "swarm_options_automation_checkpoint_v1"
         or checkpoint.get("run_id") != run_id

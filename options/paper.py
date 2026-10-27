@@ -40,6 +40,7 @@ from options.risk import (
 )
 from options.symbols import parse_occ_symbol
 from portfolio.config import ALGO_SERVICE_CONFIG
+from portfolio.state_store import AlgoStateStore, StateStoreError
 from runtime.paths import DATA_DIR, ROOT
 from strategies.event_driven.ai import AIEventSignalBook
 from strategies.options.base import OptionsStrategyContext
@@ -84,13 +85,12 @@ def _serialized_options_account(function):
 
 
 def _state_regime() -> tuple[str, str]:
-    path = ROOT / ALGO_SERVICE_CONFIG["state_file"]
+    path = ROOT / ALGO_SERVICE_CONFIG["state_db"]
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        portfolio = payload.get("strategy_portfolio", payload)
+        _, portfolio = AlgoStateStore(path).read()
         market = portfolio.get("market_regime") or {}
         return str(market.get("regime") or "unknown"), str(market.get("volatility_state") or "unknown")
-    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+    except (StateStoreError, AttributeError, TypeError):
         return "unknown", "unknown"
 
 
@@ -114,8 +114,7 @@ def _load_directional_equity_signals(
         "candidate_count": 0,
     }
     try:
-        payload = json.loads((ROOT / ALGO_SERVICE_CONFIG["state_file"]).read_text(encoding="utf-8"))
-        portfolio = payload.get("strategy_portfolio", payload)
+        _, portfolio = AlgoStateStore(ROOT / ALGO_SERVICE_CONFIG["state_db"]).read()
         if not isinstance(portfolio, dict):
             diagnostics["status"] = "invalid_portfolio_state"
             return {}, diagnostics

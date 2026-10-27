@@ -2,6 +2,8 @@
 
 import requests
 
+from runtime.http import get_session
+
 from broker.accounts import get_account_for_mode
 
 
@@ -15,7 +17,7 @@ def _get_headers(mode: str = "algo") -> dict:
 
 def get_alpaca_account(mode: str = "algo") -> dict:
     """Fetch the paper account used by the Event Driven analysis."""
-    response = requests.get(
+    response = get_session().get(
         f"{ALPACA_BASE_URL}/account",
         headers=_get_headers(mode),
         timeout=10,
@@ -26,7 +28,7 @@ def get_alpaca_account(mode: str = "algo") -> dict:
 
 def get_alpaca_positions(mode: str = "algo") -> list[dict]:
     """Fetch positions from the dedicated Algo paper account."""
-    response = requests.get(
+    response = get_session().get(
         f"{ALPACA_BASE_URL}/positions",
         headers=_get_headers(mode),
         timeout=10,

@@ -15,10 +15,11 @@ from portfolio.reconciliation import reconcile_startup
 from portfolio.state_store import AlgoStateStore, StateCorruptionError, empty_portfolio
 from strategies.state_machine import ENTRY_PENDING, EXIT_PENDING, OPEN, RuleStrategyStateMachine
 
-def _legacy(path: Path, portfolio: dict) -> bytes:
-    original = json.dumps({"market_state": "REGULAR", "strategy_portfolio": portfolio}).encode()
-    path.write_bytes(original)
-    return original
+def _seed(path: Path, portfolio: dict) -> AlgoStateStore:
+    store = AlgoStateStore(path)
+    store.load()
+    store.save("REGULAR", portfolio)
+    return store
 
 def _owned_portfolio() -> dict:
     portfolio = empty_portfolio()
@@ -40,25 +41,8 @@ def _owned_portfolio() -> dict:
     }
     return portfolio
 
-def test_sqlite_migration_preserves_legacy_snapshot_and_all_strategy_states(tmp_path):
-    snapshot = tmp_path / "algo_state.json"
-    portfolio = _owned_portfolio()
-    original = _legacy(snapshot, portfolio)
-
-    store = AlgoStateStore(snapshot)
-    market_state, loaded = store.load()
-
-    assert market_state == "REGULAR"
-    assert loaded["position_owners"] == portfolio["position_owners"]
-    assert loaded["strategy_states"] == portfolio["strategy_states"]
-    assert loaded["entries_paused"] is True
-    assert snapshot.read_bytes() == original
-    assert store.db_path.is_file()
-    with sqlite3.connect(store.db_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM entry_provenance").fetchone()[0] == 1
-
 def test_read_normalizes_legacy_strategy_ids_before_provenance_validation(tmp_path):
-    store = AlgoStateStore(tmp_path / "algo_state.json")
+    store = AlgoStateStore(tmp_path / "algo_state.sqlite3")
     store.load()
     store.save("REGULAR", _owned_portfolio())
 
@@ -88,17 +72,29 @@ def test_read_normalizes_legacy_strategy_ids_before_provenance_validation(tmp_pa
     assert loaded["position_owners"] == {"AAPL": "swing_momentum"}
     assert loaded["strategy_states"]["swing_momentum"]["AAPL"]["owner"] == "swing_momentum"
 
-def test_corrupt_legacy_state_fails_closed_without_creating_sqlite(tmp_path):
-    snapshot = tmp_path / "algo_state.json"
-    snapshot.write_text("{not valid json")
-    store = AlgoStateStore(snapshot)
+def test_daily_backup_is_a_verified_copy_and_keeps_newest_copies(tmp_path):
+    from datetime import date
 
-    with pytest.raises(StateCorruptionError, match="Cannot read existing Algo JSON state"):
-        store.load()
-    assert not store.db_path.exists()
+    store = AlgoStateStore(tmp_path / "algo_state.sqlite3")
+    store.load()
+    store.save("REGULAR", _owned_portfolio())
+    backups = tmp_path / "backups"
+
+    written = store.backup_daily(backups, date(2026, 10, 26), keep=2)
+    assert written == backups / "algo_state-2026-10-26.sqlite3"
+    assert store.backup_daily(backups, date(2026, 10, 26), keep=2) is None
+    store.backup_daily(backups, date(2026, 10, 27), keep=2)
+    store.backup_daily(backups, date(2026, 10, 28), keep=2)
+
+    assert sorted(path.name for path in backups.glob("algo_state-*.sqlite3")) == [
+        "algo_state-2026-10-27.sqlite3", "algo_state-2026-10-28.sqlite3",
+    ]
+    market_state, restored = AlgoStateStore(backups / "algo_state-2026-10-28.sqlite3").read()
+    assert market_state == "REGULAR"
+    assert restored["strategy_states"] == _owned_portfolio()["strategy_states"]
 
 def test_owner_and_strategy_state_changes_commit_together_and_provenance_is_immutable(tmp_path):
-    snapshot = tmp_path / "algo_state.json"
+    snapshot = tmp_path / "algo_state.sqlite3"
     store = AlgoStateStore(snapshot)
     store.load()
     original = _owned_portfolio()
@@ -125,7 +121,7 @@ def test_owner_and_strategy_state_changes_commit_together_and_provenance_is_immu
             connection.execute("DELETE FROM entry_provenance WHERE order_id='entry-1'")
 
 def test_execution_lease_requires_exact_token_and_parent_pid(tmp_path):
-    store = AlgoStateStore(tmp_path / "algo_state.json")
+    store = AlgoStateStore(tmp_path / "algo_state.sqlite3")
     store.load()
     assert not store.verify_coordinator_token("token", 111)
 
@@ -456,15 +452,15 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
     )
     assert portfolio["execution_incident"]["status"] == "resolved"
 
-def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_path, monkeypatch):
-    snapshot = tmp_path / "algo_state.json"
+def test_daemon_first_cycle_reconciles_and_clears_execution_lease(tmp_path, monkeypatch):
+    snapshot = tmp_path / "algo_state.sqlite3"
     legacy_portfolio = empty_portfolio()
     legacy_portfolio["universe"] = {
         "tickers": ["NVDA", "SPCX", "TSLA"],
         "selection_date": "2026-10-08",
         "overnight_tradable_tickers": ["NVDA", "SPCX"],
     }
-    _legacy(snapshot, legacy_portfolio)
+    _seed(snapshot, legacy_portfolio)
     (tmp_path / "trade_journal.jsonl").write_text("")
 
     class FakeBroker:
@@ -512,10 +508,10 @@ def test_daemon_first_cycle_migrates_reconciles_and_clears_execution_lease(tmp_p
     assert not store.verify_coordinator_token("anything", 1)
 
 def test_daemon_refuses_state_from_a_different_paper_account(tmp_path, monkeypatch):
-    snapshot = tmp_path / "algo_state.json"
+    snapshot = tmp_path / "algo_state.sqlite3"
     portfolio = empty_portfolio()
     portfolio["account_id"] = "old-account"
-    _legacy(snapshot, portfolio)
+    _seed(snapshot, portfolio)
 
     class FakeBroker:
         def calendar(self, *args):

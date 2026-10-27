@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv()
 
 import requests
 from broker.accounts import get_account_for_mode, verify_account_for_mode

@@ -15,7 +15,7 @@ import json
 import math
 from pathlib import Path
 import sqlite3
-from statistics import median
+from statistics import mean, median, stdev
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -626,8 +626,24 @@ def _forward_return(
     return end / start - 1.0
 
 
+def _t_statistic(values: list[float]) -> float | None:
+    """Mean over its standard error; valid because sampling does not overlap."""
+    if len(values) < 2:
+        return None
+    spread = stdev(values)
+    return mean(values) / (spread / math.sqrt(len(values))) if spread > 0 else None
+
+
 def _evaluate_period(values: list[dict], *, label: str, sector_cap: float) -> dict:
     returns = [float(row["return"]) for row in values if row["return"] is not None]
+    excess_universe = [
+        float(row["return"]) - float(row["universe_return"])
+        for row in values if row["return"] is not None and row["universe_return"] is not None
+    ]
+    excess_spy = [
+        float(row["return"]) - float(row["spy_return"])
+        for row in values if row["return"] is not None and row["spy_return"] is not None
+    ]
     turnover = [float(row["turnover"]) for row in values if row["turnover"] is not None]
     selected_counts = [int(row["eligible_count"]) for row in values]
     concentrations = [float(row["max_sector_exposure"]) for row in values if row["max_sector_exposure"] is not None]
@@ -645,6 +661,15 @@ def _evaluate_period(values: list[dict], *, label: str, sector_cap: float) -> di
         "mean_forward_return": _mean(returns),
         "median_forward_return": median(returns) if returns else None,
         "positive_fraction": sum(value > 0 for value in returns) / len(returns) if returns else None,
+        "mean_universe_return": _mean([row["universe_return"] for row in values]),
+        "mean_excess_vs_universe": _mean(excess_universe),
+        "excess_vs_universe_positive_fraction": (
+            sum(value > 0 for value in excess_universe) / len(excess_universe) if excess_universe else None
+        ),
+        "excess_vs_universe_t_stat": _t_statistic(excess_universe),
+        "mean_spy_return": _mean([row["spy_return"] for row in values]),
+        "mean_excess_vs_spy": _mean(excess_spy),
+        "excess_vs_spy_t_stat": _t_statistic(excess_spy),
         "mean_turnover_per_selection": _mean(turnover),
         "mean_eligible_tickers": _mean(selected_counts),
         "mean_max_sector_exposure": _mean(concentrations),
@@ -788,6 +813,21 @@ def simulate_selection_walk_forward(
             int(rules.get("lookback_sessions", 20)),
         )
         day_indices = {symbol: [row["session_date"] for row in rows] for symbol, rows in history.items()}
+        benchmarks: dict[int, dict[str, float | None]] = {}
+        for day_index in range(0, len(dates) - hold_period_sessions, hold_period_sessions):
+            start_date = dates[day_index]
+            target = dates[day_index + hold_period_sessions]
+            forwards = [
+                _forward_return(history[symbol], start_date=start_date, target_date=target)
+                for symbol in symbols
+            ]
+            benchmarks[day_index] = {
+                "universe": _mean(forwards),
+                "spy": (
+                    _forward_return(history["SPY"], start_date=start_date, target_date=target)
+                    if "SPY" in history else None
+                ),
+            }
         configurations = _sweep_rules(rules)
         sweep_results = []
         for config_index, candidate_rules in enumerate(configurations):
@@ -845,6 +885,8 @@ def simulate_selection_walk_forward(
                 previous_selected = selected_set
                 observations.append({
                     "date": current_date, "return": basket_return if returned_weight else None,
+                    "universe_return": benchmarks[day_index]["universe"],
+                    "spy_return": benchmarks[day_index]["spy"],
                     "turnover": turnover, "eligible_count": len(selected_symbols),
                     "max_sector_exposure": max(weights["sector_exposure"].values(), default=None),
                     "max_correlation_cluster_exposure": max(weights["cluster_exposure"].values(), default=None),
@@ -908,6 +950,7 @@ def simulate_selection_walk_forward(
                 "Selection at each date uses only that date and earlier daily snapshots.",
                 "The chronological 60/20/20 splits are train, validation, and untouched holdout periods.",
                 "Reported returns are close-to-close candidate-basket returns over the configured holding horizon, not strategy P&L.",
+                "Excess returns subtract, for the same hold, the equal-weight average of the scope universe and SPY. Transaction costs are not modeled.",
                 "The grid changes one parameter at a time and reports every result; it does not select or promote a winner.",
                 "Regime composition compares the configured selector with an otherwise identical counterfactual that ignores only trend/volatility bucket restrictions.",
                 "Historical earnings blackouts require point-in-time event snapshots; the current calendar has limited historical coverage.",

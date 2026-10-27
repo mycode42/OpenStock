@@ -29,8 +29,8 @@ class AlgoRuntimeSettings:
     """Per-scan projection of strategy activation and session settings."""
 
     overnight_entries_enabled: bool = True
-    enable_intraday_trend_following: bool = False
-    enable_intraday_momentum: bool = False
+    enable_intraday_trend_following: bool = True
+    enable_intraday_momentum: bool = True
     swing_multi_factor_enabled: bool = True
     swing_event_driven_enabled: bool = True
 
@@ -256,7 +256,7 @@ ALGO_REGIME_CONFIG = {
 
 ALGO_SERVICE_CONFIG = {
     "poll_seconds": 15,
-    "state_file": "data/algo_state.json",
+    "state_db": "data/algo_state.sqlite3",
     "lock_file": "/run/lock/algo-trader.lock",
 }
 

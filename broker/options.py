@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from market.quotes import parse_quote
 
 
-load_dotenv(override=True)
+load_dotenv()
 PAPER_BASE = "https://paper-api.alpaca.markets/v2"
 DATA_BASE = "https://data.alpaca.markets"
 

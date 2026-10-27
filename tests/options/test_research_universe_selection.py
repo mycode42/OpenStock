@@ -1,3 +1,4 @@
+import pytest
 import json
 from datetime import date, timedelta
 
@@ -210,3 +211,25 @@ def test_cache_uses_one_timestamped_soft_sector_selection(tmp_path, monkeypatch)
     assert result["as_of_date"] == "2026-09-25"
     assert set(result["eligible_symbols"]) == {"SPY", "XLE", "XOM"}
     assert (tmp_path / "cache" / "eligible-2026-09-25.json").is_file()
+
+
+def test_excess_returns_are_measured_against_universe_and_spy_for_the_same_hold():
+    from options.research import universe_selection
+
+    def row(basket, universe, spy):
+        return {
+            "return": basket, "universe_return": universe, "spy_return": spy,
+            "turnover": 0.0, "eligible_count": 5, "max_sector_exposure": 0.2,
+            "max_correlation_cluster_exposure": 0.1, "sector_cap_binding": False,
+            "correlation_cap_binding": False, "regime_state": "risk_on|low",
+            "regime_overlap": None, "regime_selection_changed": None,
+        }
+
+    rows = [row(0.03, 0.01, 0.02), row(0.01, 0.01, 0.0), row(0.05, 0.01, 0.01)]
+    period = universe_selection._evaluate_period(rows, label="all", sector_cap=0.3)
+
+    assert period["mean_excess_vs_universe"] == pytest.approx((0.02 + 0.0 + 0.04) / 3)
+    assert period["excess_vs_universe_positive_fraction"] == pytest.approx(2 / 3)
+    assert period["mean_excess_vs_spy"] == pytest.approx((0.01 + 0.01 + 0.04) / 3)
+    assert period["excess_vs_universe_t_stat"] is not None
+    assert universe_selection._t_statistic([0.01]) is None
