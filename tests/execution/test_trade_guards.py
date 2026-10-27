@@ -16,6 +16,16 @@ from execution.batch import BatchHooks, execute_trade_batch
 from execution import risk as risk_validator
 from market import calendar as market_calendar
 
+
+@pytest.fixture(autouse=True)
+def _offline_market_calendar(monkeypatch):
+    # Keep these tests independent of Alpaca credentials and the live calendar.
+    # Tests that need a closed or extended session override this patch.
+    monkeypatch.setattr(
+        execution_runner, "get_market_schedule",
+        lambda **kwargs: SimpleNamespace(market_open=lambda now: True),
+    )
+
 ET = ZoneInfo("America/New_York")
 
 class Response:
