@@ -11,14 +11,7 @@ from __future__ import annotations
 
 import math
 
-CASH_SLEEVE_DEFAULTS = {
-    "enabled": False,
-    "proxy_symbol": "SGOV",
-    "reserve_pct": 0.10,
-    "target_gross_pct": 0.90,
-    "max_proxy_pct": 0.80,
-    "min_trade_value": 500.0,
-}
+from portfolio.config import CASH_SLEEVE as CASH_SLEEVE_DEFAULTS
 
 
 def plan_cash_sleeve(

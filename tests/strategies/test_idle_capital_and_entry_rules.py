@@ -12,8 +12,11 @@ from strategies.runner.sizing import _make_trade, entry_limit_price, intraday_vo
 ON = {"enabled": True}
 
 
-def test_cash_sleeve_is_off_by_default():
-    plan = plan_cash_sleeve(equity=100_000, cash=90_000, invested_value=0, proxy_price=100, proxy_qty=0)
+def test_cash_sleeve_holds_when_disabled():
+    plan = plan_cash_sleeve(
+        equity=100_000, cash=90_000, invested_value=0, proxy_price=100, proxy_qty=0,
+        config={"enabled": False},
+    )
     assert plan["action"] == "hold"
 
 
@@ -90,3 +93,33 @@ def test_blocked_and_failed_journal_rows_keep_their_rule_and_reason(tmp_path, mo
     assert row["status"] == "blocked"
     assert row["rule"] == "max_sector_pct"
     assert row["error"] == "Sector cap reached"
+
+
+def test_cash_proxy_is_invisible_to_scans_and_risk_inputs(monkeypatch):
+    from portfolio import config
+    from strategies.runner import data as scan_data
+
+    positions = [{"symbol": "SGOV", "qty": "20"}, {"symbol": "AAPL", "qty": "3"}]
+    orders = [{"symbol": "SGOV", "id": "x"}, {"symbol": "AAPL", "id": "y"}]
+    account, visible, open_orders = scan_data.current_portfolio(
+        "algo",
+        request_fn=lambda endpoint, **kwargs: {
+            "account": {"equity": "100"}, "positions": positions, "orders": orders,
+        }[endpoint],
+    )
+    assert set(visible) == {"AAPL"}
+    assert [order["id"] for order in open_orders] == ["y"]
+    assert config.is_cash_proxy("sgov") and not config.is_cash_proxy("AAPL")
+
+
+def test_cash_sleeve_step_is_skipped_in_dry_run_and_outside_regular_session():
+    from types import SimpleNamespace
+
+    from portfolio import daemon
+
+    class Broker:
+        def __getattr__(self, name):
+            raise AssertionError(f"broker must not be called: {name}")
+
+    assert daemon._run_cash_sleeve(Broker(), window=SimpleNamespace(name="regular"), dry_run=True) is None
+    assert daemon._run_cash_sleeve(Broker(), window=SimpleNamespace(name="premarket"), dry_run=False) is None

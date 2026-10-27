@@ -11,6 +11,7 @@ from runtime.http import get_session
 
 from broker.accounts import get_account_for_mode
 from market.data import regular_feed
+from portfolio.config import is_cash_proxy
 from market.quotes import QuoteParseError, parse_quote
 
 DATA_BASE = "https://data.alpaca.markets/v2"
@@ -202,5 +203,8 @@ def current_portfolio(mode: str, *, request_fn=None) -> tuple[dict, dict[str, di
     account = request_fn("account", mode=mode, base=TRADE_BASE)
     positions_raw = request_fn("positions", mode=mode, base=TRADE_BASE)
     open_orders = request_fn("orders", mode=mode, base=TRADE_BASE, params={"status": "open", "limit": 500})
-    return account, {position["symbol"]: position for position in positions_raw}, open_orders
+    # The cash-proxy holding is idle cash, so scans never see it as a position or order.
+    visible_positions = [p for p in positions_raw if not is_cash_proxy(p.get("symbol"))]
+    visible_orders = [o for o in open_orders if not is_cash_proxy(o.get("symbol"))]
+    return account, {position["symbol"]: position for position in visible_positions}, visible_orders
 

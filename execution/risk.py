@@ -34,7 +34,7 @@ import requests
 
 from runtime.http import get_session
 
-from portfolio.config import get_mode_config
+from portfolio.config import get_mode_config, is_cash_proxy
 from execution.risk_models import RejectionReason, ValidationResult
 from execution.risk_policy import LEVERAGED_ETFS, MOONSHOTS, build_universe_maps
 
@@ -62,7 +62,11 @@ def _api(endpoint: str, mode: str = None) -> dict | list:
     headers = get_account_for_mode(mode).headers
     r = get_session().get(f"{API_BASE}/{endpoint}", headers=headers, timeout=10)
     r.raise_for_status()
-    return r.json()
+    payload = r.json()
+    if endpoint.startswith(("positions", "orders")) and isinstance(payload, list):
+        # The cash-proxy holding is idle cash, not exposure, so risk never sees it.
+        payload = [row for row in payload if not is_cash_proxy(row.get("symbol"))]
+    return payload
 
 
 from execution.risk_account import (

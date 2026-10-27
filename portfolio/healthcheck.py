@@ -20,7 +20,7 @@ from portfolio.protection.evidence import broker_prices_match, verified_recovery
 from portfolio.reconciliation import OPEN_ORDER_STATUSES
 from market.sessions import ET, TradingWindow, get_trading_window
 from portfolio.state_store import AlgoStateStore, StateStoreError
-from portfolio.config import ALGO_SERVICE_CONFIG, ALGO_SIGNAL_DATA_CONFIG, STRATEGY_CONFIG
+from portfolio.config import ALGO_SERVICE_CONFIG, ALGO_SIGNAL_DATA_CONFIG, CASH_SLEEVE, STRATEGY_CONFIG, is_cash_proxy
 
 
 from runtime.paths import ROOT
@@ -437,6 +437,7 @@ def build_report(
             raw_positions = broker.positions()
             if not isinstance(raw_positions, list):
                 raise ValueError("Broker positions are not a list")
+            raw_positions = [item for item in raw_positions if not is_cash_proxy(item.get("symbol"))]
             positions = {}
             for item in raw_positions:
                 if not isinstance(item, dict):

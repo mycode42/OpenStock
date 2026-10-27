@@ -18,6 +18,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
+from portfolio.config import CASH_SLEEVE, STRATEGY_CONFIG, is_cash_proxy
+from strategies.runner.cash_sleeve import plan_cash_sleeve
 from portfolio.incidents import open_incident_symbols, record_incident
 from portfolio.order_ledger import BrokerOrderLedger
 from portfolio.protection.recovery import recover_broker_protection
@@ -129,7 +131,7 @@ def _load_reconciliation_orders(portfolio: dict, broker, *, ledger: BrokerOrderL
     """Sync the broker order ledger and load exact references for reconciliation."""
     account_id = str(portfolio.get("account_id") or "")
     ledger.sync(broker, account_id=account_id, today=datetime.now(ET).date(), open_orders=open_orders)
-    all_orders = ledger.orders(account_id)
+    all_orders = [o for o in ledger.orders(account_id) if not is_cash_proxy(o.get("symbol"))]
     history_complete = ledger.history_complete(account_id)
     recent_order_ids = {str(order.get("id")) for order in all_orders}
     exact_entry_orders = {}
@@ -189,8 +191,8 @@ def _load_reconciliation_orders(portfolio: dict, broker, *, ledger: BrokerOrderL
 def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, window) -> float:
     """Reconcile persisted ownership and protection against one broker snapshot."""
     try:
-        positions = broker.positions()
-        open_orders = broker.orders("open")
+        positions = [p for p in broker.positions() if not is_cash_proxy(p.get("symbol"))]
+        open_orders = [o for o in broker.orders("open") if not is_cash_proxy(o.get("symbol"))]
         orders = _load_reconciliation_orders(
             portfolio, broker, ledger=BrokerOrderLedger(state_path), open_orders=open_orders,
         )
@@ -491,7 +493,68 @@ def _scan_strategy_portfolio(
                     portfolio["entry_pause_reasons"].append(issue)
         if persist_before_execution:
             persist_before_execution()
+    sleeve = _run_cash_sleeve(broker, window=window, dry_run=dry_run)
+    if sleeve is not None:
+        scan_result["cash_sleeve"] = sleeve
     return scan_result
+
+
+def _run_cash_sleeve(broker, *, window, dry_run: bool) -> dict | None:
+    """Park idle cash in the cash proxy, or free it. Never touches strategy state.
+
+    Runs only in the regular session, after the strategy trades. Its orders are
+    flagged so execution skips the risk gate, and its result cannot pause entries
+    or open incidents. Failures are logged and leave strategies unaffected.
+    """
+    if dry_run or window.name != "regular" or not CASH_SLEEVE["enabled"]:
+        return None
+    proxy = str(CASH_SLEEVE["proxy_symbol"]).upper()
+    try:
+        account = broker.account()
+        positions = broker.positions()
+        open_orders = broker.orders("open")
+        if any(is_cash_proxy(order.get("symbol")) for order in open_orders):
+            return None
+        invested = sum(
+            abs(float(position.get("market_value") or 0))
+            for position in positions if not is_cash_proxy(position.get("symbol"))
+        )
+        held = next((p for p in positions if is_cash_proxy(p.get("symbol"))), None)
+        proxy_qty = int(float(held["qty"])) if held else 0
+        quote = (broker.latest_quotes([proxy], feed="sip") or {}).get(proxy) or {}
+        bid = float(quote.get("bid") or 0)
+        ask = float(quote.get("ask") or 0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return None
+        mid = (bid + ask) / 2
+        plan = plan_cash_sleeve(
+            equity=float(account["equity"]), cash=float(account["cash"]),
+            invested_value=invested, proxy_price=mid, proxy_qty=proxy_qty,
+            config=CASH_SLEEVE,
+        )
+        if plan["action"] == "hold":
+            return None
+        band = STRATEGY_CONFIG["entry_limit_band_bps"] / 10_000.0
+        buying = plan["action"] == "buy"
+        limit = round(ask * (1 + band), 2) if buying else round(bid * (1 - band), 2)
+        stamp = datetime.now(ET).strftime("%Y%m%d%H%M%S")
+        trade = {
+            "ticker": proxy,
+            "action": plan["action"],
+            "qty": plan["qty"],
+            "order_type": "limit",
+            "limit_price": limit,
+            "entry_price": mid,
+            "strategy": "cash_sleeve",
+            "reasoning": plan["reason"],
+            "cash_sleeve": True,
+            "client_order_id": f"cash-{stamp}-{plan['action']}"[:48],
+        }
+        LOG.info("[ALGO] Cash sleeve %s %d %s @ limit %.2f (%s)", plan["action"], plan["qty"], proxy, limit, plan["reason"])
+        return execute_strategy_trades([trade], mode="algo")
+    except Exception:
+        LOG.exception("[ALGO] Cash sleeve step failed; strategies unaffected")
+        return None
 
 
 def run_loop(

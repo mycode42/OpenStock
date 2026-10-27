@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Callable
 from zoneinfo import ZoneInfo
 
+from execution.risk_models import ValidationResult
 from market.calendar import extended_session_name
 
 
@@ -39,6 +40,9 @@ def _extended_limit_trade(trade: dict) -> bool:
         and str(trade.get("action") or "").lower() in {"buy", "sell", "cover"}
         and math.isfinite(limit_price) and limit_price > 0
     )
+
+
+_CASH_SLEEVE_APPROVAL = ValidationResult(approved=True, reason="cash sleeve: idle-cash storage, not risk-gated")
 
 
 def _off_hours_row(trade: dict, reason: str, rule: str) -> dict:
@@ -267,7 +271,7 @@ def execute_trade_batch(
                         }
                     )
                     continue
-            rm_result = hooks.rm_validate_trade(
+            rm_result = _CASH_SLEEVE_APPROVAL if trade.get("cash_sleeve") else hooks.rm_validate_trade(
                 ticker=ticker,
                 action=action,
                 qty=qty,
@@ -309,7 +313,7 @@ def execute_trade_batch(
         elif action in ("sell", "cover") and hooks.risk_validator_available:
             # The central validator explicitly allows exits; route them through
             # it too so every submitted signal uses the same policy boundary.
-            rm_result = hooks.rm_validate_trade(
+            rm_result = _CASH_SLEEVE_APPROVAL if trade.get("cash_sleeve") else hooks.rm_validate_trade(
                 ticker=ticker,
                 action=action,
                 qty=qty,
