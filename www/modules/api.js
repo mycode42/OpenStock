@@ -1,8 +1,6 @@
-// The dashboard may be served at a history-fallback path such as
-// `/stock-monitor/dashboard/`.  A relative `./api` would then incorrectly
-// resolve to `/stock-monitor/dashboard/api`.  Resolve all API calls from the
-// document base, which is explicitly `/stock-monitor/` in index.html.
-export const API_BASE = new URL('api', typeof document === 'undefined' ? 'http://localhost/openstock/' : document.baseURI).pathname.replace(/\/$/, '');
+// Resolve API calls from the document base so the app works both at `/` and
+// behind a reverse proxy path such as `/openstock/`.
+export const API_BASE = new URL('api', typeof document === 'undefined' ? 'http://localhost:3000/' : document.baseURI).pathname.replace(/\/$/, '');
 export async function apiRequest(path, options = {}, onError = () => {}) {
     try {
         const response = await fetch(API_BASE + path, {

@@ -1,6 +1,6 @@
-require('dotenv').config({ path: process.env.OPENSTOCK_CONFIG_FILE || '/opt/openstock/.env', quiet: true });
+const path = require('node:path');
+require('dotenv').config({ path: process.env.OPENSTOCK_CONFIG_FILE || path.join(__dirname, '.env'), quiet: true });
 const express = require('express');
-const path = require('path');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
 const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/analytics');

@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const Database = require('better-sqlite3');
 const registerAlgoTraderRoutes = require('../server/routes/algo-trader');
 
 const optionsDefaults = {
@@ -68,6 +69,26 @@ async function fixture(t) {
   return root;
 }
 
+async function writeCoordinatorState(root, marketState, portfolio) {
+  const dataDir = path.join(root, 'data');
+  await fs.mkdir(dataDir, { recursive: true });
+  const db = new Database(path.join(dataDir, 'algo_state.sqlite3'));
+  try {
+    db.exec(`CREATE TABLE coordinator (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      market_state TEXT NOT NULL,
+      state_json TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision >= 1),
+      updated_at TEXT NOT NULL
+    )`);
+    db.prepare(`INSERT INTO coordinator (id, market_state, state_json, revision, updated_at)
+      VALUES (1, ?, ?, 1, ?)`)
+      .run(marketState, JSON.stringify(portfolio), '2026-10-20T20:00:00Z');
+  } finally {
+    db.close();
+  }
+}
+
 test('options paper account payload reads its own account journal and research', async t => {
   const originalEnv = {
     account: process.env.ALPACA_OPTIONS_ACCOUNT_ID,
@@ -106,15 +127,12 @@ test('options paper account payload reads its own account journal and research',
     status: 'completed', run_date_et: '2026-10-20', created_at: '2026-10-20T21:00:00Z',
     strategies: { vrp: { status: 'completed', approved: true, underlying: 'SPY' } },
   }));
-  await fs.writeFile(path.join(root, 'data', 'algo_state.json'), JSON.stringify({
-    market_state: 'REGULAR',
-    strategy_portfolio: {
-      last_scan_at: '2026-10-20T20:00:00Z',
-      last_scan_status: 'ok',
-      entries_paused: false,
-      market_regime: { regime: 'range_bound', volatility_state: 'normal', regime_engine: 'committee' },
-    },
-  }));
+  await writeCoordinatorState(root, 'REGULAR', {
+    last_scan_at: '2026-10-20T20:00:00Z',
+    last_scan_status: 'ok',
+    entries_paused: false,
+    market_regime: { regime: 'range_bound', volatility_state: 'normal', regime_engine: 'committee' },
+  });
 
   const handlers = routeHandlers(root);
   const res = response();
@@ -139,9 +157,9 @@ test('equity research payload includes the latest optimizer cycle and strategy d
   const dataDir = path.join(root, 'data');
   const researchDir = path.join(dataDir, 'research', 'algo-auto', 'optimizer');
   await fs.mkdir(researchDir, { recursive: true });
-  await fs.writeFile(path.join(dataDir, 'algo_state.json'), JSON.stringify({
-    strategy_portfolio: { account_id: 'test-account', universe: { tickers: [] } },
-  }));
+  await writeCoordinatorState(root, 'REGULAR', {
+    account_id: 'test-account', universe: { tickers: [] },
+  });
   await fs.writeFile(path.join(researchDir, 'latest.json'), JSON.stringify({
     invocation_id: 'run123', status: 'completed', run_date_et: '2026-10-21',
     created_at: '2026-10-21T15:09:36.925Z',

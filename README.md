@@ -46,7 +46,8 @@ Every monitored instrument needs a verified Trade Republic EUR mapping. If both 
 
 ## Prerequisites
 
-- Node.js v22.x or higher
+- Node.js 22 or higher
+- Python 3, a C/C++ compiler toolchain, and `make` for native Node modules (for example, `build-essential` on Debian/Ubuntu)
 - SQLite 3.x (with CLI for debugging)
 - Telegram Bot token
 - Tailscale (pre-configured)
@@ -109,6 +110,11 @@ cp .env.example .env
 # Initialize database (automatic on first run)
 npm start
 ```
+
+The server loads `.env` from the repository directory by default. Set
+`OPENSTOCK_CONFIG_FILE` only when you want to load a different environment
+file. The default database path in `.env.example` is relative to the checkout,
+so the setup also works locally at `http://localhost:3000`.
 
 ## Running
 

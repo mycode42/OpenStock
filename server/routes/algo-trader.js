@@ -2,6 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
+const Database = require('better-sqlite3');
 
 const FALLBACK_DEFAULT_SETTINGS = require('../algo-strategy-config.default.json');
 const researchSummaryCache = new Map();
@@ -1110,6 +1111,23 @@ async function readJournal(dataDir, accountId) {
     }
 }
 
+async function readCoordinatorState(root) {
+    const dataDir = path.join(root, 'data');
+    const databasePath = path.join(dataDir, 'algo_state.sqlite3');
+    const db = new Database(databasePath, { readonly: true, fileMustExist: true });
+    try {
+        const row = db.prepare('SELECT market_state, state_json FROM coordinator WHERE id = 1').get();
+        if (!row) throw new Error('Algo coordinator state is missing');
+        const portfolio = JSON.parse(row.state_json);
+        if (!portfolio || typeof portfolio !== 'object' || Array.isArray(portfolio)) {
+            throw new Error('Algo coordinator portfolio is invalid');
+        }
+        return { market_state: row.market_state, strategy_portfolio: portfolio };
+    } finally {
+        db.close();
+    }
+}
+
 function activityView(state, journal, research) {
     const portfolio = safeObject(state.strategy_portfolio);
     const activities = [];
@@ -1158,7 +1176,7 @@ function activityView(state, journal, research) {
 
 async function buildPayload(root) {
     const dataDir = path.join(root, 'data');
-    const state = await readJson(path.join(dataDir, 'algo_state.json'));
+    const state = await readCoordinatorState(root);
     if (!state.strategy_portfolio || typeof state.strategy_portfolio !== 'object') throw new Error('Algo coordinator state is incomplete');
     const portfolio = safeObject(state.strategy_portfolio);
     const settings = await loadSettings(root);
@@ -1529,7 +1547,7 @@ async function buildOptionsPayload(root) {
         accountDir ? readJsonLines(path.join(accountDir, 'strategy_greeks.jsonl')) : [],
         accountDir ? readJsonLines(path.join(accountDir, 'assignment_events.jsonl')) : [],
         readOptionsResearch(dataDir),
-        readJson(path.join(dataDir, 'algo_state.json'), { optional: true }),
+        readCoordinatorState(root).catch(() => ({})),
     ]);
     const chronologicalRiskRows = [...riskRows].sort((a, b) => String(a.logged_at || '').localeCompare(String(b.logged_at || '')));
     const history = [];
