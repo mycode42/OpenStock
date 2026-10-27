@@ -76,21 +76,14 @@ cp .env.example .env
 | `TRADE_REPUBLIC_SDK_SESSION_FILE` | Private, server-side SDK session path; required when the SDK source is enabled |
 | `TRADE_REPUBLIC_SDK_MODULE_PATH` | Local compiled SDK module path (default `/opt/handelsrepublik/dist/index.js`) |
 | `LIVE_PRICE_REFRESH_MS` | Display-only Dashboard/Configure refresh cadence; minimum/default 1000 ms |
-| `TRADE_REPUBLIC_LIVE_ENABLED` | Environment-only live-order gate; default `false` |
-| `TRADE_REPUBLIC_DRY_RUN` | Environment-only dry-run gate; default `true` |
-| `TRADE_REPUBLIC_LIVE_ACK` | Environment-only acknowledgement gate; default `false` |
-| `TRADE_REPUBLIC_KILL_SWITCH` | Immediate order kill switch; default `true` |
-| `TRADE_REPUBLIC_MAX_ORDER_EUR` | Hard maximum value per manual order; default `0` |
 
 ### Trade Republic integration
 
-The read-only Handelsrepublik SDK provides the primary executable EUR bid/ask. If it is disabled, unconfigured, or unavailable, OpenStock tries the loopback Trade Republic UAPI sidecar. The SDK adapter only reads executable quotes; broker account and order endpoints remain separate from market-data selection.
+The read-only Handelsrepublik SDK provides the primary executable EUR bid/ask. If it is disabled, unconfigured, or unavailable, OpenStock tries the loopback Trade Republic UAPI sidecar. The SDK adapter only reads executable quotes; broker account endpoints remain separate from market-data selection.
 
 Prices, amounts, fees, and performance values are displayed rounded to two decimal places. Journal trade entry, close, and edit fields retain entered precision up to six decimal places; calculations and stored values use that full precision.
 
 The Dashboard and Configure page poll `/api/live-prices` once per second while visible. Requests share the same SDK → UAPI selection path as the monitor, coalesce, and cache briefly. Live display requests never write stock state, history, alert state, or equity snapshots. Monitor and explicit refresh observations are stored in SQLite; BUY/SELL alerts use the executable ask/bid respectively.
-
-Manual order submission is fail-closed. It additionally requires a verified mapping, fresh executable quote, synchronized cash or position data, selected account, typed confirmation, idempotency key, and all environment gates above. A submitted broker order never creates a Journal execution unless a later broker reconciliation proves it filled.
 
 ### Telegram Setup
 
@@ -328,12 +321,10 @@ journalctl -u openstock.service -n 50 --no-pager
 | `/api/dashboard` | GET | Backward-compatible stock dashboard data |
 | `/api/stocks/archived` | GET | Archived stocks retained for journal/history management |
 | `/api/stocks/:id/restore` | POST | Restore an archived stock by identity |
-| `/api/broker/trade-republic/health` | GET | Sanitized broker connectivity and live-gate status |
+| `/api/broker/trade-republic/health` | GET | Sanitized broker connectivity status |
 | `/api/broker/trade-republic/mappings` | GET/POST | List or broker-verify stock instrument mappings |
 | `/api/broker/trade-republic/sync` | POST | Synchronize normalized account, portfolio, order, and transaction data |
 | `/api/broker/trade-republic/quote/:stockId` | GET | Fetch and persist a sanitized executable quote |
-| `/api/broker/trade-republic/order-preview` | POST | Fetch quote and fee preview without placing an order |
-| `/api/broker/trade-republic/orders` | POST | Fail-closed manual order submission |
 | `/health` | GET | Health check |
 
 ## Architecture and migrations
