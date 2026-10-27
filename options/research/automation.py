@@ -105,6 +105,43 @@ def _run_research_job(
     return _strategy_summary(strategy, report)
 
 
+def _input_fingerprint(paths: dict[str, Path], *, config_hash: str) -> str:
+    """Fingerprint the inputs cheaply so checkpoints are invalidated on data changes."""
+    metadata = {}
+    for symbol, path in sorted(paths.items()):
+        for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            metadata[f"{symbol}:{candidate.name}"] = {
+                "path": str(candidate.resolve()), "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+    payload = json.dumps({"config_sha256": config_hash, "inputs": metadata}, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _checkpointable_job_status(status: str | None) -> bool:
+    return status in {
+        "completed", "exploratory_only", "skipped_missing_dataset", "insufficient_history",
+    }
+
+
+def _job_report_valid(summary: dict, output_root: Path) -> bool:
+    status = summary.get("status")
+    if status in {"completed", "exploratory_only"}:
+        run_dir = Path(str(summary.get("run_dir") or ""))
+        if not run_dir.is_absolute():
+            run_dir = output_root / run_dir
+        run = _read_json(run_dir / "run.json")
+        return bool(
+            run and run.get("status") == status
+            and (run_dir / "report.json").is_file()
+        )
+    return status in {"skipped_missing_dataset", "insufficient_history"}
+
+
 def _render_markdown(report: dict) -> str:
     dataset_label = (
         f"`{report['dataset_path']}`" if report.get("dataset_path")
@@ -198,6 +235,7 @@ def _render_markdown(report: dict) -> str:
 
 def run_automated_options_research(
     *, config_path: str | Path | None = None, workers: int | None = None,
+    run_id: str | None = None,
 ) -> dict:
     """Run the configured options sleeves without touching broker credentials or orders."""
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
@@ -276,6 +314,35 @@ def run_automated_options_research(
     created_at = datetime.now(timezone.utc)
     run_log = output_root / "research_runs.jsonl"
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
+    fingerprint_paths = dict(underlying_data_paths)
+    eligibility_fingerprint_config = automation_config.get("eligibility", {})
+    configured_rules_path = (
+        eligibility_fingerprint_config.get("rules_path")
+        if isinstance(eligibility_fingerprint_config, dict) else None
+    )
+    if configured_rules_path:
+        fingerprint_paths["__eligibility_rules__"] = _project_path(configured_rules_path)
+    input_fingerprint = _input_fingerprint(fingerprint_paths, config_hash=config_hash)
+    run_id = run_id or created_at.strftime("options-%Y%m%dT%H%M%S%fZ")
+    checkpoint_dir = automation_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = checkpoint_dir / f"{run_id}.json"
+    checkpoint = _read_json(checkpoint_path) or {}
+    if (
+        checkpoint.get("schema") != "swarm_options_automation_checkpoint_v1"
+        or checkpoint.get("run_id") != run_id
+        or checkpoint.get("config_sha256") != config_hash
+        or checkpoint.get("input_fingerprint") != input_fingerprint
+    ):
+        checkpoint = {
+            "schema": "swarm_options_automation_checkpoint_v1",
+            "run_id": run_id,
+            "config_sha256": config_hash,
+            "input_fingerprint": input_fingerprint,
+            "created_at": created_at.isoformat(),
+            "jobs": {},
+        }
+    checkpoint["updated_at"] = created_at.isoformat()
     enabled = bool(config.get("automation", {}).get("enabled", True))
     configured_exclusions = automation_config.get("excluded_strategies", {})
     if not isinstance(configured_exclusions, dict):
@@ -374,6 +441,68 @@ def run_automated_options_research(
             for underlying in underlyings_by_strategy[strategy]
         ]
         job_results: dict[tuple[str, str], tuple[datetime, dict]] = {}
+        run_progress_dir = automation_dir / "runs" / run_id
+        run_progress_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_jobs = checkpoint.setdefault("jobs", {})
+        for strategy, underlying in jobs:
+            key = f"{strategy}/{underlying}"
+            saved = checkpoint_jobs.get(key) or {}
+            summary = saved.get("summary") or {}
+            if (
+                saved.get("input_fingerprint") == input_fingerprint
+                and _checkpointable_job_status(summary.get("status"))
+                and _job_report_valid(summary, output_root)
+            ):
+                try:
+                    started = datetime.fromisoformat(saved.get("started_at") or created_at.isoformat())
+                except ValueError:
+                    started = created_at
+                job_results[(strategy, underlying)] = (started, {"summary": summary})
+
+        def write_job_progress() -> None:
+            checkpoint["updated_at"] = datetime.now(timezone.utc).isoformat()
+            checkpoint["completed_jobs"] = len(job_results)
+            checkpoint["total_jobs"] = len(jobs)
+            atomic_write_json(checkpoint_path, checkpoint, indent=2, sort_keys=True, allow_nan=False)
+            completed = {
+                f"{strategy}/{underlying}": result.get("summary")
+                for (strategy, underlying), (_, result) in job_results.items()
+                if result.get("summary") is not None
+            }
+            pending = [
+                f"{strategy}/{underlying}" for strategy, underlying in jobs
+                if (strategy, underlying) not in job_results
+            ]
+            snapshot = {
+                "schema": "swarm_options_automation_progress_v1",
+                "run_id": run_id,
+                "status": "running",
+                "created_at": checkpoint.get("created_at"),
+                "updated_at": checkpoint["updated_at"],
+                "config_sha256": config_hash,
+                "input_fingerprint": input_fingerprint,
+                "completed_jobs": len(completed),
+                "total_jobs": len(jobs),
+                "pending_jobs": pending,
+                "jobs": completed,
+                "checkpoint_path": str(checkpoint_path.resolve()),
+            }
+            atomic_write_json(run_progress_dir / "progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
+            atomic_write_json(run_progress_dir / "partial-report.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
+            atomic_write_json(automation_dir / "latest-progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
+
+        def record_job(strategy: str, underlying: str, started: datetime, summary: dict) -> None:
+            job_results[(strategy, underlying)] = (started, {"summary": summary})
+            checkpoint_jobs[f"{strategy}/{underlying}"] = {
+                "status": summary.get("status"),
+                "summary": summary,
+                "started_at": started.isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "input_fingerprint": input_fingerprint,
+            }
+            write_job_progress()
+
+        write_job_progress()
         print(
             f"Options research: {len(jobs)} strategy/ticker jobs, "
             f"ticker workers {workers_used_by_strategy}; "
@@ -389,6 +518,7 @@ def run_automated_options_research(
         for strategy in strategies:
             strategy_jobs = [
                 (strategy, underlying) for underlying in underlyings_by_strategy[strategy]
+                if (strategy, underlying) not in job_results
             ]
             if not strategy_jobs:
                 strategies_report[strategy] = {
@@ -401,16 +531,17 @@ def run_automated_options_research(
                 for job_strategy, underlying in strategy_jobs:
                     started = datetime.now(timezone.utc)
                     try:
-                        job_results[(job_strategy, underlying)] = (
-                            started,
-                            {"summary": _run_research_job(
-                                job_strategy, config_path_resolved,
-                                underlying_data_paths[underlying], underlying,
-                                fold_workers_used_by_strategy[strategy],
-                            )},
+                        summary = _run_research_job(
+                            job_strategy, config_path_resolved,
+                            underlying_data_paths[underlying], underlying,
+                            fold_workers_used_by_strategy[strategy],
                         )
                     except Exception as exc:
-                        job_results[(job_strategy, underlying)] = (started, {"error": exc})
+                        summary = _error_summary(
+                            job_strategy, exc, started_at=started, run_log=run_log,
+                            output_root=output_root, underlying=underlying,
+                        )
+                    record_job(job_strategy, underlying, started, summary)
                 continue
 
             with ProcessPoolExecutor(
@@ -429,23 +560,20 @@ def run_automated_options_research(
                 for future in as_completed(futures):
                     job_strategy, underlying, started = futures[future]
                     try:
-                        result = {"summary": future.result()}
+                        summary = future.result()
                     except Exception as exc:
-                        result = {"error": exc}
-                    job_results[(job_strategy, underlying)] = (started, result)
+                        summary = _error_summary(
+                            job_strategy, exc, started_at=started, run_log=run_log,
+                            output_root=output_root, underlying=underlying,
+                        )
+                    record_job(job_strategy, underlying, started, summary)
 
         for strategy in strategies:
             by_underlying = {}
             strategy_underlyings = underlyings_by_strategy[strategy]
             for underlying in strategy_underlyings:
-                strategy_started, job_result = job_results[(strategy, underlying)]
-                if "error" in job_result:
-                    by_underlying[underlying] = _error_summary(
-                        strategy, job_result["error"], started_at=strategy_started, run_log=run_log,
-                        output_root=output_root, underlying=underlying,
-                    )
-                else:
-                    by_underlying[underlying] = job_result["summary"]
+                _, job_result = job_results[(strategy, underlying)]
+                by_underlying[underlying] = job_result["summary"]
             if not strategy_underlyings:
                 continue
             if len(strategy_underlyings) == 1:
@@ -484,6 +612,7 @@ def run_automated_options_research(
     report = {
         "schema": "swarm_options_nightly_research_v1",
         "status": status,
+        "run_id": run_id,
         "created_at": created_at.isoformat(),
         "run_date_et": today,
         "config_path": str(config_path_resolved),
@@ -521,6 +650,7 @@ def run_automated_options_research(
         "strategies": strategies_report,
         "research_only": True,
         "trade_or_order_actions": 0,
+        "checkpoint_path": str(checkpoint_path.resolve()),
     }
     report_path = automation_dir / f"{today}.json"
     atomic_write_json(report_path, report, indent=2, sort_keys=True, allow_nan=False)
@@ -529,8 +659,10 @@ def run_automated_options_research(
     markdown_path.write_text(_render_markdown(report), encoding="utf-8")
     (automation_dir / "latest.md").write_text(_render_markdown(report), encoding="utf-8")
     _append_jsonl(automation_dir / "runs.jsonl", {
+        "run_id": run_id,
         "created_at": created_at.isoformat(), "run_date_et": today,
         "status": status, "config_sha256": config_hash,
+        "checkpoint_path": str(checkpoint_path.resolve()),
         "workers_requested": configured_workers,
         "workers_used": worker_count if enabled else 0,
         "workers_requested_by_strategy": workers_requested_by_strategy,
@@ -578,6 +710,31 @@ def run_automated_options_research(
         ("automation_history", "runs", automation_dir / "runs.jsonl"),
     ):
         artifact_store.store_document(document_type=document_type, identity=identity, path=path)
+    final_path = automation_dir / "runs" / run_id / "final-report.json"
+    atomic_write_json(final_path, report, indent=2, sort_keys=True, allow_nan=False)
+    checkpoint.update({
+        "status": "completed" if status != "partial_error" else "partial_error",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "report_path": str(final_path.resolve()),
+        "completed_jobs": len(checkpoint.get("jobs", {})),
+    })
+    atomic_write_json(checkpoint_path, checkpoint, indent=2, sort_keys=True, allow_nan=False)
+    final_progress = {
+        "schema": "swarm_options_automation_progress_v1",
+        "run_id": run_id,
+        "status": checkpoint["status"],
+        "created_at": checkpoint.get("created_at"),
+        "updated_at": checkpoint["completed_at"],
+        "completed_jobs": checkpoint.get("completed_jobs", 0),
+        "total_jobs": checkpoint.get("total_jobs", 0),
+        "pending_jobs": [],
+        "report_path": str(final_path.resolve()),
+        "checkpoint_path": str(checkpoint_path.resolve()),
+    }
+    progress_dir = automation_dir / "runs" / run_id
+    atomic_write_json(progress_dir / "progress.json", final_progress, indent=2, sort_keys=True, allow_nan=False)
+    atomic_write_json(progress_dir / "partial-report.json", report, indent=2, sort_keys=True, allow_nan=False)
+    atomic_write_json(automation_dir / "latest-progress.json", final_progress, indent=2, sort_keys=True, allow_nan=False)
     return report
 
 
@@ -587,19 +744,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run configured options research sleeves")
     parser.add_argument("--config", help="options research config override")
     parser.add_argument("--workers", type=int, help="maximum concurrent research processes")
+    parser.add_argument("--run-id", help="stable cycle ID used to resume an interrupted research batch")
     args = parser.parse_args()
     try:
         os.nice(10)
     except (AttributeError, OSError):
         pass
-    report = run_automated_options_research(config_path=args.config, workers=args.workers)
+    report = run_automated_options_research(
+        config_path=args.config, workers=args.workers, run_id=args.run_id,
+    )
     print(json.dumps({
         "status": report["status"], "report": str((ROOT / "data/options/research/automation/latest.json").resolve()),
         "strategies": {name: result.get("status") for name, result in report["strategies"].items()},
         "dataset_available": report["dataset_available"],
         "workers_used": report["workers_used"],
     }, sort_keys=True))
-    return 0
+    return 1 if report.get("status") == "partial_error" else 0
 
 
 if __name__ == "__main__":
