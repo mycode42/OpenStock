@@ -117,3 +117,7 @@ Paper and research settings are file-based:
 - [Equity adaptive research](docs/adaptive_research.md)
 - [Event-driven strategy](docs/event_driven_strategy.md)
 - [Automation schedules](ops/openclaw-crons.md)
+
+## Acknowledgments
+
+This project is inspired by [AI Hedge Fund](https://github.com/virattt/ai-hedge-fund).

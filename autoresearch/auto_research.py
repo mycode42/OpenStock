@@ -76,6 +76,28 @@ def run_daily_research(args) -> dict:
     ledger.import_legacy(output_dir)
     args.invocation_id = invocation_id
     args.ledger_path = str(ledger_path)
+
+    def stage_progress(stage: str, status: str, payload: dict | None = None, strategy: str | None = None) -> None:
+        callback = getattr(args, "progress_callback", None)
+        if callback:
+            callback(stage=stage, status=status, payload=payload or {}, strategy=strategy)
+        artifact = (payload or {}).get("detail_artifact") or (payload or {}).get("report_path")
+        summary = None
+        if payload:
+            summary = {
+                key: payload.get(key)
+                for key in ("status", "error", "detail_artifact", "coordinator_artifact", "candidate_count", "fold_count")
+                if key in payload
+            }
+        ledger.record_stage(
+            invocation_id, stage=stage, strategy=strategy, status=status,
+            reused=status == "reused", source_artifact=artifact,
+            summary=summary, error=(payload or {}).get("error"),
+        )
+
+    def strategy_progress(stage: str, strategy: str, payload: dict) -> None:
+        stage_progress(stage, str(payload.get("status") or "completed"), payload, strategy)
+
     refresh_active_parameter_profile()
     runtime_settings = get_algo_runtime_settings()
     total_started = perf_counter()
@@ -103,6 +125,10 @@ def run_daily_research(args) -> dict:
             refresh_seconds, refresh_report.get("intraday_rows_written", 0),
             refresh_report.get("spy_daily_rows_written", 0),
         )
+    stage_progress("data_refresh", "completed", {
+        "status": "completed", "seconds": refresh_seconds,
+        "rows_written": (refresh_report or {}).get("intraday_rows_written", 0),
+    })
 
     history_start, latest_end, missing = _latest_dates(store, symbols)
     covered_symbols = [symbol for symbol in symbols if symbol not in missing]
@@ -311,6 +337,11 @@ def run_daily_research(args) -> dict:
             "seconds": round(perf_counter() - factor_started, 3), "reused": False,
         }
         logger.info("Multi Factor diagnostics finished in %.1fs", factor_model_timing["seconds"])
+    stage_progress("factor_model", "reused" if factor_model_timing.get("reused") else "completed", {
+        "status": "completed", "seconds": factor_model_timing.get("seconds", 0),
+        "reused": factor_model_timing.get("reused", False),
+        "data_version": data_version,
+    })
 
     adaptive_root = Path(args.output_dir) / "adaptive"
     adaptive_discovery_started = perf_counter()
@@ -318,16 +349,19 @@ def run_daily_research(args) -> dict:
         "Adaptive discovery %s",
         "skipped for factor-only run" if args.factor_only else f"starting ({len(RESEARCHABLE_STRATEGIES)} strategies)",
     )
+    stage_progress("discovery", "running", {"status": "running", "strategies_total": len(RESEARCHABLE_STRATEGIES)})
     adaptive_discovery = (
         run_adaptive_discoveries(
             database=database, symbols=covered_symbols, latest_end=cohort_end, data_version=data_version,
             output_dir=adaptive_root, workers=args.workers,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
             invocation_id=getattr(args, "invocation_id", None),
+            on_strategy_complete=strategy_progress,
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
     ledger.record_discovery_stage(invocation_id, adaptive_discovery, data_version=data_version)
+    stage_progress("discovery", adaptive_discovery.get("status", "completed"), adaptive_discovery)
     adaptive_discovery_seconds = round(perf_counter() - adaptive_discovery_started, 3)
     logger.info(
         "Adaptive discovery finished: %s in %.1fs",
@@ -400,6 +434,7 @@ def run_daily_research(args) -> dict:
                 "Training fitness can vary across rolling windows and does not guarantee future performance.",
             ],
         }
+        stage_progress("report_assembly", "completed", {"status": report.get("status"), "optimization_only": True})
         return report
 
     adaptive_verification_started = perf_counter()
@@ -407,6 +442,7 @@ def run_daily_research(args) -> dict:
         "Rolling verification %s",
         "skipped for factor-only run" if args.factor_only else f"starting ({len(RESEARCHABLE_STRATEGIES)} strategies)",
     )
+    stage_progress("verification", "running", {"status": "running", "strategies_total": len(RESEARCHABLE_STRATEGIES)})
     adaptive_verification = (
         run_adaptive_verifications(
             database=database, symbols=covered_symbols,
@@ -414,10 +450,12 @@ def run_daily_research(args) -> dict:
             data_version=data_version,
             output_dir=adaptive_root, workers=args.workers, force=args.force,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
+            on_strategy_complete=strategy_progress,
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
     candidate_validation_started = perf_counter()
+    stage_progress("candidate_validation", "running", {"status": "running", "strategies_total": len(RESEARCHABLE_STRATEGIES)})
     if not args.factor_only:
         from .pipeline.candidate_validation import run_candidate_validation
 
@@ -428,12 +466,14 @@ def run_daily_research(args) -> dict:
             verification=adaptive_verification, discovery=adaptive_discovery,
             workers=args.workers, force=args.force,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
+            on_strategy_complete=strategy_progress,
         )
     else:
         candidate_validation = {
             "status": "skipped", "reason": "factor-only run", "strategies": {},
         }
     adaptive_verification["candidate_validation"] = candidate_validation
+    stage_progress("candidate_validation", candidate_validation.get("status", "completed"), candidate_validation)
     candidate_validation_seconds = round(perf_counter() - candidate_validation_started, 3)
     logger.info(
         "Exact candidate validation finished: %s in %.1fs",
@@ -445,6 +485,7 @@ def run_daily_research(args) -> dict:
          for strategy in RESEARCHABLE_STRATEGIES},
         data_version=data_version,
     )
+    stage_progress("verification", adaptive_verification.get("status", "completed"), adaptive_verification)
     adaptive_verification_seconds = round(perf_counter() - adaptive_verification_started, 3)
     logger.info(
         "Rolling verification finished: %s in %.1fs",
@@ -455,6 +496,7 @@ def run_daily_research(args) -> dict:
     drift_report = update_research_drift_monitor(
         adaptive_verification, output_dir=output_dir,
     )
+    stage_progress("drift_monitor", "completed", drift_report)
     promotion_pause_reasons = []
     if drift_report.get("promotion_pause"):
         promotion_pause_reasons.append("drift")
@@ -474,6 +516,10 @@ def run_daily_research(args) -> dict:
             and cached.get("orchestration", {}).get("fingerprint") == fingerprint
             and (cached.get("portfolio_coordinator_replay") or {}).get("profile_selection_source") == portfolio_source
         ):
+            stage_progress("portfolio_replay", "reused", {
+                "status": "completed", "reused": True,
+                "report_path": str((cohort_dir / "report.json").resolve()),
+            })
             validation_started = perf_counter()
             from .validation.forward_validation import run_forward_validation_cycle
 
@@ -487,6 +533,7 @@ def run_daily_research(args) -> dict:
                 invocation_id=invocation_id, ledger_path=ledger_path,
                 factor_weight_timeline=factor_report.get("weight_timeline") or [],
             )
+            stage_progress("forward_validation", forward_validation.get("status", "completed"), forward_validation)
             if adaptive_portfolio_ready:
                 refresh_active_parameter_profile()
             cached = {
@@ -567,6 +614,7 @@ def run_daily_research(args) -> dict:
             cached = _attach_fitness_timeline(cached, Path(args.output_dir))
             _atomic_json(report_path, cached)
             _atomic_json(root / "latest.json", cached)
+            stage_progress("report_assembly", "completed", {"status": cached.get("status"), "cohort_report_reused": True})
             logger.info(
                 "Discovery advanced on the existing quote cohort; reused historical verification and portfolio replay"
             )
@@ -588,6 +636,7 @@ def run_daily_research(args) -> dict:
     }
     if args.factor_only:
         validation_started = perf_counter()
+        stage_progress("forward_validation", "running", {"status": "running"})
         from .validation.forward_validation import run_forward_validation_cycle
 
         forward_validation = run_forward_validation_cycle(
@@ -599,6 +648,7 @@ def run_daily_research(args) -> dict:
             invocation_id=invocation_id, ledger_path=ledger_path,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
         )
+        stage_progress("forward_validation", forward_validation.get("status", "completed"), forward_validation)
         timings["forward_validation"] = {
             "seconds": round(perf_counter() - validation_started, 3),
             "status": forward_validation.get("status"),
@@ -649,12 +699,14 @@ def run_daily_research(args) -> dict:
         report = _attach_fitness_timeline(report, Path(args.output_dir))
         _atomic_json(report_path, report)
         _atomic_json(root / "latest.json", report)
+        stage_progress("report_assembly", "completed", {"status": report.get("status")})
         return report
 
     portfolio_path = cohort_dir / "portfolio"
     portfolio_report = None
     if adaptive_portfolio_ready:
         portfolio_started = perf_counter()
+        stage_progress("portfolio_replay", "running", {"status": "running"})
         cached_portfolio, _ = read_json(portfolio_path / "latest.json")
         if (
             not args.force and cached_portfolio
@@ -691,15 +743,23 @@ def run_daily_research(args) -> dict:
             "seconds": 0.0 if portfolio_reused else round(perf_counter() - portfolio_started, 3),
             "reused": portfolio_reused,
         }
+        stage_progress("portfolio_replay", "reused" if portfolio_reused else "completed", {
+            "status": "completed", "reused": portfolio_reused,
+            "report_path": str((portfolio_path / "latest.json").resolve()),
+        })
     else:
         logger.warning("Portfolio replay skipped: verification artifacts are incomplete")
         timings["portfolio_replay"] = {
             "seconds": 0.0, "status": "skipped",
             "reason": "Adaptive verification is incomplete; portfolio replay was skipped.",
         }
+        stage_progress("portfolio_replay", "skipped", {
+            "status": "skipped", "reason": "Adaptive verification is incomplete; portfolio replay was skipped.",
+        })
 
     factor_ic = (factor_report.get("adaptive_prequential_ic") or {}).get("mean_spearman_ic")
     validation_started = perf_counter()
+    stage_progress("forward_validation", "running", {"status": "running"})
     from .validation.forward_validation import run_forward_validation_cycle
 
     forward_validation = run_forward_validation_cycle(
@@ -712,6 +772,7 @@ def run_daily_research(args) -> dict:
         invocation_id=invocation_id, ledger_path=ledger_path,
         factor_weight_timeline=factor_report.get("weight_timeline") or [],
     )
+    stage_progress("forward_validation", forward_validation.get("status", "completed"), forward_validation)
     if adaptive_portfolio_ready:
         refresh_active_parameter_profile()
     timings["forward_validation"] = {
@@ -797,6 +858,7 @@ def run_daily_research(args) -> dict:
     report = _attach_fitness_timeline(report, Path(args.output_dir))
     _atomic_json(report_path, report)
     _atomic_json(root / "latest.json", report)
+    stage_progress("report_assembly", "completed", {"status": report.get("status")})
     return report
 
 
@@ -848,6 +910,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="run a new archive-backed discovery cycle and defer rolling verification and portfolio replay",
     )
     parser.add_argument("--force", action="store_true", help="create a fresh data cohort and recompute cached research stages")
+    parser.add_argument("--invocation-id", help="stable research ID used to resume an interrupted cycle")
     return parser
 
 
@@ -884,11 +947,80 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = Path(args.output_dir)
     optimizer_latest_path = output_dir / "optimizer" / "latest.json"
     latest_report_path = optimizer_latest_path if args.optimization_only else output_dir / "latest.json"
-    invocation_id = uuid4().hex
+    invocation_id = args.invocation_id or uuid4().hex
     ledger_path = output_dir / "research.sqlite3"
     ledger = None
     args.invocation_id = invocation_id
     args.ledger_path = str(ledger_path)
+    progress_dir = output_dir / "invocations" / invocation_id
+    progress_dir.mkdir(parents=True, exist_ok=True)
+    progress_state = {
+        "schema": "swarm_autoresearch_progress_v1",
+        "invocation_id": invocation_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "status": "running",
+        "current_stage": None,
+        "stages": {},
+        "strategies": {},
+    }
+
+    def compact_progress_payload(payload: dict | None) -> dict:
+        payload = payload or {}
+        keys = (
+            "status", "error", "reason", "detail_artifact", "report_path",
+            "coordinator_artifact", "reused", "seconds", "candidate_count",
+            "fold_count", "strategies_total", "data_version", "optimization_only",
+            "completed_fold_jobs", "last_test_start", "last_test_end",
+        )
+        summary = {key: payload[key] for key in keys if key in payload}
+        for field in ("strategies", "errors", "error_strategies"):
+            value = payload.get(field)
+            if isinstance(value, dict):
+                summary[field] = {
+                    name: {
+                        key: item.get(key)
+                        for key in (
+                            "status", "error", "detail_artifact", "coordinator_artifact",
+                            "selection_status", "adaptive_improvement", "archive_sequence",
+                            "search_seed", "reused_fold_count", "candidate_count",
+                        ) if isinstance(item, dict) and key in item
+                    }
+                    for name, item in value.items()
+                }
+            elif isinstance(value, list):
+                summary[field] = value
+        return _json_safe(summary)
+
+    def progress_callback(*, stage: str, status: str, payload=None, strategy: str | None = None) -> None:
+        compact = compact_progress_payload(payload)
+        now = datetime.now(timezone.utc).isoformat()
+        progress_state["updated_at"] = now
+        progress_state["current_stage"] = stage if status == "running" else progress_state.get("current_stage")
+        if strategy:
+            progress_state["strategies"].setdefault(stage, {})[strategy] = {
+                "status": status, **compact, "updated_at": now,
+            }
+        else:
+            progress_state["stages"][stage] = {
+                "status": status, **compact, "updated_at": now,
+            }
+            if status not in {"running", "pending"} and progress_state.get("current_stage") == stage:
+                progress_state["current_stage"] = None
+        snapshot = {**progress_state, "progress_path": str((progress_dir / "progress.json").resolve())}
+        _atomic_json(progress_dir / "progress.json", snapshot)
+        _atomic_json(output_dir / "latest-progress.json", snapshot)
+        _atomic_json(progress_dir / "partial-report.json", {
+            "schema": "swarm_autoresearch_partial_report_v1",
+            "invocation_id": invocation_id,
+            "status": "running",
+            "current_stage": progress_state.get("current_stage"),
+            "updated_at": now,
+            "stages": progress_state["stages"],
+            "strategies": progress_state["strategies"],
+            "progress_path": str((progress_dir / "progress.json").resolve()),
+        })
+
+    args.progress_callback = progress_callback
     log_path = _configure_progress_logging(output_dir)
     today = datetime.now(ET).date().isoformat()
     logger.info(
@@ -917,6 +1049,11 @@ def main(argv: list[str] | None = None) -> int:
             report["workers_requested"] = args.workers
     except Exception as exc:
         logger.error("AutoResearch failed: %s: %s", type(exc).__name__, exc)
+        failed_stage = progress_state.get("current_stage") or "orchestration"
+        progress_callback(
+            stage=failed_stage, status="failed",
+            payload={"status": "failed", "error": f"{type(exc).__name__}: {exc}"},
+        )
         report = {
             "schema": (
                 "swarm_algo_optimizer_cycle_v1"
@@ -954,6 +1091,11 @@ def main(argv: list[str] | None = None) -> int:
         if not args.optimization_only:
             _atomic_json(output_dir / f"{today}.json", report)
         _atomic_json(latest_report_path, report)
+        progress_state.update({"status": "failed", "completed_at": datetime.now(timezone.utc).isoformat()})
+        snapshot = {**progress_state, "report_path": str(invocation_report_path.resolve())}
+        _atomic_json(progress_dir / "progress.json", snapshot)
+        _atomic_json(output_dir / "latest-progress.json", snapshot)
+        _atomic_json(progress_dir / "partial-report.json", report)
         return 2
 
     report = _json_safe(report)
@@ -978,6 +1120,15 @@ def main(argv: list[str] | None = None) -> int:
     if not args.optimization_only:
         _atomic_json(output_dir / f"{today}.json", report)
     _atomic_json(latest_report_path, report)
+    progress_state.update({
+        "status": "completed" if report.get("status") not in {"error", "partial_error"} else "partial_error",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "current_stage": None,
+    })
+    snapshot = {**progress_state, "report_path": str(invocation_report_path.resolve())}
+    _atomic_json(progress_dir / "progress.json", snapshot)
+    _atomic_json(output_dir / "latest-progress.json", snapshot)
+    _atomic_json(progress_dir / "partial-report.json", report)
     discovery_report = ((report.get("adaptive_research") or {}).get("discovery") or {})
     print(json.dumps(_json_safe({
         "status": report["status"],
@@ -1014,7 +1165,7 @@ def main(argv: list[str] | None = None) -> int:
             "promoted_candidate_count": len((report.get("forward_validation") or {}).get("promoted", [])),
         },
     }), sort_keys=True, default=str))
-    return 0
+    return 2 if report.get("status") in {"error", "partial_error"} else 0
 
 
 if __name__ == "__main__":

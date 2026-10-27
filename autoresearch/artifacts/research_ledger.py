@@ -94,6 +94,11 @@ class ResearchLedger:
                    VALUES (?, ?, 'running', ?)""",
                 (invocation_id, _now(), _json(request or {})),
             )
+            connection.execute(
+                """UPDATE research_run SET status='running', finished_at=NULL, error=NULL
+                   WHERE invocation_id=?""",
+                (invocation_id,),
+            )
 
     def set_run_context(
         self, invocation_id: str, *, cohort_id: str | None = None,
@@ -497,6 +502,10 @@ class ResearchLedger:
                 error=report.get("error"),
             )
             return
+        # A retried invocation keeps its stable ID so completed research stages
+        # can resume. Replace its portfolio fold rows instead of duplicating them.
+        with self._connect() as connection:
+            connection.execute("DELETE FROM portfolio_fold WHERE invocation_id=?", (invocation_id,))
         for fold_number, fold in enumerate(portfolio.get("folds") or [], start=1):
             window = fold.get("fold") or {}
             metrics = {

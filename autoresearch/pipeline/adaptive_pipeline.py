@@ -63,14 +63,36 @@ def run_adaptive_discoveries(
     *, database: str, symbols: list[str], latest_end: date, data_version: str, output_dir: Path,
     workers: int, factor_weight_timeline: list[dict] | None = None,
     invocation_id: str | None = None,
+    on_strategy_complete=None,
 ) -> dict:
-    """Run a new seeded search for every strategy on each research invocation."""
+    """Run or resume seeded strategy searches for this research invocation."""
     statuses = {}
     jobs = []
     total = len(RESEARCHABLE_STRATEGIES)
-    logger.info("Discovery: reserving new search sequences for %d strategies", total)
+    logger.info("Discovery: checking resumable artifacts for %d strategies", total)
     for strategy in RESEARCHABLE_STRATEGIES:
         options = _adaptive_window_options(strategy)
+        latest_path = output_dir / strategy / "latest-discovery.json"
+        prior, _ = read_json(latest_path)
+        prior_detail_path = Path(str((prior or {}).get("detail_artifact") or ""))
+        prior_search = (prior or {}).get("adaptive_window_search") or {}
+        if (
+            invocation_id
+            and prior
+            and prior.get("invocation_id") == invocation_id
+            and prior.get("data_version") == data_version
+            and prior_search.get("pipeline_version") == ADAPTIVE_PIPELINE_VERSION
+            and prior_search.get("data_version") == data_version
+            and prior_detail_path.is_file()
+        ):
+            resumed, _ = read_json(prior_detail_path)
+            if resumed and resumed.get("invocation_id") == invocation_id:
+                status = _discovery_status(resumed, prior_detail_path, "reused")
+                statuses[strategy] = status
+                logger.info("Discovery checkpoint reused: %s", strategy)
+                if on_strategy_complete:
+                    on_strategy_complete("discovery", strategy, status)
+                continue
         archive_dir = output_dir / "archive"
         seed, sequence = reserve_search_seed(archive_dir, strategy, ADAPTIVE_PIPELINE_VERSION)
         jobs.append((
@@ -78,6 +100,11 @@ def run_adaptive_discoveries(
             output_dir, options, archive_dir, seed, sequence,
             factor_weight_timeline or [], invocation_id,
         ))
+
+    logger.info(
+        "Discovery: %d strategies remain to search; %d resumed from completed artifacts",
+        len(jobs), len(statuses),
+    )
 
     if jobs:
         worker_budget = min(max(1, workers), available_cpu_count())
@@ -107,6 +134,8 @@ def run_adaptive_discoveries(
                 status = statuses[strategy].get("status", "unknown")
                 log = logger.warning if status == "error" else logger.info
                 log("Discovery progress %d/%d: %s %s", len(statuses), total, strategy, status)
+                if on_strategy_complete:
+                    on_strategy_complete("discovery", strategy, statuses[strategy])
                 continue
 
             # Strategy threads coordinate independent candidate process pools.
@@ -140,6 +169,8 @@ def run_adaptive_discoveries(
                     status = statuses[strategy].get("status", "unknown")
                     log = logger.warning if status == "error" else logger.info
                     log("Discovery progress %d/%d: %s %s", len(statuses), total, strategy, status)
+                    if on_strategy_complete:
+                        on_strategy_complete("discovery", strategy, statuses[strategy])
     errors = [strategy for strategy, item in statuses.items() if item.get("status") == "error"]
     stage_status = "error" if len(errors) == total else "completed" if not errors else "partial_error"
     logger.info("Discovery stage finished: %s (%d errors)", stage_status, len(errors))
@@ -225,6 +256,7 @@ def run_adaptive_verifications(
     *, database: str, symbols: list[str], start: date, end: date,
     data_version: str, output_dir: Path, workers: int, force: bool,
     factor_weight_timeline: list[dict] | None = None,
+    on_strategy_complete=None,
 ) -> dict:
     """Verify the short-window fitting policy on recent chronological folds."""
     factor_weight_timeline = list(factor_weight_timeline or [])
@@ -300,6 +332,8 @@ def run_adaptive_verifications(
                 "Coordinator artifact progress %d/%d: %s unavailable (%s)",
                 index, total, strategy, status.get("error", "verification failed"),
             )
+            if on_strategy_complete:
+                on_strategy_complete("verification", strategy, status)
             continue
         detail_path = status.get("detail_artifact")
         if detail_path:
@@ -331,6 +365,8 @@ def run_adaptive_verifications(
                 "Coordinator artifact progress %d/%d: %s failed (%s)",
                 index, total, strategy, statuses[strategy]["error"],
             )
+        if on_strategy_complete:
+            on_strategy_complete("verification", strategy, statuses[strategy])
     errors = [strategy for strategy, item in statuses.items() if item.get("status") == "error"]
     stage_status = "error" if len(errors) == total else "completed" if not errors else "partial_error"
     logger.info("Verification stage finished: %s (%d errors)", stage_status, len(errors))

@@ -240,6 +240,7 @@ def run_candidate_validation(
     data_version: str, output_dir, verification: dict, discovery: dict,
     workers: int, force: bool = False,
     factor_weight_timeline: list[dict] | None = None,
+    on_strategy_complete=None,
 ) -> dict:
     """Apply identical rolling gates to live, champion, and queued challenger settings."""
     refresh_active_parameter_profile()
@@ -253,6 +254,7 @@ def run_candidate_validation(
     context_by_strategy: dict[str, str] = {}
     current_regime_metrics_by_strategy: dict[str, dict[str, dict]] = {}
     computed_by_strategy: dict[str, list[dict]] = {}
+    completed_fold_jobs_by_strategy: dict[str, int] = {}
     jobs = []
 
     for strategy, verification_status in verification_strategies.items():
@@ -391,11 +393,26 @@ def run_candidate_validation(
 
     if jobs:
         budget = min(max(1, workers), available_cpu_count(), len(jobs))
+
+        def persist_fold_job(strategy: str, window: dict, records: list[dict]) -> None:
+            if records:
+                record_candidate_validation_folds(archive_root, strategy, records)
+                computed_by_strategy.setdefault(strategy, []).extend(records)
+            completed_fold_jobs_by_strategy[strategy] = completed_fold_jobs_by_strategy.get(strategy, 0) + 1
+            if on_strategy_complete:
+                on_strategy_complete("candidate_validation", strategy, {
+                    "status": "running",
+                    "completed_fold_jobs": completed_fold_jobs_by_strategy[strategy],
+                    "last_test_start": window.get("test_start"),
+                    "last_test_end": window.get("test_end"),
+                    "candidate_count": len(records),
+                })
+
         if budget == 1:
             for strategy, fold_index, window, missing, args in jobs:
                 try:
                     _, records = _evaluate_fold((fold_index, window, missing, args))
-                    computed_by_strategy.setdefault(strategy, []).extend(records)
+                    persist_fold_job(strategy, window, records)
                 except Exception as exc:
                     failed_strategies.add(strategy)
                     failures.append(f"{strategy} fold {window.get('test_start')}: {type(exc).__name__}: {exc}")
@@ -412,18 +429,17 @@ def run_candidate_validation(
                     strategy, window = futures[future]
                     try:
                         _, records = future.result()
-                        computed_by_strategy.setdefault(strategy, []).extend(records)
+                        persist_fold_job(strategy, window, records)
                     except Exception as exc:
                         failed_strategies.add(strategy)
                         failures.append(
                             f"{strategy} fold {window.get('test_start')}: {type(exc).__name__}: {exc}"
                         )
 
-    for strategy, records in computed_by_strategy.items():
-        record_candidate_validation_folds(archive_root, strategy, records)
-
     for strategy, result in results.items():
         if result.get("status") == "deferred":
+            if on_strategy_complete:
+                on_strategy_complete("candidate_validation", strategy, result)
             continue
         cohort = cohorts_by_strategy.get(strategy, [])
         newly_computed = computed_by_strategy.get(strategy, [])
@@ -516,6 +532,8 @@ def run_candidate_validation(
                 archive_root, strategy, limit=10_000,
             )),
         }
+        if on_strategy_complete:
+            on_strategy_complete("candidate_validation", strategy, result)
 
     return {
         "status": "partial_error" if failures else "completed",
