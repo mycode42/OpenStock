@@ -23,7 +23,9 @@ Signal → coordinator → risk gate → Alpaca Paper. The risk gate has the fin
 
 ## Setup
 
-Requires Python 3.11+ and Poetry.
+Requires Python 3.11 or 3.12, Poetry, and a C compiler toolchain to build the
+optional Cython performance extensions (for example, `build-essential` on
+Debian/Ubuntu). Python 3.13 is not supported yet.
 
 ```sh
 poetry install --with ai,ml,research
