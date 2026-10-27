@@ -86,3 +86,20 @@ def test_point_in_time_membership_uses_only_the_prior_close():
     assert membership.symbols_for(_date(2026, 10, 20)) == []
     assert membership.symbols_for(_date(2026, 10, 21)) == ["AAA", "BBB"]
     assert membership.symbols_for(_date(2026, 10, 22)) == ["CCC"]
+
+
+def test_forward_gate_accepts_a_candidate_with_a_real_edge_and_rejects_noise():
+    from autoresearch.validation.forward_validation import _acceptance_decision
+
+    days = _days(150)
+    benchmark = {day: random.Random(11 + i).gauss(0, 0.01) for i, day in enumerate(days)}
+    baseline = {day: benchmark[day] + 0.0001 for day in days}
+    edge = {day: benchmark[day] + 0.001 + random.Random(31 + i).gauss(0, 0.002) for i, day in enumerate(days)}
+    noise = {day: benchmark[day] + random.Random(71 + i).gauss(0, 0.01) for i, day in enumerate(days)}
+
+    good = _acceptance_decision({"candidate": edge, "baseline": baseline, "benchmark": benchmark}, trials=2)
+    bad = _acceptance_decision({"candidate": noise, "baseline": baseline, "benchmark": benchmark}, trials=2)
+
+    assert good["decision"] == "accept", good["reasons"]
+    assert bad["decision"] == "reject"
+    assert _acceptance_decision(None, trials=1)["decision"] == "reject"

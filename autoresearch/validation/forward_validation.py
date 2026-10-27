@@ -28,6 +28,7 @@ from ..settings import (
     SIP_EXTENDED_LOCAL_FEED,
 )
 from autoresearch.backtest.market_sessions import trading_date
+from autoresearch.validation.acceptance import AcceptancePolicy, evaluate_candidate
 
 
 ET = ZoneInfo("America/New_York")
@@ -37,7 +38,11 @@ MIN_CLOSED_TRADES = 30
 MIN_EXIT_SESSIONS = 20
 MIN_REGIME_ENTRY_SESSIONS = 15
 MAX_ACTIVE_COHORT_PER_STRATEGY_REGIME = 9
-SIMULATION_POLICY = "algo-forward-simulation-v4-ablation-cohorts"
+SIMULATION_POLICY = "algo-forward-simulation-v5-acceptance-gate"
+# Replay equity already carries simulated costs, so turnover costs are not charged twice.
+FORWARD_ACCEPTANCE_POLICY = AcceptancePolicy(
+    cost_bps_per_turnover=0.0, min_oos_sessions=20, folds=3, purge_sessions=2,
+)
 FORWARD_COST_MODEL = {
     "version": "algo-replay-cost-v1",
     "slippage_bps_each_side": 5.0,
@@ -328,6 +333,58 @@ def _candidates(discovery: dict, verification: dict, regime: str) -> list[dict]:
     return output
 
 
+def _equity_returns(daily_curve: list[dict]) -> dict[str, float]:
+    """Per-session returns from a replay's daily equity curve."""
+    returns = {}
+    for previous, current in zip(daily_curve, daily_curve[1:]):
+        if previous["equity"] > 0:
+            returns[str(current["date"])] = current["equity"] / previous["equity"] - 1.0
+    return returns
+
+
+def _bar_returns(bars: list[dict], start: date, end: date) -> dict[str, float]:
+    """Benchmark per-session returns from daily bars ({"t": ISO timestamp, "c": close})."""
+    closes = {}
+    for bar in bars:
+        stamp = str(bar.get("t") or bar.get("date") or "")[:10]
+        close = bar.get("c", bar.get("close"))
+        if stamp and close is not None and start.isoformat() <= stamp <= end.isoformat():
+            closes[stamp] = float(close)
+    days = sorted(closes)
+    return {
+        current: closes[current] / closes[previous] - 1.0
+        for previous, current in zip(days, days[1:]) if closes[previous] > 0
+    }
+
+
+def _acceptance_decision(series: dict | None, *, trials: int) -> dict:
+    """Apply the acceptance rules to a forward candidate against its baseline.
+
+    The forward window is split: the first two thirds search, the last third is
+    the holdout. A candidate passes only when both halves pass.
+    """
+    if not series:
+        return {"decision": "reject", "reasons": ["no return series recorded"], "metrics": {}}
+    candidate = series["candidate"]
+    baseline = series["baseline"]
+    benchmark_returns = series["benchmark"]
+    days = sorted(set(candidate) & set(baseline) & set(benchmark_returns))
+    if len(days) < 3:
+        return {"decision": "reject", "reasons": ["insufficient shared sessions"], "metrics": {}}
+    holdout_start = days[(len(days) * 2) // 3]
+    result = evaluate_candidate(
+        candidate, baseline, benchmark_returns,
+        holdout_start=holdout_start, trials=trials,
+        policy=FORWARD_ACCEPTANCE_POLICY,
+    )
+    return {
+        "decision": result.decision,
+        "reasons": result.reasons,
+        "metrics": result.metrics,
+        "holdout_start": holdout_start,
+    }
+
+
 def _simulate(
     *, strategy: str, regime: str, parameters: dict, start: date, end: date,
     database: str, symbols: list[str], candidate: bool,
@@ -356,7 +413,7 @@ def _simulate(
         borrow_availability_data={},
         factor_weight_timeline=factor_weight_timeline or [],
     )
-    return _run_replay(
+    report = _run_replay(
         strategy=strategy,
         parameters=ALGO_DEFAULT_PARAMETERS[strategy],
         symbols=symbols, bars=bars, spy_daily=spy, start=start, end=end,
@@ -365,6 +422,8 @@ def _simulate(
         preaggregated_daily_bars=daily,
         include_extended_hours=True,
     )
+    report["benchmark_returns"] = _bar_returns(spy, start, end)
+    return report
 
 
 def _target_metrics(report: dict, strategy: str, regime: str) -> dict:
@@ -559,6 +618,11 @@ def run_forward_validation_cycle(
                     )
                     trial["latest_simulation"] = {
                         "status": "completed", "simulation_policy": SIMULATION_POLICY,
+                        "return_series": {
+                            "candidate": _equity_returns(candidate_report.get("daily_equity", [])),
+                            "baseline": _equity_returns(baseline_report.get("daily_equity", [])),
+                            "benchmark": candidate_report.get("benchmark_returns", {}),
+                        },
                         "data_end": end.isoformat(),
                         "data_version": data_version,
                         "cost_model_version": FORWARD_COST_MODEL_VERSION,
@@ -616,9 +680,19 @@ def run_forward_validation_cycle(
                 and candidate_marked_pnl > baseline_marked_pnl
             )
             trial["latest_simulation"]["marked_equity_improvement"] = marked_equity_improvement
-            trial["forward_validation_pass"] = bool(
+            legacy_pass = bool(
                 candidate_pnl > 0 and forward_improvement and marked_equity_improvement
             )
+            trial["latest_simulation"]["legacy_gate_pass"] = legacy_pass
+            trial_count = max(1, sum(
+                1 for other in [*active.values(), *history]
+                if other.get("strategy") == trial["strategy"] and other.get("regime") == trial["regime"]
+            ))
+            acceptance = _acceptance_decision(
+                trial["latest_simulation"].get("return_series"), trials=trial_count,
+            )
+            trial["latest_simulation"]["acceptance"] = acceptance
+            trial["forward_validation_pass"] = acceptance["decision"] == "accept"
             if trial.get("cohort_id"):
                 trial["status"] = "cohort_ready"
                 trial["finished_at"] = now.isoformat()
