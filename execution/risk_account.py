@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import math
+
+from portfolio.config import is_cash_proxy
 from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 from urllib.parse import quote
@@ -323,10 +325,16 @@ def get_portfolio_state(
     # The executor verifies too, but standalone status and strategy callers
     # must not evaluate a closed or replaced account.
     _, account = verify_account(mode)
-    positions_raw = api("positions", mode=mode)
+    all_positions = api("positions", mode=mode)
+    # The cash reserve ETF is cash in all but name: its value counts as free cash,
+    # and it is excluded from exposure, sector, and position limits.
+    reserve_value = sum(
+        float(p.get("market_value", 0) or 0) for p in all_positions if is_cash_proxy(p.get("symbol"))
+    )
+    positions_raw = [p for p in all_positions if not is_cash_proxy(p.get("symbol"))]
 
     equity = float(account.get("equity", 0))
-    cash = float(account.get("cash", 0))
+    cash = float(account.get("cash", 0)) + reserve_value
     last_equity = float(account.get("last_equity", equity))
 
     daily_pnl_pct = ((equity - last_equity) / last_equity) if last_equity else 0.0

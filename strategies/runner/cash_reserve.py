@@ -11,18 +11,37 @@ from __future__ import annotations
 
 import math
 
-from portfolio.config import CASH_SLEEVE as CASH_SLEEVE_DEFAULTS
+from portfolio.config import CASH_RESERVE as CASH_RESERVE_DEFAULTS
 
 
-def plan_cash_sleeve(
+def plan_entry_cash(
+    *, equity: float, cash: float, entry_notional: float, min_cash_pct: float,
+    proxy_price: float, proxy_qty: int,
+) -> dict:
+    """Sell reserve ETF before entries that the raw cash cannot fund.
+
+    Returns the proxy shares to sell now and whether entries must wait a cycle
+    for the sale to settle. Entries wait only when they would breach the cash floor.
+    """
+    floor = min_cash_pct * equity
+    shortfall = entry_notional + floor - cash
+    if entry_notional <= 0 or shortfall <= 0:
+        return {"sell_qty": 0, "defer_entries": False}
+    if proxy_qty <= 0 or proxy_price <= 0 or not math.isfinite(proxy_price):
+        return {"sell_qty": 0, "defer_entries": True}
+    sell = min(int(proxy_qty), math.ceil(shortfall / proxy_price))
+    return {"sell_qty": sell, "defer_entries": True}
+
+
+def plan_cash_reserve(
     *, equity: float, cash: float, invested_value: float, proxy_price: float,
-    proxy_qty: int, config: dict | None = None,
+    proxy_qty: int, config: dict | None = None, entries_pending: bool = False,
 ) -> dict:
     """Return {"action": "buy" | "sell" | "hold", "qty": int, "reason": str}."""
-    settings = {**CASH_SLEEVE_DEFAULTS, **(config or {})}
+    settings = {**CASH_RESERVE_DEFAULTS, **(config or {})}
     hold = {"action": "hold", "qty": 0}
     if not settings["enabled"]:
-        return {**hold, "reason": "cash sleeve disabled"}
+        return {**hold, "reason": "cash reserve disabled"}
     if equity <= 0 or proxy_price <= 0 or not math.isfinite(proxy_price):
         return {**hold, "reason": "equity or proxy price unavailable"}
     reserve = settings["reserve_pct"] * equity
@@ -33,6 +52,8 @@ def plan_cash_sleeve(
         if qty > 0:
             return {"action": "sell", "qty": qty, "reason": "cash below reserve; free cash for entries"}
         return {**hold, "reason": "cash below reserve and no proxy held"}
+    if entries_pending:
+        return {**hold, "reason": "entries pending; keep cash for them"}
     gross_room = settings["target_gross_pct"] * equity - invested_value
     proxy_room = settings["max_proxy_pct"] * equity - proxy_value
     spare_cash = cash - reserve

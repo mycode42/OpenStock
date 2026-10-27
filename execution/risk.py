@@ -63,8 +63,8 @@ def _api(endpoint: str, mode: str = None) -> dict | list:
     r = get_session().get(f"{API_BASE}/{endpoint}", headers=headers, timeout=10)
     r.raise_for_status()
     payload = r.json()
-    if endpoint.startswith(("positions", "orders")) and isinstance(payload, list):
-        # The cash-proxy holding is idle cash, not exposure, so risk never sees it.
+    if endpoint.startswith("orders") and isinstance(payload, list):
+        # Cash-reserve ETF orders are not trade exposure.
         payload = [row for row in payload if not is_cash_proxy(row.get("symbol"))]
     return payload
 

@@ -281,20 +281,20 @@ ALGO_REGIME_CONFIG = {
 
 # Idle cash is parked in a cash-proxy ETF. The proxy is invisible to the risk
 # gate, entry gates, exposure, and reconciliation; see ``is_cash_proxy``.
-CASH_SLEEVE = {
+CASH_RESERVE = {
     "enabled": True,
     "proxy_symbol": "SGOV",
-    # Reserve sits above the 10% minimum-cash floor so entries never see the
-    # sleeve as a cash constraint; the sleeve sells proxy when cash falls below it.
-    "reserve_pct": 0.30,
-    "target_gross_pct": 0.70,
+    # The reserve ETF counts as free cash, so the floor is the risk gate's
+    # minimum cash. Entries that need cash trigger a proxy sale first.
+    "reserve_pct": 0.10,
+    "target_gross_pct": 0.90,
     "max_proxy_pct": 0.80,
     "min_trade_value": 500.0,
 }
 
 
 def is_cash_proxy(symbol: object) -> bool:
-    return str(symbol or "").upper() == str(CASH_SLEEVE["proxy_symbol"]).upper()
+    return str(symbol or "").upper() == str(CASH_RESERVE["proxy_symbol"]).upper()
 
 
 ALGO_SERVICE_CONFIG = {

@@ -6,22 +6,22 @@ from datetime import datetime
 import pytest
 
 from reporting import journal
-from strategies.runner.cash_sleeve import plan_cash_sleeve
+from strategies.runner.cash_reserve import plan_cash_reserve
 from strategies.runner.sizing import _make_trade, entry_limit_price, intraday_volatility_stop_pct
 
 ON = {"enabled": True}
 
 
-def test_cash_sleeve_holds_when_disabled():
-    plan = plan_cash_sleeve(
+def test_cash_reserve_holds_when_disabled():
+    plan = plan_cash_reserve(
         equity=100_000, cash=90_000, invested_value=0, proxy_price=100, proxy_qty=0,
         config={"enabled": False},
     )
     assert plan["action"] == "hold"
 
 
-def test_cash_sleeve_parks_only_spare_cash_above_reserve_and_below_gross_target():
-    plan = plan_cash_sleeve(
+def test_cash_reserve_parks_only_spare_cash_above_reserve_and_below_gross_target():
+    plan = plan_cash_reserve(
         equity=100_000, cash=95_000, invested_value=20_000, proxy_price=100,
         proxy_qty=0, config=ON,
     )
@@ -29,8 +29,8 @@ def test_cash_sleeve_parks_only_spare_cash_above_reserve_and_below_gross_target(
     assert plan["qty"] * 100 <= 95_000 - 10_000  # never dips into the reserve
 
 
-def test_cash_sleeve_frees_cash_when_entries_need_it_and_never_sells_more_than_held():
-    plan = plan_cash_sleeve(
+def test_cash_reserve_frees_cash_when_entries_need_it_and_never_sells_more_than_held():
+    plan = plan_cash_reserve(
         equity=100_000, cash=8_000, invested_value=70_000, proxy_price=100,
         proxy_qty=50, config=ON,
     )
@@ -38,8 +38,8 @@ def test_cash_sleeve_frees_cash_when_entries_need_it_and_never_sells_more_than_h
     assert 0 < plan["qty"] <= 50
 
 
-def test_cash_sleeve_holds_when_exposure_is_already_at_target():
-    plan = plan_cash_sleeve(
+def test_cash_reserve_holds_when_exposure_is_already_at_target():
+    plan = plan_cash_reserve(
         equity=100_000, cash=60_000, invested_value=90_000, proxy_price=100,
         proxy_qty=0, config=ON,
     )
@@ -112,7 +112,7 @@ def test_cash_proxy_is_invisible_to_scans_and_risk_inputs(monkeypatch):
     assert config.is_cash_proxy("sgov") and not config.is_cash_proxy("AAPL")
 
 
-def test_cash_sleeve_step_is_skipped_in_dry_run_and_outside_regular_session():
+def test_cash_reserve_step_is_skipped_in_dry_run_and_outside_regular_session():
     from types import SimpleNamespace
 
     from portfolio import daemon
@@ -121,5 +121,36 @@ def test_cash_sleeve_step_is_skipped_in_dry_run_and_outside_regular_session():
         def __getattr__(self, name):
             raise AssertionError(f"broker must not be called: {name}")
 
-    assert daemon._run_cash_sleeve(Broker(), window=SimpleNamespace(name="regular"), dry_run=True) is None
-    assert daemon._run_cash_sleeve(Broker(), window=SimpleNamespace(name="premarket"), dry_run=False) is None
+    assert daemon._run_cash_reserve(Broker(), window=SimpleNamespace(name="regular"), dry_run=True, entry_notional=0) is None
+    assert daemon._run_cash_reserve(Broker(), window=SimpleNamespace(name="premarket"), dry_run=False, entry_notional=0) is None
+
+
+def test_entry_cash_hop_sells_reserve_only_for_the_shortfall_and_defers_entries():
+    from strategies.runner.cash_reserve import plan_entry_cash
+
+    hop = plan_entry_cash(
+        equity=100_000, cash=5_000, entry_notional=8_000, min_cash_pct=0.10,
+        proxy_price=100, proxy_qty=200,
+    )
+    # Shortfall = 8,000 + 10,000 floor - 5,000 = 13,000 -> 130 shares.
+    assert hop == {"sell_qty": 130, "defer_entries": True}
+
+
+def test_entry_cash_hop_does_nothing_when_raw_cash_funds_entries_above_the_floor():
+    from strategies.runner.cash_reserve import plan_entry_cash
+
+    hop = plan_entry_cash(
+        equity=100_000, cash=50_000, entry_notional=8_000, min_cash_pct=0.10,
+        proxy_price=100, proxy_qty=200,
+    )
+    assert hop == {"sell_qty": 0, "defer_entries": False}
+
+
+def test_entries_are_not_starved_by_parking_while_they_are_pending():
+    from strategies.runner.cash_reserve import plan_cash_reserve
+
+    plan = plan_cash_reserve(
+        equity=100_000, cash=60_000, invested_value=0, proxy_price=100, proxy_qty=0,
+        config={"enabled": True}, entries_pending=True,
+    )
+    assert plan["action"] == "hold"
