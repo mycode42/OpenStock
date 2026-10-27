@@ -18,6 +18,7 @@ from strategies.registry import ALGO_DEFAULT_PARAMETERS
 from strategies.runner.factors import multi_factor_parameters_for_session
 from strategies.portfolio_coordinator import PortfolioCoordinatorConfig
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
+from portfolio.config import candidate_pool_tickers
 from strategies.universe import configured_universe, load_algo_universe
 from strategies.runner.data import current_portfolio
 
@@ -124,7 +125,8 @@ def prepare_scan_scope(
     # SPY remains available to macro event signals outside the configured universe.
     if event_strategy_enabled and "SPY" not in strategy_symbols:
         strategy_symbols.append("SPY")
-    regime_context_symbols = configured_universe("algo")["tickers"] + ["HYG", "LQD"]
+    # Regime context uses the same candidate pool as research, so both see one universe.
+    regime_context_symbols = candidate_pool_tickers() + ["HYG", "LQD"]
     symbols_for_bars = list(dict.fromkeys(
         strategy_symbols + ["SPY"] + regime_context_symbols
     ))

@@ -245,7 +245,7 @@ def test_tilt_mode_keeps_hard_eligible_names_ranked_and_capped_per_sector():
 
     rules = json.loads(selector.DEFAULT_RULES_PATH.read_text())
     rules["regime"].update({
-        "membership_mode": "tilt", "max_eligible_tickers": 4, "max_names_per_bucket": 2,
+        "membership_mode": "tilt", "max_eligible_tickers": 4, "max_bucket_share": 0.4,
         "top_sector_buckets": 1, "always_eligible": [],
     })
     history = {}
@@ -275,3 +275,42 @@ def test_tilt_mode_keeps_hard_eligible_names_ranked_and_capped_per_sector():
     assert sum(item["bucket"] == "alpha" for item in selected) == 2
     assert "B1" in tickers and "B2" in tickers
     assert overlay["max_eligible_tickers"] == 4
+
+
+def test_membership_history_is_point_in_time_and_read_before_the_session(tmp_path, monkeypatch):
+    from options.research import universe_selection as selector
+
+    symbols = ["SPY", "QQQ", "XLE", "XOM"]
+    monkeypatch.setattr(selector, "_universe_symbols", lambda scope="history_117": symbols)
+    database = tmp_path / "history.sqlite3"
+    for symbol, daily_return in (("SPY", 0.001), ("QQQ", 0.0015), ("XLE", 0.003), ("XOM", 0.0025)):
+        archive = tmp_path / f"{symbol}.jsonl"
+        _write_archive(archive, symbol, daily_return=daily_return)
+        OptionsHistoryStore(database).import_jsonl(archive, underlying=symbol, source_kind="theta")
+    rules_path = tmp_path / "rules.json"
+    rules = json.loads(selector.DEFAULT_RULES_PATH.read_text())
+    rules.update({"lookback_sessions": 20, "min_valid_sessions": 20, "minimum_coverage": 0.8})
+    rules["hard_filters"].update({
+        "min_average_option_volume_60d": 0, "min_latest_total_open_interest_60d": 0,
+        "min_average_equity_volume": 0, "min_average_equity_dollar_volume": 0,
+        "max_median_option_spread_fraction": 0.25,
+    })
+    rules["regime"].update({
+        "trend_lookback_sessions": 20, "sector_momentum_lookback_sessions": 20,
+        "top_sector_buckets": 2, "max_eligible_tickers": 10, "always_eligible": ["SPY"],
+        "hard_only_when_proxy_data_missing": False, "membership_mode": "tilt",
+    })
+    rules["bucket_proxies"] = {"technology": "QQQ", "energy": "XLE"}
+    rules["ticker_buckets"] = {"SPY": "hedges", "QQQ": "technology", "XLE": "energy", "XOM": "energy"}
+    rules_path.write_text(json.dumps(rules))
+
+    summary = selector.build_membership_history(database=database, rules_path=rules_path)
+    assert summary["rows_written"] > 0 and summary["sessions"] > 20
+
+    store = OptionsHistoryStore(database)
+    sha = summary["rules_sha256"]
+    known = store.membership_as_of("2026-09-25", sha)
+    assert known is not None
+    assert known["as_of_date"] < "2026-09-25"
+    assert set(known["members"]) <= set(symbols)
+    assert store.membership_as_of("2000-01-01", sha) is None

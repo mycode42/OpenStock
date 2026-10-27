@@ -380,12 +380,15 @@ def _apply_sector_overlay(
         )
     )
     max_names = int(regime_rules.get("max_eligible_tickers", 40))
-    per_bucket_cap = regime_rules.get("max_names_per_bucket")
-    if per_bucket_cap is not None:
+    # Share-based sector cap: the list size floats with how many names pass the
+    # hard filters, and no bucket can exceed its share of that list.
+    bucket_share = float(regime_rules.get("max_bucket_share", 1.0))
+    if tilt and bucket_share < 1.0 and selected:
+        per_bucket_cap = max(2, math.ceil(bucket_share * len(selected)))
         per_bucket: dict[str, int] = {}
         capped = []
         for row in selected:
-            if row["always_eligible_core"] or per_bucket.get(row["bucket"], 0) < int(per_bucket_cap):
+            if row["always_eligible_core"] or per_bucket.get(row["bucket"], 0) < per_bucket_cap:
                 capped.append(row)
                 per_bucket[row["bucket"]] = per_bucket.get(row["bucket"], 0) + 1
         selected = capped
@@ -584,6 +587,75 @@ def build_eligible_cache(
     OptionsHistoryStore(db_path).write_eligible_snapshot(result)
     result["snapshot_location"] = f"{db_path}#{target}#{result['rules_sha256']}"
     return result
+
+
+def build_membership_history(
+    *, database: str | Path = DEFAULT_DATABASE, rules_path: str | Path | None = None,
+    universe_scope: str = "history_117", start: str | None = None, end: str | None = None,
+) -> dict:
+    """Run the live selector for every session and store point-in-time membership.
+
+    Each session uses only rows dated on or before that session, exactly as the
+    live cache does, so research can ask who was eligible at any date.
+    """
+    rules = load_rules(rules_path)
+    universe_payload = json.loads(BASE_UNIVERSE_PATH.read_text(encoding="utf-8"))
+    symbols = _universe_symbols(universe_scope)
+    db_path = Path(database).resolve()
+    store = OptionsHistoryStore(db_path)
+    connection = sqlite3.connect(db_path, timeout=60)
+    try:
+        history = {symbol: _read_history(connection, symbol) for symbol in symbols}
+    finally:
+        connection.close()
+    dates = sorted({row["session_date"] for rows in history.values() for row in rows})
+    if start:
+        dates = [day for day in dates if day >= start]
+    if end:
+        dates = [day for day in dates if day <= end]
+    max_window = max(
+        int(rules["lookback_sessions"]),
+        int(rules["regime"].get("trend_lookback_sessions", 200)),
+        int(rules["regime"].get("sector_momentum_lookback_sessions", 20)) + 1,
+        int(rules["portfolio_caps"].get("correlation_lookback_sessions", 60)) + 1,
+    )
+    day_indices = {symbol: [row["session_date"] for row in rows] for symbol, rows in history.items()}
+    rules_sha = _rules_hash(rules)
+    written = 0
+    for current_date in dates:
+        recent: dict[str, list[dict]] = {}
+        for symbol, rows in history.items():
+            end_index = bisect_right(day_indices[symbol], current_date)
+            recent[symbol] = rows[max(0, end_index - max_window):end_index]
+        raw = {
+            symbol: _evaluate_hard_filters(symbol, recent[symbol], as_of_date=current_date, rules=rules)
+            for symbol in symbols
+        }
+        hard_rows = [dict(metric) for metric in raw.values() if metric["hard_eligible"]]
+        selected, _overlay = _apply_sector_overlay(
+            hard_rows, history=recent, as_of_date=current_date, rules=rules, universe=universe_payload,
+        )
+        rank = {row["ticker"]: index + 1 for index, row in enumerate(selected)}
+        rows_to_write = [
+            (
+                current_date, symbol, rules_sha, int(metric["hard_eligible"]),
+                int(symbol in rank), rank.get(symbol),
+                _bucket_for(symbol, rules, universe_payload),
+                "; ".join(metric.get("hard_reasons", [])) if not metric["hard_eligible"] else (
+                    "selected" if symbol in rank else "not_selected"
+                ),
+            )
+            for symbol, metric in raw.items()
+        ]
+        written += store.write_membership_rows(rows_to_write)
+    return {
+        "rules_sha256": rules_sha,
+        "universe_scope": universe_scope,
+        "sessions": len(dates),
+        "first_date": dates[0] if dates else None,
+        "last_date": dates[-1] if dates else None,
+        "rows_written": written,
+    }
 
 
 class EligibleUniverseError(RuntimeError):

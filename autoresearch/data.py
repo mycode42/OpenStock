@@ -29,13 +29,18 @@ def _parse_date(value: str) -> date:
 
 
 def load_algo_universe() -> tuple[list[str], dict]:
-    """Use the same curated fixed Algo symbols as live trading."""
-    universe = configured_universe("algo")
-    symbols = universe["tickers"]
+    """Research symbols: the 117-name candidate pool, traded point-in-time.
+
+    Membership per session comes from the selector (see
+    ``autoresearch.backtest.membership``), so the pool is only the candidate set.
+    """
+    from portfolio.config import candidate_pool_tickers
+
+    symbols = candidate_pool_tickers()
     if not symbols:
-        raise ValueError("Configured Algo universe is empty")
+        raise ValueError("Candidate pool is empty")
     return symbols, {
-        "universe_source": "configured_fixed",
+        "universe_source": "candidate_pool_point_in_time",
     }
 
 def _bar_coverage(store: SQLiteBarStore) -> dict[str, dict]:

@@ -49,10 +49,18 @@ from execution.risk import _get_universe_maps, validate_trade
 class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportingMixin, ReplayLoopMixin):
     """Replay a fixed symbol list through live Algo rules and risk checks."""
 
+    def symbols_on(self, trading_day) -> list[str]:
+        """Symbols tradable on a session: point-in-time members when membership is set."""
+        if self.membership is None:
+            return self.symbols
+        members = set(self.membership.symbols_for(trading_day))
+        return [symbol for symbol in self.symbols if symbol in members]
+
     def __init__(
         self,
         *,
         symbols: list[str],
+        membership=None,
         intraday_bars: dict[str, list[dict]],
         spy_daily_bars: list[dict],
         start: str,
@@ -105,6 +113,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self._trade_validator = _trade_validator or validate_trade
         self._regime_ranker = _regime_ranker or rank_strategies
         self.symbols = list(dict.fromkeys(symbol.upper() for symbol in symbols))
+        self.membership = membership
         self.intraday_bars = intraday_bars
         self.precomputed_timeline = precomputed_timeline
         self.factor_weight_timeline = list(factor_weight_timeline or [])

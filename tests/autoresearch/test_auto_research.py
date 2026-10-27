@@ -43,13 +43,13 @@ def _synthetic_daily_history(session_count: int = 850) -> dict[str, list[dict]]:
 
 
 
-def test_auto_research_uses_the_configured_fixed_algo_universe():
+def test_auto_research_uses_the_candidate_pool_with_point_in_time_membership():
     symbols, metadata = auto_research.load_algo_universe()
 
-    assert len(symbols) == 24
+    assert len(symbols) == 117
     assert symbols[:9] == ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD"]
-    assert symbols[-5:] == ["PLTR", "CRM", "PANW", "TSLA", "SPCX"]
-    assert metadata == {"universe_source": "configured_fixed"}
+    assert set(["PLTR", "CRM", "PANW", "TSLA", "SPCX"]) <= set(symbols)
+    assert metadata == {"universe_source": "candidate_pool_point_in_time"}
 
 
 def test_auto_research_backfills_symbols_missing_from_the_market_store(monkeypatch):

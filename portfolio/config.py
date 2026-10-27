@@ -498,6 +498,16 @@ def get_mode_config(mode: str | None = None) -> dict:
     return result
 
 
+def candidate_pool_tickers() -> list[str]:
+    """Every ticker in the equity candidate pool, in pool order."""
+    seen: list[str] = []
+    for bucket in ALGO_CANDIDATE_UNIVERSE.values():
+        for ticker in bucket["tickers"]:
+            if ticker not in seen:
+                seen.append(ticker)
+    return seen
+
+
 def risk_universe(mode_config: dict) -> dict:
     """Ticker catalog for risk caps: static categories win over pool categories."""
     return {**mode_config.get("candidate_universe", {}), **mode_config["universe"]}

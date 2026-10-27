@@ -16,7 +16,7 @@ from .config import multi_factor_warmup_days, validate_research_controls, valida
 from market.store import SQLiteBarStore, fetch_alpaca_bars
 from strategies.event_driven import EventCalendar
 from strategies.registry import validate_parameter_profile
-from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
+from portfolio.config import candidate_pool_tickers
 from portfolio.config import get_algo_regime_config
 from market.regime import load_fred_regime_series
 from market.data import data_tier, regular_feed
@@ -122,7 +122,7 @@ def fetch_dataset(args) -> dict:
     adjustment = args.adjustment or ("split" if needs_split_adjustment else "raw")
     warmup_days = multi_factor_warmup_days(_read_profile(getattr(args, "profile", None))) if needs_factor_warmup else 0
     context_symbols = list(dict.fromkeys(
-        [ticker for bucket in ALGO_PORTFOLIO_UNIVERSE.values() for ticker in bucket["tickers"]]
+        candidate_pool_tickers()
         + ["HYG", "LQD"]
     ))
     all_symbols = list(dict.fromkeys(symbols + context_symbols))
@@ -173,7 +173,7 @@ def run_backtest(args) -> dict:
     profile = _read_profile(args.profile)
     warmup_days = multi_factor_warmup_days(profile) if needs_factor_warmup else 0
     context_symbols = list(dict.fromkeys(
-        [ticker for bucket in ALGO_PORTFOLIO_UNIVERSE.values() for ticker in bucket["tickers"]]
+        candidate_pool_tickers()
         + ["HYG", "LQD"]
     ))
     all_symbols = list(dict.fromkeys(symbols + context_symbols))

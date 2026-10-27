@@ -23,7 +23,7 @@
     "trend_lookback_sessions": 200,
     "sector_momentum_lookback_sessions": 20,
     "top_sector_buckets": 4,
-    "max_eligible_tickers": 20,
+    "max_eligible_tickers": 40,
     "always_eligible": [
       "SPY",
       "QQQ",
@@ -47,7 +47,7 @@
     ],
     "hard_only_when_proxy_data_missing": true,
     "membership_mode": "tilt",
-    "max_names_per_bucket": 6
+    "max_bucket_share": 0.25
   },
   "portfolio_caps": {
     "max_sector_exposure": 0.3,
@@ -221,7 +221,7 @@
     ]
   },
   "live_selection": {
-    "min_eligible_tickers": 15,
+    "min_eligible_tickers": 12,
     "max_staleness_sessions": 1
   }
 }

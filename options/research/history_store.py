@@ -129,6 +129,19 @@ CREATE TABLE IF NOT EXISTS eligible_universe_snapshot (
     payload_json TEXT NOT NULL,
     PRIMARY KEY (as_of_date, rules_sha256)
 );
+CREATE TABLE IF NOT EXISTS eligible_membership_daily (
+    as_of_date TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    rules_sha256 TEXT NOT NULL,
+    hard_eligible INTEGER NOT NULL,
+    eligible INTEGER NOT NULL,
+    rank INTEGER,
+    bucket TEXT,
+    reason TEXT,
+    PRIMARY KEY (as_of_date, ticker, rules_sha256)
+);
+CREATE INDEX IF NOT EXISTS eligible_membership_daily_date
+    ON eligible_membership_daily (rules_sha256, as_of_date);
 """
 
 
@@ -309,6 +322,58 @@ class OptionsHistoryStore:
                         "ALTER TABLE options_history_contract ADD COLUMN volume INTEGER"
                     )
                 connection.commit()
+
+    def write_membership_rows(self, rows: list[tuple]) -> int:
+        """Store per-session selector membership; rows are idempotent by key."""
+        with closing(self._connect()) as connection:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO eligible_membership_daily
+                    (as_of_date, ticker, rules_sha256, hard_eligible, eligible, rank, bucket, reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            connection.commit()
+        return len(rows)
+
+    def membership_by_session(self, rules_sha256: str) -> dict[str, list[str]]:
+        """Every session's eligible names, ranked, keyed by the close they reflect."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT as_of_date, ticker FROM eligible_membership_daily "
+                "WHERE rules_sha256 = ? AND eligible = 1 ORDER BY as_of_date, rank",
+                (rules_sha256,),
+            ).fetchall()
+        members: dict[str, list[str]] = {}
+        for as_of, ticker in rows:
+            members.setdefault(as_of, []).append(ticker)
+        return members
+
+    def membership_as_of(self, session: str, rules_sha256: str) -> dict[str, dict] | None:
+        """Selection known before ``session`` opens: the latest close strictly before it.
+
+        Returns None when no membership row precedes the session.
+        """
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT MAX(as_of_date) FROM eligible_membership_daily "
+                "WHERE rules_sha256 = ? AND as_of_date < ?",
+                (rules_sha256, session),
+            ).fetchone()
+            if row is None or row[0] is None:
+                return None
+            as_of = row[0]
+            members = connection.execute(
+                "SELECT ticker, rank, bucket, reason FROM eligible_membership_daily "
+                "WHERE rules_sha256 = ? AND as_of_date = ? AND eligible = 1 ORDER BY rank",
+                (rules_sha256, as_of),
+            ).fetchall()
+        return {
+            "as_of_date": as_of,
+            "members": {ticker: {"rank": rank, "bucket": bucket, "reason": reason}
+                        for ticker, rank, bucket, reason in members},
+        }
 
     def write_eligible_snapshot(self, result: dict) -> None:
         """Persist one selector run; re-running the same date and rules replaces it."""

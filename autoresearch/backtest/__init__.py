@@ -40,9 +40,16 @@ class AlgoPortfolioBacktest(PortfolioBacktest):
         include_extended_hours=False,
         regime_context_bars=None, regime_macro_series=None, regime_config=None,
         execution_delay_bars=0, factor_weight_timeline=None, regime_cache=None,
+        membership="default",
     ):
+        if membership == "default":
+            # Research trades only point-in-time selector members when they exist.
+            from .membership import load_default_membership
+
+            membership = load_default_membership()
         super().__init__(
             symbols=symbols, intraday_bars=intraday_bars, spy_daily_bars=spy_daily_bars,
+            membership=membership,
             start=start, end=end, feed=feed, data_adjustment=data_adjustment,
             initial_capital=initial_capital, slippage_bps=slippage_bps, profile=profile,
             strategies=strategies, research_controls=research_controls,

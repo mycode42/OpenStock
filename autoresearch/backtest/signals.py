@@ -92,7 +92,7 @@ class ReplaySignalsMixin:
         }
         signals, diagnostics = self.multi_factor_generator.generate(
             self.daily_stock_bars,
-            symbols=self.symbols,
+            symbols=self.symbols_on(as_of),
             as_of=as_of,
             session=session,
             regime=str(self._current_regime.get("regime", "unknown")),
@@ -519,7 +519,7 @@ class ReplaySignalsMixin:
                     ticker,
                     self._completed_daily_history(ticker, self._trading_date(timestamp)),
                     as_of=signal_as_of,
-                    universe=set(self.symbols),
+                    universe=set(self.symbols_on(self._trading_date(timestamp))),
                     regime=str(self._current_regime.get("regime", "unknown")),
                     strategy_state=self.event_strategy_state,
                     position_qty=position_qty if held and held.strategy == "swing_event_driven" else 0,
@@ -632,7 +632,7 @@ class ReplaySignalsMixin:
                 signal["target_weight"] = float(base_weight) * uncertainty_multiplier
         if action == "short":
             regime_name = str(regime.get("regime", "unknown"))
-            if ticker not in self.symbols:
+            if ticker not in self.symbols_on(self._trading_date(timestamp)):
                 self.rejections["short_universe_block"] += 1
                 return
             if regime_name == "range_bound":
