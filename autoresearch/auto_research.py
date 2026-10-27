@@ -497,8 +497,8 @@ def run_daily_research(args) -> dict:
     )
     from .profile_versions import ProfileStore
 
-    # The live feed is written by `reporting.performance --drift-feed` on a
-    # schedule; the nightly run only reads it. Absent feed = backtest-only check.
+    # The daemon writes the live feed after each regular close; the nightly run
+    # only reads it. An absent feed means a backtest-only drift check.
     live_feed = load_live_drift_feed(output_dir / "live-drift-feed.json")
     drift_report = update_research_drift_monitor(
         adaptive_verification, output_dir=output_dir, live_returns=live_feed,

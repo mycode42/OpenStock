@@ -41,7 +41,6 @@ equivalents.
 ```sh
 poetry run python -m portfolio.healthcheck                 # coordinator and broker health
 poetry run python -m portfolio.daemon --mode algo          # run the Algo coordinator
-poetry run python -m reporting.performance --mode algo --json --fill-report
 poetry run python -m autoresearch.auto_research --workers 8
 poetry run python -m options.paper                         # options dry run
 poetry run python -m options.paper --submit                # submit to options paper

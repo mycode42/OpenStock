@@ -1,14 +1,13 @@
+from reporting.fills import get_account_fill_report
 #!/usr/bin/env python3
 """Algo account performance, benchmark comparison, and broker-fill reports."""
 
-import argparse
 from bisect import bisect_left
 from collections import defaultdict
 import fcntl
 import json
 import logging
 import math
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -20,7 +19,6 @@ load_dotenv()
 import requests
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 from market.calendar import get_market_schedule
-from reporting.fills import FillHistoryError, get_account_fill_report
 from autoresearch.validation.drift_monitor import LIVE_FEED_SCHEMA
 from reporting.journal import dedupe_journal_entries
 from runtime.atomic import atomic_write_json
@@ -80,31 +78,6 @@ def get_portfolio(mode: str = "algo") -> dict:
         "daily_pnl_pct": daily_pnl_pct,
         "daily_pnl": equity - last_equity,
     }
-
-
-def get_benchmark_return(symbol: str, period_days: int = 1) -> float | None:
-    """Get benchmark return for the last period_days using yfinance."""
-    try:
-        import yfinance as yf
-
-        ticker = yf.Ticker(symbol)
-        # Request enough history for the window
-        lookback = max(period_days + 5, 10)
-        hist = ticker.history(period=f"{lookback}d", interval="1d")
-        if hist.empty or len(hist) < 2:
-            return None
-        if period_days == 1:
-            prev = float(hist["Close"].iloc[-2])
-            curr = float(hist["Close"].iloc[-1])
-        else:
-            # Use earliest close in window as base
-            window = hist.tail(period_days + 1)
-            prev = float(window["Close"].iloc[0])
-            curr = float(window["Close"].iloc[-1])
-        return (curr - prev) / prev if prev else None
-    except Exception as e:
-        log.warning(f"Benchmark fetch failed ({symbol}): {e}")
-        return None
 
 
 def _snapshot_dir(mode: str) -> Path:
@@ -282,51 +255,6 @@ def compute_sharpe_21d(snapshots: list[dict]) -> float | None:
     if std_dev == 0:
         return None
     return (mean_excess / std_dev) * math.sqrt(252)
-
-
-def compute_trade_stats(trades: list[dict]) -> dict:
-    """
-    Compute win rate and average win/loss from trade journal entries.
-
-    Expects entries that have a 'pnl' or 'unrealized_pl' field, or skips
-    if unavailable.  Filters to 'sell' side with a known outcome.
-    """
-    closed_trades = [
-        t for t in trades
-        if t.get("action", "").lower() in ("sell", "cover")
-        and (t.get("broker_status") == "filled" or t.get("status") == "filled")
-        and t.get("pnl") is not None
-    ]
-
-    if not closed_trades:
-        return {
-            "total_trades": len(trades),
-            "closed_trades": 0,
-            "win_rate": None,
-            "avg_win": None,
-            "avg_loss": None,
-            "profit_factor": None,
-        }
-
-    wins = [t for t in closed_trades if t.get("pnl", 0) > 0]
-    losses = [t for t in closed_trades if t.get("pnl", 0) <= 0]
-
-    win_rate = len(wins) / len(closed_trades) if closed_trades else 0
-    avg_win = sum(t["pnl"] for t in wins) / len(wins) if wins else 0
-    avg_loss = sum(t["pnl"] for t in losses) / len(losses) if losses else 0
-
-    total_wins_pnl = sum(t["pnl"] for t in wins)
-    total_loss_pnl = abs(sum(t["pnl"] for t in losses))
-    profit_factor = (total_wins_pnl / total_loss_pnl) if total_loss_pnl > 0 else None
-
-    return {
-        "total_trades": len(trades),
-        "closed_trades": len(closed_trades),
-        "win_rate": round(win_rate * 100, 1),
-        "avg_win": round(avg_win, 2),
-        "avg_loss": round(avg_loss, 2),
-        "profit_factor": round(profit_factor, 2) if profit_factor else None,
-    }
 
 
 def compute_strategy_stats(trades: list[dict]) -> dict[str, dict]:
@@ -661,193 +589,3 @@ def take_snapshot(
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
-
-def terminal_report(
-    perf: dict, trade_stats: dict, mode: str = "algo", skipped_snapshots: int = 0,
-) -> None:
-    """Pretty-print performance summary to stdout."""
-    if not perf:
-        print("No performance data yet. Run --snapshot first.")
-        if skipped_snapshots:
-            print(f"  {skipped_snapshots} snapshot file(s) were skipped as unreadable.")
-        return
-
-    print(f"{'='*65}")
-    print(f"  ALGO TRADER — {mode.upper()} PERFORMANCE TRACKER ({perf.get('account_name', mode.title())})")
-    print(f"  {perf['period_start']} → {perf['period_end']}  ({perf['snapshots_count']} snapshots)")
-    if skipped_snapshots:
-        print(f"  {skipped_snapshots} snapshot file(s) skipped as unreadable; figures exclude them.")
-    print(f"{'='*65}")
-    print(f"  Starting Equity:    ${perf['starting_equity']:>13,.2f}")
-    print(f"  Current Equity:     ${perf['current_equity']:>13,.2f}")
-    print(f"  Cash:               ${perf['cash']:>13,.2f}  ({perf['cash_pct']:.1f}%)")
-    print()
-    print(f"  Portfolio Return:    {perf['portfolio_return_pct']:>+12.2f}%")
-
-    if perf.get("spy_return_pct") is not None:
-        spy_beat = "✅ BEATING" if (perf.get("alpha_vs_spy") or 0) > 0 else "❌ LAGGING"
-        print(f"  SPY Return:         {perf['spy_return_pct']:>+12.2f}%")
-        print(f"  Alpha vs SPY:       {perf['alpha_vs_spy']:>+12.2f}%  {spy_beat}")
-
-    if perf.get("qqq_return_pct") is not None:
-        qqq_beat = "✅ BEATING" if (perf.get("alpha_vs_qqq") or 0) > 0 else "❌ LAGGING"
-        print(f"  QQQ Return:         {perf['qqq_return_pct']:>+12.2f}%")
-        print(f"  Alpha vs QQQ:       {perf['alpha_vs_qqq']:>+12.2f}%  {qqq_beat}")
-
-    print()
-
-    if perf.get("sharpe_21d") is not None:
-        sharpe = perf["sharpe_21d"]
-        sharpe_label = "Excellent" if sharpe > 1.5 else ("Good" if sharpe > 1.0 else ("OK" if sharpe > 0.5 else "Poor"))
-        print(f"  21-Day Sharpe:      {sharpe:>+12.3f}  ({sharpe_label})")
-
-    print(f"  Win Days:           {perf['win_days']:>13}  ({perf.get('win_day_rate', 0):.1f}%)")
-    print(f"  Lose Days:          {perf['lose_days']:>13}")
-
-    if perf.get("best_day"):
-        print(f"  Best Day:           {perf['best_day']['date']}  ({perf['best_day']['change_pct']:+.2f}%)")
-    if perf.get("worst_day"):
-        print(f"  Worst Day:          {perf['worst_day']['date']}  ({perf['worst_day']['change_pct']:+.2f}%)")
-
-    print()
-
-    # Trade stats
-    if trade_stats.get("closed_trades", 0) > 0:
-        print(f"  TRADE STATS ({trade_stats['closed_trades']} closed / {trade_stats['total_trades']} total):")
-        if trade_stats.get("win_rate") is not None:
-            print(f"    Win Rate:         {trade_stats['win_rate']:>8.1f}%")
-        if trade_stats.get("avg_win") is not None:
-            print(f"    Avg Win:          ${trade_stats['avg_win']:>8.2f}")
-        if trade_stats.get("avg_loss") is not None:
-            print(f"    Avg Loss:         ${trade_stats['avg_loss']:>8.2f}")
-        if trade_stats.get("profit_factor") is not None:
-            print(f"    Profit Factor:    {trade_stats['profit_factor']:>8.2f}x")
-        print()
-
-    # Recent daily P&L
-    if perf.get("daily_changes"):
-        print(f"  Recent Daily P&L:")
-        for dc in perf["daily_changes"]:
-            dot = "🟢" if dc["change_pct"] >= 0 else "🔴"
-            print(f"    {dot} {dc['date']}: ${dc['change']:>+9,.2f}  ({dc['change_pct']:>+6.2f}%)  → ${dc['equity']:,.2f}")
-    print()
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Algo Trader Performance Tracker")
-    parser.add_argument("--snapshot", action="store_true", help="Record today's snapshot")
-    parser.add_argument("--force", action="store_true", help="Overwrite the daily snapshot; intraday points always append")
-    parser.add_argument("--snapshot-kind", choices=["intraday", "close"],
-                        help="Write a timestamped intraday point or a broker-calendar-verified close")
-    parser.add_argument("--report", action="store_true", help="Terminal performance report")
-    parser.add_argument("--json", action="store_true", help="JSON output")
-    parser.add_argument("--fill-report", action="store_true",
-                        help="Reconcile gross realized P&L from broker FILL activities")
-    parser.add_argument("--drift-feed", type=Path,
-                        help="Write per-strategy daily realized returns from broker FILL activities for drift monitoring")
-    parser.add_argument("--days", type=int, help="Limit to last N days")
-    parser.add_argument("--mode", choices=["algo"], default="algo",
-                        help="Account route (only the Algo paper account is supported)")
-    args = parser.parse_args()
-    if args.snapshot_kind and not args.snapshot:
-        parser.error("--snapshot-kind requires --snapshot")
-    if args.fill_report and args.snapshot:
-        parser.error("--fill-report cannot be combined with --snapshot")
-    if args.drift_feed and args.snapshot:
-        parser.error("--drift-feed cannot be combined with --snapshot")
-
-    if args.snapshot:
-        try:
-            snap = take_snapshot(force=args.force, mode=args.mode, snapshot_kind=args.snapshot_kind)
-        except (requests.RequestException, ValueError) as exc:
-            log.error("Cannot record %s snapshot: %s", args.mode, exc)
-            return 1
-        if snap is None:
-            return 1
-        if snap.get("skipped"):
-            print(f"{args.mode.upper()} close snapshot skipped: {snap['reason']}")
-            return 0
-        print(
-            f"{args.mode.upper()} snapshot saved: {snap['date']} — "
-            f"equity=${snap['equity']:,.2f} "
-            f"({snap.get('account_name', args.mode.title())})"
-        )
-        return 0
-
-    try:
-        _, current_account = verify_account_for_mode(args.mode)
-        current_account_id = str(current_account.get("id") or current_account.get("account_number") or "")
-        if not current_account_id:
-            raise ValueError("Alpaca account response omitted its ID")
-    except (requests.RequestException, ValueError) as exc:
-        log.error("Cannot verify current %s account for reporting: %s", args.mode, exc)
-        return 1
-    snapshots, skipped_snapshots = load_snapshots_with_skips(
-        days=args.days, mode=args.mode, account_id=current_account_id,
-    )
-    trades = load_trade_journal(mode=args.mode, account_id=current_account_id)
-    trades, order_reconciliation = reconcile_trade_orders(trades, mode=args.mode)
-    perf = compute_performance(snapshots)
-    trade_stats = compute_trade_stats(trades)
-    strategy_stats = compute_strategy_stats(trades)
-    fill_report = None
-    if args.fill_report or args.drift_feed:
-        try:
-            fill_report = get_account_fill_report(args.mode, trades)
-        except (requests.RequestException, FillHistoryError, ValueError) as exc:
-            log.error("Cannot reconcile %s broker fills: %s", args.mode, exc)
-            return 1
-        if args.drift_feed:
-            # The drift feed uses every snapshot, not the --days window.
-            all_snapshots, _ = load_snapshots_with_skips(mode=args.mode, account_id=current_account_id)
-            feed = build_strategy_daily_returns(fill_report.get("realized_fills") or [], all_snapshots)
-            write_live_drift_feed(args.drift_feed, feed)
-        # The summary is concise enough for cron reports. Full per-fill
-        # details remain available through reporting.fills directly.
-        fill_report.pop("realized_fills", None)
-        if not args.fill_report:
-            fill_report = None
-
-    if args.json:
-        output = {
-            "trading_mode": args.mode,
-            "performance": perf,
-            "trade_stats": trade_stats,
-            "strategy_stats": strategy_stats,
-            "order_reconciliation": order_reconciliation,
-            "snapshot_files_skipped": skipped_snapshots,
-        }
-        if fill_report is not None:
-            output["fill_report"] = fill_report
-        print(json.dumps(output, indent=2, default=str))
-    elif args.report or not args.json:
-        terminal_report(perf, trade_stats, mode=args.mode, skipped_snapshots=skipped_snapshots)
-        if strategy_stats:
-            print("  STRATEGY ATTRIBUTION:")
-            for name, values in strategy_stats.items():
-                print(
-                    f"    {name:<28} {values['orders']:>4} orders  "
-                    f"{values['submitted']} submitted / {values['filled']} filled  "
-                    f"{values['blocked']} blocked / {values['failed']} failed"
-                )
-        if order_reconciliation["error"]:
-            print("  Broker order reconciliation unavailable; fill counts may be stale.")
-        elif order_reconciliation["unmatched"]:
-            print(f"  {order_reconciliation['unmatched']} journal order(s) not found in recent broker history.")
-        if fill_report is not None:
-            pnl = fill_report.get("realized_pnl")
-            pnl_label = f"${float(pnl):+,.2f}" if pnl is not None else "unknown"
-            print(f"  Gross realized P&L from broker fills: {pnl_label}")
-            print(f"  By strategy: {fill_report.get('strategy_pnl') or {}}")
-            print(f"  Unattributed gross P&L: ${float(fill_report['unattributed_realized_pnl']):+,.2f}")
-            if not fill_report.get("realized_pnl_complete"):
-                print("  Broker fill basis is incomplete; realized total is unknown.")
-    return 0 if fill_report is None or fill_report.get("realized_pnl_complete") else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

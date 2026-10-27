@@ -6,7 +6,6 @@ The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `Ameri
 | --- | --- | --- |
 | `health` | Hourly | Read-only service, scan, state, and broker-protection check. |
 | `event-briefing` | 10:00, 13:00, and 15:00 ET, weekdays | Refresh the read-only Event Driven signal snapshot and report market context. |
-| `midday` | 11:35 ET, weekdays | Send a concise Algo account and strategy update. |
 | `optimization` | 08:00 ET, daily | Run an archive-backed AutoResearch optimizer cycle on stored bars, without refreshing, rolling verification, or portfolio replay. |
 | `options-history-capture` | 16:15 ET, weekdays | Save same-session Alpaca OPRA option chains for the 117-symbol options research history universe and refresh merged datasets. |
 | `options-opening-capture` | 09:35 ET, weekdays | Save a separate Alpaca OPRA opening snapshot for the 117-symbol options research history universe. |

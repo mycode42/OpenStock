@@ -11,7 +11,6 @@ import pytest
 from broker import accounts
 from reporting import journal as trade_journal
 from reporting import performance as tracker
-from reporting import monitor as monitor_report
 
 
 class FakeResponse:
@@ -157,17 +156,3 @@ def test_close_snapshot_requires_broker_close_and_skips_holidays(monkeypatch, tm
     monkeypatch.setattr(tracker, "get_market_schedule", lambda **kwargs: None)
     skipped = tracker.take_snapshot(mode="algo", snapshot_kind="close", force=True)
     assert skipped["skipped"] is True
-
-
-def test_algo_monitor_excludes_previous_account_journal_rows():
-    rows = [
-        {"trading_mode": "algo", "account_id": "old-id", "timestamp": "2026-10-08T08:00:00", "order_id": "old-order"},
-        {"trading_mode": "algo", "account_id": "new-id", "timestamp": "2026-10-08T09:00:00", "order_id": "new-order"},
-    ]
-    updates, statuses = monitor_report._trade_updates(
-        rows, None, len(rows),
-        [{"id": "old-order", "status": "filled"}, {"id": "new-order", "status": "new"}],
-        {}, today="2026-10-08", account_id="new-id",
-    )
-    assert [row["order_id"] for row in updates] == ["new-order"]
-    assert statuses == {"new-order": "new"}

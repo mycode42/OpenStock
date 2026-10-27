@@ -108,14 +108,6 @@ def test_unreadable_snapshot_files_are_skipped_and_counted(tmp_path, monkeypatch
     assert performance.load_snapshots(mode="algo", account_id="acct-1") == snapshots
 
 
-def test_report_output_states_skipped_snapshot_count(capsys):
-    perf = performance.compute_performance(SNAPSHOTS)
-
-    performance.terminal_report(perf, {}, mode="algo", skipped_snapshots=3)
-
-    assert "3 snapshot file(s) skipped as unreadable" in capsys.readouterr().out
-
-
 def test_fill_round_trip_has_no_duplicated_realized_pnl():
     activities = [
         {"id": "a1", "activity_type": "FILL", "order_id": "B1", "symbol": "NVDA", "side": "buy",
