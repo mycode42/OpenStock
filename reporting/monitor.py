@@ -211,9 +211,9 @@ def build_report() -> dict:
     today = now.astimezone(ET).date().isoformat()
     data_errors = []
     try:
-        _, portfolio = AlgoStateStore(STATE_PATH).read()
+        market_state, portfolio = AlgoStateStore(STATE_PATH).read()
     except StateStoreError as exc:
-        portfolio = {}
+        market_state, portfolio = "STATE_ERROR", {}
         data_errors.append(f"Algo coordinator state: {exc}")
     previous = _read_json(SNAPSHOT_PATH)
     universe = portfolio.get("universe") or {}
@@ -345,7 +345,7 @@ def build_report() -> dict:
     last_scan_at = portfolio.get("last_scan_at")
     last_successful_scan_at = portfolio.get("last_successful_scan_at") or last_scan_at
     expected_session_data_limited = _expected_extended_data_limited(
-        portfolio, persisted.get("market_state"),
+        portfolio, market_state,
     )
     scan_age_reference = (
         last_scan_at
@@ -361,7 +361,7 @@ def build_report() -> dict:
             scan_age_seconds = max(0, int((now - last_scan.astimezone(timezone.utc)).total_seconds()))
         except (TypeError, ValueError):
             data_errors.append("Strategy scan timestamp is invalid")
-    market_state = persisted.get("market_state")
+    market_state = market_state
     scan_is_stale = market_state in {"OVERNIGHT", "PREMARKET", "REGULAR", "AFTER_HOURS"} and (
         scan_age_seconds is None
         or scan_age_seconds > 180
