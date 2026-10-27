@@ -70,6 +70,54 @@ def write_research_report(run_dir: Path, report: dict) -> None:
          _fmt(holdout.get("risk_adjusted_score"))],
     ]
     metrics_table = _table(["Period", "Trades", "Return", "Sharpe", "Max DD", "Risk score"], rows)
+    baseline_comparison = report.get("baseline_comparison", {})
+    baseline_period_rows = []
+    for label, period in (
+        ("Rolling OOS", baseline_comparison.get("walk_forward", {})),
+        ("Untouched holdout", baseline_comparison.get("holdout", {})),
+    ):
+        baseline_metrics = period.get("baseline_metrics", {})
+        tuned_metrics = period.get("tuned_metrics", {})
+        deltas = period.get("tuned_minus_baseline", {})
+        if baseline_metrics or tuned_metrics:
+            baseline_period_rows.append([
+                label,
+                _fmt(baseline_metrics.get("total_return"), percent=True),
+                _fmt(tuned_metrics.get("total_return"), percent=True),
+                _fmt(deltas.get("total_return"), percent=True),
+                _fmt(baseline_metrics.get("risk_adjusted_score")),
+                _fmt(tuned_metrics.get("risk_adjusted_score")),
+                _fmt(deltas.get("risk_adjusted_score")),
+                _fmt(baseline_metrics.get("max_drawdown"), percent=True),
+                _fmt(tuned_metrics.get("max_drawdown"), percent=True),
+                _fmt(deltas.get("max_drawdown"), percent=True),
+            ])
+    baseline_period_table = _table([
+        "Period", "Baseline return", "Tuned return", "Delta return",
+        "Baseline score", "Tuned score", "Delta score",
+        "Baseline max DD", "Tuned max DD", "Delta max DD",
+    ], baseline_period_rows)
+    baseline_fold_rows = []
+    for item in report.get("folds", []):
+        baseline_metrics = item.get("baseline_oos_metrics", {})
+        tuned_metrics = item.get("oos_metrics", {})
+        deltas = item.get("oos_delta_vs_baseline", {})
+        baseline_fold_rows.append([
+            str(item.get("fold", {}).get("number", "")),
+            str(baseline_metrics.get("trade_count", 0)),
+            str(tuned_metrics.get("trade_count", 0)),
+            _fmt(baseline_metrics.get("total_return"), percent=True),
+            _fmt(tuned_metrics.get("total_return"), percent=True),
+            _fmt(deltas.get("total_return"), percent=True),
+            _fmt(baseline_metrics.get("risk_adjusted_score")),
+            _fmt(tuned_metrics.get("risk_adjusted_score")),
+            _fmt(deltas.get("risk_adjusted_score")),
+        ])
+    baseline_fold_table = _table([
+        "OOS fold", "Baseline trades", "Tuned trades",
+        "Baseline return", "Tuned return", "Delta return",
+        "Baseline score", "Tuned score", "Delta score",
+    ], baseline_fold_rows)
     candidate_rows = []
     for item in report.get("candidate_leaderboard", []):
         metrics = item.get("mean_is_metrics", {})
@@ -77,8 +125,12 @@ def write_research_report(run_dir: Path, report: dict) -> None:
             str(item.get("candidate_id", "")), json.dumps(item.get("parameters", {}), sort_keys=True),
             ", ".join(item.get("allowed_regimes", [])), str(item.get("selected_oos_folds", 0)),
             _fmt(metrics.get("risk_adjusted_score")),
+            _fmt(item.get("baseline_fitness")), _fmt(item.get("fitness_delta_vs_baseline")),
         ])
-    candidate_table = _table(["Candidate", "Parameters", "Regimes", "Selected OOS folds", "Mean IS score"], candidate_rows)
+    candidate_table = _table([
+        "Candidate", "Parameters", "Regimes", "Selected OOS folds",
+        "Fitness (mean IS risk score)", "Baseline fitness", "Delta vs baseline",
+    ], candidate_rows)
 
     greek = oos.get("greeks", {})
     regime_rows = [
@@ -117,6 +169,18 @@ def write_research_report(run_dir: Path, report: dict) -> None:
         "",
         metrics_table,
         "",
+        "## Fixed baseline comparison",
+        "",
+        "The baseline keeps the checked-in defaults fixed for every OOS fold and the untouched holdout. Baseline and tuned runs use the same dates and execution-cost assumptions. Deltas are tuned minus baseline; positive return/score deltas favor tuning, while a negative drawdown delta favors tuning.",
+        "",
+        baseline_period_table,
+        "",
+        "### Paired rolling OOS folds",
+        "",
+        baseline_fold_table,
+        "",
+        "Baseline daily curves and trades are in `baseline_equity_curve.csv`, `baseline_holdout_equity_curve.csv`, `baseline_oos_trades.csv`, and `baseline_holdout_trades.csv`.",
+        "",
         f"Walk-forward efficiency (OOS/IS risk score): **{_fmt(report.get('walk_forward', {}).get('walk_forward_efficiency'))}**  ",
         f"Parameter stability score: **{_fmt(report.get('parameter_stability', {}).get('stability_score'))}**  ",
         f"Minimum OOS trades met: **{quality.get('minimum_oos_trades_met')}**  ",
@@ -133,7 +197,7 @@ def write_research_report(run_dir: Path, report: dict) -> None:
         "",
         "## Candidate ledger",
         "",
-        "Candidates are ranked on training windows; OOS results are shown only for configurations selected using prior training data.",
+        "Fitness is the mean in-sample risk-adjusted score across training windows. Delta is candidate fitness minus the baseline candidate fitness; positive values beat the baseline on this training metric. Candidates are ranked on training windows; OOS results are shown only for configurations selected using prior training data.",
         "Per-candidate rolling metrics, curve summaries, Greek summaries, regime breakdowns, and selected OOS reports are in `candidate_reports.json`.",
         "",
         candidate_table,

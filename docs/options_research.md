@@ -31,6 +31,14 @@ gates pass. Otherwise the export is named `candidate-options-config.json` and
 the researched strategy section is disabled so copying it cannot enable an
 unvalidated sleeve by accident.
 
+Every standard run also evaluates a fixed-default baseline over the same rolling
+OOS folds and untouched holdout as the tuned walk-forward strategy, using the
+same execution-cost assumptions. The per-run and nightly reports show tuned
+minus baseline return and risk-adjusted-score deltas; baseline curves and trades
+are exported alongside the tuned artifacts. This comparison is informational:
+the existing approval gates still assess absolute validation results and do
+not require the tuned candidate to beat the baseline.
+
 ## Nightly automation
 
 The scheduled AutoResearch automation runs `autoresearch.nightly`, which starts

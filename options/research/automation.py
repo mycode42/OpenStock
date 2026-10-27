@@ -34,6 +34,17 @@ def _append_jsonl(path: Path, row: dict) -> None:
 
 
 def _strategy_summary(strategy: str, report: dict) -> dict:
+    candidate_leaderboard = []
+    for item in report.get("candidate_leaderboard", []):
+        metrics = item.get("mean_is_metrics") or {}
+        candidate_leaderboard.append({
+            "candidate_id": item.get("candidate_id"),
+            "parameters": item.get("parameters", {}),
+            "is_baseline": bool(item.get("is_baseline", False)),
+            "fitness": metrics.get("risk_adjusted_score"),
+            "baseline_fitness": item.get("baseline_fitness"),
+            "fitness_delta_vs_baseline": item.get("fitness_delta_vs_baseline"),
+        })
     return {
         "status": report.get("status", "completed"),
         "run_id": report.get("run_id"),
@@ -44,6 +55,8 @@ def _strategy_summary(strategy: str, report: dict) -> dict:
         "walk_forward": (report.get("walk_forward") or {}).get("oos_metrics", {}),
         "holdout": report.get("holdout", {}).get("metrics", {}),
         "final_parameters": report.get("final_parameters", {}),
+        "candidate_leaderboard": candidate_leaderboard,
+        "baseline_comparison": report.get("baseline_comparison", {}),
         "parallelism": report.get("parallelism", {}),
         "exploratory_replay": report.get("exploratory_replay"),
         "data_mode": report.get("data_mode"),
@@ -214,6 +227,102 @@ def _render_markdown(report: dict) -> str:
                     f"Parameters: `{json.dumps(item.get('final_parameters', {}), sort_keys=True)}`  ",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
+                candidates = item.get("candidate_leaderboard", [])
+                if candidates:
+                    ranked_candidates = sorted(
+                        candidates,
+                        key=lambda candidate: (
+                            candidate.get("fitness") is not None,
+                            float(candidate.get("fitness") or 0.0),
+                        ),
+                        reverse=True,
+                    )
+                    display_candidates = ranked_candidates[:5]
+                    baseline = next((candidate for candidate in candidates if candidate.get("is_baseline")), None)
+                    if baseline and all(
+                        candidate.get("candidate_id") != baseline.get("candidate_id")
+                        for candidate in display_candidates
+                    ):
+                        display_candidates.append(baseline)
+                    candidate_rows = []
+                    for candidate in display_candidates:
+                        fitness = candidate.get("fitness")
+                        baseline_fitness = candidate.get("baseline_fitness")
+                        delta = candidate.get("fitness_delta_vs_baseline")
+                        candidate_rows.append([
+                            ("Baseline" if candidate.get("is_baseline") else str(candidate.get("candidate_id", ""))),
+                            json.dumps(candidate.get("parameters", {}), sort_keys=True),
+                            f"{float(fitness):.3f}" if fitness is not None else "n/a",
+                            f"{float(baseline_fitness):.3f}" if baseline_fitness is not None else "n/a",
+                            f"{float(delta):+.3f}" if delta is not None else "n/a",
+                        ])
+                    widths = [
+                        max(len(header), *(len(row[index]) for row in candidate_rows))
+                        for index, header in enumerate([
+                            "Candidate", "Parameters", "Fitness", "Baseline", "Delta",
+                        ])
+                    ]
+                    headers = ["Candidate", "Parameters", "Fitness", "Baseline", "Delta"]
+                    table = "\n".join([
+                        "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)) + " |",
+                        "| " + " | ".join("-" * widths[index] for index in range(len(headers))) + " |",
+                        *[
+                            "| " + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) + " |"
+                            for row in candidate_rows
+                        ],
+                    ])
+                    lines.extend([
+                        "",
+                        "Top five candidates by mean in-sample risk-adjusted score, plus the baseline. Delta is candidate minus baseline; the detailed report has the full candidate ledger.",
+                        "",
+                        table,
+                    ])
+                comparison = item.get("baseline_comparison", {})
+                comparison_rows = []
+                for label, period in (
+                    ("Rolling OOS", comparison.get("walk_forward", {})),
+                    ("Untouched holdout", comparison.get("holdout", {})),
+                ):
+                    baseline_metrics = period.get("baseline_metrics", {})
+                    tuned_metrics = period.get("tuned_metrics", {})
+                    deltas = period.get("tuned_minus_baseline", {})
+                    if not baseline_metrics or not tuned_metrics:
+                        continue
+                    format_value = lambda value, percent=False: (
+                        f"{float(value):.2%}" if percent else f"{float(value):.3f}"
+                    ) if value is not None else "n/a"
+                    comparison_rows.append([
+                        label,
+                        format_value(baseline_metrics.get("total_return"), percent=True),
+                        format_value(tuned_metrics.get("total_return"), percent=True),
+                        format_value(deltas.get("total_return"), percent=True),
+                        format_value(baseline_metrics.get("risk_adjusted_score")),
+                        format_value(tuned_metrics.get("risk_adjusted_score")),
+                        format_value(deltas.get("risk_adjusted_score")),
+                    ])
+                if comparison_rows:
+                    headers = [
+                        "Period", "Baseline return", "Tuned return", "Delta return",
+                        "Baseline score", "Tuned score", "Delta score",
+                    ]
+                    widths = [
+                        max(len(header), *(len(row[index]) for row in comparison_rows))
+                        for index, header in enumerate(headers)
+                    ]
+                    table = "\n".join([
+                        "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)) + " |",
+                        "| " + " | ".join("-" * widths[index] for index in range(len(headers))) + " |",
+                        *[
+                            "| " + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) + " |"
+                            for row in comparison_rows
+                        ],
+                    ])
+                    lines.extend([
+                        "",
+                        "Fixed baseline comparison: baseline and tuned use the same dates and execution costs; deltas are tuned minus baseline.",
+                        "",
+                        table,
+                    ])
             elif item.get("status") == "exploratory_only":
                 metrics = (item.get("exploratory_replay") or {}).get("metrics", {})
                 lines.extend([

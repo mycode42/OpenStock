@@ -92,6 +92,20 @@ def _mean_metrics(rows: list[dict]) -> dict:
     return result
 
 
+def _metric_deltas(tuned: dict, baseline: dict) -> dict:
+    """Return paired tuned-minus-baseline deltas for the headline metrics."""
+    keys = ("risk_adjusted_score", "total_return", "annualized_sharpe", "max_drawdown", "trade_count")
+    deltas = {}
+    for key in keys:
+        tuned_value, baseline_value = tuned.get(key), baseline.get(key)
+        if tuned_value is None or baseline_value is None:
+            deltas[key] = None
+            continue
+        tuned_number, baseline_number = float(tuned_value), float(baseline_value)
+        deltas[key] = tuned_number - baseline_number if math.isfinite(tuned_number) and math.isfinite(baseline_number) else None
+    return deltas
+
+
 def _equity_summary(run: dict) -> dict:
     curve = run.get("equity_curve", [])
     if not curve:
@@ -348,10 +362,20 @@ def _evaluate_fold_index(fold_index: int) -> dict:
         dataset, oos, strategy_name=strategy, candidate=chosen_obj,
         config=research_config, base_config=base_config, force_close=True,
     )
+    baseline_candidate = next(
+        (item for item in context["candidate_pool"] if item.is_baseline), None,
+    )
+    if baseline_candidate is None:
+        raise ValueError("candidate pool lost its baseline candidate")
+    baseline_oos_run = simulate_options_strategy(
+        dataset, oos, strategy_name=strategy, candidate=baseline_candidate,
+        config=research_config, base_config=base_config, force_close=True,
+    )
     return {
         "candidate_rows": candidate_rows,
         "chosen": chosen,
         "oos_run": oos_run,
+        "baseline_oos_run": baseline_oos_run,
     }
 
 
@@ -623,11 +647,14 @@ def run_research(
     candidate_ledger: dict[str, dict] = {}
     selected_rows = []
     selected_oos_runs = []
+    baseline_oos_runs = []
     for fold, fold_result in zip(folds, fold_results):
         candidate_rows = fold_result["candidate_rows"]
         chosen = fold_result["chosen"]
         oos_run = fold_result["oos_run"]
+        baseline_oos_run = fold_result["baseline_oos_run"]
         selected_oos_runs.append(oos_run)
+        baseline_oos_runs.append(baseline_oos_run)
         selected_entry = {"candidate": chosen["candidate"], "plateau": chosen["plateau"],
                           "is_metrics": chosen.get("metrics", {}), "oos_metrics": oos_run["metrics"],
                           "fold": fold.number}
@@ -636,6 +663,8 @@ def run_research(
             "fold": fold.__dict__, "selected_candidate": chosen["candidate"],
             "selection_score": chosen.get("selection_score"), "plateau": chosen["plateau"],
             "is_metrics": chosen.get("metrics", {}), "oos_metrics": oos_run["metrics"],
+            "baseline_oos_metrics": baseline_oos_run["metrics"],
+            "oos_delta_vs_baseline": _metric_deltas(oos_run["metrics"], baseline_oos_run["metrics"]),
         })
         for item in candidate_rows:
             identity = item["candidate"]["candidate_id"]
@@ -668,6 +697,15 @@ def run_research(
         selected_oos_runs, starting_equity=starting_equity,
         gamma_vega_threshold=gamma_vega_threshold,
     )
+    baseline_candidate = next(
+        (item for item in shared_candidate_pool if item.is_baseline), None,
+    )
+    if baseline_candidate is None:
+        raise ValueError("candidate pool lost its baseline candidate")
+    baseline_walk_forward = _aggregate_runs(
+        baseline_oos_runs, starting_equity=starting_equity,
+        gamma_vega_threshold=gamma_vega_threshold,
+    )
     mean_is_score = statistics.mean(
         float(row["is_metrics"].get("risk_adjusted_score", -5.0)) for row in selected_rows
     ) if selected_rows else 0.0
@@ -696,6 +734,29 @@ def run_research(
         dataset, holdout, strategy_name=strategy, candidate=final_candidate,
         config=research_config, base_config=base_config, force_close=True,
     )
+    baseline_holdout_run = simulate_options_strategy(
+        dataset, holdout, strategy_name=strategy, candidate=baseline_candidate,
+        config=research_config, base_config=base_config, force_close=True,
+    )
+    baseline_comparison = {
+        "baseline_candidate": baseline_candidate.to_dict(),
+        "same_oos_folds_and_holdout": True,
+        "same_execution_cost_model": True,
+        "walk_forward": {
+            "baseline_metrics": baseline_walk_forward["metrics"],
+            "tuned_metrics": walk_forward["metrics"],
+            "tuned_minus_baseline": _metric_deltas(
+                walk_forward["metrics"], baseline_walk_forward["metrics"],
+            ),
+        },
+        "holdout": {
+            "baseline_metrics": baseline_holdout_run["metrics"],
+            "tuned_metrics": holdout_run["metrics"],
+            "tuned_minus_baseline": _metric_deltas(
+                holdout_run["metrics"], baseline_holdout_run["metrics"],
+            ),
+        },
+    }
 
     sensitivity = []
     slippage_scenarios = research_config.get("robustness", {}).get("slippage_multipliers", [1.0, 1.5, 2.0])
@@ -742,6 +803,7 @@ def run_research(
             "candidate_id": identity,
             "parameters": entry["candidate"].get("parameters", {}),
             "allowed_regimes": entry["candidate"].get("allowed_regimes", []),
+            "is_baseline": bool(entry["candidate"].get("is_baseline", False)),
             "selected_oos_folds": entry["selected_oos_folds"],
             "mean_is_metrics": _mean_metrics(is_rows),
             "selected_oos_metrics": _mean_metrics(oos_rows) if oos_rows else None,
@@ -755,6 +817,18 @@ def run_research(
         (row["selected_oos_metrics"] or {}).get("risk_adjusted_score", -5.0),
         row["mean_is_metrics"].get("risk_adjusted_score", -5.0),
     ), reverse=True)
+    baseline_row = next((row for row in leaderboard if row["is_baseline"]), None)
+    baseline_fitness = (
+        baseline_row["mean_is_metrics"].get("risk_adjusted_score")
+        if baseline_row else None
+    )
+    for row in leaderboard:
+        fitness = row["mean_is_metrics"].get("risk_adjusted_score")
+        row["baseline_fitness"] = baseline_fitness
+        row["fitness_delta_vs_baseline"] = (
+            float(fitness) - float(baseline_fitness)
+            if fitness is not None and baseline_fitness is not None else None
+        )
 
     wf_min_trades = int(research_config.get("walk_forward", {}).get("minimum_oos_trades", 8))
     holdout_min_trades = int(research_config.get("walk_forward", {}).get("minimum_holdout_trades", 4))
@@ -847,6 +921,7 @@ def run_research(
         "final_candidate_id": final_id,
         "final_parameters": final_candidate.parameters,
         "final_allowed_regimes": list(final_candidate.allowed_regimes),
+        "baseline_comparison": baseline_comparison,
         "parameter_stability": selected_stability,
         "walk_forward": {
             "metrics": walk_forward["metrics"],
@@ -891,8 +966,12 @@ def run_research(
                       indent=2, sort_keys=True, allow_nan=False)
     _write_equity_csv(run_dir / "equity_curve.csv", walk_forward["equity_curve"])
     _write_equity_csv(run_dir / "holdout_equity_curve.csv", holdout_run["equity_curve"])
+    _write_equity_csv(run_dir / "baseline_equity_curve.csv", baseline_walk_forward["equity_curve"])
+    _write_equity_csv(run_dir / "baseline_holdout_equity_curve.csv", baseline_holdout_run["equity_curve"])
     _write_trades_csv(run_dir / "oos_trades.csv", walk_forward["trades"])
     _write_trades_csv(run_dir / "holdout_trades.csv", holdout_run["trades"])
+    _write_trades_csv(run_dir / "baseline_oos_trades.csv", baseline_walk_forward["trades"])
+    _write_trades_csv(run_dir / "baseline_holdout_trades.csv", baseline_holdout_run["trades"])
     atomic_write_json(run_dir / "run.json", {
         "run_id": run_id, "strategy": strategy,
         "research_config": research_config,
