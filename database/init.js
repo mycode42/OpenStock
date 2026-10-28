@@ -1,4 +1,5 @@
 const Database = require('better-sqlite3');
+const paths = require('../lib/paths');
 const migrations = [
   require('./migrations/001_initial'),
   require('./migrations/002_legacy_compatibility'),
@@ -24,7 +25,7 @@ const migrations = [
   ,require('./migrations/022_percentage_move_alerts')
 ];
 
-function initDatabase({ silent = false, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', seedDefaults = true } = {}) {
+function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true } = {}) {
   const db = new Database(dbPath);
   db.pragma('foreign_keys = ON');
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))" );

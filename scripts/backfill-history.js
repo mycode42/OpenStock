@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-require('dotenv').config({ path: '/opt/openstock/.env' });
+const paths = require('../lib/paths');
+require('dotenv').config({ path: paths.configFilePath() });
 const OpenStockDB = require('../database/db');
 const { initDatabase } = require('../database/init');
 const { backfillStocks } = require('../lib/history-backfill');
 const { TradeRepublicClient } = require('../lib/brokers/trade-republic');
 
 async function main() {
-    const dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db';
+    const dbPath = paths.databasePath();
     initDatabase();
     const db = new OpenStockDB(dbPath);
     try {
