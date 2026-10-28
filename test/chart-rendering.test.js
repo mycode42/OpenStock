@@ -15,15 +15,16 @@ test('responsive charts stretch their SVG interaction plane to the full visible 
 test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day session scale', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     const formatting = fs.readFileSync(path.join(root, 'www/modules/formatting.js'), 'utf8');
-    assert.match(source, /Number\(point\.price_eur\)/);
-    assert.match(source, /primary: \['1y', '5y'\]\.includes\(range\) \? formatChartDate\(point\.recorded_at\) : formatChartHoverTime\(point\.recorded_at\)/);
-    assert.match(source, /price: `€\$\{money\(point\.price_eur\)\}`/);
+    assert.match(source, /_chartPrice: Number\(point\[priceField\]\)/);
+    assert.match(source, /primary: \['1y', '5y'\]\.includes\(range\) \? formatChartDate\(point\._chartTime\) : formatChartHoverTime\(point\._chartTime\)/);
+    assert.match(source, /price: chartPrice\(point\._chartPrice, currency\)/);
     assert.match(source, /data-chart-readout/);
     assert.match(source, /data-chart-value/);
     assert.match(source, /updateValue\(point\)/);
     assert.match(source, /resetValue\(\)/);
-    assert.match(source, /native EUR price chart/);
-    assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · EUR/);
+    assert.match(source, /\$\{chartRangeLabel\(range\)\} \$\{currency\} price chart/);
+    assert.match(source, /history-title">\$\{chartRangeLabel\(range\)\} · \$\{currency\}/);
+    assert.match(source, /function renderHistoryPanel\(panel, history, range, \{ currency = 'EUR', priceField = 'price_eur'/);
     assert.match(source, /\['1d', '1w', '1mo', '1y', '5y'\]/);
     assert.match(source, /async function loadCardHistory\(card, range = '1d', \{ force = false, showLoading = true \} = \{\}\)/);
     assert.match(source, /async function refreshOpenHistoryPanels\(container = document, \{ includePreviouslyOpened = false \} = \{\}\)/);
@@ -36,9 +37,10 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     assert.match(source, /const hasFixedDayScale/);
     assert.match(source, /formatChartTime\(startAt\)/);
     assert.match(source, /smooth: true/);
-    assert.match(source, /\.sort\(\(left, right\) => parseOpenStockDate\(left\.recorded_at\)\.getTime\(\) - parseOpenStockDate\(right\.recorded_at\)\.getTime\(\)\)/);
+    assert.match(source, /\.sort\(\(left, right\) => parseOpenStockDate\(left\._chartTime\)\.getTime\(\) - parseOpenStockDate\(right\._chartTime\)\.getTime\(\)\)/);
     assert.doesNotMatch(source, /history-gap-line|maxGapMs|coordinateSegments|gapSegments/);
-    assert.doesNotMatch(source, /point\.price_usd|USD price chart|· USD/);
+    assert.match(source, /renderHistoryPanel\(panel, history, range, \{ currency: 'USD', priceField: 'price', sampleLabel: 'Alpaca bars' \}\)/);
+    assert.doesNotMatch(source, /point\.price_usd/);
 });
 
 test('one-day charts reserve future session time on a 07:30–22:00 wall-clock scale', async () => {
@@ -87,7 +89,7 @@ test('dashboard history percentage follows the inspected point and resets to the
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
     assert.match(source, /data-chart-change/);
     assert.match(source, /data-default-chart-change/);
-    assert.match(source, /change: \(Number\(point\.price_eur\) \/ Number\(clean\[0\]\.price_eur\) - 1\) \* 100/);
+    assert.match(source, /change: \(point\._chartPrice \/ clean\[0\]._chartPrice - 1\) \* 100/);
     assert.match(source, /updateChange\(point\)/);
     assert.match(source, /resetChange\(\)/);
 });

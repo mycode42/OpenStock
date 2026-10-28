@@ -3,6 +3,7 @@ import { money, parseOpenStockDate, formatChartHoverTime, formatChartDate, forma
 
 export function createCharts({ request, historyCache }) {
 const historyRequests = new Map();
+const usdChartNumber = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 function chartRangeControls(activeRange) {
     return `<div class="history-ranges" role="group" aria-label="Chart range">${['1d', '1w', '1mo', '1y', '5y'].map(range => `<button class="history-range ${range === activeRange ? 'active' : ''}" type="button" data-history-range="${range}">${range === '1mo' ? '1M' : range.toUpperCase()}</button>`).join('')}</div>`;
 }
@@ -146,15 +147,21 @@ function attachInteractiveLineCharts(root) {
     });
 }
 
-function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, now = new Date() } = {}) {
+function chartPrice(value, currency) {
+    if (currency === 'USD') return usdChartNumber.format(value);
+    return `€${money(value)}`;
+}
+
+function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, now = new Date(), priceField = 'price_eur', currency = 'EUR' } = {}) {
     const clean = points
-        .filter(point => Number.isFinite(Number(point.price_eur)) && parseOpenStockDate(point.recorded_at))
-        .sort((left, right) => parseOpenStockDate(left.recorded_at).getTime() - parseOpenStockDate(right.recorded_at).getTime());
+        .map(point => ({ ...point, _chartPrice: Number(point[priceField]), _chartTime: point.recorded_at || point.timestamp }))
+        .filter(point => Number.isFinite(point._chartPrice) && parseOpenStockDate(point._chartTime))
+        .sort((left, right) => parseOpenStockDate(left._chartTime).getTime() - parseOpenStockDate(right._chartTime).getTime());
     if (clean.length < 2) {
         const message = range === '1d' && isMarketClosedWeekend(now) ? 'market closed' : 'collecting price history';
         return `<div class="history-empty">${message}</div>`;
     }
-    const values = clean.map(point => Number(point.price_eur));
+    const values = clean.map(point => point._chartPrice);
     const min = Math.min(...values), max = Math.max(...values);
     const padding = Math.max((max - min) * 0.08, max * 0.002, 0.01);
     const low = min - padding, high = max + padding, width = 264, height = 82;
@@ -163,36 +170,37 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, n
     const sessionDuration = sessionEnd?.getTime() - sessionStart?.getTime();
     const hasFixedDayScale = Number.isFinite(sessionDuration) && sessionDuration > 0;
     const coordinates = clean.map((point, index) => {
-        const timestamp = parseOpenStockDate(point.recorded_at)?.getTime();
+        const timestamp = parseOpenStockDate(point._chartTime)?.getTime();
         const sessionX = hasFixedDayScale && Number.isFinite(timestamp)
             ? Math.max(0, Math.min(width, (timestamp - sessionStart.getTime()) / sessionDuration * width))
             : index / (clean.length - 1) * width;
-        return { point, x: sessionX, y: height - ((Number(point.price_eur) - low) / (high - low || 1) * height) };
+        return { point, x: sessionX, y: height - ((point._chartPrice - low) / (high - low || 1) * height) };
     });
     const linePoints = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: ['1y', '5y'].includes(range) ? formatChartDate(point.recorded_at) : formatChartHoverTime(point.recorded_at), secondary: '', price: `€${money(point.price_eur)}`, change: (Number(point.price_eur) / Number(clean[0].price_eur) - 1) * 100 }));
+    const hoverPoints = coordinates.map(({ point, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: ['1y', '5y'].includes(range) ? formatChartDate(point._chartTime) : formatChartHoverTime(point._chartTime), secondary: '', price: chartPrice(point._chartPrice, currency), change: (point._chartPrice / clean[0]._chartPrice - 1) * 100 }));
     const first = clean[0], last = clean[clean.length - 1];
-    const change = (Number(last.price_eur) / Number(first.price_eur) - 1) * 100;
+    const change = (last._chartPrice / first._chartPrice - 1) * 100;
     const changeClass = change >= 0 ? 'up' : 'down';
-    const ariaLabel = `${chartRangeLabel(range)} native EUR price chart from ${formatChartDate(first.recorded_at)} to ${formatChartDate(last.recorded_at)}`;
+    const ariaLabel = `${chartRangeLabel(range)} ${currency} price chart from ${formatChartDate(first._chartTime)} to ${formatChartDate(last._chartTime)}`;
     const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints, smooth: true, hoverPoints, ariaLabel });
     const changeText = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
-    const axisStart = hasFixedDayScale ? formatChartTime(startAt) : formatChartDate(first.recorded_at);
-    const axisEnd = hasFixedDayScale ? formatChartTime(endAt) : formatChartDate(last.recorded_at);
+    const axisStart = hasFixedDayScale ? formatChartTime(startAt) : formatChartDate(first._chartTime);
+    const axisEnd = hasFixedDayScale ? formatChartTime(endAt) : formatChartDate(last._chartTime);
     const axisTicks = [0, 0.25, 0.5, 0.75, 1].map(fraction => {
         if (fraction === 0) return { fraction, label: axisStart };
         if (fraction === 1) return { fraction, label: axisEnd };
         if (hasFixedDayScale) return { fraction, label: formatChartTime(new Date(sessionStart.getTime() + sessionDuration * fraction).toISOString()) };
         const point = clean[Math.round((clean.length - 1) * fraction)];
-        return { fraction, label: formatChartDate(point.recorded_at) };
+        return { fraction, label: formatChartDate(point._chartTime) };
     });
     const axisLabels = axisTicks.map(({ fraction, label }) => `<span style="left:${(fraction * 100).toFixed(0)}%">${label}</span>`).join('');
-    const priceRange = `€${money(min)} – €${money(max)}`;
+    const priceRange = `${chartPrice(min, currency)} – ${chartPrice(max, currency)}`;
     return `<div class="history-chart-readout" data-chart-readout><div class="history-meta"><span class="history-price" data-chart-value data-default-chart-value="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates" aria-label="Chart time axis">${axisLabels}</div></div>`;
 }
 
-function renderHistoryPanel(panel, history, range) {
-    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR <span>${history.points.length} native samples</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, history)}`;
+function renderHistoryPanel(panel, history, range, { currency = 'EUR', priceField = 'price_eur', sampleLabel = 'native samples' } = {}) {
+    const chartOptions = { ...history, currency, priceField };
+    panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · ${currency} <span>${history.points.length} ${sampleLabel}${history.stale ? ' · cached' : ''}</span></div>${chartRangeControls(range)}</div>${renderHistoryChart(history.points, range, chartOptions)}`;
     attachInteractiveLineCharts(panel);
 }
 
@@ -225,6 +233,36 @@ async function loadCardHistory(card, range = '1d', { force = false, showLoading 
     renderHistoryPanel(panel, history, range);
 }
 
+async function loadQuoteCardHistory(card, range = '1d', { force = false, showLoading = true } = {}) {
+    const symbol = String(card.dataset.quoteSymbol || '').toUpperCase();
+    const panel = card.querySelector('.history-popover');
+    if (!/^[A-Z0-9.-]{1,16}$/.test(symbol) || !panel) return;
+    const key = `algo-universe:${symbol}:${range}`;
+    panel.dataset.requestedRange = range;
+    panel.dataset.requestedSymbol = symbol;
+    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD</div>${chartRangeControls(range)}</div><div class="history-loading">loading Alpaca price history</div>`;
+    let history = force ? null : historyCache.get(key);
+    if (!history) {
+        let pending = historyRequests.get(key);
+        if (!pending) {
+            pending = request(`/algo-trader/universe/${encodeURIComponent(symbol)}/history?range=${encodeURIComponent(range)}`, {}, () => {});
+            historyRequests.set(key, pending);
+        }
+        try {
+            history = await pending;
+            if (history) historyCache.set(key, history);
+        } finally {
+            if (historyRequests.get(key) === pending) historyRequests.delete(key);
+        }
+    }
+    if (panel.dataset.requestedRange !== range || panel.dataset.requestedSymbol !== symbol) return;
+    if (!history || !Array.isArray(history.points)) {
+        panel.innerHTML = '<div class="history-empty">Alpaca history is unavailable.</div>';
+        return;
+    }
+    renderHistoryPanel(panel, history, range, { currency: 'USD', priceField: 'price', sampleLabel: 'Alpaca bars' });
+}
+
 async function refreshOpenHistoryPanels(container = document, { includePreviouslyOpened = false } = {}) {
     const openPanels = [...container.querySelectorAll('.stock-card[data-stock-id] .history-popover')]
         .filter(panel => panel.classList.contains('is-open')
@@ -233,6 +271,17 @@ async function refreshOpenHistoryPanels(container = document, { includePreviousl
     await Promise.all(openPanels.map(panel => {
         const card = panel.closest('.stock-card[data-stock-id]');
         return card ? loadCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false }) : null;
+    }));
+}
+
+async function refreshOpenQuoteHistoryPanels(container = document, { includePreviouslyOpened = false } = {}) {
+    const openPanels = [...container.querySelectorAll('.stock-card[data-quote-symbol] .history-popover')]
+        .filter(panel => panel.classList.contains('is-open')
+            || panel.closest('.stock-card')?.matches(':hover, :focus-within')
+            || (includePreviouslyOpened && panel.dataset.requestedRange));
+    await Promise.all(openPanels.map(panel => {
+        const card = panel.closest('.stock-card[data-quote-symbol]');
+        return card ? loadQuoteCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false }) : null;
     }));
 }
 
@@ -284,5 +333,39 @@ function attachChartHovers(container) {
     });
 }
 
-    return { attachInteractiveLineCharts, interactiveChartSvg, renderHistoryChart, renderHistoryPanel, loadCardHistory, refreshOpenHistoryPanels, attachChartHovers };
+function attachQuoteChartHovers(container) {
+    const usesMobileChartInteraction = () => window.matchMedia?.('(hover: none), (pointer: coarse)').matches ?? false;
+    const closeMobilePopovers = except => container.querySelectorAll('.history-popover.is-open').forEach(panel => {
+        if (panel !== except) panel.classList.remove('is-open');
+    });
+    if (container.dataset.mobileQuoteChartDismissBound !== '1') {
+        container.dataset.mobileQuoteChartDismissBound = '1';
+        document.addEventListener('click', event => {
+            if (!usesMobileChartInteraction() || event.target.closest?.('.stock-card[data-quote-symbol]')) return;
+            closeMobilePopovers();
+        });
+    }
+    container.querySelectorAll('.stock-card[data-quote-symbol]').forEach(card => {
+        const panel = card.querySelector('.history-popover');
+        if (!panel) return;
+        const refreshHistory = () => loadQuoteCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false });
+        card.addEventListener('mouseenter', () => { if (!usesMobileChartInteraction()) refreshHistory(); });
+        card.addEventListener('focusin', () => { if (!usesMobileChartInteraction()) refreshHistory(); });
+        card.addEventListener('click', event => {
+            if (!usesMobileChartInteraction() || event.target.closest('.history-popover')) return;
+            closeMobilePopovers(panel);
+            panel.classList.add('is-open');
+            refreshHistory();
+        });
+        panel.addEventListener('click', event => {
+            const button = event.target.closest('[data-history-range]');
+            if (!button) return;
+            event.preventDefault();
+            event.stopPropagation();
+            loadQuoteCardHistory(card, button.dataset.historyRange, { force: true });
+        });
+    });
+}
+
+    return { attachInteractiveLineCharts, interactiveChartSvg, renderHistoryChart, renderHistoryPanel, loadCardHistory, loadQuoteCardHistory, refreshOpenHistoryPanels, refreshOpenQuoteHistoryPanels, attachChartHovers, attachQuoteChartHovers };
 }

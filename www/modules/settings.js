@@ -145,7 +145,7 @@ export function createSettings() {
         host.innerHTML = `<main class="settings-page">
             <header class="settings-page-heading"><div><span class="settings-eyebrow">OPENSTOCK PREFERENCES</span><h1>Website settings</h1><p>Choose a color theme for this browser. Your selection is saved locally.</p></div></header>
             <section class="card settings-appearance-panel" aria-labelledby="settings-appearance-title">
-                <div class="settings-panel-heading"><div><span class="settings-eyebrow">APPEARANCE</span><h2 id="settings-appearance-title">Choose a theme</h2><p>Theme changes apply across the dashboard, journal, configuration, and Algo Trader pages.</p></div></div>
+                <div class="settings-panel-heading"><div><span class="settings-eyebrow">APPEARANCE</span><h2 id="settings-appearance-title">Choose a theme</h2><p>Theme changes apply across the dashboard, journal, configuration, Algo Universe, Algo-trader, and Research pages.</p></div></div>
                 <div class="settings-theme-grid" role="group" aria-label="Color theme">
                     ${THEMES.map(theme => `<button type="button" class="settings-theme-option ${theme.id === selectedTheme ? 'selected' : ''}" data-theme-choice="${theme.id}" aria-pressed="${theme.id === selectedTheme}">
                         <span class="settings-theme-preview" data-preview-theme="${theme.id}" aria-hidden="true"><span class="settings-preview-top"><i></i><i></i><i></i></span><span class="settings-preview-content"><i></i><span><i></i><i></i><i></i></span></span></span>

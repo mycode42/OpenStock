@@ -128,47 +128,6 @@ function statusClass(value) {
     return '';
 }
 
-function renderOptimizerDetail(optimizer) {
-    if (!optimizer) return '<div class="algo-empty">Select an optimizer run to inspect its results.</div>';
-    const strategies = Array.isArray(optimizer.strategies) ? optimizer.strategies : [];
-    const rows = strategies.map(strategy => {
-        const eligibility = strategy.selected_eligible
-            ? ['promising', 'Eligible']
-            : strategy.selected_candidate === 'baseline' ? ['', 'Baseline retained'] : ['rejected', 'Not eligible'];
-        return `<tr>
-            <th scope="row"><strong>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</strong><small>Archive #${strategy.archive_sequence ?? '—'} · ${strategy.new_variants ?? 0} variants</small></th>
-            <td title="${escapeHtml(strategy.top_tested_candidate || '')}">${escapeHtml(strategy.top_tested_candidate || 'Unavailable')}</td>
-            <td class="${classForReturn(strategy.top_tested_fitness)}">${signedScore(strategy.top_tested_fitness)}</td>
-            <td class="${classForReturn(strategy.top_tested_delta)}">${signedScore(strategy.top_tested_delta)}</td>
-            <td title="${escapeHtml(strategy.selected_candidate || '')}">${escapeHtml(strategy.selected_candidate || 'Unavailable')}</td>
-            <td><span class="algo-status-pill ${eligibility[0]}">${eligibility[1]}</span></td>
-            <td>${strategy.selected_closed_trades ?? 0}</td>
-            <td class="${classForReturn(strategy.selected_return_pct)}">${signedPercent(strategy.selected_return_pct, 4)}</td>
-            <td>${strategy.top_tested_window_days ? `${strategy.top_tested_window_days} sessions` : '—'}</td>
-        </tr>`;
-    }).join('');
-    return `<div class="algo-optimizer-detail">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">OPTIMIZER CYCLE</span><h3>${escapeHtml(optimizer.date || 'Undated run')}</h3><p>${escapeHtml(optimizer.range_start || '—')} to ${escapeHtml(optimizer.range_end || '—')} · ${optimizer.created_at ? `completed ${escapeHtml(dateTime(optimizer.created_at))}` : 'completion time unavailable'}</p></div><span class="algo-status-pill ${statusClass(optimizer.status)}">${escapeHtml(optimizer.status || 'UNKNOWN')}</span></div>
-        <div class="algo-optimizer-run-meta"><span title="${escapeHtml(optimizer.run_id || '')}">Run ${escapeHtml(optimizer.run_id || 'ID unavailable')}</span><span>${optimizer.duration_seconds === null || optimizer.duration_seconds === undefined ? 'Duration unavailable' : `${Math.round(optimizer.duration_seconds / 60)} min`}</span></div>
-        <div class="algo-optimizer-summary"><div><span>Strategies</span><strong>${optimizer.strategy_count ?? 0}</strong></div><div><span>New variants</span><strong>${optimizer.new_variants ?? 0}</strong></div><div><span>Search iterations</span><strong>${optimizer.search_iterations ?? 0}</strong></div><div><span>Archive sequence</span><strong>#${optimizer.archive_sequence ?? '—'}</strong></div></div>
-        ${rows ? `<div class="algo-optimizer-table-wrap" role="region" aria-label="Per-strategy optimizer results" tabindex="0"><table class="algo-optimizer-results"><thead><tr><th scope="col">Strategy</th><th scope="col">Top candidate</th><th scope="col">Fitness</th><th scope="col">Δ baseline</th><th scope="col">Archive choice</th><th scope="col">Eligibility</th><th scope="col">Trades</th><th scope="col">Return</th><th scope="col">Best window</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="algo-optimizer-table-empty">No per-strategy discovery results were recorded.</div>'}
-        <p class="algo-optimizer-note">Discovery fitness is measured on the search window. Optimizer-only cycles do not verify or promote candidates.</p>
-    </div>`;
-}
-
-function renderOptimizerPanel(optimizer, selectedCycleId) {
-    const history = Array.isArray(optimizer?.history) ? optimizer.history : [];
-    const selected = history.find(run => run.cycle_id === selectedCycleId) || history[0] || null;
-    const runs = history.map(run => `<button type="button" class="algo-optimizer-run-row ${run.cycle_id === selected?.cycle_id ? 'selected' : ''}" data-optimizer-run="${escapeHtml(run.cycle_id || '')}" aria-pressed="${run.cycle_id === selected?.cycle_id}" title="${escapeHtml(run.run_id || '')}">
-        <span class="algo-optimizer-run-date">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved cycle'} · ${escapeHtml(run.run_id || 'Run ID unavailable')} · ${run.new_variants ?? 0} variants · ${run.search_iterations ?? 0} iterations</small></span>
-        <span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span>
-    </button>`).join('');
-    return `<section class="card algo-panel algo-history-panel algo-optimizer-panel" id="algo-optimizer">
-        <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">OPTIMIZER ARCHIVE</span><h2>Optimizer history</h2><p>Browse saved discovery cycles and their per-strategy results.</p></div><span class="algo-status-pill">${history.length} ${history.length === 1 ? 'RUN' : 'RUNS'}</span></div>
-        <div class="algo-optimizer-history-layout"><div class="algo-optimizer-run-list" role="list">${runs || '<div class="algo-empty">No optimizer cycles are available yet.</div>'}</div><aside class="algo-optimizer-detail-pane">${renderOptimizerDetail(selected)}</aside></div>
-    </section>`;
-}
-
 const EQUITY_STRATEGY_ALIASES = Object.freeze({
     mean_reversion: 'intraday_mean_reversion',
     trend_following: 'swing_trend_following',
@@ -411,6 +370,7 @@ function equitySettingSections(settings) {
 
 export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');
+    const researchHost = document.getElementById('page-algo-research');
     const snapshots = { equity: null, options: null };
     const errors = { equity: '', options: '' };
     const loadingAccounts = new Set();
@@ -420,18 +380,18 @@ export function createAlgoTrader({ request, charts }) {
     const openConfigSections = { equity: new Set(), options: new Set() };
     const notices = { equity: '', options: '' };
     let accountMode = 'equity';
+    let researchMode = 'equity';
     let saving = false;
     let range = '1M';
-    let researchFilter = 'all';
-    let selectedRunDate = null;
-    let selectedOptimizerRunId = null;
+    const researchFilters = { equity: 'all', options: 'all' };
+    const selectedRunDates = { equity: null, options: null };
     let activityPage = 0;
     let pollTimer = null;
 
-    function visibleRuns() {
-        const history = snapshots[accountMode]?.research?.history || [];
-        if (researchFilter === 'promoted') return history.filter(run => run.promoted > 0);
-        if (researchFilter === 'no-promotion') return history.filter(run => !run.promoted);
+    function visibleRuns(mode = researchMode) {
+        const history = snapshots[mode]?.research?.history || [];
+        if (researchFilters[mode] === 'promoted') return history.filter(run => run.promoted > 0);
+        if (researchFilters[mode] === 'no-promotion') return history.filter(run => !run.promoted);
         return history;
     }
 
@@ -496,7 +456,7 @@ export function createAlgoTrader({ request, charts }) {
         const isOptions = accountMode === 'options';
         if (!snapshot) {
             const loading = loadingAccounts.has(accountMode);
-            host.innerHTML = `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountSwitch()}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(errors[accountMode] || 'Loading the paper-account snapshot and research records.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
+            host.innerHTML = `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountSwitch()}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(errors[accountMode] || 'Loading the paper-account snapshot and coordinator data.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
             return;
         }
 
@@ -505,14 +465,6 @@ export function createAlgoTrader({ request, charts }) {
         const metrics = performance.metrics || {};
         const history = performance.history || [];
         const settings = draftSettingsByAccount[accountMode] || snapshot.settings || {};
-        const research = snapshot.research || { latest: null, history: [] };
-        const optimizerRuns = research.optimizer?.history || [];
-        if (!optimizerRuns.some(run => run.cycle_id === selectedOptimizerRunId)) {
-            selectedOptimizerRunId = optimizerRuns[0]?.cycle_id || null;
-        }
-        const runs = visibleRuns();
-        if (!runs.some(run => run.date === selectedRunDate)) selectedRunDate = runs[0]?.date || null;
-        const selectedRun = runs.find(run => run.date === selectedRunDate) || null;
         const activities = snapshot.activity || [];
         const activityPageCount = Math.max(1, Math.ceil(activities.length / ACTIVITY_PAGE_SIZE));
         activityPage = Math.min(activityPage, activityPageCount - 1);
@@ -598,17 +550,45 @@ export function createAlgoTrader({ request, charts }) {
                 </article>
             </section>
 
-            <section class="card algo-panel algo-history-panel" id="algo-history">
-                <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${isOptions ? 'Options research history' : 'Autoresearch history'}</h2><p>${isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from /opt/algo-trader/data/research.'}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${researchFilter === key ? 'active' : ''}" aria-pressed="${researchFilter === key}">${label}</button>`).join('')}</div></div>
-                <div class="algo-history-layout"><div class="algo-run-list" role="list">${runs.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === selectedRunDate ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === selectedRunDate}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? `${run.promoted ?? 0} approved` : signedPercent(run.portfolio_return_pct)}<small>${isOptions ? 'paper config approval' : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>
-                    <aside class="algo-run-detail">${renderRunDetail(selectedRun)}</aside></div>
-            </section>
-
-            ${!isOptions ? renderOptimizerPanel(research.optimizer, selectedOptimizerRunId) : ''}
-
         </main>`;
         restoreOpenConfigSections(accountMode);
         charts.attachInteractiveLineCharts(host);
+    }
+
+    function renderResearchAccountSwitch() {
+        return `<div class="algo-account-switch algo-title-account-switch" role="group" aria-label="Research account">${[['equity', 'Equity'], ['options', 'Options']].map(([mode, label]) => `<button type="button" data-research-mode="${mode}" class="${researchMode === mode ? 'active' : ''}" aria-pressed="${researchMode === mode}">${label}</button>`).join('')}</div>`;
+    }
+
+    function renderResearch() {
+        if (!researchHost) return;
+        const snapshot = snapshots[researchMode];
+        const isOptions = researchMode === 'options';
+        const modeLabel = isOptions ? 'Options' : 'Equity';
+        if (!snapshot) {
+            const loading = loadingAccounts.has(researchMode);
+            researchHost.innerHTML = `<main class="algo-page algo-research-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> RESEARCH ARCHIVE</div><h1>Research</h1>${renderResearchAccountSwitch()}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Loading ${modeLabel} research…` : `${modeLabel} research unavailable`}</strong><p>${escapeHtml(errors[researchMode] || 'Loading saved strategy research records.')}</p><button type="button" class="btn btn-secondary" data-research-action="retry">Retry connection</button></section></main>`;
+            return;
+        }
+
+        const research = snapshot.research || { history: [] };
+        const runs = visibleRuns(researchMode);
+        if (!runs.some(run => run.date === selectedRunDates[researchMode])) selectedRunDates[researchMode] = runs[0]?.date || null;
+        const selectedRun = runs.find(run => run.date === selectedRunDates[researchMode]) || null;
+        const filter = researchFilters[researchMode];
+        const title = isOptions ? 'Options research history' : 'Equity autoresearch history';
+        const description = isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from /opt/algo-trader/data/research.';
+
+        researchHost.innerHTML = `<main class="algo-page algo-research-page">
+            <header class="algo-page-header">
+                <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> RESEARCH ARCHIVE</div><h1>Research</h1>${renderResearchAccountSwitch()}</div>
+                <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${modeLabel.toUpperCase()} RESEARCH</span></div>
+            </header>
+            <section class="card algo-panel algo-history-panel" id="algo-history">
+                <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${title}</h2><p>${description}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${filter === key ? 'active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div></div>
+                <div class="algo-history-layout"><div class="algo-run-list" role="list">${runs.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === selectedRunDates[researchMode] ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === selectedRunDates[researchMode]}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? `${run.promoted ?? 0} approved` : signedPercent(run.portfolio_return_pct)}<small>${isOptions ? 'paper config approval' : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>
+                    <aside class="algo-run-detail">${renderRunDetail(selectedRun)}</aside></div>
+            </section>
+        </main>`;
     }
 
     function sparklinePath(history) {
@@ -640,41 +620,61 @@ export function createAlgoTrader({ request, charts }) {
         return settings;
     }
 
-    async function load({ silent = false } = {}) {
+    async function loadAccount(mode, { silent = false } = {}) {
         if (document.hidden) return;
-        const mode = accountMode;
         if (requestInFlight.has(mode)) return;
         requestInFlight.add(mode);
         if (!snapshots[mode] && !silent) loadingAccounts.add(mode);
         if (loadingAccounts.has(mode) && mode === accountMode) render();
+        if (loadingAccounts.has(mode) && mode === researchMode) renderResearch();
         const data = await request(`/algo-trader?account=${mode}`, {}, () => {});
         requestInFlight.delete(mode);
         loadingAccounts.delete(mode);
         if (!data) {
             if (!snapshots[mode]) errors[mode] = 'Check that OpenStock can read this paper account and its Algo Trader data.';
             if (mode === accountMode) render();
+            if (mode === researchMode) renderResearch();
             return;
         }
         if (mode === 'options' && data.account_type !== 'options') {
             snapshots.options = null;
             errors.options = 'OpenStock returned Equity data for this Options request. The running API needs the Options account route enabled.';
             if (mode === accountMode) render();
+            if (mode === researchMode) renderResearch();
             return;
         }
         snapshots[mode] = data;
         errors[mode] = '';
         if (!dirtyAccounts.has(mode)) draftSettingsByAccount[mode] = null;
         if (mode === accountMode && !dirtyAccounts.has(mode)) render();
+        if (mode === researchMode) renderResearch();
     }
 
+    function load({ silent = false } = {}) {
+        return loadAccount(accountMode, { silent });
+    }
+
+    function loadResearch({ silent = false } = {}) {
+        return loadAccount(researchMode, { silent });
+    }
+
+    let pollLoad = null;
     function startPolling() {
-        if (pollTimer) return;
-        pollTimer = window.setInterval(() => load({ silent: true }), 15000);
+        stopPolling();
+        pollLoad = load;
+        pollTimer = window.setInterval(() => pollLoad?.({ silent: true }), 15000);
+    }
+
+    function startResearchPolling() {
+        stopPolling();
+        pollLoad = loadResearch;
+        pollTimer = window.setInterval(() => pollLoad?.({ silent: true }), 15000);
     }
 
     function stopPolling() {
         if (pollTimer) window.clearInterval(pollTimer);
         pollTimer = null;
+        pollLoad = null;
     }
 
     host?.addEventListener('input', event => {
@@ -713,8 +713,6 @@ export function createAlgoTrader({ request, charts }) {
             }
             accountMode = mode;
             errors[mode] = '';
-            researchFilter = 'all';
-            selectedRunDate = null;
             activityPage = 0;
             notices[mode] ||= '';
             render();
@@ -728,23 +726,33 @@ export function createAlgoTrader({ request, charts }) {
                 activityPage = requestedPage;
                 render();
             }
-        } else if (button.dataset.researchFilter) {
-            researchFilter = button.dataset.researchFilter;
-            selectedRunDate = null;
-            render();
-        } else if (button.dataset.optimizerRun) {
-            selectedOptimizerRunId = button.dataset.optimizerRun;
-            render();
-        } else if (button.dataset.runDate) {
-            selectedRunDate = button.dataset.runDate;
-            render();
-        } else if (button.dataset.action === 'open-history') {
-            document.getElementById('algo-history')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } else if (button.dataset.action === 'open-config') {
             document.getElementById('algo-config')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         } else if (button.dataset.action === 'retry') {
             errors[accountMode] = '';
             load();
+        }
+    });
+    researchHost?.addEventListener('click', event => {
+        const button = event.target.closest('button');
+        if (!button || !researchHost.contains(button)) return;
+        if (button.dataset.researchMode) {
+            const mode = button.dataset.researchMode;
+            if (!['equity', 'options'].includes(mode) || mode === researchMode) return;
+            researchMode = mode;
+            errors[mode] = '';
+            renderResearch();
+            loadResearch({ silent: Boolean(snapshots[mode]) });
+        } else if (button.dataset.researchFilter) {
+            researchFilters[researchMode] = button.dataset.researchFilter;
+            selectedRunDates[researchMode] = null;
+            renderResearch();
+        } else if (button.dataset.runDate) {
+            selectedRunDates[researchMode] = button.dataset.runDate;
+            renderResearch();
+        } else if (button.dataset.researchAction === 'retry') {
+            errors[researchMode] = '';
+            loadResearch();
         }
     });
     host?.addEventListener('submit', async event => {
@@ -780,8 +788,8 @@ export function createAlgoTrader({ request, charts }) {
         if (mode === accountMode) render();
     });
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && pollTimer) load({ silent: true });
+        if (!document.hidden && pollTimer) pollLoad?.({ silent: true });
     });
 
-    return { load, render, startPolling, stopPolling };
+    return { load, render, loadResearch, renderResearch, startPolling, startResearchPolling, stopPolling };
 }
