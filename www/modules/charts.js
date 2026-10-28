@@ -206,16 +206,18 @@ function renderHistoryPanel(panel, history, range, { currency = 'EUR', priceFiel
 
 async function loadCardHistory(card, range = '1d', { force = false, showLoading = true } = {}) {
     const stockId = Number(card.dataset.stockId);
+    const broker = card.dataset.broker === 'alpaca' ? 'alpaca' : 'trade_republic';
+    const currency = broker === 'alpaca' ? 'USD' : 'EUR';
     const panel = card.querySelector('.history-popover');
     if (!Number.isInteger(stockId) || !panel) return;
-    const key = `${stockId}:${range}`;
+    const key = `${broker}:${stockId}:${range}`;
     panel.dataset.requestedRange = range;
-    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · EUR</div>${chartRangeControls(range)}</div><div class="history-loading">loading price history</div>`;
+    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · ${currency}</div>${chartRangeControls(range)}</div><div class="history-loading">loading price history</div>`;
     let history = force ? null : historyCache.get(key);
     if (!history) {
         let pending = historyRequests.get(key);
         if (!pending) {
-            pending = request(`/stocks/${stockId}/history?range=${range}`);
+            pending = request(`/stocks/${stockId}/history?range=${range}&broker=${broker}`);
             historyRequests.set(key, pending);
         }
         try {
@@ -230,7 +232,7 @@ async function loadCardHistory(card, range = '1d', { force = false, showLoading 
         panel.innerHTML = '<div class="history-empty">History is unavailable.</div>';
         return;
     }
-    renderHistoryPanel(panel, history, range);
+    renderHistoryPanel(panel, history, range, broker === 'alpaca' ? { currency: 'USD', priceField: 'price_usd', sampleLabel: history.source?.includes('_sip_') ? 'SIP bars' : 'IEX bars' } : {});
 }
 
 async function loadQuoteCardHistory(card, range = '1d', { force = false, showLoading = true } = {}) {

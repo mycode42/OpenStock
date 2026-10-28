@@ -98,7 +98,7 @@ export function renderAccountPage({ mode, snapshot, settings, range, activityPag
 
         ${renderStrategyPerformance(snapshot.strategy_performance, isOptions, settings, demoMode)}
 
-        ${demoMode ? '<section class="algo-demo-notice"><span class="algo-notice-mark">i</span><p><strong>Setup required.</strong> Connect Trade Republic and the Algo Trader service to load real account history and edit strategy settings.</p></section>' : `<section class="card algo-panel algo-config-panel" id="algo-config">
+        ${demoMode ? '<section class="algo-demo-notice"><span class="algo-notice-mark">i</span><p><strong>Setup required.</strong> Connect Alpaca and the Algo Trader service to load real account history and edit strategy settings.</p></section>' : `<section class="card algo-panel algo-config-panel" id="algo-config">
             <div class="algo-section-heading algo-config-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS CONFIGURATION' : 'RUNTIME CONFIGURATION'}</span><h2>${isOptions ? 'Options strategy settings' : 'Algo strategy settings'}</h2><p>${isOptions ? 'Independent settings for the options paper account and research engine.' : 'These settings are read by the Algo coordinator and autoresearch runtime.'}</p></div><span class="algo-local-save">${isOptions ? 'OPTIONS CONFIG' : 'CONNECTED CONFIG'}</span></div>
             ${renderConfig()}
         </section>`}

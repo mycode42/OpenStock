@@ -106,7 +106,7 @@ function optionsStrategiesForRegime(settings, regime) {
 
     if (!exclusiveLongVolatility && safeObject(settings.llm_driven).enabled !== false
         && regimeWeight(settings.llm_driven)) {
-        strategies.push('Event Driven');
+        strategies.push('LLM Driven');
     }
 
     const allowedLongVolatilityRegimes = Array.isArray(longVolatility.allowed_regimes)

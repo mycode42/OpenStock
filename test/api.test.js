@@ -36,7 +36,13 @@ async function fixture({ now } = {}) {
         }
         return fetch(base + url, options);
     };
-    return { db, dir, server, request };
+    return { app, db, dir, server, request };
+}
+
+function addAlpacaStock(fixture, stock) {
+    const result = fixture.db.db.prepare(`INSERT INTO alpaca_watchlist (symbol, name, source_stock_id, copied_fx_rate)
+        VALUES (?, ?, ?, 1)`).run(stock.symbol, stock.name, stock.id);
+    return Number(result.lastInsertRowid);
 }
 
 test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
@@ -110,51 +116,34 @@ test('percentage alert API captures the latest saved EUR quote as its reference'
     assert.deepEqual([level.trigger_mode, level.side, level.reference_price_eur, level.price_eur], ['PERCENT', 'BUY', 100, 95]);
 });
 
-test('live prices use the UAPI backup in memory only and coalesce concurrent requests', async t => {
+test('live prices use Alpaca quotes in memory only and coalesce concurrent requests', async t => {
     const f = await fixture({ now: () => new Date('2026-09-17T12:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'LIVE', name: 'Live', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await created.json()).stock;
+    const alpacaStockId = addAlpacaStock(f, stock);
     let calls = 0;
-    f.server.close();
-    const app = createApp({ db: f.db, backfill: { enqueue() {}, enqueueMissing() { return 0; } }, fetchImpl: async () => { throw new Error('unexpected external fetch'); }, now: () => new Date('2026-09-17T12:00:00Z'), sdkClient: { isEnabled: () => false } });
-    app.locals.brokerClient = { getQuote: async () => { calls += 1; return { bid_eur: 12.345678, ask_eur: 12.345679, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', bid_time: '2026-09-17T12:00:00Z', ask_time: '2026-09-17T12:00:00Z', observed_at: '2026-09-17T12:00:00Z' }; } };
-    const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
-    t.after(() => server.close());
-    const base = `http://127.0.0.1:${server.address().port}`;
-    const [a, b] = await Promise.all([fetch(`${base}/api/live-prices`), fetch(`${base}/api/live-prices`)]);
+    f.app.locals.alpacaClient = { getLatestQuotes: async () => { calls += 1; return { feed: 'iex', quotes: { LIVE: { bp: 12.345678, ap: 12.345679, t: '2026-09-17T12:00:00.000Z' } } }; } };
+    const [a, b] = await Promise.all([f.request('/api/live-prices'), f.request('/api/live-prices')]);
     const payload = await a.json();
     assert.equal(b.status, 200);
     assert.equal(calls, 1);
-    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 12.3456785, bid_eur: 12.345678, ask_eur: 12.345679, quote_time: '2026-09-17T12:00:00.000Z', observed_at: '2026-09-17T12:00:00Z', source: 'trade_republic_order_price', fallback: true });
+    assert.deepEqual(payload.prices[0], { stock_id: alpacaStockId, symbol: 'LIVE', currency: 'USD', price_usd: 12.3456785, bid_usd: 12.345678, ask_usd: 12.345679, quote_time: '2026-09-17T12:00:00.000Z', feed: 'iex', source: 'alpaca_iex_quote' });
     assert.equal(f.db.getStockById(stock.id).current_price_eur, null);
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);
 });
 
-test('live prices select the enabled Handelsrepublik SDK before the UAPI sidecar', async t => {
+test('live prices label the Alpaca feed returned by the provider', async t => {
     const f = await fixture({ now: () => new Date('2026-10-02T11:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'SDK', name: 'SDK', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     const stock = (await created.json()).stock;
-    f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'SDK', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-10-02T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
-    let sidecarCalls = 0, sdkRetryFlags = [];
-    f.server.close();
-    const app = createApp({
-        db: f.db,
-        backfill: { enqueue() {}, enqueueMissing() { return 0; } },
-        fetchImpl: async () => { throw new Error('unexpected external fetch'); },
-        now: () => new Date('2026-10-02T11:00:00Z'),
-        sdkClient: { isEnabled: () => true, getQuote: async ({ forceAuthRetry }) => { sdkRetryFlags.push(forceAuthRetry); return { bid_eur: 10.123456, ask_eur: 10.123457, bid_unit: 'EUR', ask_unit: 'EUR', currency: 'EUR', observed_at: '2026-10-02T11:00:00Z' }; } },
-    });
-    app.locals.brokerClient = { getQuote: async () => { sidecarCalls += 1; throw new Error('sidecar must not be used'); } };
-    const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
-    t.after(() => server.close());
-    const base = `http://127.0.0.1:${server.address().port}`;
-    await fetch(`${base}/api/live-prices`);
-    const payload = await (await fetch(`${base}/api/live-prices?retrySdkAuth=1`)).json();
-    assert.equal(sidecarCalls, 0);
-    assert.deepEqual(sdkRetryFlags, [false, true]);
-    assert.deepEqual(payload.prices[0], { stock_id: stock.id, price_eur: 10.1234565, bid_eur: 10.123456, ask_eur: 10.123457, quote_time: '2026-10-02T11:00:00.000Z', observed_at: '2026-10-02T11:00:00Z', source: 'trade_republic_sdk_order_price', fallback: false });
+    const alpacaStockId = addAlpacaStock(f, stock);
+    let calls = 0;
+    f.app.locals.alpacaClient = { getLatestQuotes: async () => { calls += 1; return { feed: 'sip', quotes: { SDK: { bp: 10.123456, ap: 10.123457, t: '2026-10-02T11:00:00.000Z' } } }; } };
+    const payload = await (await f.request('/api/live-prices')).json();
+    assert.equal(calls, 1);
+    assert.deepEqual(payload.prices[0], { stock_id: alpacaStockId, symbol: 'SDK', currency: 'USD', price_usd: 10.1234565, bid_usd: 10.123456, ask_usd: 10.123457, quote_time: '2026-10-02T11:00:00.000Z', feed: 'sip', source: 'alpaca_sip_quote' });
     assert.equal(f.db.getStockById(stock.id).current_price_eur, null);
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);
 });
@@ -254,18 +243,17 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal(secondTrade.trade_number, 2);
     assert.equal((await f.request('/api/analytics/dashboard')).status, 200);
 
+    addAlpacaStock(f, good);
+    f.app.locals.alpacaClient = { getLatestQuotes: async () => ({ feed: 'iex', quotes: { GOOD: { bp: 89.99, ap: 90.01, t: '2026-01-01T12:00:00.000Z' } } }) };
     const bad = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'BAD', name: 'Bad', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     assert.equal(bad.status, 201);
     response = await f.request('/api/refresh-prices', { method: 'POST' });
     const refreshed = await response.json();
     assert.equal(response.status, 200);
     assert.equal(refreshed.updated, 1);
-    const fallbackStock = refreshed.stocks.find(stock => stock.id === good.id);
-    assert.equal(fallbackStock.current_price_usd, null);
-    assert.equal(fallbackStock.current_price_eur, 90);
-    assert.equal(fallbackStock.last_exchange_rate, null);
-    assert.ok(fallbackStock.broker_quote);
-    assert.deepEqual({ label: fallbackStock.market_data.label, fallback: fallbackStock.market_data.fallback }, { label: 'Trade Republic UAPI sidecar', fallback: true });
+    assert.equal(refreshed.prices[0].symbol, 'GOOD');
+    assert.equal(refreshed.prices[0].currency, 'USD');
+    assert.equal(refreshed.prices[0].price_usd, 90);
 
     response = await f.request(`/api/stocks/${good.id}`, { method: 'DELETE' });
     assert.equal((await response.json()).archived, true);

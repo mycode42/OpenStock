@@ -15,7 +15,7 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
         const api = await import(pathToFileURL(path.join(tempDir, 'modules', 'api.js')).href);
         const hostile = '<img src=x onerror="alert(1)">';
         assert.equal(escape.escapeHtml(hostile).includes('<img'), false);
-        for (const module of ['charts', 'dashboard', 'config']) {
+        for (const module of ['charts', 'dashboard']) {
             await import(pathToFileURL(path.join(tempDir, 'modules', `${module}.js`)).href);
         }
         const journal = await import(pathToFileURL(path.join(tempDir, 'modules', 'journal.js')).href);
@@ -42,16 +42,15 @@ test('v1 browser modules link and shared escaping blocks markup injection', asyn
     }
 });
 
-test('dashboard cards retain live bid and ask placeholders for broker quotes', () => {
+test('dashboard cards render Alpaca bid and ask values in USD', () => {
     const dashboard = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'dashboard.js'), 'utf8');
     assert.match(dashboard, /data-live-bid/);
     assert.match(dashboard, /data-live-ask/);
     assert.match(dashboard, /value === null \|\| value === undefined \|\| value === ''/);
-    assert.match(dashboard, /quoteMoney\(quote\.bid_eur\)/);
-    assert.match(dashboard, /quoteMoney\(quote\.ask_eur\)/);
-    assert.match(dashboard, /Handelsrepublik SDK/);
-    assert.match(dashboard, /retrySdkAuthOnNextPoll/);
-    assert.match(dashboard, /live-prices\?retrySdkAuth=1/);
+    assert.match(dashboard, /formatMoney\(quote\.bid_usd/);
+    assert.match(dashboard, /formatMoney\(quote\.ask_usd/);
+    assert.match(dashboard, /Alpaca market data/);
+    assert.doesNotMatch(dashboard, /Handelsrepublik|retrySdkAuth|Trade Republic/);
 });
 
 test('dashboard cards show the Journal buy-in and a live current-price percentage', () => {
@@ -63,29 +62,25 @@ test('dashboard cards show the Journal buy-in and a live current-price percentag
     assert.match(dashboard, /history-change \$\{formatted\.className\}/);
 });
 
-test('Configure polls display-only live prices only while its page is active', () => {
-    const config = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'config.js'), 'utf8');
+test('public navigation has no local broker configuration page', () => {
+    const index = fs.readFileSync(path.join(__dirname, '..', 'www', 'index.html'), 'utf8');
     const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
 
-    assert.match(config, /const livePollMs = 1000/);
-    assert.match(config, /window\.location\.hash !== '#\/config'/);
-    assert.match(config, /af\('\/live-prices'/);
-    assert.match(config, /data-live-price/);
-    assert.match(config, /stopLivePolling/);
-    assert.match(app, /if\(page!=='config'\)config\.stopLivePolling\(\)/);
+    assert.doesNotMatch(index, /data-page="config"|id="page-config"/);
+    assert.doesNotMatch(app, /modules\/config|broker-profile|trade_republic/);
+    assert.equal(fs.existsSync(path.join(__dirname, '..', 'www', 'modules', 'config.js')), false);
 });
 
-test('dashboard links to alert configuration and Journal trade rows are read-only', () => {
+test('dashboard exposes Alpaca alert rearming and Journal trade rows remain read-only', () => {
     const root = path.join(__dirname, '..', 'www');
     const dashboard = fs.readFileSync(path.join(root, 'modules', 'dashboard.js'), 'utf8');
-    const config = fs.readFileSync(path.join(root, 'modules', 'config.js'), 'utf8');
     const journal = fs.readFileSync(path.join(root, 'modules', 'journal.js'), 'utf8');
     const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-    assert.match(dashboard, /data-stock-action="configureAlerts"/);
-    assert.match(config, /function openAlerts\(stockId\)/);
-    assert.match(app, /configureAlerts: config\.openAlerts/);
-    assert.match(config, /data-alert-action="add-percent"/);
+    assert.match(dashboard, /data-alpaca-rearm/);
+    assert.match(app, /af\('\/alpaca\/journal'\)/);
+    assert.doesNotMatch(app, /broker-profile/);
+    assert.doesNotMatch(dashboard, /data-stock-action="configureAlerts"/);
     assert.doesNotMatch(journal, /Broker confirmed · read only/);
     assert.doesNotMatch(journal, /external activity or history the broker cannot provide/);
     assert.doesNotMatch(journal, /data-trade-action|trade-form|journal-trade-editor/);
@@ -93,7 +88,6 @@ test('dashboard links to alert configuration and Journal trade rows are read-onl
     assert.match(journal, /collapseJournalCardByTitle\(container, 'Trades'/);
     assert.match(journal, /collapseJournalCardByTitle\(container, 'Per-Instrument Analytics'/);
     assert.match(styles, /\.history-popover\{[^}]*z-index:30;isolation:isolate;overflow:hidden;/);
-    assert.match(styles, /\.dashboard-alert-link\{[^}]*z-index:0;/);
 });
 
 test('Dashboard refreshes only open history panels once per minute while visible', () => {
@@ -118,9 +112,9 @@ test('broker Trading screen and order UI are removed', () => {
     assert.doesNotMatch(serviceWorker, /\.\/modules\/trading\.js/);
 });
 
-test('Journal requests fifteen trades per page', () => {
+test('Journal loads read-only Alpaca account activity', () => {
     const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
-    assert.match(app, /trades\?page=\$\{requestedPage\}&page_size=15/);
+    assert.match(app, /af\('\/alpaca\/journal'\)/);
 });
 
 test('Journal displays instrument and quantity with trades without exposing trade IDs or a dividends column', () => {

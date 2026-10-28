@@ -14,7 +14,7 @@ This guide describes the single-host deployment that OpenStock is built for: a L
 │                 Web Application                        │
 │                 Port 3000 (127.0.0.1)                  │
 │  ┌───────────┐  ┌───────────┐  ┌──────────────┐       │
-│  │ Dashboard │  │ Journal   │  │ Config       │       │
+│  │ Dashboard │  │ Journal   │  │ Algo Trader  │       │
 │  └───────────┘  └───────────┘  └──────────────┘       │
 └─────────────────────────────────────────────────────────┘
                                  │
@@ -36,8 +36,8 @@ This guide describes the single-host deployment that OpenStock is built for: a L
 │  - Fetches prices       │      │      └─────────────────────────┘
 │  - Uses bounded workers │      │
 │  - Evaluates triggers   │      │      ┌─────────────────────────┐
-│  - Sends Telegram       │──────┬──────│ Handelsrepublik SDK      │
-│  - Durable alert outbox │      └──────│ Trade Republic UAPI     │
+│  - Sends Telegram       │──────┬──────│ Alpaca Trading + Data   │
+│  - Durable alert outbox │      └──────│ Alpaca Trading + Data   │
 └─────────────────────────┘             └─────────────────────────┘
 ```
 
@@ -46,9 +46,9 @@ This guide describes the single-host deployment that OpenStock is built for: a L
 - Node.js 22 or higher
 - Python 3, a C/C++ compiler toolchain, and `make` for native Node modules (for example, `build-essential` on Debian/Ubuntu)
 - SQLite 3.x with the CLI, for debugging
-- Telegram bot token
+- Alpaca live Trading API key and secret
+- Telegram bot token (optional; required for Telegram alerts)
 - Tailscale, configured for the host
-- Trade Republic account access provisioned outside the dashboard (see the README for the quote sources)
 
 ## Install
 
@@ -58,13 +58,16 @@ cd /opt/openstock
 npm install
 
 cp .env.example .env
-# Edit .env with your credentials. Keep it out of source control.
+# Set ALPACA_ALGO_API_KEY and ALPACA_ALGO_API_SECRET for the live USD profile.
+# Keep .env out of source control. No Alpaca account ID is needed by OpenStock.
 
 # Initialize the database (automatic on first run)
 npm start
 ```
 
 `server.js` loads `.env` from the repository directory by default. Set `OPENSTOCK_CONFIG_FILE` to load a different file. The default `DATABASE_PATH` in `.env.example` is relative to the checkout, so the setup also works at `http://localhost:3000`.
+
+`ALPACA_DATA_FEED` defaults to `sip`; OpenStock falls back to `iex` if the account cannot access the preferred feed. To import an existing watchlist and alert levels into Alpaca, run `node scripts/migrate-alpaca-profile.js` once after setting the Alpaca credentials. The script converts legacy EUR alert prices using the current EUR/USD rate and refuses to overwrite a populated Alpaca watchlist.
 
 ## Services
 
@@ -149,12 +152,6 @@ curl "https://api.telegram.org/botYOUR_TOKEN/getMe"
 cat /home/openclaw/.openclaw/credentials/telegram-default-allowFrom.json
 cat /opt/openstock/memory/monitor-error.log
 ```
-
-## Trade Republic sidecar and SDK
-
-Quotes come from the read-only Handelsrepublik SDK first and the loopback Trade Republic UAPI sidecar second. The SDK session file and any PIN belong on the server only, outside the repository. The sidecar listens on `TRADE_REPUBLIC_BASE_URL` (default `http://127.0.0.1:8000`).
-
-If prices stop updating, check `/api/broker/trade-republic/health`, then confirm the SDK session and the sidecar are reachable from the OpenStock service.
 
 ## Tailscale
 

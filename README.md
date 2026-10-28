@@ -1,7 +1,6 @@
 # OpenStock
 
-OpenStock is a self-hosted dashboard for monitoring stock prices, keeping a trading journal, and tracking performance and risk. 
-It polls executable EUR bid and ask prices, alerts on thresholds through Telegram, and records position lots, capital events and equity history in SQLite.
+OpenStock is a self-hosted stock dashboard and trading journal built around Alpaca accounts and market data in USD. It uses SIP quotes when available and falls back to IEX when the account cannot access SIP.
 
 It is also the frontend for the algo-trader repository: https://github.com/mycode42/algo-trader.git
 
@@ -18,10 +17,14 @@ Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `
 git clone https://github.com/mycode42/openstock.git
 cd openstock
 npm ci
-npm run demo
+cp .env.example .env
+# Add ALPACA_ALGO_API_KEY and ALPACA_ALGO_API_SECRET to .env
+npm start
 ```
 
-Then open http://127.0.0.1:3000. To use another port, run `PORT=3001 npm run demo`.
+Then open http://127.0.0.1:3000. The `.env` file is ignored by Git; never commit live credentials. To use another port, set `PORT=3001` before `npm start`.
+
+For a no-account demo, run `npm run demo` instead. It uses a separate database and ignores broker credentials.
 
 ### Demo mode
 
@@ -32,20 +35,19 @@ Then open http://127.0.0.1:3000. To use another port, run `PORT=3001 npm run dem
 - fills the trading journal with sample lots, deposits and a 150-day equity curve, so Journal and Analytics have data to show. Delete `data/demo/` to start over;
 - shows a banner in the interface listing the setup still missing.
 
-Demo mode is also the default whenever Trade Republic credentials or Algo Trader data are not configured. The application reports what is missing through `GET /api/demo-status`.
+Normal startup uses Alpaca when its API key and secret are configured. Without Alpaca credentials, OpenStock starts in demo mode. Algo Trader is optional and does not control the stock dashboard's demo state. The application reports missing setup through `GET /api/demo-status`.
 
 ## Features
 
-- **Dashboard:** current prices, alert state, quick stock actions, and local hover price-history charts.
+- **Dashboard:** Alpaca USD quotes, alert levels, and Alpaca price-history charts.
   
   <img width="800" alt="Screenshot 2026-10-28 at 13 48 03" src="https://github.com/user-attachments/assets/8a077760-4125-43cc-83d0-3141a5f4bd0c" />
 
-- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through 
-a durable outbox until Telegram confirms delivery.
+- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks BUY and SELL thresholds against Alpaca quotes. Alerts fire once per episode and use a durable outbox for Telegram delivery.
 
   <img width="800" alt="Screenshot 2026-10-28 at 15 15 38" src="https://github.com/user-attachments/assets/249c61da-0a47-489f-8650-b91414a8fc06" />
 
-- **Trading journal:** record position lots, then edit or close them with frozen EUR conversion rates and fees. Adding a purchase to an open position merges it using quantity-weighted entry prices, with an audit trail.
+- **Trading journal:** reads Alpaca account balances, positions, and fills in USD. OpenStock does not submit orders.
   
   <img width="800" alt="Screenshot 2026-10-28 at 13 34 18" src="https://github.com/user-attachments/assets/9a7c47a9-cffd-4236-98e1-7b2860158c21" />
 
@@ -85,17 +87,13 @@ cp .env.example .env
 
 `.env` is read from the repository directory. Set `OPENSTOCK_CONFIG_FILE` to load a different file. Keep credentials out of source control.
 
+Add the Alpaca Trading API key and secret to `.env`. The account is resolved from those credentials; OpenStock does not need an account ID. `ALPACA_DATA_FEED` defaults to `sip` and falls back to `iex` if SIP access is denied.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TRADE_REPUBLIC_API_KEY` | empty | Key for the loopback Trade Republic UAPI sidecar. Leaving it empty, together with no SDK session, starts demo mode. |
-| `TRADE_REPUBLIC_BASE_URL` | `http://127.0.0.1:8000` | Loopback UAPI sidecar URL. |
-| `TRADE_REPUBLIC_TIMEOUT_MS` | `30000` | Broker request timeout. 30000 is recommended for portfolio synchronization. |
-| `TRADE_REPUBLIC_SDK_ENABLED` | `true` | Uses the read-only Handelsrepublik SDK as the primary quote source. Failed or disabled SDK requests fall back to UAPI. |
-| `TRADE_REPUBLIC_SDK_SESSION_FILE` | empty | Private, server-side SDK session file. Required when the SDK source is enabled. Keep it outside the repository. |
-| `TRADE_REPUBLIC_SDK_MODULE_PATH` | `../handelsrepublik/dist/index.js` | Compiled SDK module. Relative paths resolve from the checkout, so a sibling clone works without configuration. |
-| `TRADE_REPUBLIC_SDK_PHONE_NUMBER` | empty | Used only when the saved SDK session is missing or rejected. The broker may ask for approval in its mobile app. |
-| `TRADE_REPUBLIC_SDK_PIN` | empty | Used with the phone number for the same fallback login. |
-| `TRADE_REPUBLIC_SDK_AUTH_TIMEOUT_MS` | `45000` | Time allowed for SDK login. |
+| `ALPACA_ALGO_API_KEY` | empty | Alpaca Trading API key for the USD account. |
+| `ALPACA_ALGO_API_SECRET` | empty | Alpaca Trading API secret. Keep it in the ignored `.env` file. |
+| `ALPACA_DATA_FEED` | `sip` | Preferred Alpaca stock-data feed. OpenStock falls back between SIP and IEX when feed access is denied. |
 | `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather for alert delivery. |
 | `TELEGRAM_CHAT_ID` | empty | Chat that receives alerts. |
 | `DATABASE_PATH` | `database/openstock.db` | SQLite database path. Relative paths resolve from the checkout, not the current directory. |
@@ -106,29 +104,33 @@ cp .env.example .env
 | `HISTORY_BACKFILL_DELAY_MS` | `1500` | Pause between chart-history backfill requests. |
 | `ALGO_TRADER_ROOT` | `../algo-trader` | Data directory of the optional Algo Trader installation. |
 
-Demo mode is automatic while either a Trade Republic credential or the Algo Trader data is missing.
-
 ### Price sources
 
-Quotes come from the Handelsrepublik SDK first and the loopback Trade Republic UAPI sidecar second. Every monitored instrument needs a verified Trade Republic EUR mapping. If both providers fail for a symbol, OpenStock records a per-stock failure and continues the cycle.
+Alpaca provides the quote and chart-history data. OpenStock requests the configured SIP or IEX feed and labels the feed returned by Alpaca.
 
 BUY alerts compare against the executable ask; SELL alerts compare against the executable bid.
 
 Prices, amounts, fees and performance values are displayed rounded to two decimals. Journal fields keep the precision you enter, up to six decimals; calculations and stored values use full precision.
 
-The Dashboard polls `/api/live-prices` once per second while visible. That endpoint is display-only: it never writes stock state, history, alert state or equity snapshots.
+The Dashboard polls `/api/live-prices` while visible. That endpoint is display-only: it never writes stock state, history, alert state or equity snapshots.
+
+To copy an existing watchlist and its alert levels into the Alpaca USD watchlist, configure Alpaca credentials first, then run this once:
+
+```bash
+node scripts/migrate-alpaca-profile.js
+```
+
+The script verifies symbols with Alpaca and converts legacy EUR price levels using the current EUR/USD rate. It refuses to overwrite an already-populated Alpaca watchlist.
 
 ## Monitoring behavior
 
 `scripts/monitor.js` runs one cycle per invocation:
 
-1. Reads enabled stocks from the database.
-2. Fetches an executable EUR quote for each stock, SDK first, UAPI second.
-3. Stores price and quote-side data in SQLite.
-4. Evaluates buy and sell thresholds against ask and bid.
-5. Sends Telegram alerts on threshold crossing.
-6. Writes a durable alert-outbox record, and retires an alert level only after confirmed delivery.
-7. Stores a local price observation and, when capital is configured, an equity snapshot.
+1. Reads enabled tickers from the Alpaca watchlist.
+2. Fetches executable ask and bid quotes from Alpaca.
+3. Evaluates BUY against ask and SELL against bid; SELL alerts wait for an open Alpaca position.
+4. Sends Telegram alerts through the durable alert outbox and retires levels after confirmed delivery.
+5. Fetches chart history directly from Alpaca.
 
 The cycle uses bounded concurrency, a deadline, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock.
 
@@ -145,16 +147,11 @@ npm run monitor -- --help  # print usage only
 
 ### Journal positions
 
-Position summaries and SELL eligibility use the total quantity of open journal trades. Without an open position, SELL levels stay configured but do not fire. Archiving a stock preserves its history; restoring it re-enables non-retired alert levels.
+Position summaries and SELL eligibility come from the authenticated Alpaca account. Without an open position, SELL levels stay configured but do not fire.
 
 ### Chart history backfill
 
-The server queues missing history for active, non-archived stocks with verified Trade Republic EUR mappings. Incomplete ranges stay eligible for retry. Run the queue manually with:
-
-```bash
-npm run backfill-history
-# Optional: HISTORY_BACKFILL_DELAY_MS=2000 npm run backfill-history
-```
+Alpaca chart ranges use Alpaca bars directly.
 
 ## Performance data model
 
@@ -171,24 +168,10 @@ npm run backfill-history
 | `/health` | GET | Health check and version |
 | `/api/demo-status` | GET | Whether demo mode is active and what setup is missing |
 | `/api/dashboard` | GET | Stock dashboard data |
-| `/api/live-prices` | GET | Display-only executable prices |
-| `/api/stocks` | GET, POST | List or add stocks |
-| `/api/stocks/archived` | GET | Archived stocks kept for journal and history |
-| `/api/stocks/:id` | GET, PUT, DELETE | Read, update or remove a stock |
-| `/api/stocks/:id/restore` | POST | Restore an archived stock |
-| `/api/stocks/:id/history` | GET | Chart history for a stock |
-| `/api/stocks/:id/alert-levels` | GET, POST | List or add alert levels |
-| `/api/alert-levels/:id` | PUT, DELETE | Update or remove an alert level |
-| `/api/alert-levels/:id/rearm` | POST | Rearm a retired alert level |
-| `/api/trades` | GET, POST | List or record position lots |
-| `/api/trades/:id` | PUT | Edit a trade |
-| `/api/trades/:id/close` | POST | Close an open trade |
-| `/api/capital-events` | GET, POST | List or record capital movements |
-| `/api/analytics/dashboard` | GET | Performance, risk and equity-curve data |
-| `/api/broker/trade-republic/health` | GET | Sanitized broker connectivity status |
-| `/api/broker/trade-republic/mappings` | GET, POST | List or verify instrument mappings |
-| `/api/broker/trade-republic/quote/:stockId` | GET | Fetch and persist a sanitized executable quote |
-| `/api/broker/trade-republic/sync` | POST | Synchronize account, portfolio, order and transaction data |
+| `/api/live-prices` | GET | Display-only Alpaca quotes |
+| `/api/alpaca/journal` | GET | Read-only Alpaca account, positions, and fills |
+| `/api/alpaca/alert-levels/:id/rearm` | POST | Rearm a copied Alpaca alert level |
+| `/api/stocks/:id/history?broker=alpaca` | GET | Alpaca chart history |
 
 Mutating requests must come from the same origin as the page.
 

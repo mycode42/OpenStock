@@ -31,10 +31,9 @@ const optionsDefaults = {
     realized_lookback_sessions: 20, short_delta_min: 0.1, short_delta_max: 0.2,
     wing_delta_max: 0.07, allowed_regimes: ['range_bound', 'trending_up', 'trending_down'], max_entries_per_day: 1,
   },
-  event_driven: {
-    enabled: true, min_days_before_event: 0, max_days_before_event: 5, min_historical_events: 3,
-    min_move_edge_pct: 0.15, min_llm_confidence: 0.6, min_dte: 3, max_dte: 35,
-    max_spread_pct: 0.2, realized_lookback_days: 730,
+  llm_driven: {
+    enabled: true, min_llm_confidence: 0.6, min_dte: 3, max_dte: 35,
+    max_spread_pct: 0.2,
   },
   directional_overlay: {
     enabled: false, underlying: 'SPY', min_dte: 25, max_dte: 60, target_dte: 40,
@@ -146,7 +145,7 @@ test('options paper account payload reads its own account journal and research',
   assert.equal(res.body.account.regime, 'range_bound');
   assert.equal(res.body.account.regime_engine, 'committee');
   assert.equal(res.body.account.entries_paused, false);
-  assert.deepEqual(res.body.account.active_strategies, ['Event Driven', 'Volatility Risk Premium']);
+  assert.deepEqual(res.body.account.active_strategies, ['LLM Driven', 'Volatility Risk Premium']);
   assert.equal(res.body.research.latest.promoted, 1);
   assert.ok(res.body.activity.some(item => item.title.includes('SPY')));
   assert.equal(Object.hasOwn(res.body.account, 'account_id'), false);

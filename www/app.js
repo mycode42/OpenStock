@@ -1,10 +1,9 @@
 import { apiRequest } from './modules/api.js';
 import { createState, sortedStocks, indexStocks } from './modules/state.js';
-import { createCharts } from './modules/charts.js?demo-mode=1';
-import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1';
-import { createConfig } from './modules/config.js?title-cleanup=1';
-import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1';
-import { createAlgoTrader } from './modules/algo-trader.js?v=2.0.3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
+import { createCharts } from './modules/charts.js?demo-mode=1&alpaca-usd-only=1';
+import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1&alpaca-usd-only=1';
+import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1';
+import { createAlgoTrader } from './modules/algo-trader.js?v=2.0.4&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
 import { createSettings } from './modules/settings.js';
 import { createAlgoUniverse } from './modules/algo-universe.js?cards=1&demo-mode=1';
 
@@ -18,8 +17,8 @@ function removeStockFromState(id) { replaceStocks(state.stocks.filter(stock => s
 function beginStockMutation(id) { const token=(stockMutationTokens.get(id)||0)+1; stockMutationTokens.set(id, token); stockRevision += 1; return token; }
 function isCurrentStockMutation(id, token) { return stockMutationTokens.get(id) === token; }
 function showA(message, type='i', containerId='ac') { const container=document.getElementById(containerId); if(!container)return; const alert=document.createElement('div'); alert.className=`alert-box ${type}`; alert.textContent=message; container.appendChild(alert); setTimeout(()=>alert.remove(),5000); }
-function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','algo-universe','journal','config','algo-trader','algo-research','settings'].includes(page)?page:'dashboard'; }
-function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','algo-universe','config','journal','algo-trader','algo-research','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
+function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','algo-universe','journal','algo-trader','algo-research','settings'].includes(page)?page:'dashboard'; }
+function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','algo-universe','journal','algo-trader','algo-research','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
 function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
 async function af(path, options={}, onError) { return apiRequest(path, options, (message, details)=>onError ? onError(message, details) : showA(message,'error')); }
 apiRequest('/demo-status').then(status => {
@@ -28,26 +27,23 @@ apiRequest('/demo-status').then(status => {
     const message = document.getElementById('demo-mode-message');
     if (!banner || !message) return;
     const setup = Array.isArray(status.setup) ? status.setup : [];
-    message.textContent = `Sample prices, positions and activity are simulated. ${setup.length ? `Complete setup to connect live data: ${setup.join('; ')}.` : 'Complete Trade Republic and Algo Trader setup to connect live data.'}`;
+    message.textContent = `Sample prices, positions and activity are simulated. ${setup.length ? `Complete setup to connect live data: ${setup.join('; ')}.` : 'Complete Alpaca and Algo Trader setup to connect live data.'}`;
     banner.hidden = false;
 });
 const charts = createCharts({ request:af, historyCache:state.historyCache });
-function renderCurrentPage() { const page=pageFromHash(); showPage(page); if(page==='dashboard')dashboard.renderDashboard(); else if(page==='journal')journal.renderJournal(); else if(page==='algo-trader')algoTrader.render(); else if(page==='algo-research')algoTrader.renderResearch(); else if(page==='algo-universe')algoUniverse.render(); else if(page==='settings')settings.render(); else config.renderConfig(); }
-const context = { getStocks:()=>state.stocks, getStockMap:()=>state.stockMap, getTrades:()=>state.trades, getTradePagination:()=>state.tradePagination, getCapitalEvents:()=>state.capitalEvents, getAnalytics:()=>state.analytics, request:af, replaceStocks, upsertStock, removeStockFromState, beginStockMutation, isCurrentStockMutation, getStockRevision:()=>stockRevision, incrementStockRevision:()=>++stockRevision, showA, renderCurrentPage, pageFromHash, nav, charts, actions: {}, setJournalPage:page=>{state.journalPage=page;}, reloadJournal:(page=state.journalPage)=>loadPage('journal', page) };
+function renderCurrentPage() { const page=pageFromHash(); showPage(page); if(page==='dashboard')dashboard.renderDashboard(); else if(page==='journal')journal.renderJournal(); else if(page==='algo-trader')algoTrader.render(); else if(page==='algo-research')algoTrader.renderResearch(); else if(page==='algo-universe')algoUniverse.render(); else if(page==='settings')settings.render(); }
+const context = { getStocks:()=>state.stocks, getStockMap:()=>state.stockMap, getTrades:()=>state.trades, getTradePagination:()=>state.tradePagination, getCapitalEvents:()=>state.capitalEvents, getAnalytics:()=>state.analytics, request:af, replaceStocks, upsertStock, removeStockFromState, beginStockMutation, isCurrentStockMutation, getStockRevision:()=>stockRevision, incrementStockRevision:()=>++stockRevision, showA, renderCurrentPage, reloadCurrentPage:()=>loadPage(pageFromHash()), pageFromHash, nav, charts, setJournalPage:page=>{state.journalPage=page;}, reloadJournal:(page=state.journalPage)=>loadPage('journal', page) };
 const dashboard = createDashboard(context);
-const config = createConfig(context);
 const journal = createJournal(context);
 const algoTrader = createAlgoTrader({ request:af, charts });
 const algoUniverse = createAlgoUniverse({ request:af, charts });
 const settings = createSettings();
 settings.initialize();
-Object.assign(context.actions, { edit: config.es, toggle: config.ts, remove: config.rs, configureAlerts: config.openAlerts });
 function nav(hash) { const page=pageFromHash(hash); const target=page==='dashboard'?'':`#/${page}`; if(window.location.hash!==target){window.location.hash=target;return;} loadPage(page); }
 async function loadPage(page, journalPage=state.journalPage) {
     const loadId=++pageLoadId;
     const startRevision=stockRevision;
     if(page!=='dashboard')dashboard.stopLivePolling();
-    if(page!=='config')config.stopLivePolling();
     if(page!=='algo-trader'&&page!=='algo-research')algoTrader.stopPolling();
     if(page!=='algo-universe')algoUniverse.stopPolling();
     showPage(page);
@@ -59,19 +55,16 @@ async function loadPage(page, journalPage=state.journalPage) {
     if(page==='dashboard'){
         const data=await af('/dashboard');
         if(loadId!==pageLoadId||pageFromHash()!==page)return;
+        if(!data){document.getElementById('page-dashboard').innerHTML='<header><h1>OpenStock</h1></header><div class="alert-box error">Dashboard market data is unavailable.</div>';return;}
         if(data&&stockRevision===startRevision)replaceStocks(data.stocks);
         dashboard.renderDashboard();
         return;
     }
     if(page==='journal'){
-        const requestedPage=Math.max(1, Number(journalPage) || 1);
-        const [freshStocks,freshTrades,freshEvents,freshAnalytics]=await Promise.all([af('/stocks?includeArchived=1'),af(`/trades?page=${requestedPage}&page_size=15`),af('/capital-events'),af('/analytics/dashboard')]);
+        const data=await af('/alpaca/journal');
         if(loadId!==pageLoadId||pageFromHash()!==page)return;
-        if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks);
-        if(freshTrades){state.trades=freshTrades.items; state.tradePagination={page:freshTrades.page,page_size:freshTrades.page,total:freshTrades.total,total_pages:freshTrades.total_pages}; state.journalPage=freshTrades.page;}
-        if(freshEvents)state.capitalEvents=freshEvents;
-        if(freshAnalytics)state.analytics=freshAnalytics;
-        journal.renderJournal();
+        if(data)journal.renderAlpacaJournal(data);
+        else document.getElementById('page-journal').innerHTML='<header><h1>Trading Journal</h1><p class="subtitle">Alpaca · USD</p></header><div class="alert-box error">Alpaca account activity is unavailable.</div>';
         return;
     }
     if(page==='algo-trader'){
@@ -92,12 +85,8 @@ async function loadPage(page, journalPage=state.journalPage) {
         algoUniverse.startPolling();
         return;
     }
-    const freshStocks=await af('/stocks');
-    if(loadId!==pageLoadId||pageFromHash()!==page)return;
-    if(freshStocks&&stockRevision===startRevision)replaceStocks(freshStocks);
-    config.renderConfig();
 }
-Object.assign(window, { ...dashboard, ...config, ...journal, nav, dt, showA });
+Object.assign(window, { ...dashboard, ...journal, nav, dt, showA });
 function enableStandalonePullToRefresh() {
   const indicator = document.getElementById('pull-refresh-indicator');
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;

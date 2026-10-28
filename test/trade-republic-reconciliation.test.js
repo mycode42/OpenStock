@@ -52,13 +52,10 @@ test('read-only account maps mask IBAN-style and numeric account keys', () => {
   assert.equal(JSON.stringify(safe).includes('1234567890123456'), false);
 });
 
-test('executed transaction without authoritative fields becomes a pending candidate', async t => {
+test('public app does not expose legacy broker transaction synchronization', async t => {
   const f=await fixture(); t.after(()=>{f.server.close();f.db.db.close();fs.rmSync(f.dir,{recursive:true,force:true});});
-  f.app.locals.brokerClient={getAccounts:async()=>[],getPortfolio:async()=>[],getOrders:async()=>({}),getTransactions:async()=>[{id:'tx-1',title:'Trade Republic',subtitle:'Achat',status:'EXECUTED',timestamp:'2026-09-15T10:00:00Z',amount:{currency:'EUR',value:-10001,fractionDigits:2},presentation:null}]};
-  let response=await f.request('/api/broker/trade-republic/sync',{method:'POST'});
-  assert.equal(response.status,200); let body=await response.json(); assert.equal(body.new_reconciliation_candidates,1); assert.equal(body.pending_reconciliation,1);
-  response=await f.request('/api/broker/trade-republic/sync',{method:'POST'}); body=await response.json(); assert.equal(body.new_reconciliation_candidates,0); assert.equal(body.pending_reconciliation,1);
-  const candidates=f.db.getBrokerReconciliationCandidates(); assert.equal(candidates[0].amount_eur,-100.01); assert.equal(candidates[0].reason.includes('missing'),true); assert.equal(f.db.getAllTrades().length,0);
+  const response=await f.request('/api/broker/trade-republic/sync',{method:'POST'});
+  assert.equal(response.status,404);
 });
 
 

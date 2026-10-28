@@ -13,6 +13,8 @@ const OPTIONS_STRATEGY_IDS = Object.freeze([
 ]);
 const OPTIONS_STRATEGY_ALIASES = Object.freeze({
     vrp: 'options_vrp',
+    event_driven: 'options_llm_driven',
+    options_event_driven: 'options_llm_driven',
     llm_driven: 'options_llm_driven',
     directional_overlay: 'options_directional_overlay',
     long_volatility: 'options_long_volatility_sleeve',

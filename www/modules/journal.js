@@ -391,6 +391,24 @@ function renderJournal() {
     attachInteractiveLineCharts(container);
 }
 
+function renderAlpacaJournal(data) {
+    const container = document.getElementById('page-journal');
+    const account = data.account || {};
+    const positions = Array.isArray(data.positions) ? data.positions : [];
+    const fills = Array.isArray(data.fills) ? data.fills : [];
+    const equity = Number(account.equity);
+    const lastEquity = Number(account.last_equity);
+    const dayChange = Number.isFinite(equity) && Number.isFinite(lastEquity) ? equity - lastEquity : null;
+    const unrealized = positions.reduce((sum, position) => sum + (Number(position.unrealized_pl) || 0), 0);
+    const positionRows = positions.length ? positions.map(position => `<tr><td><strong>${escapeHtml(position.symbol)}</strong></td><td>${Number(position.qty).toLocaleString('en-US', { maximumFractionDigits: 8 })}</td><td>${escapeHtml(position.side || 'long')}</td><td>${journalTradePrice(position.avg_entry_price, 'USD')}</td><td>${journalTradePrice(position.current_price, 'USD')}</td><td>${journalTradePrice(position.market_value, 'USD')}</td><td class="${journalClass(position.unrealized_pl)}">${journalSigned(position.unrealized_pl)}</td></tr>`).join('') : '<tr><td colspan="7" class="journal-empty">No open Alpaca positions.</td></tr>';
+    const fillRows = fills.length ? fills.map(fill => `<tr><td>${formatLocalDate(fill.transaction_time)}</td><td><strong>${escapeHtml(fill.symbol)}</strong></td><td>${escapeHtml(String(fill.side || '').toUpperCase())}</td><td>${Number(fill.qty).toLocaleString('en-US', { maximumFractionDigits: 8 })}</td><td>${journalTradePrice(fill.price, 'USD')}</td><td>${journalTradePrice(Number(fill.qty) * Number(fill.price), 'USD')}</td></tr>`).join('') : '<tr><td colspan="6" class="journal-empty">No Alpaca fills yet.</td></tr>';
+    container.innerHTML = `<header><h1>Trading Journal</h1><p class="subtitle">Alpaca account · USD · read-only broker data</p></header>
+      <div class="journal-kpi-grid journal-kpi-featured-grid">${journalKpi('Account Equity', journalTradePrice(account.equity, 'USD'), 'Current Alpaca account equity.')}${journalKpi('Cash', journalTradePrice(account.cash, 'USD'), 'Cash reported by Alpaca.')}${journalKpi('Day Change', journalSigned(dayChange), 'Equity minus the previous account equity snapshot.', journalClass(dayChange))}${journalKpi('Unrealized P/L', journalSigned(unrealized), 'Sum of unrealized P/L across open Alpaca positions.', journalClass(unrealized))}</div>
+      <div class="journal-kpi-grid journal-kpi-secondary-grid">${journalKpi('Portfolio Value', journalTradePrice(account.portfolio_value, 'USD'), 'Current value reported by Alpaca.')}${journalKpi('Buying Power', journalTradePrice(account.buying_power, 'USD'), 'Available buying power reported by Alpaca.')}${journalKpi('Open Positions', String(positions.length), 'Positions currently held in the Alpaca account.')}${journalKpi('Account Status', escapeHtml(account.status || '—'), 'Status reported by Alpaca.')}</div>
+      <div class="card"><div class="section-title">Open Alpaca Positions</div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Instrument</th><th>Quantity</th><th>Side</th><th>Avg. Entry</th><th>Current Price</th><th>Market Value</th><th>Unrealized P/L</th></tr></thead><tbody>${positionRows}</tbody></table></div></div>
+      <div class="card"><div class="section-header"><div><div class="section-title">Alpaca Fills</div><p class="subtitle">Latest broker executions from the authenticated Alpaca account.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Time</th><th>Instrument</th><th>Side</th><th>Quantity</th><th>Fill Price</th><th>Value</th></tr></thead><tbody>${fillRows}</tbody></table></div></div>`;
+}
+
 function queueJournalDividendEnhancements(container) {
     queueMicrotask(() => {
         const statsCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Trade Statistics');
@@ -417,5 +435,5 @@ async function saveCapitalEvent(event) {
     showA('Capital event recorded', 'success');
 }
 
-    return { renderJournal, renderTradePagination, saveCapitalEvent };
+    return { renderJournal, renderAlpacaJournal, renderTradePagination, saveCapitalEvent };
 }

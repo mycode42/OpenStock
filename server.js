@@ -27,8 +27,9 @@ const {
 } = require('./server/serializers');
 const { alertLevelInput, booleanField, toDatabaseDate, numberField, normaliseTrade } = require('./server/input');
 const { dashboardData, captureEquitySnapshot, queueStockHistory, brokerError } = require('./server/services');
-const { quoteServiceFor, createLiveQuoteFeed } = require('./server/quote-feed');
-const { detectDemoSetup } = require('./server/demo-setup');
+const { detectDemoSetup, hasAlpacaCredentials } = require('./server/demo-setup');
+const { AlpacaClient } = require('./lib/brokers/alpaca');
+const { createAlpacaQuoteFeed } = require('./server/alpaca-quote-feed');
 
 function createApp({
     db: suppliedDb,
@@ -61,7 +62,8 @@ function createApp({
         timeoutMs: Number(process.env.TRADE_REPUBLIC_TIMEOUT_MS || 30000),
     });
     app.locals.sdkClient = sdkClient || new HandelsrepublikQuoteClient();
-    const detectedDemoSetup = detectDemoSetup({ algoTraderRoot, sdkClient: app.locals.sdkClient });
+    app.locals.alpacaClient = new AlpacaClient({ fetchImpl, timeoutMs: Number(process.env.ALPACA_TIMEOUT_MS || 10000) });
+    const detectedDemoSetup = detectDemoSetup({ algoTraderRoot });
     app.locals.demoMode =
         demoMode === null ? (process.env.NODE_ENV === 'test' ? false : detectedDemoSetup.demo_mode) : Boolean(demoMode);
     app.locals.demoStatus =
@@ -104,7 +106,7 @@ function createApp({
         next();
     });
     app.use(express.static(path.join(__dirname, 'www')));
-    app.locals.liveQuoteFeed = createLiveQuoteFeed({ app, now });
+    app.locals.alpacaQuoteFeed = createAlpacaQuoteFeed({ app, now });
 
     require('./server/routes/stocks')({
         app,
@@ -136,24 +138,15 @@ function createApp({
         toISODateTime,
     });
 
+    require('./server/routes/alpaca')({ app });
+
     require('./server/routes/dashboard')({
         app,
-        dashboardData,
-        captureEquitySnapshot,
-        serializeConfiguredStock,
-        quoteServiceFor,
+        alpacaQuoteFeed: app.locals.alpacaQuoteFeed,
         now,
     });
 
     require('./server/routes/algo-trader')({ app, root: algoTraderRoot, now });
-
-    require('./server/routes/trade-republic')({
-        app,
-        resolveVerifiedInstrument,
-        serializeConfiguredStock,
-        brokerError,
-        serializeTrade,
-    });
 
     // Health check
     app.get('/health', (req, res) => {
@@ -171,15 +164,6 @@ function createApp({
         res.sendFile(path.join(__dirname, 'www', 'index.html'));
     });
 
-    // Seed real charts only after broker setup is present. The demo feed is synthetic
-    // and must not trigger writes to the user's stock history.
-    if (!app.locals.demoMode) {
-        try {
-            historyBackfill.enqueueMissing();
-        } catch (error) {
-            console.error('Unable to queue startup history backfill:', error.message);
-        }
-    }
     return app;
 }
 
@@ -206,6 +190,5 @@ module.exports = {
     serializeTrade,
     berlinTradingDayStart,
     berlinTradingDayEnd,
-    createLiveQuoteFeed,
     detectDemoSetup,
 };

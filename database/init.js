@@ -23,6 +23,8 @@ const migrations = [
   ,require('./migrations/020_trade_republic_only_quotes')
   ,require('./migrations/021_crypto_execution_sync')
   ,require('./migrations/022_percentage_move_alerts')
+  ,require('./migrations/023_alpaca_usd_profile')
+  ,require('./migrations/024_alpaca_alert_outbox')
 ];
 
 function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true } = {}) {

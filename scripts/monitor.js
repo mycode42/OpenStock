@@ -6,10 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
 const { initDatabase } = require('../database/init');
-const OpenStockDB = require('../database/db');
-const { EXIT, runMonitor, safeError } = require('../lib/monitor');
-const { TradeRepublicClient } = require('../lib/brokers/trade-republic');
-const { HandelsrepublikQuoteClient } = require('../lib/brokers/handelsrepublik');
+const { EXIT, safeError } = require('../lib/monitor');
+const { runAlpacaMonitor } = require('../lib/alpaca-monitor');
+const { AlpacaClient } = require('../lib/brokers/alpaca');
 
 if (process.argv.includes('--help')) {
     process.stdout.write('Usage: node scripts/monitor.js\nRuns one live OpenStock monitoring cycle using .env configuration.\n');
@@ -40,26 +39,22 @@ async function main() {
     if (!fs.existsSync(dbPath)) { error(`Database not found: ${dbPath}`); return EXIT.CONFIG; }
     initDatabase({ silent: true });
     const db = new Database(dbPath);
-    const journalDb = new OpenStockDB(dbPath);
     db.pragma('journal_mode = WAL'); db.pragma('foreign_keys = ON');
     const chatId = process.env.TELEGRAM_CHAT_ID || '';
     if (!chatId) error('No Telegram recipient configured; trigger notifications will fail safely');
     try {
         const timeoutMs = positiveSetting('MONITOR_TIMEOUT_MS', 10000);
-        const tradeRepublic = new TradeRepublicClient({ timeoutMs });
-        const tradeRepublicSdk = new HandelsrepublikQuoteClient({ timeoutMs });
         log('=== Monitoring cycle started ===');
-        return await runMonitor({ db, journalDb, log, error, config: {
+        const config = {
             timeoutMs,
             concurrency: positiveSetting('MONITOR_CONCURRENCY', 3),
             cycleDeadlineMs: positiveSetting('MONITOR_CYCLE_DEADLINE_MS', 45000),
             lockPath: process.env.MONITOR_LOCK_PATH || path.join(memoryDir, 'monitor.lock'),
-            telegram: { token: process.env.TELEGRAM_BOT_TOKEN, chatId },
-            tradeRepublic,
-            tradeRepublicSdk
-        }});
+            telegram: { token: process.env.TELEGRAM_BOT_TOKEN, chatId }
+        };
+        return await runAlpacaMonitor({ db, alpacaClient: new AlpacaClient({ timeoutMs }), log, error, config });
     } catch (monitorError) { error(safeError(monitorError)); return EXIT.CONFIG; }
-    finally { db.close(); journalDb.db.close(); }
+    finally { db.close(); }
 }
 
 main().then(code => { log(`Monitoring cycle complete (exit=${code})`); process.exitCode = code; }).catch(errorValue => { error(safeError(errorValue)); process.exitCode = EXIT.CONFIG; });

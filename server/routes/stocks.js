@@ -1,5 +1,7 @@
 'use strict';
 
+const { rawDatabase } = require('../alpaca-profile');
+
 module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, queueStockHistory, resolveVerifiedInstrument, resolveCryptoCandidates, resolveVerifiedCryptoInstrument, brokerError, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
@@ -42,6 +44,46 @@ app.get('/api/stocks/:id/history', (req, res) => {
         const history = req.app.locals.demoData.stockHistory(req.params.id, range, now());
         if (!history) return res.status(404).json({ error: 'Stock not found' });
         return res.json(history);
+    }
+
+    if (req.query.broker === 'alpaca') {
+        (async () => {
+            const stock = rawDatabase(req.app.locals.db).prepare(`SELECT id, symbol FROM alpaca_watchlist
+                WHERE id=? AND enabled=1 AND archived=0`).get(req.params.id);
+            if (!stock) return res.status(404).json({ error: 'Alpaca watchlist stock not found' });
+            const durations = { '1d': 5, '1w': 7, '1mo': 31, '30d': 30, '1y': 366, '5y': 1827 };
+            const timeframes = { '1d': '5Min', '1w': '30Min', '1mo': '1Day', '30d': '1Day', '1y': '1Day', '5y': '1Week' };
+            const end = now();
+            const start = new Date(end.getTime() - durations[range] * 86400000);
+            const result = await req.app.locals.alpacaClient.getBars(stock.symbol, {
+                timeframe: timeframes[range], start, end, limit: range === '5y' ? 500 : 5000
+            });
+            const maximum = { '1d': 72, '1w': 84, '1mo': 90, '30d': 90, '1y': 120, '5y': 120 }[range];
+            let bars = (result.bars || []).map(bar => ({
+                recorded_at: bar.t,
+                price_usd: Number(bar.c),
+                volume: Number(bar.v || 0)
+            })).filter(point => Number.isFinite(point.price_usd) && point.price_usd > 0)
+                .sort((left, right) => Date.parse(left.recorded_at) - Date.parse(right.recorded_at));
+            if (range === '1d' && bars.length) {
+                const nyDate = value => {
+                    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+                    const date = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+                    return `${date.year}-${date.month}-${date.day}`;
+                };
+                const latestSession = nyDate(bars[bars.length - 1].recorded_at);
+                bars = bars.filter(point => nyDate(point.recorded_at) === latestSession);
+            }
+            const points = evenlySample(bars, maximum);
+            return res.json({
+                stock_id: stock.id, symbol: stock.symbol, range, currency: 'USD', source: `alpaca_${result.feed}_bars`,
+                bucket_seconds: null, max_gap_seconds: null, start_at: null, end_at: null, points
+            });
+        })().catch(error => {
+            console.warn(`Alpaca price history unavailable: ${error.message}`);
+            res.status(error.status || 503).json({ error: 'Alpaca price history is unavailable' });
+        });
+        return;
     }
 
     try {
