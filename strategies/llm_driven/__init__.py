@@ -1,6 +1,6 @@
 """LLM-signal strategy: scheduled AI recommendations and owner exit management.
 
-Calendar data is an input for autoresearch replay and options research. The
+Calendar data is an input for equity_research replay and options research. The
 live scanner uses only LLMSignalBook and LLMSignalGenerator's AI and
 owner-protection paths.
 """

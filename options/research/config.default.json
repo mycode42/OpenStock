@@ -69,7 +69,7 @@
     "minimum_oos_trades": 8,
     "minimum_holdout_trades": 4,
     "embargo_sessions": 5,
-    "final_holdout_sessions": 252,
+    "final_holdout_sessions": 63,
     "minimum_holdout_regime_labels": 2,
     "minimum_high_volatility_holdout_sessions": 5,
     "high_volatility_labels": ["volatile", "high_vol", "high_volatility", "elevated", "crisis", "risk_off"]
@@ -77,6 +77,11 @@
   "short_history_exploration": {
     "enabled": true,
     "minimum_sessions": 60
+  },
+  "champion": {
+    "enabled": true,
+    "minimum_holdout_score_margin": 0.0,
+    "minimum_fresh_holdout_sessions": 42
   },
   "search": {
     "mode": "surrogate",

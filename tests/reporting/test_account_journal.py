@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from reporting import journal_store
+
 from broker import accounts
 from reporting import journal as trade_journal
 from reporting import performance as tracker
@@ -48,8 +50,8 @@ def test_account_verification_fails_closed_on_wrong_account_or_block(monkeypatch
 
 
 def test_submitted_order_is_not_counted_as_filled_until_broker_confirms(monkeypatch, tmp_path):
-    journal = tmp_path / "journal.jsonl"
-    monkeypatch.setattr(trade_journal, "JOURNAL_PATH", journal)
+    journal = tmp_path / "algo_state.sqlite3"
+    monkeypatch.setattr(journal_store, "DEFAULT_DATABASE", journal)
     logged = trade_journal.append_trades({
         "timestamp": "2026-10-08T10:00:00-04:00",
         "trading_mode": "algo",
@@ -61,7 +63,7 @@ def test_submitted_order_is_not_counted_as_filled_until_broker_confirms(monkeypa
         }],
     })
     assert logged == 1
-    row = json.loads(journal.read_text().strip())
+    [row] = journal_store.read_entries(journal)
     assert row["status"] == "submitted"
     assert row["broker_status"] == "pending_new"
     assert trade_journal.compute_stats([row])["filled"] == 0
@@ -78,7 +80,7 @@ def test_submitted_order_is_not_counted_as_filled_until_broker_confirms(monkeypa
 
 
 def test_replayed_client_id_enriches_order_without_double_counting(monkeypatch, tmp_path):
-    monkeypatch.setattr(trade_journal, "JOURNAL_PATH", tmp_path / "journal.jsonl")
+    monkeypatch.setattr(journal_store, "DEFAULT_DATABASE", tmp_path / "algo_state.sqlite3")
     first = {"trading_mode": "algo", "mode": "live", "results": [{
         "ticker": "AAPL", "action": "buy", "qty": 2, "status": "submitted",
         "client_order_id": "stable-1", "strategy": "swing_momentum",
@@ -99,8 +101,7 @@ def test_replayed_client_id_enriches_order_without_double_counting(monkeypatch, 
 
 
 def test_account_reset_keeps_old_journal_and_snapshots_out_of_current_report(monkeypatch, tmp_path):
-    monkeypatch.setattr(trade_journal, "JOURNAL_PATH", tmp_path / "journal.jsonl")
-    monkeypatch.setattr(tracker, "TRADE_JOURNAL_PATH", tmp_path / "journal.jsonl")
+    monkeypatch.setattr(journal_store, "DEFAULT_DATABASE", tmp_path / "algo_state.sqlite3")
     monkeypatch.setattr(tracker, "_snapshot_dir", lambda mode: tmp_path / "snapshots")
     (tmp_path / "snapshots").mkdir()
     for account_id, equity in (("old-id", 99_000), ("new-id", 1_000_000)):

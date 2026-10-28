@@ -65,7 +65,7 @@ The systemd unit scans every 15 minutes during regular US hours, starts 10
 minutes after the open, and stops opening new trades 15 minutes before close.
 It submits orders only to the separate Alpaca paper endpoint.
 
-The dedicated options research runner is separate from equity autoresearch:
+The dedicated options research runner is separate from equity equity_research:
 
 ```sh
 poetry run python -m options.research --strategy vrp --data data/options/research/chains.jsonl

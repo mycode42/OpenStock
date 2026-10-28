@@ -19,7 +19,8 @@ load_dotenv()
 import requests
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 from market.calendar import get_market_schedule
-from autoresearch.validation.drift_monitor import LIVE_FEED_SCHEMA
+from equity_research.validation.drift_monitor import LIVE_FEED_SCHEMA
+from reporting import journal_store
 from reporting.journal import dedupe_journal_entries
 from runtime.atomic import atomic_write_json
 
@@ -34,7 +35,6 @@ API_BASE = "https://paper-api.alpaca.markets/v2"
 
 from runtime.paths import DATA_DIR
 
-TRADE_JOURNAL_PATH = DATA_DIR / "trade_journal.jsonl"
 
 RISK_FREE_RATE_ANNUAL = 0.045  # ~4.5% annualised (T-bill proxy)
 RISK_FREE_DAILY = RISK_FREE_RATE_ANNUAL / 252
@@ -131,29 +131,20 @@ def load_snapshots_with_skips(
 
 
 def load_trade_journal(mode: str = "algo", account_id: str | None = None) -> list[dict]:
-    """Load submissions for one mode and, when supplied, one broker account."""
+    """Load submissions for one mode and, when supplied, one broker account, from the state database."""
     trades = []
     unclassified = 0
-    if not TRADE_JOURNAL_PATH.exists():
-        return trades
     try:
-        with open(TRADE_JOURNAL_PATH) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        entry = json.loads(line)
-                        entry_mode = entry.get("trading_mode")
-                        if entry_mode is None:
-                            unclassified += 1
-                        elif entry_mode == mode and (
-                            account_id is None or entry.get("account_id") == account_id
-                        ):
-                            trades.append(entry)
-                    except json.JSONDecodeError:
-                        continue
+        entries = journal_store.read_entries(journal_store.DEFAULT_DATABASE)
     except Exception as e:
         log.warning(f"Could not load trade journal: {e}")
+        return trades
+    for entry in entries:
+        entry_mode = entry.get("trading_mode")
+        if entry_mode is None:
+            unclassified += 1
+        elif entry_mode == mode and (account_id is None or entry.get("account_id") == account_id):
+            trades.append(entry)
     if unclassified:
         log.warning(
             "%d legacy journal entries have no trading_mode and are excluded from %s stats",

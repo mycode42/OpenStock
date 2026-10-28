@@ -10,7 +10,7 @@ dynamic = ["dependencies"]
 
 [tool.poetry]
 packages = [
-    { include = "autoresearch" },
+    { include = "equity_research" },
     { include = "broker" },
     { include = "execution" },
     { include = "market" },
@@ -33,16 +33,16 @@ include = [
     { path = "strategies/multi_factor/_features_cy.pyx", format = "sdist" },
     { path = "strategies/multi_factor/*.so", format = "wheel" },
     { path = "strategies/multi_factor/*.pyd", format = "wheel" },
-    { path = "autoresearch/backtest/_execution_cy.pyx", format = "sdist" },
-    { path = "autoresearch/backtest/*.so", format = "wheel" },
-    { path = "autoresearch/backtest/*.pyd", format = "wheel" },
+    { path = "equity_research/backtest/_execution_cy.pyx", format = "sdist" },
+    { path = "equity_research/backtest/*.so", format = "wheel" },
+    { path = "equity_research/backtest/*.pyd", format = "wheel" },
     { path = "strategies/_swing_common_cy.pyx", format = "sdist" },
     { path = "strategies/*.so", format = "wheel" },
     { path = "strategies/*.pyd", format = "wheel" },
 ]
 exclude = [
     "strategies/multi_factor/_features_cy.pyx",
-    "autoresearch/backtest/_execution_cy.pyx",
+    "equity_research/backtest/_execution_cy.pyx",
     "strategies/_swing_common_cy.pyx",
     "options/_pricing_cy.pyx",
     "options/_search_cy.pyx",

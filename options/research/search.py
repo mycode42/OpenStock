@@ -23,6 +23,7 @@ class Candidate:
     allowed_regimes: tuple[str, ...]
     grid_indices: tuple[int, ...]
     is_baseline: bool = False
+    pinned: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -111,8 +112,8 @@ def _distance(
 def _select_budget(pool: list[Candidate], budget: int) -> list[Candidate]:
     if len(pool) <= budget:
         return pool
-    baseline = [item for item in pool if item.is_baseline]
-    others = [item for item in pool if not item.is_baseline]
+    baseline = [item for item in pool if item.is_baseline or item.pinned]
+    others = [item for item in pool if not (item.is_baseline or item.pinned)]
     remaining = max(0, budget - len(baseline))
     if remaining == 0:
         return baseline[:budget]

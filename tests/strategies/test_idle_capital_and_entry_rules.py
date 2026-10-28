@@ -1,9 +1,12 @@
 """Idle-cash planning, entry limit bands, intraday stop floors, and blocked-trade journaling."""
 
-import json
 from datetime import datetime
 
 import pytest
+
+from reporting import journal_store
+
+from tests.conftest import write_journal
 
 from reporting import journal
 from strategies.runner.cash_reserve import plan_cash_reserve
@@ -76,10 +79,9 @@ def test_minimum_stop_widens_the_intraday_stop_and_shrinks_size():
 
 
 def test_blocked_and_failed_journal_rows_keep_their_rule_and_reason(tmp_path, monkeypatch):
-    path = tmp_path / "trade_journal.jsonl"
-    path.write_text("")
-    monkeypatch.setattr(journal, "JOURNAL_PATH", path)
-    monkeypatch.setattr(journal, "ensure_dir", lambda: None)
+    path = tmp_path / "algo_state.sqlite3"
+    write_journal(path, "")
+    monkeypatch.setattr(journal_store, "DEFAULT_DATABASE", path)
 
     journal.append_trades({
         "mode": "algo", "timestamp": datetime(2026, 10, 27, 10, 0).isoformat(),
@@ -89,7 +91,7 @@ def test_blocked_and_failed_journal_rows_keep_their_rule_and_reason(tmp_path, mo
         }],
     })
 
-    row = json.loads(path.read_text().splitlines()[0])
+    [row] = journal_store.read_entries(path)
     assert row["status"] == "blocked"
     assert row["rule"] == "max_sector_pct"
     assert row["error"] == "Sector cap reached"

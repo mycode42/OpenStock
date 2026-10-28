@@ -2,7 +2,7 @@ from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from autoresearch.backtest import AlgoPortfolioBacktest
+from equity_research.backtest import AlgoPortfolioBacktest
 from strategies.portfolio_coordinator import (
     PortfolioCoordinator, PortfolioCoordinatorConfig, choose_priority, strategy_priority,
     throttle_signal, get_algo_runtime_settings,

@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from autoresearch.artifacts.research_ledger import ResearchLedger
+from equity_research.artifacts.research_ledger import ResearchLedger
 from runtime.paths import DATA_DIR
 
 

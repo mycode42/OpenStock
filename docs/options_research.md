@@ -1,6 +1,6 @@
 # Options research and validation
 
-Options sleeves use a separate research loop from the equity autoresearch
+Options sleeves use a separate research loop from the equity equity_research
 pipeline. Each run evaluates one expression module: `vrp`, `llm_driven`, or
 `directional_overlay`. The LLM-driven run consumes frozen point-in-time event
 recommendations; it never searches or invokes the LLM analyst itself.
@@ -41,7 +41,7 @@ not require the tuned candidate to beat the baseline.
 
 ## Nightly automation
 
-The scheduled AutoResearch automation runs `autoresearch.nightly`, which starts
+The scheduled AutoResearch automation runs `equity_research.nightly`, which starts
 the existing equity research command and an independent options job concurrently.
 The options job currently runs VRP and long-volatility. VRP screens the 117-symbol
 history candidate pool one ticker at a time; long-volatility keeps its explicit

@@ -1,31 +1,9 @@
-#!/usr/bin/env python3
-"""
-Trade Journal — Persistent log of Algo Trader decisions and outcomes.
+"""Trade journal helpers: record submissions in the state database, read them back, and compute stats."""
 
-Append mode:
-  poetry run python -m reporting.journal --log decisions.json    # Log from executor output
-  echo '{"results":[...]}' | poetry run python -m reporting.journal --log -
-
-Query mode:
-  poetry run python -m reporting.journal --show                   # Last 10 trades
-  poetry run python -m reporting.journal --show --limit 50        # Last 50
-  poetry run python -m reporting.journal --show --ticker NVDA     # Filter by ticker
-  poetry run python -m reporting.journal --stats                  # Win/loss stats
-  poetry run python -m reporting.journal --stats --days 7         # Stats for last 7 days
-  poetry run python -m reporting.journal --telegram               # Summary for Telegram
-"""
-
-import argparse
-import fcntl
-import json
-import os
-import sys
+from reporting import journal_store
 from datetime import datetime, timedelta
-from pathlib import Path
 
-from runtime.paths import DATA_DIR
 
-JOURNAL_PATH = DATA_DIR / "trade_journal.jsonl"
 BROKER_ORDER_STATUSES = {
     "accepted", "accepted_for_bidding", "calculated", "canceled", "done_for_day",
     "expired", "filled", "held", "new", "partially_filled", "pending_cancel",
@@ -34,18 +12,11 @@ BROKER_ORDER_STATUSES = {
 SUBMITTED_STATUSES = {"submitted", "executed", "accepted", "new", "pending_new", "filled", "partially_filled"}
 
 
-def ensure_dir():
-    JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
-def _order_keys(entry: dict) -> set[tuple[str, str, str]]:
-    mode = f"{entry.get('trading_mode') or 'unknown'}:{entry.get('account_id') or 'legacy'}"
-    keys = set()
-    if entry.get("order_id"):
-        keys.add((mode, "order", str(entry["order_id"])))
-    if entry.get("client_order_id"):
-        keys.add((mode, "client", str(entry["client_order_id"])))
-    return keys
+_order_keys = journal_store.order_keys
+
+
 
 
 def dedupe_journal_entries(entries: list[dict]) -> list[dict]:
@@ -81,106 +52,71 @@ def dedupe_journal_entries(entries: list[dict]) -> list[dict]:
 
 def append_trades(execution_result: dict):
     """Append order submissions and rejections from execution command output."""
-    ensure_dir()
     results = execution_result.get("results", [])
     timestamp = execution_result.get("timestamp", datetime.now().isoformat())
     mode = execution_result.get("mode", "unknown")
     account_id = execution_result.get("account_id")
 
-    logged = 0
-    with open(JOURNAL_PATH, "a+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        existing_keys = set()
-        for line in f:
-            try:
-                existing = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(existing, dict):
-                existing_keys.update(_order_keys(existing))
-        f.seek(0, os.SEEK_END)
-        for trade in results:
-            raw_status = trade.get("status")
-            if raw_status in ("skipped", "would_execute"):
-                continue
-            submission_status = trade.get("submission_status")
-            if not submission_status:
-                submission_status = "submitted" if raw_status in SUBMITTED_STATUSES else raw_status
-            broker_status = trade.get("broker_status")
-            if not broker_status and raw_status in BROKER_ORDER_STATUSES:
-                broker_status = raw_status
-            entry = {
-                "timestamp": timestamp,
-                "mode": mode,
-                "trading_mode": execution_result.get("trading_mode", "unknown"),
-                "account_id": account_id,
-                "strategy": trade.get("strategy", "unspecified"),
-                "strategy_group": trade.get("strategy_group"),
-                "research_profile_id": trade.get("research_profile_id"),
-                "research_profile_regime": trade.get("research_profile_regime"),
-                "market_regime": trade.get("market_regime"),
-                "client_order_id": trade.get("client_order_id"),
-                "ticker": trade.get("ticker"),
-                "action": trade.get("action"),
-                "qty": trade.get("qty", 0),
-                "status": submission_status,
-                "submission_status": submission_status,
-                "broker_status": broker_status,
-                "reasoning": trade.get("reasoning") or trade.get("reason", ""),
-                "order_id": trade.get("order_id"),
-                "error": trade.get("error") or (
-                    trade.get("reason") if raw_status in ("blocked", "failed") else None
-                ),
-                "rule": trade.get("rule"),
-                "filled_qty": trade.get("filled_qty"),
-                "filled_avg_price": trade.get("filled_avg_price"),
-                "filled_at": trade.get("filled_at"),
-                "idempotent_replay": bool(trade.get("idempotent_replay")),
-                "pnl": trade.get("pnl"),
-            }
-            keys = _order_keys(entry)
-            # A replay may supply the broker order ID after an earlier
-            # uncertain submission supplied only its stable client ID.
-            # Preserve that enrichment as an append event; readers merge it.
-            known_order_id = (
-                f"{entry.get('trading_mode') or 'unknown'}:{entry.get('account_id') or 'legacy'}",
-                "order", str(entry.get("order_id")),
-            )
-            if keys & existing_keys and (not entry.get("order_id") or known_order_id in existing_keys):
-                continue
-            f.write(json.dumps(entry) + "\n")
-            existing_keys.update(keys)
-            logged += 1
+    entries: list[dict] = []
+    for trade in results:
+        raw_status = trade.get("status")
+        if raw_status in ("skipped", "would_execute"):
+            continue
+        submission_status = trade.get("submission_status")
+        if not submission_status:
+            submission_status = "submitted" if raw_status in SUBMITTED_STATUSES else raw_status
+        broker_status = trade.get("broker_status")
+        if not broker_status and raw_status in BROKER_ORDER_STATUSES:
+            broker_status = raw_status
+        entry = {
+            "timestamp": timestamp,
+            "mode": mode,
+            "trading_mode": execution_result.get("trading_mode", "unknown"),
+            "account_id": account_id,
+            "strategy": trade.get("strategy", "unspecified"),
+            "strategy_group": trade.get("strategy_group"),
+            "research_profile_id": trade.get("research_profile_id"),
+            "research_profile_regime": trade.get("research_profile_regime"),
+            "market_regime": trade.get("market_regime"),
+            "client_order_id": trade.get("client_order_id"),
+            "ticker": trade.get("ticker"),
+            "action": trade.get("action"),
+            "qty": trade.get("qty", 0),
+            "status": submission_status,
+            "submission_status": submission_status,
+            "broker_status": broker_status,
+            "reasoning": trade.get("reasoning") or trade.get("reason", ""),
+            "order_id": trade.get("order_id"),
+            "error": trade.get("error") or (
+                trade.get("reason") if raw_status in ("blocked", "failed") else None
+            ),
+            "rule": trade.get("rule"),
+            "filled_qty": trade.get("filled_qty"),
+            "filled_avg_price": trade.get("filled_avg_price"),
+            "filled_at": trade.get("filled_at"),
+            "idempotent_replay": bool(trade.get("idempotent_replay")),
+            "pnl": trade.get("pnl"),
+        }
+        entries.append(entry)
 
+    # The database is the record: a write failure raises, so it can never pass silently.
+    written = journal_store.append_entries(journal_store.DEFAULT_DATABASE, entries, recorded_at=timestamp)
+    logged = len(written)
     return logged
 
-
 def read_journal(limit=None, ticker=None, days=None):
-    """Read journal entries with optional filters."""
-    if not JOURNAL_PATH.exists():
-        return []
-
+    """Read journal entries with optional filters, from the state database."""
     entries = []
     cutoff = None
     if days:
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
 
-    with open(JOURNAL_PATH) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            if ticker and entry.get("ticker") != ticker.upper():
-                continue
-            if cutoff and entry.get("timestamp", "") < cutoff:
-                continue
-            entries.append(entry)
+    for entry in journal_store.read_entries(journal_store.DEFAULT_DATABASE):
+        if ticker and entry.get("ticker") != ticker.upper():
+            continue
+        if cutoff and entry.get("timestamp", "") < cutoff:
+            continue
+        entries.append(entry)
 
     if limit:
         entries = entries[-limit:]
@@ -235,108 +171,3 @@ def compute_stats(entries):
         "active_days": len(daily),
         "daily_breakdown": dict(sorted(daily.items(), reverse=True)[:10]),
     }
-
-
-def show_trades(entries):
-    """Display trades in a readable format."""
-    if not entries:
-        print("No trades in journal.")
-        return
-
-    print(f"{'Timestamp':<22} {'Ticker':<7} {'Action':<6} {'Qty':>6} {'Status':<10} {'Reasoning'}")
-    print("-" * 100)
-    for e in entries:
-        ts = e.get("timestamp", "")[:19]
-        reasoning = (e.get("reasoning") or "")[:40]
-        print(f"{ts:<22} {e.get('ticker','?'):<7} {e.get('action','?'):<6} {e.get('qty',0):>6} {e.get('status','?'):<10} {reasoning}")
-
-
-def show_stats(stats):
-    """Display stats in terminal."""
-    print(f"{'='*50}")
-    print(f"  ALGO TRADER JOURNAL — STATS")
-    print(f"{'='*50}")
-    print(f"  Total entries:   {stats['total_entries']}")
-    print(f"  Submitted:       {stats['submitted']}")
-    print(f"  Confirmed fills: {stats['filled']}")
-    print(f"  Partial fills:   {stats['partially_filled']}")
-    print(f"  Blocked:         {stats['blocked']}")
-    print(f"  Failed:          {stats['failed']}")
-    print(f"  Buys:            {stats['buys']}")
-    print(f"  Sells:           {stats['sells']}")
-    print(f"  Unique tickers:  {stats['unique_tickers']}")
-    print(f"  Active days:     {stats['active_days']}")
-
-    if stats["most_traded"]:
-        print(f"\n  Most Traded:")
-        for ticker, count in stats["most_traded"]:
-            print(f"    {ticker}: {count} trades")
-
-    if stats["daily_breakdown"]:
-        print(f"\n  Recent Daily Activity:")
-        for day, d in stats["daily_breakdown"].items():
-            print(f"    {day}: {d['total']} trades ({d['buys']}B / {d['sells']}S)")
-    print()
-
-
-def telegram_summary(stats, entries):
-    """Telegram-formatted summary."""
-    last_5 = entries[-5:] if entries else []
-
-    print("📓 Algo Trader Journal")
-    print(f"📊 {stats['submitted']} submitted | {stats['filled']} broker-confirmed filled | {stats['blocked']} blocked | {stats['failed']} failed")
-    print(f"📈 {stats['buys']} buy submissions | 📉 {stats['sells']} sell submissions | 🎯 {stats['unique_tickers']} tickers")
-    print(f"📅 {stats['active_days']} active trading days")
-
-    if stats["most_traded"]:
-        top = ", ".join(f"{t} ({c})" for t, c in stats["most_traded"][:3])
-        print(f"🔥 Most traded: {top}")
-
-    if last_5:
-        print(f"\n🕐 Last {len(last_5)} trades:")
-        for e in last_5:
-            emoji = "🟢" if e.get("action") in ("buy", "cover") else "🔴"
-            print(f"  {emoji} {e.get('ticker')} — {e.get('action')} {e.get('qty',0)} ({e.get('status','?')})")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Algo Trader trade journal")
-    parser.add_argument("--log", type=str, help="Log trades from executor JSON output (file or - for stdin)")
-    parser.add_argument("--show", action="store_true", help="Show recent trades")
-    parser.add_argument("--stats", action="store_true", help="Show trade statistics")
-    parser.add_argument("--telegram", action="store_true", help="Telegram-formatted summary")
-    parser.add_argument("--limit", type=int, default=10, help="Number of trades to show")
-    parser.add_argument("--ticker", type=str, help="Filter by ticker")
-    parser.add_argument("--days", type=int, help="Filter to last N days")
-    args = parser.parse_args()
-
-    if args.log:
-        if args.log == "-":
-            data = json.load(sys.stdin)
-        else:
-            with open(args.log) as f:
-                data = json.load(f)
-        logged = append_trades(data)
-        print(f"✅ Logged {logged} trades to journal")
-        return
-
-    entries = read_journal(
-        limit=args.limit if args.show else None,
-        ticker=args.ticker,
-        days=args.days,
-    )
-
-    if args.telegram:
-        stats = compute_stats(entries)
-        telegram_summary(stats, entries)
-    elif args.stats:
-        stats = compute_stats(entries)
-        show_stats(stats)
-    elif args.show:
-        show_trades(entries)
-    else:
-        parser.print_help()
-
-
-if __name__ == "__main__":
-    main()

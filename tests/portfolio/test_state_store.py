@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.conftest import write_journal
+
 from portfolio import daemon
 from portfolio.reconciliation import reconcile_startup
 from portfolio.state_store import AlgoStateStore, StateCorruptionError, empty_portfolio
@@ -143,8 +145,8 @@ def _order(order_id, symbol, side, qty, when, price):
     }
 
 def test_startup_recovers_only_the_current_flat_to_open_episode_and_bracket(tmp_path):
-    journal = tmp_path / "trade_journal.jsonl"
-    journal.write_text("\n".join(json.dumps(row) for row in [
+    journal = tmp_path / "algo_state.sqlite3"
+    write_journal(journal, "\n".join(json.dumps(row) for row in [
         {"trading_mode": "algo", "action": "buy", "ticker": "AVGO", "strategy": "swing_momentum", "order_id": "old", "client_order_id": "client-old", "submission_status": "submitted"},
         {"trading_mode": "algo", "action": "buy", "ticker": "AVGO", "strategy": "swing_trend_following", "order_id": "current", "client_order_id": "client-current", "submission_status": "submitted"},
     ]))
@@ -181,8 +183,8 @@ def test_startup_recovers_only_the_current_flat_to_open_episode_and_bracket(tmp_
     assert state["take_profit"] == 380.54
 
 def test_capped_broker_history_uses_exact_persisted_entry_or_pauses(tmp_path):
-    journal = tmp_path / "trade_journal.jsonl"
-    journal.write_text(json.dumps({
+    journal = tmp_path / "algo_state.sqlite3"
+    write_journal(journal, json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
         "strategy": "swing_momentum", "order_id": "entry-1", "client_order_id": "rule-1",
         "status": "pending_new",
@@ -218,8 +220,8 @@ def test_capped_broker_history_uses_exact_persisted_entry_or_pauses(tmp_path):
     assert missing_exact["position_owners"] == {"AAPL": "swing_momentum"}
 
 def test_pending_coordinator_entry_recovers_by_persisted_client_id_if_journal_write_was_lost(tmp_path):
-    journal = tmp_path / "trade_journal.jsonl"
-    journal.write_text("")
+    journal = tmp_path / "algo_state.sqlite3"
+    write_journal(journal, "")
     portfolio = empty_portfolio()
     portfolio["position_owners"] = {"AAPL": "swing_momentum"}
     portfolio["strategy_states"] = {"swing_momentum": {"AAPL": {
@@ -242,8 +244,8 @@ def test_pending_coordinator_entry_recovers_by_persisted_client_id_if_journal_wr
     assert state["entry_source"] == "persisted_pending_client_id"
 
 def test_reconciliation_keeps_software_levels_when_broker_legs_are_gone(tmp_path):
-    journal = tmp_path / "trade_journal.jsonl"
-    journal.write_text(json.dumps({
+    journal = tmp_path / "algo_state.sqlite3"
+    write_journal(journal, json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
         "strategy": "swing_momentum", "order_id": "entry-1", "client_order_id": "rule-1",
         "submission_status": "submitted",
@@ -275,8 +277,8 @@ def test_reconciliation_keeps_software_levels_when_broker_legs_are_gone(tmp_path
     ("submitted", "someone-elses-client-id"),
 ])
 def test_failed_or_mismatched_journal_buy_cannot_claim_broker_position(tmp_path, submission_status, client_id):
-    journal = tmp_path / "trade_journal.jsonl"
-    journal.write_text(json.dumps({
+    journal = tmp_path / "algo_state.sqlite3"
+    write_journal(journal, json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL",
         "strategy": "swing_momentum", "order_id": "entry-1", "client_order_id": client_id,
         "submission_status": submission_status, "status": submission_status,
@@ -434,8 +436,8 @@ def test_failed_algo_exit_stays_visible_and_pauses_new_entries_until_broker_prov
     assert portfolio["execution_incident"]["status"] == "open"
     assert portfolio["entries_paused"] is True
 
-    journal = tmp_path / "trade_journal.jsonl"
-    journal.write_text(json.dumps({
+    journal = tmp_path / "algo_state.sqlite3"
+    write_journal(journal, json.dumps({
         "trading_mode": "algo", "action": "buy", "ticker": "AAPL", "strategy": "swing_momentum",
         "order_id": "entry-1", "client_order_id": "rule-1", "submission_status": "submitted",
     }))
@@ -462,7 +464,7 @@ def test_daemon_first_cycle_reconciles_and_clears_execution_lease(tmp_path, monk
         "overnight_tradable_tickers": ["NVDA", "SPCX"],
     }
     _seed(snapshot, legacy_portfolio)
-    (tmp_path / "trade_journal.jsonl").write_text("")
+    write_journal(tmp_path / "algo_state.sqlite3", "")
 
     class FakeBroker:
         def calendar(self, *args):
@@ -519,7 +521,7 @@ def test_daemon_replaces_a_same_day_universe_from_the_old_fixed_source(tmp_path,
         "tickers": ["NVDA", "AAPL"], "selection_date": "2026-10-08", "source": "fixed_catalog",
     }
     _seed(snapshot, seeded)
-    (tmp_path / "trade_journal.jsonl").write_text("")
+    write_journal(tmp_path / "algo_state.sqlite3", "")
     loaded = []
 
     class FakeBroker:

@@ -38,7 +38,7 @@ integrity gates are tightened.
   has stopped scanning.
 - Protection migration (`portfolio.protection.migration`): dry run by default;
   writes protection rows before cancelling any broker exit legs.
-- Versioned profile store (`autoresearch.profile_versions`): every promotion
+- Versioned profile store (`equity_research.profile_versions`): every promotion
   and revert is recorded with parameters, fitness and lineage, plus a
   `revert` command.
 - Final holdout registry with `initialize`, `status` and `supersede`
@@ -70,7 +70,7 @@ integrity gates are tightened.
   sleeves; `min_llm_confidence` 0.80; `close_on_regime_exit` false by default.
 - Momentum exits use per-name rank hysteresis (exit outside 2 x top_n).
 - Route weights and risk scales are separate (`risk_scale` per strategy).
-- Equity cost constants are shared in `autoresearch/costs.py`.
+- Equity cost constants are shared in `equity_research/costs.py`.
 
 ### Fixed
 
@@ -194,4 +194,4 @@ V1.5 consolidates the separate paper-trading routes and adds a continuously runn
 - Copy `.env.example` and configure separate paper-account credentials and account IDs for each enabled trading route.
 - The Algo service uses the fixed Alpaca paper endpoint. Live-account execution is not supported by that service.
 - Set `ALPACA_DATA_TIER=basic` until the Plus subscription is active; regular-session history then uses IEX and overnight bars use BOATS.
-- This release is paper-trading software. Simulator reports and autoresearch candidates do not update live strategy settings.
+- This release is paper-trading software. Simulator reports and equity_research candidates do not update live strategy settings.

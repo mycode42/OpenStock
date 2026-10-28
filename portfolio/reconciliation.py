@@ -7,7 +7,6 @@ in that episode has an exact matching Algo journal order ID and one strategy.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -36,18 +35,15 @@ def _decimal(value: object) -> Decimal:
 
 
 def _journal_entries(path: Path, account_id: str | None = None) -> tuple[dict[str, dict], list[str]]:
+    """Journal rows keyed by broker order ID, read from the Algo state database."""
+    from reporting import journal_store
+
     if not path.is_file():
-        return {}, ["Algo trade journal is missing"]
+        return {}, ["Algo state database is missing"]
+    raw_rows = journal_store.read_entries(path)
     rows: dict[str, dict] = {}
     errors = []
-    for line_number, line in enumerate(path.read_text().splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            errors.append(f"Malformed trade journal row {line_number}")
-            continue
+    for line_number, row in enumerate(raw_rows, 1):
         if not isinstance(row, dict):
             errors.append(f"Malformed trade journal row {line_number}")
             continue

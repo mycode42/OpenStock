@@ -33,7 +33,7 @@ from execution.strategy import execute_strategy_trades
 from strategies.runner.scan import scan as scan_strategy_portfolio
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
 from strategies.universe import current_selector_rules_sha256, load_algo_universe
-from autoresearch.settings import DEFAULT_OUTPUT_DIR
+from equity_research.settings import DEFAULT_OUTPUT_DIR
 from reporting.performance import take_snapshot, write_live_drift_feed_for_account
 
 
@@ -234,7 +234,7 @@ def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, wi
             all_orders=orders.all_orders,
             nested_orders=orders.nested_orders,
             open_orders=open_orders,
-            journal_path=state_path.parent / "trade_journal.jsonl",
+            journal_path=state_path,
             exact_entry_orders=orders.exact_entry_orders,
             exact_incident_orders=orders.exact_incident_orders,
             regular_session=window.name == "regular",

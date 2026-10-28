@@ -6,11 +6,10 @@ The scheduled Algo jobs run from `/opt/algo-trader`. Market-time jobs use `Ameri
 | --- | --- | --- |
 | `health` | Hourly | Read-only service, scan, state, and broker-protection check. |
 | `event-briefing` | 10:00, 13:00, and 15:00 ET, weekdays | Refresh the read-only Event Driven signal snapshot and report market context. |
-| `optimization` | 08:00 ET, daily | Run an archive-backed AutoResearch optimizer cycle on stored bars, without refreshing, rolling verification, or portfolio replay. |
 | `options-history-capture` | 16:15 ET, weekdays | Save same-session Alpaca OPRA option chains for the 117-symbol options research history universe and refresh merged datasets. |
 | `options-opening-capture` | 09:35 ET, weekdays | Save a separate Alpaca OPRA opening snapshot for the 117-symbol options research history universe. |
 | `Theta options history` | Every 25 hours | Resume ThetaData EOD quotes and open interest across the 117-symbol options research history universe. |
-| `autoresearch` | 17:00 ET, daily | Run equity AutoResearch alongside the independent VRP and llm-driven options research batch, then report them in separate sections. It starts one hour after the close and the 16:15 ET options-history capture. Validate each report date against its file write time in New York time so a long cycle crossing midnight is not mislabeled stale. Research may write artifacts; it does not place trades or alter live settings. |
+| `algo-research` | 17:00 ET, daily | Run `python -m equity_research.nightly`: options research first, then equity AutoResearch with recent two-year verification. On Sunday, equity also runs full-history verification as a review only; it asks you to keep or demote each live profile. Target 6 hours total; guidance only, no timeout failure. Report equity and options under separate headings. Replaces the former `equity-research` and `options-research` jobs. |
 | `morning` | 04:00 ET, weekdays | Send an overnight session, order, risk, and fill-attribution report. |
 
 The Algo daemon records timestamped equity points every 15 minutes during the regular session and a daily close point after the market closes. The close point remains the weekly risk-baseline source, so no separate `close-snapshot` automation is needed.
@@ -19,7 +18,6 @@ The research history universe is in `options/research/universe.json`; it contain
 
 The `event-briefing` analysis command uses a 300-second Gateway exec timeout; the automation retains its separate 20-minute turn timeout. Analyst phases and ticker-level progress are appended to `data/algo/llm_driven/analysis-runs.jsonl`. Missing headline sentiment is classified in one batch request, and LLM requests time out after 30 seconds by default (`EVENT_ANALYSIS_LLM_TIMEOUT_SECONDS` overrides this). A timed-out run does not publish or reuse a signal snapshot.
 
-Trigger `optimization` on demand with `openclaw automations run 3731fb23-c610-4b7a-9032-61c7beefe55e`. It shares the AutoResearch single-run lock with `autoresearch`, so do not start it while another AutoResearch process is active. Reports are written to `data/research/algo-auto/optimizer/`.
 
 The live OpenClaw Gateway is the source of truth for job schedules and prompts. Use `openclaw automations list --all` and `openclaw automations get <job-id>` to inspect the declarations. Report templates are in [`openclaw_prompts/`](openclaw_prompts/).
 

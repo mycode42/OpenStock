@@ -35,12 +35,18 @@ def longest_strategy_lookback_sessions(strategy: str, section: dict, config: dic
     return int(config.get("walk_forward", {}).get("directional_input_lookback_sessions", 252))
 
 
+class FreshHoldoutUnavailable(ValueError):
+    """Raised when fewer than the minimum unseen sessions exist for a new holdout."""
+
+
 def make_purged_walk_forward(
     observations: tuple[ResearchObservation, ...],
     *,
     strategy: str,
     strategy_section: dict,
     config: dict,
+    holdout_after: str | None = None,
+    minimum_fresh_holdout_sessions: int = 0,
 ) -> tuple[list[WalkForwardFold], tuple[ResearchObservation, ...], dict]:
     settings = config.get("walk_forward", {})
     train_size = int(settings.get("rolling_train_sessions", 252))
@@ -60,6 +66,21 @@ def make_purged_walk_forward(
     )
     purge = max(lookback, max_dte) + embargo
     holdout_start = len(observations) - holdout_size
+    if holdout_after is not None:
+        # Rotating holdout: only sessions after the previous holdout may be used,
+        # so every holdout decision sees data no earlier decision has seen.
+        fresh_start = next(
+            (index for index, item in enumerate(observations)
+             if item.as_of.date().isoformat() > holdout_after),
+            len(observations),
+        )
+        fresh = len(observations) - fresh_start
+        if fresh < minimum_fresh_holdout_sessions:
+            raise FreshHoldoutUnavailable(
+                f"only {fresh} sessions after the previous holdout ending {holdout_after}; "
+                f"need {minimum_fresh_holdout_sessions}"
+            )
+        holdout_start = max(holdout_start, fresh_start)
     folds = []
     test_start = train_size + purge
     while test_start + test_size <= holdout_start:
@@ -132,6 +153,8 @@ def make_purged_walk_forward(
         "actual_oos_periods": len(folds),
         "holdout_sessions": len(holdout),
         "holdout_start": holdout[0].as_of.isoformat() if holdout else None,
+        "holdout_end": holdout[-1].as_of.date().isoformat() if holdout else None,
+        "holdout_after": holdout_after,
         "holdout_regime_coverage": coverage,
     }
 

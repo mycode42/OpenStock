@@ -28,7 +28,7 @@ import time
 import traceback
 from typing import Any, Callable
 
-from autoresearch.cpu import available_cpu_count
+from equity_research.cpu import available_cpu_count
 from options.research import dataset as dataset_module
 from options.research import runner as runner_module
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _read_json

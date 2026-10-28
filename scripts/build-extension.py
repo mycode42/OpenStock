@@ -25,12 +25,12 @@ EXTENSIONS = (
         ROOT / "strategies/multi_factor/_features_cy.pyx",
     ),
     (
-        "autoresearch.backtest._execution_cy",
-        ROOT / "autoresearch/backtest/_execution_cy.pyx",
+        "equity_research.backtest._execution_cy",
+        ROOT / "equity_research/backtest/_execution_cy.pyx",
     ),
     (
-        "autoresearch.backtest._signals_cy",
-        ROOT / "autoresearch/backtest/signals.py",
+        "equity_research.backtest._signals_cy",
+        ROOT / "equity_research/backtest/signals.py",
     ),
     (
         "strategies._swing_common_cy",

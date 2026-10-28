@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from autoresearch.validation import drift_monitor
+from equity_research.validation import drift_monitor
 from reporting import performance
 from reporting.fills import calculate_realized_pnl
 

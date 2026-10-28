@@ -4,7 +4,7 @@ import json
 import pytest
 
 from execution.risk import validate_trade
-from autoresearch.backtest import multi_factor_warmup_days
+from equity_research.backtest import multi_factor_warmup_days
 from portfolio.state_store import validate_portfolio
 from strategies.multi_factor.diagnostics import information_coefficient, turnover
 from portfolio.config import STRATEGY_CONFIG, get_mode_config

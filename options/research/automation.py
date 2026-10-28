@@ -12,10 +12,11 @@ import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from autoresearch.cpu import available_cpu_count
+from equity_research.cpu import available_cpu_count
 from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.history_store import DEFAULT_DATABASE, OptionsHistoryStore
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
+from options.research.validation import FreshHoldoutUnavailable
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
@@ -111,10 +112,13 @@ def _run_research_job(
     strategy: str, config_path: Path, data_path: Path, underlying: str,
     parallel_workers: int,
 ) -> dict:
-    report = run_research(
-        strategy, config_path=config_path, data_path=data_path, underlying=underlying,
-        parallel_workers=parallel_workers,
-    )
+    try:
+        report = run_research(
+            strategy, config_path=config_path, data_path=data_path, underlying=underlying,
+            parallel_workers=parallel_workers,
+        )
+    except FreshHoldoutUnavailable as exc:
+        return {"strategy": strategy, "underlying": underlying, "status": "waiting_for_fresh_holdout", "error": str(exc)}
     return _strategy_summary(strategy, report)
 
 
@@ -153,6 +157,16 @@ def _job_report_valid(summary: dict, output_root: Path) -> bool:
             and (run_dir / "report.json").is_file()
         )
     return status in {"skipped_missing_dataset", "insufficient_history"}
+
+
+def _return_improvement(baseline: object, tuned: object) -> str:
+    """Relative return improvement over the baseline, or the gap in points if the baseline is not positive."""
+    if baseline is None or tuned is None:
+        return "n/a"
+    base, new = float(baseline), float(tuned)
+    if base > 0:
+        return f"{(new - base) / base:+.1%}"
+    return f"n/a (baseline {base:.2%}; {(new - base) * 100:+.2f} pts)"
 
 
 def _render_markdown(report: dict) -> str:
@@ -296,13 +310,14 @@ def _render_markdown(report: dict) -> str:
                         format_value(baseline_metrics.get("total_return"), percent=True),
                         format_value(tuned_metrics.get("total_return"), percent=True),
                         format_value(deltas.get("total_return"), percent=True),
+                        _return_improvement(baseline_metrics.get("total_return"), tuned_metrics.get("total_return")),
                         format_value(baseline_metrics.get("risk_adjusted_score")),
                         format_value(tuned_metrics.get("risk_adjusted_score")),
                         format_value(deltas.get("risk_adjusted_score")),
                     ])
                 if comparison_rows:
                     headers = [
-                        "Period", "Baseline return", "Tuned return", "Delta return",
+                        "Period", "Baseline return", "Tuned return", "Delta return", "Return improvement",
                         "Baseline score", "Tuned score", "Delta score",
                     ]
                     widths = [

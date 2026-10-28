@@ -16,7 +16,7 @@ from time import perf_counter
 from types import SimpleNamespace
 from typing import Any
 
-from autoresearch.cpu import available_cpu_count
+from equity_research.cpu import available_cpu_count
 from options.data import HistoricalChainSnapshotProvider, ModelSurfaceDataProvider, OptionChain, OptionDataProvider
 from strategies.llm_driven.models import ScheduledEvent
 

@@ -16,15 +16,18 @@ import random
 import statistics
 from typing import Any
 
-from autoresearch.cpu import available_cpu_count
+from equity_research.cpu import available_cpu_count
 from options.market_inputs import research_market_inputs
 from options.research.artifact_store import OptionsResearchArtifactStore
+from options.research.champion import (
+    champion_candidate, decide_promotion, load_state, pool_with_champion, record_decision,
+)
 from options.research.dataset import load_options_research_dataset
 from options.research.reporting import write_research_report
 from options.research.search import Candidate, add_plateau_scores, candidate_pool, evaluate_candidates
 from options.research.simulator import simulate_options_strategy
 from options.research.strategy_factory import export_section, live_defaults
-from options.research.validation import make_purged_walk_forward
+from options.research.validation import FreshHoldoutUnavailable, make_purged_walk_forward
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
@@ -487,7 +490,13 @@ def run_research(
         try:
             folds, holdout, split = make_purged_walk_forward(
                 dataset.observations, strategy=strategy, strategy_section=section, config=research_config,
+                holdout_after=(champion_state or {}).get("holdout_end") if champion_enabled else None,
+                minimum_fresh_holdout_sessions=int(
+                    champion_config.get("minimum_fresh_holdout_sessions", 42)
+                ) if champion_enabled else 0,
             )
+        except FreshHoldoutUnavailable:
+            raise
         except ValueError as exc:
             short_history = research_config.get("short_history_exploration", {})
             minimum_sessions = int(short_history.get("minimum_sessions", 60))
@@ -622,7 +631,12 @@ def run_research(
         fold_worker_count = 1
 
     global _FOLD_EVALUATION_CONTEXT
-    shared_candidate_pool = candidate_pool(strategy, research_config, base_config)
+    champion_config = research_config.get("champion", {})
+    champion_enabled = bool(champion_config.get("enabled", True))
+    champion_margin = float(champion_config.get("minimum_holdout_score_margin", 0.0))
+    champion_state = load_state(strategy, underlying) if champion_enabled else None
+    incumbent = champion_state if champion_state and champion_state.get("candidate_id") else None
+    shared_candidate_pool = pool_with_champion(candidate_pool(strategy, research_config, base_config), incumbent)
     _FOLD_EVALUATION_CONTEXT = {
         "dataset": dataset,
         "folds": folds,
@@ -741,6 +755,14 @@ def run_research(
         dataset, holdout, strategy_name=strategy, candidate=baseline_candidate,
         config=research_config, base_config=base_config, force_close=True,
     )
+    incumbent_holdout_run = None
+    if incumbent and incumbent["candidate_id"] != final_candidate.candidate_id:
+        incumbent_holdout_run = simulate_options_strategy(
+            dataset, holdout, strategy_name=strategy, candidate=champion_candidate(incumbent),
+            config=research_config, base_config=base_config, force_close=True,
+        )
+    elif incumbent:
+        incumbent_holdout_run = holdout_run
     baseline_comparison = {
         "baseline_candidate": baseline_candidate.to_dict(),
         "same_oos_folds_and_holdout": True,
@@ -880,16 +902,37 @@ def run_research(
         validation["parameter_stability_gate_met"], validation["stress_case_positive_after_costs"],
         validation["returns_not_dominated_by_gamma_or_vega_episodes"],
     ))
+    candidate_score = holdout_run["metrics"].get("risk_adjusted_score")
+    incumbent_score = (incumbent_holdout_run["metrics"].get("risk_adjusted_score") if incumbent_holdout_run else None)
+    promoted, promotion_reason = (False, "champion carry disabled")
+    if champion_enabled:
+        promoted, promotion_reason = decide_promotion(
+            approved=validation["approved"],
+            candidate_holdout_score=float(candidate_score) if candidate_score is not None else None,
+            incumbent_holdout_score=float(incumbent_score) if incumbent_score is not None else None,
+            margin=champion_margin,
+        )
+    live_candidate = final_candidate if promoted else (champion_candidate(incumbent) if incumbent else None)
+    validation["champion"] = {
+        "enabled": champion_enabled,
+        "incumbent_candidate_id": (incumbent or {}).get("candidate_id"),
+        "incumbent_holdout_risk_adjusted_score": incumbent_score,
+        "candidate_holdout_risk_adjusted_score": candidate_score,
+        "minimum_holdout_score_margin": champion_margin,
+        "promoted": promoted,
+        "reason": promotion_reason,
+        "live_candidate_id": live_candidate.candidate_id if live_candidate else None,
+    }
     exported = live_defaults(live_config_path)
     exported[strategy] = export_section(
-        strategy, parameters=final_candidate.parameters,
-        allowed_regimes=final_candidate.allowed_regimes, base_config=exported,
+        strategy, parameters=(live_candidate or final_candidate).parameters,
+        allowed_regimes=(live_candidate or final_candidate).allowed_regimes, base_config=exported,
     )
     if strategy in {"long_volatility", "directional_overlay"}:
         exported[strategy]["underlyings"] = [underlying]
     else:
         exported[strategy]["underlying"] = underlying
-    exported[strategy]["enabled"] = bool(validation["approved"])
+    exported[strategy]["enabled"] = live_candidate is not None
 
     report = {
         "run_id": run_id,
@@ -986,7 +1029,18 @@ def run_research(
         "final_candidate_id": final_id,
         "parallelism": report["parallelism"],
     }, indent=2, sort_keys=True, allow_nan=False)
-    if validation["approved"]:
+    if champion_enabled:
+        record_decision(
+            strategy=strategy, underlying=underlying, run_id=run_id,
+            decided_at=timestamp.isoformat(),
+            holdout_start=split["holdout_start"], holdout_end=split["holdout_end"],
+            candidate=final_candidate,
+            candidate_holdout_score=float(candidate_score) if candidate_score is not None else None,
+            incumbent_candidate_id=(incumbent or {}).get("candidate_id"),
+            incumbent_holdout_score=float(incumbent_score) if incumbent_score is not None else None,
+            promoted=promoted, reason=promotion_reason,
+        )
+    if exported[strategy]["enabled"]:
         atomic_write_json(run_dir / "approved-options-config.json", exported, indent=2, sort_keys=True, allow_nan=False)
     else:
         atomic_write_json(run_dir / "candidate-options-config.json", exported, indent=2, sort_keys=True, allow_nan=False)

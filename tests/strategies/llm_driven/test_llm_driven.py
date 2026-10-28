@@ -4,8 +4,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from autoresearch.backtest import AlgoPortfolioBacktest
-import autoresearch.backtest as backtest_module
+from equity_research.backtest import AlgoPortfolioBacktest
+import equity_research.backtest as backtest_module
 from strategies.llm_driven import (
     EventCalendar, LLMSignalGenerator, LLMStrategyConfig, ScheduledEvent,
 )

@@ -37,7 +37,7 @@ when an AI snapshot is missing or expired.
   owner-exit adapter used by the live scanner.
 - `config.py`: `LLMStrategyConfig`, the validated strategy parameters.
 - `models.py`, `calendar.py`, `filters.py`, `reactions.py`: scheduled-event
-  inputs for the calendar replay used by autoresearch and options research.
+  inputs for the calendar replay used by equity_research and options research.
   The live scanner does not read them.
 - Algo integration: `strategies/runner/llm_context.py` loads the snapshot for a
   scan; registry/regime selection, standard sizing, shared order route, and
@@ -88,7 +88,7 @@ archives remain useful for deterministic research and historical examples.
 
 Historical event-calendar replays exercise the deterministic calendar adapter. They do not reproduce the scheduled LLM recommendations, so their results should not be presented as AI-strategy performance.
 
-Run `poetry run python -m autoresearch.event_calendar_refresh` to refresh
+Run `poetry run python -m equity_research.event_calendar_refresh` to refresh
 `data/event_calendar.csv`. The `algo-event-calendar` OpenClaw job runs this at
 04:05 ET on weekdays. It reads the configured fixed Algo universe, obtains scheduled
 earnings and pre/post-market classifications from Nasdaq's public earnings
@@ -153,11 +153,11 @@ release dates and Federal Reserve FOMC schedule. For a replay, ingest split-
 adjusted 5-minute SIP bars and run:
 
 ```bash
-poetry run python -m autoresearch.backtest fetch \
+poetry run python -m equity_research.backtest fetch \
   --symbols AAPL,SPY --start 2025-07-31 --end 2025-09-17 \
   --strategies swing_llm_driven --adjustment split
 
-poetry run python -m autoresearch.backtest run \
+poetry run python -m equity_research.backtest run \
   --symbols AAPL,SPY \
   --start 2025-07-31 --end 2025-09-17 \
   --strategies swing_llm_driven \
@@ -176,18 +176,3 @@ The minimal profile is:
 The example is an interface demonstration, not a performance claim. It needs
 local SIP bars for the requested date range and at least 22 earlier SPY daily
 bars for the deterministic regime filter.
-
-## Migration note (rename)
-
-This strategy was previously named `swing_event_driven`, and before that
-`event_driven`. Persisted state is rewritten once with:
-
-```bash
-poetry run python -m strategies.migrations.rename_llm_driven            # dry run
-poetry run python -m strategies.migrations.rename_llm_driven --apply    # daemon stopped
-```
-
-`--apply` backs up `algo_state.sqlite3` and `trade_journal.jsonl` under
-`data/backups/llm_driven_rename-<UTC timestamp>/` before writing. It refuses to
-run while the Algo daemon holds `/run/lock/algo-trader.lock`. A second run
-changes nothing.
