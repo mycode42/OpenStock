@@ -40,48 +40,49 @@ Demo mode is also the default whenever Trade Republic credentials or Algo Trader
 - **Dashboard:** current prices, alert state, quick stock actions, and local hover price-history charts.
   
 <img width="1704" height="954" alt="Screenshot 2026-10-28 at 13 48 03" src="https://github.com/user-attachments/assets/8a077760-4125-43cc-83d0-3141a5f4bd0c" />
-
+<br>
 
 
 - **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through 
 a durable outbox until Telegram confirms delivery. 
 
 <img width="1679" height="956" alt="Screenshot 2026-10-28 at 13 22 08" src="https://github.com/user-attachments/assets/76143c54-63b3-4117-8aba-419667b77c11" />
+<br>
 
 
 
 - **Trading journal:** record position lots, then edit or close them with frozen EUR conversion rates and fees. Adding a purchase to an open position merges it using quantity-weighted entry prices, with an audit trail.
   
 <img width="1179" height="826" alt="Screenshot 2026-10-28 at 13 34 18" src="https://github.com/user-attachments/assets/9a7c47a9-cffd-4236-98e1-7b2860158c21" />
-
+<br>
 
 
 - **Capital events:** initial capital, deposits, withdrawals and financing are tracked separately, so they never count as trading P/L.
 
 <img width="1183" height="903" alt="Screenshot 2026-10-28 at 13 38 43" src="https://github.com/user-attachments/assets/daeb17d4-47c6-4541-be2f-2d83fbcab2c8" />
-
+<br>
 
 
 - **Analytics:** P/L, risk, equity curve, drawdown, monthly and per-stock performance. Figures show `N/A` or `Insufficient data` until enough history exists.
 
 <img width="1176" height="904" alt="Screenshot 2026-10-28 at 13 35 05" src="https://github.com/user-attachments/assets/7c4db67e-85fc-40b0-8472-8a50cacef214" />
-
+<br>
 
 
 - **Chart history:** persisted quote history with a background backfill queue; provider failures do not affect API responses.
 
 <img width="1687" height="883" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/0005f313-bbe9-4d65-853a-326d917f799d" />
-
+<br>
 
 
 - **Algo Trader pages:** research, universe and performance views for a separate Algo Trader installation, with its strategy settings editable from the UI.
 
 <img width="1195" height="613" alt="Screenshot 2026-10-28 at 13 21 27" src="https://github.com/user-attachments/assets/ae0d0fc7-2303-4786-ab2f-91b396c69b73" />
-
+<br>
 
 
 <img width="1207" height="810" alt="Screenshot 2026-10-28 at 13 20 51" src="https://github.com/user-attachments/assets/b2bdc6a4-3884-49e0-890b-bb00282a4274" />
-
+<br>
 
 
 OpenStock does not place, change or cancel orders. Broker endpoints are read-only: they retrieve quotes, accounts, portfolio, orders and transactions.
