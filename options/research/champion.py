@@ -1,9 +1,9 @@
-"""Per-strategy champion and rotating holdout state, stored in the options history database.
+"""Per-strategy champion state, stored in the options history database.
 
-A champion is the parameter set exported for paper trading. Each holdout decision
-uses sessions that no earlier decision used. A new candidate replaces the champion
-only when it passes the approval gate and beats the incumbent on that holdout.
-The champion is pinned into the next search pool so each run starts from it.
+A champion is the parameter set exported for paper trading. A candidate replaces it
+only when it passes the approval gate and ranks above the incumbent on the same
+out-of-sample folds (runtime/fold_ranking.py, the same rule equity uses). The
+champion is pinned into the next search pool so each run starts from it.
 """
 
 from __future__ import annotations
@@ -16,8 +16,7 @@ from typing import Any
 
 from options.research.history_store import DEFAULT_DATABASE
 from options.research.search import Candidate, _candidate
-
-DEFAULT_MARGIN = 0.0
+from runtime.fold_ranking import beats
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS options_champion (
@@ -26,10 +25,8 @@ CREATE TABLE IF NOT EXISTS options_champion (
     candidate_id TEXT,
     parameters_json TEXT,
     allowed_regimes_json TEXT,
-    holdout_risk_adjusted_score REAL,
     promoted_run_id TEXT,
     promoted_at TEXT,
-    holdout_end TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (strategy, underlying)
 );
@@ -39,12 +36,10 @@ CREATE TABLE IF NOT EXISTS options_champion_decision (
     strategy TEXT NOT NULL,
     underlying TEXT NOT NULL,
     decided_at TEXT NOT NULL,
-    holdout_start TEXT,
-    holdout_end TEXT,
     candidate_id TEXT NOT NULL,
     incumbent_candidate_id TEXT,
-    candidate_holdout_score REAL,
-    incumbent_holdout_score REAL,
+    candidate_fold_summary_json TEXT NOT NULL,
+    incumbent_fold_summary_json TEXT,
     promoted INTEGER NOT NULL,
     reason TEXT NOT NULL
 );
@@ -68,7 +63,7 @@ def load_state(strategy: str, underlying: str, path: Path | None = None) -> dict
             "SELECT * FROM options_champion WHERE strategy = ? AND underlying = ?",
             (strategy, underlying),
         ).fetchone()
-    if row is None:
+    if row is None or not row["candidate_id"]:
         return None
     state = dict(row)
     state["parameters"] = json.loads(state.pop("parameters_json") or "{}")
@@ -94,73 +89,52 @@ def pool_with_champion(pool: list[Candidate], record: dict[str, Any] | None) -> 
 
 
 def decide_promotion(
-    *, approved: bool, candidate_holdout_score: float | None,
-    incumbent_holdout_score: float | None, margin: float = DEFAULT_MARGIN,
+    *, approved: bool, candidate_summary: dict | None, incumbent_summary: dict | None,
+    has_incumbent: bool,
 ) -> tuple[bool, str]:
-    """Promote only when the approval gate passes and the holdout beats the incumbent."""
+    """Promote when the approval gate passes and the candidate ranks above the incumbent on the same folds."""
     if not approved:
         return False, "candidate did not pass the approval gate"
-    if candidate_holdout_score is None:
-        return False, "candidate holdout score unavailable"
-    if incumbent_holdout_score is None:
+    if not has_incumbent:
         return True, "first approved candidate"
-    if candidate_holdout_score > incumbent_holdout_score + margin:
-        return True, "holdout score beats incumbent by more than the margin"
-    return False, "holdout score does not beat incumbent by the required margin"
+    return beats(candidate_summary, incumbent_summary)
 
 
 def record_decision(
-    *, strategy: str, underlying: str, run_id: str, decided_at: str,
-    holdout_start: str | None, holdout_end: str, candidate: Candidate,
-    candidate_holdout_score: float | None, incumbent_candidate_id: str | None,
-    incumbent_holdout_score: float | None, promoted: bool, reason: str,
-    path: Path | None = None,
+    *, strategy: str, underlying: str, run_id: str, decided_at: str, candidate: Candidate,
+    candidate_summary: dict | None, incumbent_candidate_id: str | None,
+    incumbent_summary: dict | None, promoted: bool, reason: str, path: Path | None = None,
 ) -> None:
-    """Persist one holdout decision and, when promoted, the new champion."""
-    with closing(_connect(Path(path or DEFAULT_DATABASE))) as connection:
-        with connection:
+    """Persist one decision and, when promoted, the new champion."""
+    with closing(_connect(Path(path or DEFAULT_DATABASE))) as connection, connection:
+        connection.execute(
+            """
+            INSERT INTO options_champion_decision (
+                run_id, strategy, underlying, decided_at, candidate_id, incumbent_candidate_id,
+                candidate_fold_summary_json, incumbent_fold_summary_json, promoted, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, strategy, underlying, decided_at, candidate.candidate_id, incumbent_candidate_id,
+             json.dumps(candidate_summary, sort_keys=True), json.dumps(incumbent_summary, sort_keys=True),
+             int(promoted), reason),
+        )
+        if promoted:
             connection.execute(
                 """
-                INSERT INTO options_champion_decision (
-                    run_id, strategy, underlying, decided_at, holdout_start, holdout_end,
-                    candidate_id, incumbent_candidate_id, candidate_holdout_score,
-                    incumbent_holdout_score, promoted, reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO options_champion (
+                    strategy, underlying, candidate_id, parameters_json, allowed_regimes_json,
+                    promoted_run_id, promoted_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (strategy, underlying) DO UPDATE SET
+                    candidate_id = excluded.candidate_id,
+                    parameters_json = excluded.parameters_json,
+                    allowed_regimes_json = excluded.allowed_regimes_json,
+                    promoted_run_id = excluded.promoted_run_id,
+                    promoted_at = excluded.promoted_at,
+                    updated_at = excluded.updated_at
                 """,
-                (run_id, strategy, underlying, decided_at, holdout_start, holdout_end,
-                 candidate.candidate_id, incumbent_candidate_id, candidate_holdout_score,
-                 incumbent_holdout_score, int(promoted), reason),
+                (strategy, underlying, candidate.candidate_id,
+                 json.dumps(candidate.parameters, sort_keys=True),
+                 json.dumps(list(candidate.allowed_regimes)),
+                 run_id, decided_at, decided_at),
             )
-            if promoted:
-                connection.execute(
-                    """
-                    INSERT INTO options_champion (
-                        strategy, underlying, candidate_id, parameters_json, allowed_regimes_json,
-                        holdout_risk_adjusted_score, promoted_run_id, promoted_at, holdout_end, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (strategy, underlying) DO UPDATE SET
-                        candidate_id = excluded.candidate_id,
-                        parameters_json = excluded.parameters_json,
-                        allowed_regimes_json = excluded.allowed_regimes_json,
-                        holdout_risk_adjusted_score = excluded.holdout_risk_adjusted_score,
-                        promoted_run_id = excluded.promoted_run_id,
-                        promoted_at = excluded.promoted_at,
-                        holdout_end = excluded.holdout_end,
-                        updated_at = excluded.updated_at
-                    """,
-                    (strategy, underlying, candidate.candidate_id,
-                     json.dumps(candidate.parameters, sort_keys=True),
-                     json.dumps(list(candidate.allowed_regimes)),
-                     candidate_holdout_score, run_id, decided_at, holdout_end, decided_at),
-                )
-            else:
-                connection.execute(
-                    """
-                    INSERT INTO options_champion (strategy, underlying, holdout_end, updated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT (strategy, underlying) DO UPDATE SET
-                        holdout_end = excluded.holdout_end,
-                        updated_at = excluded.updated_at
-                    """,
-                    (strategy, underlying, holdout_end, decided_at),
-                )

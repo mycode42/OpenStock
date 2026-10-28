@@ -74,3 +74,14 @@ def test_keep_unknown_profile_raises(tmp_path: Path):
     except KeyError:
         return
     raise AssertionError("expected KeyError")
+
+
+def test_demoted_candidate_is_blocked_from_repromotion(tmp_path: Path):
+    db = _versions_db(tmp_path / "research.sqlite3")
+    assert wr.blocked_candidate_ids(db) == {}
+    with sqlite3.connect(db) as connection:
+        connection.executescript(wr._BLOCK_SCHEMA)
+        connection.execute(
+            "INSERT INTO algo_demoted_candidates VALUES ('swing_momentum', 'range_bound', 'new', 'x')"
+        )
+    assert wr.blocked_candidate_ids(db) == {("swing_momentum", "range_bound"): {"new"}}

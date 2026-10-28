@@ -22,12 +22,13 @@ from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.champion import (
     champion_candidate, decide_promotion, load_state, pool_with_champion, record_decision,
 )
+from runtime.fold_ranking import fold_summary
 from options.research.dataset import load_options_research_dataset
 from options.research.reporting import write_research_report
 from options.research.search import Candidate, add_plateau_scores, candidate_pool, evaluate_candidates
 from options.research.simulator import simulate_options_strategy
 from options.research.strategy_factory import export_section, live_defaults
-from options.research.validation import FreshHoldoutUnavailable, make_purged_walk_forward
+from options.research.validation import make_purged_walk_forward
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
@@ -375,11 +376,18 @@ def _evaluate_fold_index(fold_index: int) -> dict:
         dataset, oos, strategy_name=strategy, candidate=baseline_candidate,
         config=research_config, base_config=base_config, force_close=True,
     )
+    incumbent_oos_run = None
+    if context.get("incumbent_candidate") is not None:
+        incumbent_oos_run = simulate_options_strategy(
+            dataset, oos, strategy_name=strategy, candidate=context["incumbent_candidate"],
+            config=research_config, base_config=base_config, force_close=True,
+        )
     return {
         "candidate_rows": candidate_rows,
         "chosen": chosen,
         "oos_run": oos_run,
         "baseline_oos_run": baseline_oos_run,
+        "incumbent_oos_run": incumbent_oos_run,
     }
 
 
@@ -473,7 +481,7 @@ def run_research(
             workers=loader_worker_count,
         )
         database_source = selected_data_path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
-        read_stage = "SQLite/DuckDB read" if database_source else "JSONL parse/normalize"
+        read_stage = "SQLite read" if database_source else "JSONL parse/normalize"
         read_seconds = dataset.loading_parallelism.get(
             "database_read_elapsed_seconds" if database_source
             else "jsonl_parse_and_normalize_elapsed_seconds",
@@ -488,15 +496,9 @@ def run_research(
             flush=True,
         )
         try:
-            folds, holdout, split = make_purged_walk_forward(
+            folds, split = make_purged_walk_forward(
                 dataset.observations, strategy=strategy, strategy_section=section, config=research_config,
-                holdout_after=(champion_state or {}).get("holdout_end") if champion_enabled else None,
-                minimum_fresh_holdout_sessions=int(
-                    champion_config.get("minimum_fresh_holdout_sessions", 42)
-                ) if champion_enabled else 0,
             )
-        except FreshHoldoutUnavailable:
-            raise
         except ValueError as exc:
             short_history = research_config.get("short_history_exploration", {})
             minimum_sessions = int(short_history.get("minimum_sessions", 60))
@@ -566,7 +568,6 @@ def run_research(
                         "trades": replay_summary["trades"],
                     },
                     "walk_forward": {},
-                    "holdout": {},
                     "final_parameters": {},
                     "final_allowed_regimes": list(baseline.allowed_regimes),
                     "parameter_stability": {},
@@ -575,7 +576,7 @@ def run_research(
                         "approved": False,
                         "promotion_eligible": False,
                         "status": "not_validated",
-                        "reason": "Short-history replay is descriptive only; standard rolling OOS and holdout gates were not met.",
+                        "reason": "Short-history replay is descriptive only; standard rolling OOS gates were not met.",
                     },
                     "data_assumptions": {
                         "historical_chain_snapshots_required_for_empirical_claims": True,
@@ -633,11 +634,11 @@ def run_research(
     global _FOLD_EVALUATION_CONTEXT
     champion_config = research_config.get("champion", {})
     champion_enabled = bool(champion_config.get("enabled", True))
-    champion_margin = float(champion_config.get("minimum_holdout_score_margin", 0.0))
-    champion_state = load_state(strategy, underlying) if champion_enabled else None
-    incumbent = champion_state if champion_state and champion_state.get("candidate_id") else None
+    incumbent = load_state(strategy, underlying) if champion_enabled else None
+    incumbent_candidate = champion_candidate(incumbent) if incumbent else None
     shared_candidate_pool = pool_with_champion(candidate_pool(strategy, research_config, base_config), incumbent)
     _FOLD_EVALUATION_CONTEXT = {
+        "incumbent_candidate": incumbent_candidate,
         "dataset": dataset,
         "folds": folds,
         "strategy": strategy,
@@ -733,8 +734,7 @@ def run_research(
     walk_forward["mean_oos_risk_adjusted_score"] = mean_oos_score
 
     # The final candidate is selected by risk-adjusted OOS score among the
-    # configurations already selected on training windows. The final holdout
-    # remains untouched until after this step.
+    # configurations already selected on training windows.
     vote_scores = defaultdict(list)
     selected_by_id = {}
     for entry in selected_rows:
@@ -747,38 +747,22 @@ def run_research(
         final_candidate_payload["candidate_id"], final_candidate_payload.get("parameters", {}),
         tuple(final_candidate_payload.get("allowed_regimes", [])), (),
     )
-    holdout_run = simulate_options_strategy(
-        dataset, holdout, strategy_name=strategy, candidate=final_candidate,
+    # Stress and assignment checks replay the final candidate over the stitched OOS span.
+    stress_span = dataset.observations[folds[0].oos_start:folds[-1].oos_end]
+    stress_run = simulate_options_strategy(
+        dataset, stress_span, strategy_name=strategy, candidate=final_candidate,
         config=research_config, base_config=base_config, force_close=True,
     )
-    baseline_holdout_run = simulate_options_strategy(
-        dataset, holdout, strategy_name=strategy, candidate=baseline_candidate,
-        config=research_config, base_config=base_config, force_close=True,
-    )
-    incumbent_holdout_run = None
-    if incumbent and incumbent["candidate_id"] != final_candidate.candidate_id:
-        incumbent_holdout_run = simulate_options_strategy(
-            dataset, holdout, strategy_name=strategy, candidate=champion_candidate(incumbent),
-            config=research_config, base_config=base_config, force_close=True,
-        )
-    elif incumbent:
-        incumbent_holdout_run = holdout_run
+    incumbent_oos_runs = [result["incumbent_oos_run"] for result in fold_results] if incumbent_candidate else []
     baseline_comparison = {
         "baseline_candidate": baseline_candidate.to_dict(),
-        "same_oos_folds_and_holdout": True,
+        "same_oos_folds": True,
         "same_execution_cost_model": True,
         "walk_forward": {
             "baseline_metrics": baseline_walk_forward["metrics"],
             "tuned_metrics": walk_forward["metrics"],
             "tuned_minus_baseline": _metric_deltas(
                 walk_forward["metrics"], baseline_walk_forward["metrics"],
-            ),
-        },
-        "holdout": {
-            "baseline_metrics": baseline_holdout_run["metrics"],
-            "tuned_metrics": holdout_run["metrics"],
-            "tuned_minus_baseline": _metric_deltas(
-                holdout_run["metrics"], baseline_holdout_run["metrics"],
             ),
         },
     }
@@ -789,7 +773,7 @@ def run_research(
     for slippage in slippage_scenarios:
         for spread_width in spread_scenarios:
             run = simulate_options_strategy(
-                dataset, holdout, strategy_name=strategy, candidate=final_candidate,
+                dataset, stress_span, strategy_name=strategy, candidate=final_candidate,
                 config=research_config, base_config=base_config,
                 slippage_multiplier=float(slippage), spread_width_multiplier=float(spread_width),
                 force_close=True,
@@ -800,17 +784,17 @@ def run_research(
     assignment_sensitivity = {"enabled": bool(research_config.get("robustness", {}).get("run_assignment_sensitivity", True))}
     if assignment_sensitivity["enabled"]:
         without_assignment = simulate_options_strategy(
-            dataset, holdout, strategy_name=strategy, candidate=final_candidate,
+            dataset, stress_span, strategy_name=strategy, candidate=final_candidate,
             config=research_config, base_config=base_config, assignment_enabled=False,
             force_close=True,
         )
         assignment_sensitivity.update({
-            "with_assignment": holdout_run["metrics"],
+            "with_assignment": stress_run["metrics"],
             "without_early_assignment": without_assignment["metrics"],
             "pnl_difference_usd": starting_equity * (
-                holdout_run["metrics"]["total_return"] - without_assignment["metrics"]["total_return"]
+                stress_run["metrics"]["total_return"] - without_assignment["metrics"]["total_return"]
             ),
-            "assignment_events": len(holdout_run.get("assignment_events", [])),
+            "assignment_events": len(stress_run.get("assignment_events", [])),
         })
     reshuffle = _sequence_reshuffle(
         walk_forward["trades"],
@@ -856,8 +840,6 @@ def run_research(
         )
 
     wf_min_trades = int(research_config.get("walk_forward", {}).get("minimum_oos_trades", 8))
-    holdout_min_trades = int(research_config.get("walk_forward", {}).get("minimum_holdout_trades", 4))
-    holdout_coverage = split["holdout_regime_coverage"]
     plateau_fraction = statistics.mean([bool(row["plateau"].get("stable")) for row in selected_rows]) if selected_rows else 0.0
     min_plateau_fraction = float(research_config.get("search", {}).get("minimum_stable_selection_fraction", 0.50))
     min_parameter_stability = float(research_config.get("search", {}).get("minimum_parameter_stability_score", 0.50))
@@ -874,12 +856,7 @@ def run_research(
         "minimum_oos_trades": wf_min_trades,
         "observed_oos_trades": walk_forward["metrics"]["trade_count"],
         "minimum_oos_trades_met": walk_forward["metrics"]["trade_count"] >= wf_min_trades,
-        "minimum_holdout_trades": holdout_min_trades,
-        "observed_holdout_trades": holdout_run["metrics"]["trade_count"],
-        "minimum_holdout_trades_met": holdout_run["metrics"]["trade_count"] >= holdout_min_trades,
-        "holdout_coverage_met": bool(holdout_coverage["meets_minimum_coverage"]),
         "walk_forward_oos_positive": walk_forward["metrics"]["risk_adjusted_score"] > 0,
-        "holdout_positive_after_costs": holdout_run["metrics"]["risk_adjusted_score"] > 0 and holdout_run["metrics"]["total_return"] > 0,
         "plateau_stable_selection_fraction": plateau_fraction,
         "minimum_stable_selection_fraction": min_plateau_fraction,
         "plateau_gate_met": plateau_fraction >= min_plateau_fraction,
@@ -891,34 +868,32 @@ def run_research(
         "stress_case_positive_after_costs": stress_resilient,
         "returns_not_dominated_by_gamma_or_vega_episodes": not (
             walk_forward["metrics"]["returns_dominated_by_gamma_or_vega_episodes"]
-            or holdout_run["metrics"]["returns_dominated_by_gamma_or_vega_episodes"]
         ),
         "approved": False,
     }
     validation["approved"] = all((
-        validation["minimum_oos_trades_met"], validation["minimum_holdout_trades_met"],
-        validation["holdout_coverage_met"], validation["walk_forward_oos_positive"],
-        validation["holdout_positive_after_costs"], validation["plateau_gate_met"],
-        validation["parameter_stability_gate_met"], validation["stress_case_positive_after_costs"],
+        validation["minimum_oos_trades_met"], validation["walk_forward_oos_positive"],
+        validation["plateau_gate_met"], validation["parameter_stability_gate_met"],
+        validation["stress_case_positive_after_costs"],
         validation["returns_not_dominated_by_gamma_or_vega_episodes"],
     ))
-    candidate_score = holdout_run["metrics"].get("risk_adjusted_score")
-    incumbent_score = (incumbent_holdout_run["metrics"].get("risk_adjusted_score") if incumbent_holdout_run else None)
+    candidate_summary = fold_summary([float(run["metrics"].get("risk_adjusted_score", -5.0)) for run in selected_oos_runs])
+    incumbent_summary = (
+        fold_summary([float(run["metrics"].get("risk_adjusted_score", -5.0)) for run in incumbent_oos_runs])
+        if incumbent_candidate else None
+    )
     promoted, promotion_reason = (False, "champion carry disabled")
     if champion_enabled:
         promoted, promotion_reason = decide_promotion(
-            approved=validation["approved"],
-            candidate_holdout_score=float(candidate_score) if candidate_score is not None else None,
-            incumbent_holdout_score=float(incumbent_score) if incumbent_score is not None else None,
-            margin=champion_margin,
+            approved=validation["approved"], candidate_summary=candidate_summary,
+            incumbent_summary=incumbent_summary, has_incumbent=incumbent is not None,
         )
-    live_candidate = final_candidate if promoted else (champion_candidate(incumbent) if incumbent else None)
+    live_candidate = final_candidate if promoted else (incumbent_candidate if incumbent else None)
     validation["champion"] = {
         "enabled": champion_enabled,
         "incumbent_candidate_id": (incumbent or {}).get("candidate_id"),
-        "incumbent_holdout_risk_adjusted_score": incumbent_score,
-        "candidate_holdout_risk_adjusted_score": candidate_score,
-        "minimum_holdout_score_margin": champion_margin,
+        "candidate_fold_summary": candidate_summary,
+        "incumbent_fold_summary": incumbent_summary,
         "promoted": promoted,
         "reason": promotion_reason,
         "live_candidate_id": live_candidate.candidate_id if live_candidate else None,
@@ -981,23 +956,13 @@ def run_research(
             "equity_curve": walk_forward["equity_curve"],
             "trades": walk_forward["trades"],
         },
-        "holdout": {
-            "metrics": holdout_run["metrics"],
-            "regime_breakdown": holdout_run["regime_breakdown"],
-            "volatility_breakdown": holdout_run["volatility_breakdown"],
-            "greek_summary": holdout_run["greek_summary"],
-            "equity_curve": holdout_run["equity_curve"],
-            "trades": holdout_run["trades"],
-            "assignment_events": holdout_run["assignment_events"],
-            "start": holdout[0].as_of.isoformat(), "end": holdout[-1].as_of.isoformat(),
-        },
         "robustness": {
             "slippage_sensitivity": sensitivity,
             "assignment_sensitivity": assignment_sensitivity,
             "trade_sequence_reshuffle": reshuffle,
         },
         "validation": validation,
-        "execution_assumptions": holdout_run["execution"],
+        "execution_assumptions": stress_run["execution"],
         "data_assumptions": {
             "event_llm_core_searched": False,
             "historical_chain_snapshots_required_for_empirical_claims": True,
@@ -1011,13 +976,9 @@ def run_research(
     atomic_write_json(run_dir / "candidate_reports.json", leaderboard,
                       indent=2, sort_keys=True, allow_nan=False)
     _write_equity_csv(run_dir / "equity_curve.csv", walk_forward["equity_curve"])
-    _write_equity_csv(run_dir / "holdout_equity_curve.csv", holdout_run["equity_curve"])
     _write_equity_csv(run_dir / "baseline_equity_curve.csv", baseline_walk_forward["equity_curve"])
-    _write_equity_csv(run_dir / "baseline_holdout_equity_curve.csv", baseline_holdout_run["equity_curve"])
     _write_trades_csv(run_dir / "oos_trades.csv", walk_forward["trades"])
-    _write_trades_csv(run_dir / "holdout_trades.csv", holdout_run["trades"])
     _write_trades_csv(run_dir / "baseline_oos_trades.csv", baseline_walk_forward["trades"])
-    _write_trades_csv(run_dir / "baseline_holdout_trades.csv", baseline_holdout_run["trades"])
     atomic_write_json(run_dir / "run.json", {
         "run_id": run_id, "strategy": strategy,
         "research_config": research_config,
@@ -1033,12 +994,9 @@ def run_research(
         record_decision(
             strategy=strategy, underlying=underlying, run_id=run_id,
             decided_at=timestamp.isoformat(),
-            holdout_start=split["holdout_start"], holdout_end=split["holdout_end"],
-            candidate=final_candidate,
-            candidate_holdout_score=float(candidate_score) if candidate_score is not None else None,
+            candidate=final_candidate, candidate_summary=candidate_summary,
             incumbent_candidate_id=(incumbent or {}).get("candidate_id"),
-            incumbent_holdout_score=float(incumbent_score) if incumbent_score is not None else None,
-            promoted=promoted, reason=promotion_reason,
+            incumbent_summary=incumbent_summary, promoted=promoted, reason=promotion_reason,
         )
     if exported[strategy]["enabled"]:
         atomic_write_json(run_dir / "approved-options-config.json", exported, indent=2, sort_keys=True, allow_nan=False)

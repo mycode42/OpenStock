@@ -195,7 +195,7 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
             runtime_settings.swing_multi_factor_enabled
             and (self.strategy_filter is None or "swing_multi_factor" in self.strategy_filter)
         )
-        multi_factor_parameters = self.parameters_for_regime("swing_multi_factor", "unknown")
+        multi_factor_parameters = dict(self.parameters_for_regime("swing_multi_factor", "unknown"))
         if self.regime_config["strategy_regime_weights"]["swing_multi_factor"].get("volatile", 0) > 0:
             multi_factor_parameters["disable_in_volatile"] = False
         self.multi_factor_generator = SignalGenerator(MultiFactorConfig.from_dict(multi_factor_parameters))
@@ -291,12 +291,20 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         }
 
     def parameters_for_regime(self, strategy: str, regime: str) -> dict:
-        """Return the current strategy profile with an optional regime override."""
-        values = {
-            **ALGO_DEFAULT_PARAMETERS[strategy],
-            **(self.profile.get(strategy) or {}),
-        }
-        return {
-            **values,
-            **((self.regime_profiles.get(strategy) or {}).get(regime) or {}),
-        }
+        """Return the current strategy profile with an optional regime override.
+
+        The result is shared between calls for the same strategy and regime, so
+        callers must copy it before changing it.
+        """
+        cache = self.__dict__.setdefault("_parameter_cache", {})
+        key = (strategy, regime)
+        if key not in cache:
+            values = {
+                **ALGO_DEFAULT_PARAMETERS[strategy],
+                **(self.profile.get(strategy) or {}),
+            }
+            cache[key] = {
+                **values,
+                **((self.regime_profiles.get(strategy) or {}).get(regime) or {}),
+            }
+        return cache[key]

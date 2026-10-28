@@ -5,7 +5,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from functools import cached_property
+from functools import cached_property, lru_cache
 import math
 from typing import Callable, Iterable, Mapping, Protocol, Sequence
 
@@ -13,6 +13,9 @@ from market.quotes import QuoteParseError, parse_quote
 from options.market_inputs import MarketInputs
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
 from options.pricing import implied_volatility, model_greeks, years_to_expiration
+
+
+from options.models import _compact_reduce  # noqa: E402  (shared compact pickle form)
 
 
 @dataclass(frozen=True)
@@ -129,7 +132,7 @@ def _parse_contract(row: dict) -> OptionContract:
     return OptionContract(
         symbol=str(row.get("symbol") or "").upper(),
         underlying=str(row.get("underlying_symbol") or row.get("underlying") or "").upper(),
-        expiration=date.fromisoformat(str(row.get("expiration_date"))),
+        expiration=_date_from_text(row.get("expiration_date")),
         right=str(row.get("type") or "").lower(),
         strike=float(row.get("strike_price")),
         multiplier=int(float(row.get("size") or row.get("multiplier") or 100)),
@@ -219,6 +222,12 @@ def _vendor_greeks(raw: object) -> dict[str, float] | None:
     if not -1.0 <= output["delta"] <= 1.0 or output["gamma"] < 0 or output["vega"] < 0:
         return None
     return output
+
+
+@lru_cache(maxsize=16384)
+def _date_from_text(value: object) -> date:
+    """Expiration dates repeat across a chain; one shared object per distinct value."""
+    return date.fromisoformat(str(value))
 
 
 def parse_snapshot_quote(
@@ -530,3 +539,5 @@ __all__ = [
     "AlpacaOptionDataProvider", "ChainQuote", "HistoricalChainSnapshotProvider",
     "ModelSurfaceDataProvider", "OptionChain", "OptionDataProvider", "parse_snapshot_quote", "realized_volatility",
 ]
+
+ChainQuote.__reduce__ = _compact_reduce

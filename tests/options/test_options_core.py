@@ -102,7 +102,7 @@ def test_rolling_walk_forward_purges_maximum_lookback_dte_and_embargo():
         for index in range(600)
     )
 
-    folds, holdout, split = make_purged_walk_forward(
+    folds, split = make_purged_walk_forward(
         observations,
         strategy="vrp",
         strategy_section={"realized_lookback_sessions": 30, "max_dte": 40},
@@ -110,8 +110,7 @@ def test_rolling_walk_forward_purges_maximum_lookback_dte_and_embargo():
             "strategy_defaults": {"vrp": {"max_dte": 35}},
             "walk_forward": {
                 "rolling_train_sessions": 100, "oos_sessions": 20, "step_sessions": 20,
-                "minimum_oos_periods": 4, "final_holdout_sessions": 100, "embargo_sessions": 5,
-                "minimum_holdout_regime_labels": 2, "minimum_high_volatility_holdout_sessions": 5,
+                "minimum_oos_periods": 4, "embargo_sessions": 5,
             },
         },
     )
@@ -120,7 +119,7 @@ def test_rolling_walk_forward_purges_maximum_lookback_dte_and_embargo():
     assert split["purge_sessions"] == 45
     assert all(fold.oos_start - fold.train_end == 45 for fold in folds)
     assert all(folds[index].oos_end <= folds[index + 1].oos_start for index in range(len(folds) - 1))
-    assert len(holdout) == 100
+    assert len(observations) - folds[-1].oos_end < 20  # no full OOS window is left unused
 
 
 def _european_contract(symbol: str, right: str, strike: float) -> OptionContract:

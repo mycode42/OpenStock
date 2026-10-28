@@ -1,6 +1,6 @@
 """Transactional, source-aware store for historical option-chain snapshots.
 
-SQLite is canonical. DuckDB reads normalized SQLite tables for research. The
+SQLite is the only engine. Research reads the normalized tables directly. The
 Theta monthly response cache remains resumable vendor input; assembled chain
 JSONL files are legacy migration inputs only.
 """
@@ -142,6 +142,60 @@ CREATE TABLE IF NOT EXISTS eligible_membership_daily (
 );
 CREATE INDEX IF NOT EXISTS eligible_membership_daily_date
     ON eligible_membership_daily (rules_sha256, as_of_date);
+"""
+
+# Every write to the chain tables bumps a per-underlying version. Readers that cache
+# prepared chains key on this version, so a backfill or new capture invalidates them
+# without any writer having to remember to do so.
+_CHANGE_TRACKING_SQL = """
+CREATE TABLE IF NOT EXISTS options_history_version (
+    underlying TEXT PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 0
+);
+CREATE TRIGGER IF NOT EXISTS options_history_snapshot_track_insert
+AFTER INSERT ON options_history_snapshot BEGIN
+    INSERT INTO options_history_version(underlying, version) VALUES (NEW.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_snapshot_track_update
+AFTER UPDATE ON options_history_snapshot BEGIN
+    INSERT INTO options_history_version(underlying, version) VALUES (NEW.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+    INSERT INTO options_history_version(underlying, version) VALUES (OLD.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_snapshot_track_delete
+AFTER DELETE ON options_history_snapshot BEGIN
+    INSERT INTO options_history_version(underlying, version) VALUES (OLD.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_contract_track_insert
+AFTER INSERT ON options_history_contract BEGIN
+    INSERT INTO options_history_version(underlying, version)
+    SELECT underlying, 1 FROM options_history_snapshot WHERE snapshot_id = NEW.snapshot_id AND true
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_contract_track_delete
+AFTER DELETE ON options_history_contract BEGIN
+    INSERT INTO options_history_version(underlying, version)
+    SELECT underlying, 1 FROM options_history_snapshot WHERE snapshot_id = OLD.snapshot_id AND true
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_active_track_insert
+AFTER INSERT ON options_history_active_source BEGIN
+    INSERT INTO options_history_version(underlying, version) VALUES (NEW.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_active_track_update
+AFTER UPDATE ON options_history_active_source BEGIN
+    INSERT INTO options_history_version(underlying, version) VALUES (NEW.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS options_history_active_track_delete
+AFTER DELETE ON options_history_active_source BEGIN
+    INSERT INTO options_history_version(underlying, version) VALUES (OLD.underlying, 1)
+    ON CONFLICT(underlying) DO UPDATE SET version = version + 1;
+END;
 """
 
 
@@ -296,7 +350,7 @@ def _contract_values(row: dict, *, underlying: str, as_of: str) -> tuple:
 
 
 class OptionsHistoryStore:
-    """Source-aware SQLite store with a DuckDB read path for research."""
+    """Source-aware SQLite store for historical option chains."""
 
     def __init__(self, path: str | Path = DEFAULT_DATABASE, *, initialize: bool = True) -> None:
         self.path = Path(path).resolve()
@@ -307,6 +361,7 @@ class OptionsHistoryStore:
                 connection.execute("PRAGMA synchronous=NORMAL")
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.executescript(_SCHEMA)
+                connection.executescript(_CHANGE_TRACKING_SQL)
                 snapshot_columns = {row[1] for row in connection.execute(
                     "PRAGMA table_info(options_history_snapshot)"
                 )}
@@ -1003,6 +1058,30 @@ class OptionsHistoryStore:
             "dataset_path": str(self.path),
         }
 
+    def ensure_change_tracking(self) -> None:
+        """Install the version triggers on databases created before they existed."""
+        with closing(self._connect()) as connection:
+            connection.executescript(_CHANGE_TRACKING_SQL)
+
+    def data_version(self, underlying: str) -> int:
+        """Monotonic count of writes that touched this underlying's chains."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT version FROM options_history_version WHERE underlying=?",
+                (str(underlying).strip().upper(),),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def latest_marks(self, underlying: str) -> str:
+        """Cheap content mark: changes when new sessions or snapshots arrive, not on every write."""
+        symbol = str(underlying).strip().upper()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT MAX(session_date), MAX(as_of) FROM options_history_snapshot WHERE underlying=?",
+                (symbol,),
+            ).fetchone()
+        return f"{row[0]}|{row[1]}"
+
     def dataset_fingerprint(self, underlying: str, *, phase: str = "daily_close") -> str:
         symbol = str(underlying).strip().upper()
         digest = hashlib.sha256(SCHEMA_VERSION.encode("ascii"))
@@ -1030,20 +1109,12 @@ class OptionsHistoryStore:
         return digest.hexdigest()
 
     def iter_effective_snapshots(
-        self, underlying: str, *, phase: str = "daily_close", threads: int = 1,
+        self, underlying: str, *, phase: str = "daily_close",
     ) -> Iterator[dict]:
-        """Read an effective chain through DuckDB in bounded result batches."""
-        import duckdb
-
-        if isinstance(threads, bool) or not isinstance(threads, int) or threads < 1:
-            raise ValueError("DuckDB threads must be a positive integer")
+        """Read an effective chain from SQLite in bounded result batches."""
         symbol = str(underlying).strip().upper()
-        path_literal = str(self.path).replace("'", "''")
-        connection = duckdb.connect(":memory:")
+        connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
         try:
-            connection.execute(f"SET threads={threads}")
-            connection.execute("INSTALL sqlite")
-            connection.execute("LOAD sqlite")
             query = f"""
                 WITH ranked AS (
                     SELECT s.snapshot_id, s.underlying, s.session_date, s.as_of,
@@ -1056,10 +1127,10 @@ class OptionsHistoryStore:
                                ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 4 WHEN 'theta_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
-                    FROM sqlite_scan('{path_literal}', 'options_history_snapshot') AS s
-                    JOIN sqlite_scan('{path_literal}', 'options_history_active_source') AS a
+                    FROM options_history_snapshot AS s
+                    JOIN options_history_active_source AS a
                       ON a.source_id=s.source_id
-                    JOIN sqlite_scan('{path_literal}', 'options_history_source') AS src
+                    JOIN options_history_source AS src
                       ON src.source_id=s.source_id
                     WHERE s.underlying=? AND s.phase=?
                 ), effective AS (
@@ -1075,7 +1146,7 @@ class OptionsHistoryStore:
                        q.open_interest, q.bid, q.ask,
                        q.quote_at, q.iv, q.greeks_json
                 FROM effective e
-                LEFT JOIN sqlite_scan('{path_literal}', 'options_history_contract') AS q
+                LEFT JOIN options_history_contract AS q
                   ON q.snapshot_id=e.snapshot_id
                 ORDER BY e.session_date, e.as_of, q.expiration_date, q.right, q.strike
             """

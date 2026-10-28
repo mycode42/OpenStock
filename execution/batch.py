@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from execution.risk_models import ValidationResult
 from market.calendar import extended_session_name
+from market.data import feeds_for_session
 from portfolio.config import CASH_RESERVE, is_cash_proxy
 from portfolio.protection.software import exit_limit_price, exit_order_policy
 
@@ -79,8 +80,11 @@ def _extended_exit_trade(trade: dict, session_name: str, hooks: BatchHooks, mode
     policy = exit_order_policy(session_name)
     try:
         closing_quote = (
-            hooks.get_latest_bid(trade["ticker"], mode=mode) if action == "sell"
-            else hooks.get_latest_ask(trade["ticker"], mode=mode)
+            hooks.get_latest_bid(
+                trade["ticker"], mode=mode, feed=feeds_for_session(session_name)[1],
+            ) if action == "sell" else hooks.get_latest_ask(
+                trade["ticker"], mode=mode, feed=feeds_for_session(session_name)[1],
+            )
         )
         limit_price = exit_limit_price(action, closing_quote, closing_quote, session_name)
     except Exception as exc:

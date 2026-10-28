@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import math
 import sqlite3
+
+try:
+    from market._bars_cy import group_bar_rows as _group_bar_rows_cy
+except ImportError:  # pragma: no cover - pure-Python fallback when the extension is not built
+    _group_bar_rows_cy = None
 import time
 from contextlib import closing
 from datetime import datetime, timezone
@@ -183,6 +188,8 @@ class SQLiteBarStore:
                 f"{start}T00:00:00.000000Z", f"{end}T23:59:59.999999Z",
             )).fetchall()
         output: dict[str, list[dict]] = {symbol.upper(): [] for symbol in symbols}
+        if _group_bar_rows_cy is not None:
+            return _group_bar_rows_cy(rows, output)
         for symbol, timestamp, opening, high, low, close, volume, count, vwap, ingested_at in rows:
             bar = {"t": timestamp, "o": opening, "h": high, "l": low, "c": close, "v": volume}
             bar["_ingested_at"] = ingested_at

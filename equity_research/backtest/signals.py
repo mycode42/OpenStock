@@ -414,6 +414,7 @@ class ReplaySignalsMixin:
         self._daily_history_indices[key] = index
         return history
 
+
     def _signal_for(
         self, ticker: str, history: list[dict], active: list[str], ranked: dict,
         timestamp: datetime, factor_signal: dict | None = None, position_qty: float = 0,

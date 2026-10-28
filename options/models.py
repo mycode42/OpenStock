@@ -20,6 +20,20 @@ def _finite(name: str, value: float, *, nonnegative: bool = False) -> None:
         raise ValueError(f"{name} must be non-negative")
 
 
+def _rebuild_compact(cls, values):
+    """Rebuild a frozen model from positional field values. Values were validated when first built."""
+    obj = object.__new__(cls)
+    for name, value in zip(cls.__dataclass_fields__, values):
+        object.__setattr__(obj, name, value)
+    return obj
+
+
+def _compact_reduce(self):
+    """Pickle positional values instead of a per-object dict; chains cross process boundaries."""
+    cls = type(self)
+    return (_rebuild_compact, (cls, tuple(getattr(self, name) for name in cls.__dataclass_fields__)))
+
+
 @dataclass(frozen=True)
 class OptionContract:
     symbol: str
@@ -320,3 +334,7 @@ class PortfolioRiskSummary:
         row["observed_at"] = self.observed_at.isoformat()
         row["data_quality"] = list(self.data_quality)
         return row
+
+
+for _model in (OptionContract, GreeksSnapshot):
+    _model.__reduce__ = _compact_reduce

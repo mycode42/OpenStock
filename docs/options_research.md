@@ -23,7 +23,7 @@ the broker, or submit orders. Run-specific artifacts are written beneath
 `data/options/research/runs/`; each run gets a reproducibility record, JSON and
 Markdown reports, an OOS equity/Greek CSV, and a live-format candidate config.
 Candidate-specific fold metrics and selected OOS summaries are also written to
-`candidate_reports.json`; closed OOS and holdout trades have separate CSVs.
+`candidate_reports.json`; closed OOS trades are exported as CSV.
 Compressed copies of reports, run artifacts, and candidates are stored in
 `data/options/research/research.sqlite3`; the files remain available as exports.
 An `approved-options-config.json` is emitted only if the configured validation
@@ -32,16 +32,23 @@ the researched strategy section is disabled so copying it cannot enable an
 unvalidated sleeve by accident.
 
 Every standard run also evaluates a fixed-default baseline over the same rolling
-OOS folds and untouched holdout as the tuned walk-forward strategy, using the
-same execution-cost assumptions. The per-run and nightly reports show tuned
+OOS folds as the tuned walk-forward strategy, using the same execution-cost
+assumptions. The per-run and nightly reports show tuned
 minus baseline return and risk-adjusted-score deltas; baseline curves and trades
 are exported alongside the tuned artifacts. This comparison is informational:
-the existing approval gates still assess absolute validation results and do
-not require the tuned candidate to beat the baseline.
+the approval gates still assess absolute validation results. Promotion over the
+live champion is decided separately (see below).
+
+Promotion. A candidate is approved only if the OOS gates pass. The live champion
+is replayed on the same OOS folds, and the candidate replaces it only if it ranks
+above it: lower-quartile per-fold fitness, then median fitness, then fold
+consistency (`runtime/fold_ranking.py`, the same rule equity uses). The first
+approved candidate becomes champion. Decisions are stored in
+`options_champion_decision`; the champion in `options_champion`.
 
 ## Nightly automation
 
-The scheduled AutoResearch automation runs `equity_research.nightly`, which starts
+The scheduled AutoResearch automation runs `research`, which starts
 the existing equity research command and an independent options job concurrently.
 The options job currently runs VRP and long-volatility. VRP screens the 117-symbol
 history candidate pool one ticker at a time; long-volatility keeps its explicit
@@ -316,10 +323,9 @@ exercise style (defaults to American for SPY and European for SPX).
   training data with a neighbor/plateau score.
 - OOS windows do not overlap. The gap before each OOS window is the larger of
   the strategy's longest lookback and the maximum structure DTE, plus the
-  configured embargo. Several OOS windows are required before the final holdout.
-- The untouched tail holdout must cover the configured number of distinct
-  market regimes and several high-volatility sessions. It is evaluated only
-  after the fold selections and final parameter consensus are fixed.
+  configured embargo. Every session after warm-up is out-of-sample for some fold.
+- There is no separate holdout. Champion decisions use the same folds as the
+  approval gates, and the same rule applies to equity.
 - Per-leg fills cross the configured fraction of the observed spread, floored at
   `slippage_per_contract_usd` and capped at `max_slippage_per_contract_usd`
   (the same function live limit prices use), and pay commissions on entry and exit. Sensitivity runs widen displayed spreads and

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
@@ -9,6 +10,7 @@ import hashlib
 import json
 import math
 import multiprocessing as mp
+import os
 import pickle
 from pathlib import Path
 import tempfile
@@ -17,6 +19,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from equity_research.cpu import available_cpu_count
+from runtime.paths import ROOT
 from options.data import HistoricalChainSnapshotProvider, ModelSurfaceDataProvider, OptionChain, OptionDataProvider
 from strategies.llm_driven.models import ScheduledEvent
 
@@ -172,6 +175,14 @@ def _normalize_jsonl_chunk(args: tuple[str, int, int, str, str]) -> tuple[str, i
             pickle.dump(output_row, output, protocol=pickle.HIGHEST_PROTOCOL)
             target_rows += 1
     return output_name, rows_seen, target_rows, model_surface_marker
+
+
+def _with_chain(observation, chain, chain_error):
+    """Equivalent to dataclasses.replace for these two fields, without per-call field introspection."""
+    updated = copy.copy(observation)
+    object.__setattr__(updated, "chain", chain)
+    object.__setattr__(updated, "chain_error", chain_error)
+    return updated
 
 
 def _prepare_chain_index(index: int) -> tuple[OptionChain | None, str | None]:
@@ -357,7 +368,103 @@ def _events(raw: Any, *, as_of: datetime) -> tuple[ScheduledEvent, ...]:
     return tuple(output)
 
 
+CHAIN_CACHE_VERSION = "options-chains-v1"
+CHAIN_CACHE_DIR = ROOT / ".cache" / "options-chains"
+
+
 def load_options_research_dataset(
+    path: str | Path,
+    *,
+    underlying: str = "SPY",
+    rate: float = 0.04,
+    dividend_yield: float = 0.015,
+    data_mode: str = "auto",
+    model_surface_config: dict | None = None,
+    workers: int = 1,
+) -> OptionsResearchDataset:
+    """Load a prepared dataset, reusing a disk copy when the source data has not changed.
+
+    Preparing point-in-time chains is the most expensive part of a load, and every
+    strategy on the same underlying needs the same chains. The cache key covers the
+    database identity, its latest-session marks, the rates, and the requested mode.
+    Model-surface datasets are not cached because their provider holds closures.
+    """
+    source = Path(path)
+    target = underlying.upper()
+    requested_mode = str(data_mode or "auto").lower()
+    if source.suffix.lower() not in {".sqlite", ".sqlite3", ".db"} or requested_mode in {"model", "model_surface"}:
+        return _load_options_research_dataset_uncached(
+            path, underlying=underlying, rate=rate, dividend_yield=dividend_yield,
+            data_mode=data_mode, model_surface_config=model_surface_config, workers=workers,
+        )
+    from options.research.history_store import OptionsHistoryStore
+
+    store = OptionsHistoryStore(source, initialize=False)
+    store.ensure_change_tracking()
+    marks = store.latest_marks(target)
+    key = json.dumps({
+        "version": CHAIN_CACHE_VERSION, "source": str(source.resolve()), "underlying": target,
+        "marks": marks, "writes": store.data_version(target), "rate": rate, "dividend_yield": dividend_yield,
+        "data_mode": requested_mode, "model_surface_config": model_surface_config or {},
+    }, sort_keys=True, default=str)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    cache_path = CHAIN_CACHE_DIR / f"{target}-{digest}.pkl"
+    if cache_path.is_file():
+        started = perf_counter()
+        try:
+            with cache_path.open("rb") as handle:
+                cached = pickle.load(handle)
+        except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ImportError):
+            cached = None
+        if cached is not None:
+            print(f"Options dataset {target}: loaded prepared chains from cache in {perf_counter() - started:.1f}s", flush=True)
+            cached.loading_parallelism["cache"] = "hit"
+            return cached
+    dataset = _load_options_research_dataset_uncached(
+        path, underlying=underlying, rate=rate, dividend_yield=dividend_yield,
+        data_mode=data_mode, model_surface_config=model_surface_config, workers=workers,
+    )
+    dataset.loading_parallelism["cache"] = "miss"
+    _write_chain_cache(dataset, cache_path)
+    return dataset
+
+
+class _ClosesOnlyProvider:
+    """What research needs from a prepared dataset: underlying closes. Chains are already attached."""
+
+    def __init__(self, underlying_history):
+        self._history = {key: tuple(values) for key, values in underlying_history.items()}
+
+    def underlying_closes(self, underlying: str, *, as_of: datetime, sessions: int) -> list[tuple[date, float]]:
+        return [row for row in self._history.get(underlying.upper(), ()) if row[0] < as_of.date()][-sessions:]
+
+
+def _write_chain_cache(dataset: "OptionsResearchDataset", cache_path: Path) -> None:
+    """Write the cache in a forked child so the parent starts research immediately.
+
+    The child inherits the dataset copy-on-write and exits without running the
+    parent's cleanup. A failed write only means the next load is a miss.
+    """
+    if not hasattr(os, "fork"):
+        return
+    pid = os.fork()
+    if pid:
+        return
+    status = 0
+    try:
+        CHAIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        slim = replace(dataset, provider=_ClosesOnlyProvider(dataset.underlying_history))
+        temp = cache_path.with_suffix(f".{os.getpid()}.tmp")
+        with temp.open("wb") as handle:
+            pickle.dump(slim, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temp, cache_path)
+    except Exception:  # noqa: BLE001 - a missing cache entry is not an error
+        status = 1
+    finally:
+        os._exit(status)
+
+
+def _load_options_research_dataset_uncached(
     path: str | Path,
     *,
     underlying: str = "SPY",
@@ -400,7 +507,7 @@ def load_options_research_dataset(
         loader_workers_used = requested_loader_workers
         metadata = {}
         for row in store.iter_effective_snapshots(
-            target, phase="daily_close", threads=requested_loader_workers,
+            target, phase="daily_close",
         ):
             as_of = _timestamp(row.get("as_of"), field=f"snapshot[{row['source_line']}].as_of")
             spot = float(row.get("spot", 0))
@@ -626,9 +733,7 @@ def load_options_research_dataset(
             with ProcessPoolExecutor(max_workers=chain_worker_count, mp_context=context) as executor:
                 chain_results = executor.map(_prepare_chain_index, range(len(observations)), chunksize=1)
                 for observation, (chain, error) in zip(observations, chain_results):
-                    prepared_observations.append(replace(
-                        observation, chain=chain, chain_error=error,
-                    ))
+                    prepared_observations.append(_with_chain(observation, chain, error))
         finally:
             _CHAIN_PREPARATION_CONTEXT.clear()
     else:
@@ -637,10 +742,10 @@ def load_options_research_dataset(
                 chain = provider.get_chain(
                     target, as_of=observation.as_of, min_dte=0, max_dte=730,
                 )
-                prepared_observations.append(replace(observation, chain=chain))
+                prepared_observations.append(_with_chain(observation, chain, None))
             except (KeyError, TypeError, ValueError, OverflowError) as exc:
-                prepared_observations.append(replace(
-                    observation, chain_error=f"{type(exc).__name__}: {exc}",
+                prepared_observations.append(_with_chain(
+                    observation, None, f"{type(exc).__name__}: {exc}",
                 ))
     return OptionsResearchDataset(
         observations=tuple(prepared_observations),
@@ -654,7 +759,7 @@ def load_options_research_dataset(
             "workers_used": loader_workers_used,
             "chain_workers_used": chain_worker_count,
             "source_format": (
-                "duckdb_sqlite_batches" if database_loaded
+                "sqlite_batches" if database_loaded
                 else "jsonl_process_chunks" if loader_workers_used > 1
                 else source.suffix.lower().lstrip(".") or "json"
             ),

@@ -1,4 +1,4 @@
-"""Candidates must beat the benchmark and incumbent out of sample, and pass a holdout."""
+"""Candidates must beat the benchmark and incumbent out of sample, net of costs, with a deflated Sharpe."""
 
 import random
 from datetime import date, timedelta
@@ -8,7 +8,7 @@ import pytest
 from statistics import NormalDist
 
 from equity_research.validation.acceptance import (
-    EULER_MASCHERONI, AcceptancePolicy, deflated_sharpe_ratio, evaluate_candidate,
+    EULER_MASCHERONI, AcceptancePolicy, deflated_sharpe_ratio,
     evaluate_search, expected_max_sharpe, purged_fold_means,
 )
 
@@ -29,12 +29,12 @@ def test_real_edge_over_benchmark_and_incumbent_is_accepted():
     incumbent = {day: benchmark[day] + 0.0001 for day in days}
     candidate = {day: benchmark[day] + 0.0009 + random.Random(7 + i).gauss(0, 0.002) for i, day in enumerate(days)}
 
-    result = evaluate_candidate(
-        candidate, incumbent, benchmark, holdout_start=days[300], trials=3,
+    result = evaluate_search(
+        candidate, incumbent, benchmark, trials=3,
         policy=AcceptancePolicy(cost_bps_per_turnover=0.0),
     )
 
-    assert result.decision == "accept", result.reasons
+    assert result.decision == "search_passed", result.reasons
 
 
 def test_noise_is_rejected_once_the_trial_count_raises_the_bar():
@@ -43,27 +43,13 @@ def test_noise_is_rejected_once_the_trial_count_raises_the_bar():
     incumbent = _series(days, 0.0, 0.01, seed=3)
     candidate = {day: benchmark[day] + value for day, value in _series(days, 0.00005, 0.01, seed=4).items()}
 
-    result = evaluate_candidate(
-        candidate, incumbent, benchmark, holdout_start=days[300], trials=500,
+    result = evaluate_search(
+        candidate, incumbent, benchmark, trials=500,
         policy=AcceptancePolicy(cost_bps_per_turnover=0.0),
     )
 
     assert result.decision == "reject"
     assert any("deflated Sharpe" in reason for reason in result.reasons)
-
-
-def test_candidate_without_holdout_evidence_is_pending_not_accepted():
-    days = _days(200)
-    benchmark = _series(days, 0.0, 0.01, seed=5)
-    incumbent = {day: benchmark[day] for day in days}
-    candidate = {day: benchmark[day] + 0.002 + random.Random(9 + i).gauss(0, 0.002) for i, day in enumerate(days)}
-
-    result = evaluate_candidate(
-        candidate, incumbent, benchmark, holdout_start="2099-01-01", trials=1,
-        policy=AcceptancePolicy(cost_bps_per_turnover=0.0),
-    )
-
-    assert result.decision == "holdout_pending"
 
 
 def test_expected_max_sharpe_is_zero_for_one_trial_and_rises_with_trials():
@@ -106,8 +92,8 @@ def test_same_edge_passes_search_for_few_trials_and_fails_for_many():
     candidate = {day: benchmark[day] + 0.0012 + random.Random(40 + i).gauss(0, 0.01) for i, day in enumerate(days)}
     policy = AcceptancePolicy(cost_bps_per_turnover=0.0, min_oos_sessions=20)
 
-    few = evaluate_search(candidate, incumbent, benchmark, holdout_start=days[300], trials=1, policy=policy)
-    many = evaluate_search(candidate, incumbent, benchmark, holdout_start=days[300], trials=5000, policy=policy)
+    few = evaluate_search(candidate, incumbent, benchmark, trials=1, policy=policy)
+    many = evaluate_search(candidate, incumbent, benchmark, trials=5000, policy=policy)
 
     assert few.decision == "search_passed", few.reasons
     assert many.decision == "reject"
@@ -124,13 +110,10 @@ def test_search_gate_never_reads_the_holdout_but_the_final_gate_does():
     }
     policy = AcceptancePolicy(cost_bps_per_turnover=0.0, min_oos_sessions=20)
 
-    search = evaluate_search(candidate, incumbent, benchmark, holdout_start=days[200], trials=1, policy=policy)
-    final = evaluate_candidate(candidate, incumbent, benchmark, holdout_start=days[200], trials=1, policy=policy)
+    search = evaluate_search(candidate, incumbent, benchmark, trials=1, policy=policy)
 
-    assert search.decision == "search_passed"
+    assert search.decision == "reject"
     assert "holdout_sessions" not in search.metrics
-    assert final.decision == "reject"
-    assert final.reasons == ["holdout excess is not positive"]
 
 
 def test_purged_folds_drop_boundary_sessions_and_cover_the_sample():
@@ -167,6 +150,6 @@ def test_forward_gate_accepts_a_candidate_with_a_real_edge_and_rejects_noise():
     good = _acceptance_decision({"candidate": edge, "baseline": baseline, "benchmark": benchmark}, trials=2)
     bad = _acceptance_decision({"candidate": noise, "baseline": baseline, "benchmark": benchmark}, trials=2)
 
-    assert good["decision"] == "accept", good["reasons"]
+    assert good["decision"] == "search_passed", good["reasons"]
     assert bad["decision"] == "reject"
     assert _acceptance_decision(None, trials=1)["decision"] == "reject"

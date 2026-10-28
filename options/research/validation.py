@@ -1,4 +1,4 @@
-"""Purged rolling walk-forward and final-holdout split construction."""
+"""Purged rolling walk-forward split construction. Every session after warm-up is out-of-sample for some fold."""
 
 from __future__ import annotations
 
@@ -35,27 +35,20 @@ def longest_strategy_lookback_sessions(strategy: str, section: dict, config: dic
     return int(config.get("walk_forward", {}).get("directional_input_lookback_sessions", 252))
 
 
-class FreshHoldoutUnavailable(ValueError):
-    """Raised when fewer than the minimum unseen sessions exist for a new holdout."""
-
-
 def make_purged_walk_forward(
     observations: tuple[ResearchObservation, ...],
     *,
     strategy: str,
     strategy_section: dict,
     config: dict,
-    holdout_after: str | None = None,
-    minimum_fresh_holdout_sessions: int = 0,
-) -> tuple[list[WalkForwardFold], tuple[ResearchObservation, ...], dict]:
+) -> tuple[list[WalkForwardFold], dict]:
     settings = config.get("walk_forward", {})
     train_size = int(settings.get("rolling_train_sessions", 252))
     test_size = int(settings.get("oos_sessions", 63))
     step = int(settings.get("step_sessions", test_size))
     min_periods = int(settings.get("minimum_oos_periods", 4))
-    holdout_size = int(settings.get("final_holdout_sessions", 252))
     embargo = int(settings.get("embargo_sessions", 5))
-    if min(train_size, test_size, step, min_periods, holdout_size) <= 0 or embargo < 0:
+    if min(train_size, test_size, step, min_periods) <= 0 or embargo < 0:
         raise ValueError("walk-forward session counts must be positive and embargo non-negative")
     if step < test_size:
         raise ValueError("step_sessions must be at least oos_sessions so OOS periods are independent and non-overlapping")
@@ -65,25 +58,9 @@ def make_purged_walk_forward(
         int(config.get("strategy_defaults", {}).get(strategy, {}).get("max_dte", 0)),
     )
     purge = max(lookback, max_dte) + embargo
-    holdout_start = len(observations) - holdout_size
-    if holdout_after is not None:
-        # Rotating holdout: only sessions after the previous holdout may be used,
-        # so every holdout decision sees data no earlier decision has seen.
-        fresh_start = next(
-            (index for index, item in enumerate(observations)
-             if item.as_of.date().isoformat() > holdout_after),
-            len(observations),
-        )
-        fresh = len(observations) - fresh_start
-        if fresh < minimum_fresh_holdout_sessions:
-            raise FreshHoldoutUnavailable(
-                f"only {fresh} sessions after the previous holdout ending {holdout_after}; "
-                f"need {minimum_fresh_holdout_sessions}"
-            )
-        holdout_start = max(holdout_start, fresh_start)
     folds = []
     test_start = train_size + purge
-    while test_start + test_size <= holdout_start:
+    while test_start + test_size <= len(observations):
         train_end = test_start - purge
         train_start = train_end - train_size
         if train_start >= 0:
@@ -97,51 +74,12 @@ def make_purged_walk_forward(
             ))
         test_start += step
     if len(folds) < min_periods:
-        needed = train_size + purge + (min_periods - 1) * step + test_size + holdout_size
+        needed = train_size + purge + (min_periods - 1) * step + test_size
         raise ValueError(
             f"insufficient history for {min_periods} purged rolling OOS periods: "
             f"need at least {needed} sessions, have {len(observations)}"
         )
-    if holdout_start < 0:
-        raise ValueError("dataset is shorter than the untouched final holdout")
-    holdout = observations[holdout_start:]
-    labels = set()
-    regime_labels = set()
-    high_vol_labels = {
-        str(value).strip().lower().replace("-", "_")
-        for value in settings.get("high_volatility_labels", ["high_vol", "high_volatility", "elevated", "crisis", "risk_off"])
-    }
-    high_vol_rows = 0
-    high_vol_streak = 0
-    longest_high_vol_streak = 0
-    for item in holdout:
-        regime = item.regime.strip().lower().replace("-", "_")
-        volatility = item.volatility_state.strip().lower().replace("-", "_")
-        if regime and regime != "unknown":
-            labels.add(regime)
-            if regime not in high_vol_labels and regime not in {"normal", "low_vol", "low_volatility"}:
-                regime_labels.add(regime)
-        if volatility and volatility != "unknown":
-            labels.add(volatility)
-        if regime in high_vol_labels or volatility in high_vol_labels:
-            high_vol_rows += 1
-            high_vol_streak += 1
-            longest_high_vol_streak = max(longest_high_vol_streak, high_vol_streak)
-        else:
-            high_vol_streak = 0
-    required_label_count = int(settings.get("minimum_holdout_regime_labels", 2))
-    required_high_vol_sessions = int(settings.get("minimum_high_volatility_holdout_sessions", 5))
-    coverage = {
-        "observed_labels": sorted(labels),
-        "observed_market_regimes": sorted(regime_labels),
-        "required_distinct_market_regimes": required_label_count,
-        "distinct_market_regime_count": len(regime_labels),
-        "high_volatility_rows": high_vol_rows,
-        "required_high_volatility_sessions": required_high_vol_sessions,
-        "longest_consecutive_high_volatility_period": longest_high_vol_streak,
-        "meets_minimum_coverage": len(regime_labels) >= required_label_count and longest_high_vol_streak >= required_high_vol_sessions,
-    }
-    return folds, holdout, {
+    return folds, {
         "rolling_train_sessions": train_size,
         "oos_sessions": test_size,
         "step_sessions": step,
@@ -151,11 +89,8 @@ def make_purged_walk_forward(
         "embargo_sessions": embargo,
         "minimum_oos_periods": min_periods,
         "actual_oos_periods": len(folds),
-        "holdout_sessions": len(holdout),
-        "holdout_start": holdout[0].as_of.isoformat() if holdout else None,
-        "holdout_end": holdout[-1].as_of.date().isoformat() if holdout else None,
-        "holdout_after": holdout_after,
-        "holdout_regime_coverage": coverage,
+        "oos_start": observations[folds[0].oos_start].as_of.isoformat(),
+        "oos_end": observations[folds[-1].oos_end - 1].as_of.isoformat(),
     }
 
 

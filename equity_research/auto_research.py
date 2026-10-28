@@ -150,13 +150,6 @@ def run_daily_research(args) -> dict:
             f"is {latest_age_days} calendar days old"
         )
 
-    from .validation.final_holdout import holdout_report as read_holdout_report
-
-    # Read-only: a nightly run never supersedes a cohort holdout; only the
-    # final_holdout CLI can retire one. Research stages use the latest completed
-    # common session, and each staged candidate is evaluated only on sessions
-    # after its own immutable staging date.
-    holdout_report = read_holdout_report(database=ledger_path, output_dir=output_dir)
     cohort_end = latest_end
     warmup_start = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
     logger.info("Computing research data fingerprint for the configured universe")
@@ -275,8 +268,6 @@ def run_daily_research(args) -> dict:
         "swing_multi_factor_enabled": runtime_settings.swing_multi_factor_enabled,
         "swing_llm_driven_enabled": runtime_settings.swing_llm_driven_enabled,
         "factor_only": bool(args.factor_only),
-        "final_holdout_quarantine": bool(holdout_report.get("promotion_paused_pairs")),
-        "final_holdout_status": holdout_report.get("status"),
         "research_cutoff_policy": "latest_completed_common_market_session",
         "historical_validation_policy": "rolling_walk_forward_with_outcome_horizon_purge",
         "forward_validation_policy": "immutable_candidate_versions_scored_on_sessions_after_staging",
@@ -409,7 +400,6 @@ def run_daily_research(args) -> dict:
                 for strategy in RESEARCHABLE_STRATEGIES
             },
             "multi_factor_discovery": multi_factor_discovery,
-            "final_holdout": holdout_report,
             "orchestration": {
                 **context,
                 "cohort_id": run_id,
@@ -586,7 +576,6 @@ def run_daily_research(args) -> dict:
                 ),
                 "forward_validation": forward_validation,
                 "drift_monitor": drift_report,
-                "final_holdout": holdout_report,
                 "regime_inputs": {
                     "macro_status": macro_diagnostics.get("status"),
                     "macro_data_version": stable_hash(macro_series),
@@ -708,7 +697,6 @@ def run_daily_research(args) -> dict:
             "factor_only": True,
             "forward_validation": forward_validation,
             "drift_monitor": drift_report,
-            "final_holdout": holdout_report,
             "regime_inputs": {
                 "macro_status": macro_diagnostics.get("status"),
                 "macro_data_version": stable_hash(macro_series),
@@ -853,7 +841,6 @@ def run_daily_research(args) -> dict:
         "multi_factor_discovery": multi_factor_discovery,
         "forward_validation": forward_validation,
         "drift_monitor": drift_report,
-        "final_holdout": holdout_report,
         "regime_inputs": {
             "macro_status": macro_diagnostics.get("status"),
             "macro_data_version": stable_hash(macro_series),
@@ -888,7 +875,7 @@ def run_daily_research(args) -> dict:
             "The portfolio replay includes strategies enabled in live config with available historical data.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
             "Each immutable forward candidate version is scored only on sessions after its staging date and with modeled execution costs; results are not a performance forecast.",
-            "Historical walk-forward results are reused across research cycles and are not a pristine independent holdout; all candidate trials remain in the archive and promotion requires forward evidence.",
+            "Historical walk-forward results are reused across research cycles; all candidate trials remain in the archive and promotion requires forward evidence.",
             *([] if adaptive_portfolio_ready else [
                 "Adaptive verification did not produce coordinator artifacts for every active strategy; the portfolio replay was skipped.",
             ]),

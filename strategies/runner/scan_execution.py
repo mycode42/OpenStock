@@ -280,9 +280,18 @@ def execute_scan_candidates(
             f"{scope.mode}:{scope.today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:"
             f"{item.get('event_id') or ''}:{item.get('signal_bar_time') or ''}"
         )
-        trade["client_order_id"] = item.get("retry_client_order_id") or (
+        retryable_intent = (
+            pending_intent
+            if isinstance(pending_intent, dict) and pending_intent.get("retryable") is True
+            else None
+        )
+        trade["client_order_id"] = (
+            item.get("retry_client_order_id")
+            or (retryable_intent or {}).get("client_order_id")
+            or (
             f"rule-{scope.today.replace('-', '')}-"
             f"{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
+            )
         )
         trade["signal_bar_time"] = item.get("signal_bar_time")
         if scope.mode == "algo":
@@ -327,14 +336,6 @@ def execute_scan_candidates(
                         continue
                 except ValueError:
                     pass
-        if (
-            trade["action"] in {"sell", "cover"}
-            and scope.session_name != "regular"
-            and isinstance(pending_intent, dict)
-            and pending_intent.get("retryable") is True
-        ):
-            item["suppressed_reason"] = "persisted strategy exit deferred until regular hours"
-            continue
         if item.get("software_protection"):
             trade["software_protection"] = True
         if item.get("coordinator_force_flatten"):

@@ -36,6 +36,14 @@ EXTENSIONS = (
         "strategies._swing_common_cy",
         ROOT / "strategies/_swing_common_cy.pyx",
     ),
+    (
+        "strategies._indicators_cy",
+        ROOT / "strategies/_indicators_cy.pyx",
+    ),
+    (
+        "market._bars_cy",
+        ROOT / "market/_bars_cy.pyx",
+    ),
 )
 
 

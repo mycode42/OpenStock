@@ -4,9 +4,8 @@ A candidate is accepted only when it beats the incumbent and the benchmark on
 out-of-sample sessions, net of costs, and its Deflated Sharpe Ratio clears the
 configured threshold. The DSR deflates the observed Sharpe ratio by the expected
 maximum Sharpe of N evaluated candidates (Bailey and Lopez de Prado, 2014), so
-the bar rises with every candidate ever evaluated for the strategy. The holdout
-is scored once, only for the candidate that the caller has already chosen, and
-must also pass; a candidate without holdout evidence stays pending.
+the bar rises with every candidate ever evaluated for the strategy. There is no
+separate holdout: every shared session is out-of-sample for the rules here.
 
 Inputs are per-session return series keyed by ISO date. Nothing here reads the
 live system, and nothing here is promoted by itself; the caller decides.
@@ -153,20 +152,17 @@ def max_drawdown(values: list[float]) -> float:
     return worst
 
 
-def _excess_split(
+def _shared_excess(
     candidate: dict[str, float],
     incumbent: dict[str, float],
     benchmark: dict[str, float],
-    *, holdout_start: str, policy: AcceptancePolicy,
+    *, policy: AcceptancePolicy,
     candidate_turnover: dict[str, float] | None,
     incumbent_turnover: dict[str, float] | None,
-) -> tuple[dict, dict, list[str], list[str]]:
+) -> tuple[dict, dict, list[str]]:
     cand = net_excess(candidate, benchmark, turnover=candidate_turnover, cost_bps=policy.cost_bps_per_turnover)
     inc = net_excess(incumbent, benchmark, turnover=incumbent_turnover, cost_bps=policy.cost_bps_per_turnover)
-    shared = sorted(set(cand) & set(inc))
-    search_days = [day for day in shared if day < holdout_start]
-    holdout_days = [day for day in shared if day >= holdout_start]
-    return cand, inc, search_days, holdout_days
+    return cand, inc, sorted(set(cand) & set(inc))
 
 
 def evaluate_search(
@@ -174,35 +170,32 @@ def evaluate_search(
     incumbent: dict[str, float],
     benchmark: dict[str, float],
     *,
-    holdout_start: str,
     trials: int,
     policy: AcceptancePolicy = AcceptancePolicy(),
     candidate_turnover: dict[str, float] | None = None,
     incumbent_turnover: dict[str, float] | None = None,
 ) -> CandidateResult:
-    """Search-window rules only. Sessions at or after ``holdout_start`` are never read.
+    """Acceptance rules on every shared session.
 
-    Decisions: ``search_passed`` or ``reject``. Use this to rank and qualify
-    candidates; the holdout gate in ``evaluate_candidate`` is applied afterwards
-    to the single candidate the caller chooses.
+    Decisions: ``search_passed`` or ``reject``.
     """
-    cand, inc, search_days, _ = _excess_split(
-        candidate, incumbent, benchmark, holdout_start=holdout_start, policy=policy,
+    cand, inc, days = _shared_excess(
+        candidate, incumbent, benchmark, policy=policy,
         candidate_turnover=candidate_turnover, incumbent_turnover=incumbent_turnover,
     )
-    cand_oos = {day: cand[day] for day in search_days}
-    inc_oos = {day: inc[day] for day in search_days}
-    margin = {day: cand[day] - inc[day] for day in search_days}
+    cand_oos = {day: cand[day] for day in days}
+    inc_oos = {day: inc[day] for day in days}
+    margin = {day: cand[day] - inc[day] for day in days}
 
     reasons: list[str] = []
     metrics = {
-        "oos_sessions": len(search_days),
+        "oos_sessions": len(days),
         "trials": trials,
         "mean_excess_oos_bps": round(mean(cand_oos.values()) * 10_000, 3) if cand_oos else None,
         "margin_over_incumbent_bps": round(mean(margin.values()) * 10_000, 3) if margin else None,
     }
-    if len(search_days) < policy.min_oos_sessions:
-        return CandidateResult("reject", [f"only {len(search_days)} out-of-sample sessions"], metrics)
+    if len(days) < policy.min_oos_sessions:
+        return CandidateResult("reject", [f"only {len(days)} out-of-sample sessions"], metrics)
 
     deflated = deflated_sharpe_ratio(list(cand_oos.values()), trials=trials)
     dsr = deflated["deflated_sharpe"]
@@ -230,56 +223,19 @@ def evaluate_search(
     if positive < policy.min_positive_fold_fraction:
         reasons.append(f"only {positive:.0%} of folds positive")
 
-    cand_dd = max_drawdown([cand_oos[day] for day in search_days])
-    inc_dd = max_drawdown([inc_oos[day] for day in search_days])
+    cand_dd = max_drawdown([cand_oos[day] for day in days])
+    inc_dd = max_drawdown([inc_oos[day] for day in days])
     if inc_dd > 0 and cand_dd > policy.max_drawdown_ratio * inc_dd:
         reasons.append("drawdown of excess exceeds the incumbent's by more than allowed")
     metrics["drawdown_ratio"] = round(cand_dd / inc_dd, 3) if inc_dd > 0 else None
 
     if reasons:
         return CandidateResult("reject", reasons, metrics)
-    return CandidateResult("search_passed", ["passed search rules"], metrics)
-
-
-def evaluate_candidate(
-    candidate: dict[str, float],
-    incumbent: dict[str, float],
-    benchmark: dict[str, float],
-    *,
-    holdout_start: str,
-    trials: int,
-    policy: AcceptancePolicy = AcceptancePolicy(),
-    candidate_turnover: dict[str, float] | None = None,
-    incumbent_turnover: dict[str, float] | None = None,
-) -> CandidateResult:
-    """Final acceptance: the search rules, then the holdout gate.
-
-    Decisions: ``accept``, ``reject``, or ``holdout_pending`` (passed search
-    rules, but no holdout evidence yet).
-    """
-    search = evaluate_search(
-        candidate, incumbent, benchmark, holdout_start=holdout_start, trials=trials,
-        policy=policy, candidate_turnover=candidate_turnover,
-        incumbent_turnover=incumbent_turnover,
-    )
-    if search.decision != "search_passed":
-        return search
-    cand, _, _, holdout_days = _excess_split(
-        candidate, incumbent, benchmark, holdout_start=holdout_start, policy=policy,
-        candidate_turnover=candidate_turnover, incumbent_turnover=incumbent_turnover,
-    )
-    metrics = {**search.metrics, "holdout_sessions": len(holdout_days)}
-    if len(holdout_days) < policy.min_oos_sessions:
-        return CandidateResult("holdout_pending", ["passed search; holdout not yet long enough"], metrics)
-    holdout_mean = mean(cand[day] for day in holdout_days)
-    metrics["mean_excess_holdout_bps"] = round(holdout_mean * 10_000, 3)
-    if holdout_mean <= 0:
-        return CandidateResult("reject", ["holdout excess is not positive"], metrics)
-    return CandidateResult("accept", ["passed search rules and holdout"], metrics)
+    return CandidateResult("search_passed", ["passed acceptance rules"], metrics)
 
 
 __all__ = [
-    "AcceptancePolicy", "CandidateResult", "deflated_sharpe_ratio", "evaluate_candidate",
+    "AcceptancePolicy", "CandidateResult", "deflated_sharpe_ratio",
     "evaluate_search", "expected_max_sharpe", "max_drawdown", "net_excess",
     "purged_fold_means", "t_statistic",
 ]

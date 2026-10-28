@@ -5,13 +5,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 
+from market.calendar import EXTENDED_SESSIONS
+
 from .scan_types import ScanScope
 
 
 def prepare_strategy_exits(scope: ScanScope, generated: list[dict]) -> None:
-    """Persist off-session exits and restore retryable exits during regular hours."""
+    """Persist exits outside a trading window and restore them in any open session."""
     now_utc = scope.now_utc or datetime.now(timezone.utc)
-    if scope.session_name != "regular" and scope.strategy_states is not None:
+    session_is_open = scope.session_name in {"regular", *EXTENDED_SESSIONS}
+    if not session_is_open and scope.strategy_states is not None:
         for item in generated:
             action = str(item.get("action") or "").lower()
             if action not in {"sell", "cover"}:
@@ -45,12 +48,12 @@ def prepare_strategy_exits(scope: ScanScope, generated: list[dict]) -> None:
                 "software_protection": bool(item.get("software_protection")),
                 "coordinator_force_flatten": bool(item.get("coordinator_force_flatten")),
                 "retryable": True,
-                "status": "deferred_until_regular_hours",
+                "status": "deferred_until_supported_session",
                 "created_at": now_utc.isoformat(),
             }
             state["updated_at"] = now_utc.isoformat()
 
-    if scope.session_name == "regular" and scope.strategy_states is not None:
+    if session_is_open and scope.strategy_states is not None:
         generated_exit_keys = {
             (
                 str(item.get("strategy") or ""),
@@ -118,7 +121,10 @@ def prepare_strategy_exits(scope: ScanScope, generated: list[dict]) -> None:
             and state["pending_exit_intent"].get("retryable") is True
         })
         if retryable_exit_symbols:
+            if session_is_open:
+                reason = "Algo strategy exits are awaiting broker submission or cancellation resolution: "
+            else:
+                reason = "Algo strategy exits are deferred until a supported trading session or broker cancellation: "
             scope.entry_pause_reasons.append(
-                "Algo strategy exits are deferred until regular hours or broker cancellation: "
-                + ", ".join(retryable_exit_symbols)
+                reason + ", ".join(retryable_exit_symbols)
             )

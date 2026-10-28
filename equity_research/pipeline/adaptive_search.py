@@ -113,6 +113,11 @@ def _baseline_improvement(search: dict) -> dict:
     }
 
 
+def _worker_context():
+    """Fork shares the replay context copy-on-write; spawn pickles it into every worker."""
+    return mp.get_context("fork" if "fork" in mp.get_all_start_methods() else "spawn")
+
+
 def _run_search_with_bars(
     *, strategy: str, method: str, count: int, seed: int,
     space: dict[str, list], symbols: list[str], bars: dict,
@@ -194,7 +199,7 @@ def _run_search_with_bars(
                     max_workers=worker_count,
                     initializer=_candidate_replay_worker_init,
                     initargs=(replay_context,),
-                    mp_context=mp.get_context("spawn"),
+                    mp_context=_worker_context(),
                 )
                 logger.info(
                     "Adaptive search %s%s: evaluating candidates in batches of up to %d processes",

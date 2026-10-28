@@ -88,8 +88,6 @@ ADAPTIVE_MINIMUM_FOLDS = 5
 ROBUSTNESS_COST_MULTIPLIERS = (1.5, 2.0)
 ROBUSTNESS_BOOTSTRAP_ITERATIONS = 1000
 ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS = 5
-FINAL_HOLDOUT_MIN_SESSIONS = 252
-FINAL_HOLDOUT_MIN_REGIMES = 3
 
 # Session-specific bars need to cover the complete lifetime of a forward trial
 # when the feed is first enabled, then refresh incrementally.

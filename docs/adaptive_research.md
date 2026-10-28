@@ -8,7 +8,7 @@ Event Driven is not researched.
 Entry points:
 
 ```bash
-poetry run python -m equity_research.nightly                       # options, then equity; target about 6h
+poetry run python -m research                        # options, then equity; target about 6h
 poetry run python -m equity_research.auto_research --optimization-only --no-refresh --workers 8
 ```
 
@@ -31,8 +31,7 @@ poetry run python -m equity_research.auto_research --optimization-only --no-refr
 4. **Forward trials** (nightly only) stage up to nine candidates per strategy
    and regime against the currently promoted profile. Each trial needs at least
    30 closed trades in its regime, 20 exit sessions, and 15 entry sessions, and
-   expires after 180 days. The forward window is split: the first two thirds
-   gate search, the last third gates holdout.
+   expires after 180 days. The acceptance rules run on every forward session.
 5. **Promotion.** At most one promotion per cycle and one per strategy. Winners
    need a deflated Sharpe ratio of at least 0.95, where the trial count covers
    all distinct evaluations. The chosen profile becomes the active version in
@@ -40,16 +39,15 @@ poetry run python -m equity_research.auto_research --optimization-only --no-refr
    promote.
 
 **History promotion (current path).** A candidate that passes exact rolling
-out-of-sample validation and beats its training baseline is queued. Its holdout
-is the next 42 trading sessions after both its staging date and the previous
-holdout for that strategy and regime. The holdout is never reused. The
-candidate goes live only if it beats the live profile on both net realized P&L
-and marked P&L over that holdout. Until 42 new sessions exist, it waits. Forward
-trials keep running as monitoring. The Sunday full-history review gives the
-keep or demote decision (`python -m equity_research.weekly_review`).
+out-of-sample validation and ranks above the live profile on the same folds is
+promoted: lower-quartile fitness first, then median fitness, then fold
+consistency. Forward trials keep running as monitoring. The Sunday full-history
+review gives the keep or demote decision (`python -m equity_research.weekly_review`).
+A demoted candidate is blocked from automatic re-promotion.
 
-Options champions use the same rule: a fresh holdout is required for each
-decision, and the holdout sessions are recorded in `options_champion_decision`.
+Options champions follow the same rule on the same folds: a candidate replaces
+the champion only if it ranks above it on OOS folds (`runtime/fold_ranking.py`).
+Neither pipeline has a holdout.
 
 `--optimization-only` runs step 1 alone against stored bars, for manual use. It adds
 evidence to the archive and challenger queue and does not verify, replay, or

@@ -46,6 +46,28 @@ def summarize_verification(summary: dict | None) -> dict[str, Any]:
     }
 
 
+_BLOCK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS algo_demoted_candidates (
+    strategy TEXT NOT NULL,
+    regime TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,
+    decided_at TEXT NOT NULL,
+    PRIMARY KEY (strategy, regime, candidate_id)
+);
+"""
+
+
+def blocked_candidate_ids(database: Path) -> dict[tuple[str, str], set[str]]:
+    """Candidates an operator demoted. They are never re-promoted automatically."""
+    with closing(sqlite3.connect(database, timeout=60.0)) as connection:
+        connection.executescript(_BLOCK_SCHEMA)
+        rows = connection.execute("SELECT strategy, regime, candidate_id FROM algo_demoted_candidates").fetchall()
+    blocked: dict[tuple[str, str], set[str]] = {}
+    for strategy, regime, candidate in rows:
+        blocked.setdefault((strategy, regime), set()).add(candidate)
+    return blocked
+
+
 def _live_versions(database: Path) -> list[dict[str, Any]]:
     """Live version per strategy and regime, with the version it replaced."""
     with closing(sqlite3.connect(database, timeout=60.0)) as connection:
@@ -146,9 +168,18 @@ def demote(
     )
     if dry_run:
         return result
+    stamp = datetime.now(timezone.utc).isoformat()
+    if entry.get("live_candidate_id"):
+        with closing(sqlite3.connect(database, timeout=60.0)) as connection, connection:
+            connection.executescript(_BLOCK_SCHEMA)
+            connection.execute(
+                "INSERT OR IGNORE INTO algo_demoted_candidates (strategy, regime, candidate_id, decided_at) "
+                "VALUES (?, ?, ?, ?)",
+                (strategy, regime, entry["live_candidate_id"], stamp),
+            )
     entry["decision"] = {
         "action": "demoted", "restored_version_id": entry["previous_version_id"],
-        "decided_at": datetime.now(timezone.utc).isoformat(),
+        "blocked_candidate_id": entry.get("live_candidate_id"), "decided_at": stamp,
     }
     review["status"] = "pending_decision" if any(item["decision"] is None for item in review["entries"]) else "decided"
     write_review(review, path)

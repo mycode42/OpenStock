@@ -1,4 +1,8 @@
-"""Run options research first, then equity AutoResearch."""
+"""Daily research cycle: options research first, then equity AutoResearch.
+
+Run it with ``python -m research``. The parts also run alone:
+``python -m research.options`` and ``python -m research.equity``.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
 
-logger = logging.getLogger("equity_research.nightly")
+logger = logging.getLogger("research.cycle")
 SCHEDULE_TZ = ZoneInfo("Europe/Berlin")
 
 
@@ -76,7 +80,7 @@ def _attach_options_report(
 
 
 def _equity_command(args) -> list[str]:
-    command = [sys.executable, "-m", "equity_research.auto_research", "--workers", str(args.workers)]
+    command = [sys.executable, "-m", "research.equity", "--workers", str(args.workers)]
     if args.db:
         command.extend(("--db", args.db))
     if args.output_dir:
@@ -391,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                     with options_log_path.open("a", encoding="utf-8") as options_log:
                         options_process = subprocess.Popen(
                             [
-                                sys.executable, "-m", "options.research.automation",
+                                sys.executable, "-m", "research.options",
                                 "--config", str(ROOT / "options/research/config.portfolio.json"),
                                 "--workers", str(args.workers),
                                 "--run-id", run_id,

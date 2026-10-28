@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import math
 
+try:
+    from strategies import _indicators_cy as _cy
+except ImportError:  # pragma: no cover - pure-Python fallback when the extension is not built
+    _cy = None
+
 
 def closes(bars: list[dict]) -> list[float]:
     values = []
@@ -24,6 +29,12 @@ def moving_average(values: list[float], period: int) -> float | None:
 
 
 def population_std(values: list[float]) -> float | None:
+    if _cy is not None:
+        return _cy.population_std(values)
+    return _population_std_py(values)
+
+
+def _population_std_py(values: list[float]) -> float | None:
     if not values:
         return None
     mean = sum(values) / len(values)
@@ -31,6 +42,12 @@ def population_std(values: list[float]) -> float | None:
 
 
 def rsi(values: list[float], period: int = 14) -> float | None:
+    if _cy is not None:
+        return _cy.rsi(values, period)
+    return _rsi_py(values, period)
+
+
+def _rsi_py(values: list[float], period: int = 14) -> float | None:
     if period <= 0 or len(values) < period + 1:
         return None
     changes = [values[i] - values[i - 1] for i in range(len(values) - period, len(values))]
@@ -44,6 +61,12 @@ def rsi(values: list[float], period: int = 14) -> float | None:
 
 def efficiency_ratio(values: list[float], period: int = 20) -> float | None:
     """Kaufman efficiency ratio over the last completed ``period`` moves."""
+    if _cy is not None:
+        return _cy.efficiency_ratio(values, period)
+    return _efficiency_ratio_py(values, period)
+
+
+def _efficiency_ratio_py(values: list[float], period: int = 20) -> float | None:
     if period <= 0 or len(values) < period + 1:
         return None
     path = sum(abs(values[index] - values[index - 1]) for index in range(len(values) - period, len(values)))

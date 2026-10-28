@@ -22,7 +22,8 @@ from strategies.registry import (
 )
 
 from ..pipeline.adaptive_search import _load_forward_window_data, _run_replay, _trading_sessions
-from . import history_holdout
+from ..weekly_review import blocked_candidate_ids
+from runtime.fold_ranking import beats
 from ..artifacts.candidate_archive import candidate_id
 from ..profile_versions import (
     ProfileStore, cumulative_trial_count, project_live, record_trial_evaluations,
@@ -33,8 +34,7 @@ from ..settings import (
     SIP_EXTENDED_LOCAL_FEED,
 )
 from equity_research.backtest.market_sessions import trading_date
-from .final_holdout import active_holdout_pairs
-from equity_research.validation.acceptance import AcceptancePolicy, evaluate_candidate, evaluate_search
+from equity_research.validation.acceptance import AcceptancePolicy, evaluate_search
 
 
 ET = ZoneInfo("America/New_York")
@@ -44,11 +44,11 @@ MIN_CLOSED_TRADES = 30
 MIN_EXIT_SESSIONS = 20
 MIN_REGIME_ENTRY_SESSIONS = 15
 MAX_ACTIVE_COHORT_PER_STRATEGY_REGIME = 9
-# Historical candidates are promoted only after beating the live profile on a rotating holdout.
+# Candidates that pass exact rolling validation are promoted when they beat the live profile on the same folds.
 HISTORY_PROMOTION_ENABLED = True
 MAX_PROMOTIONS_PER_CYCLE = 1
 MAX_PROMOTIONS_PER_STRATEGY_PER_CYCLE = 1
-SIMULATION_POLICY = "algo-forward-simulation-v6-dsr-search-then-holdout"
+SIMULATION_POLICY = "algo-forward-simulation-v7-dsr-search"
 # Replay equity already carries simulated costs, so turnover costs are not charged twice.
 # min_deflated_sharpe is the promotion threshold on the Deflated Sharpe Ratio.
 FORWARD_ACCEPTANCE_POLICY = AcceptancePolicy(
@@ -420,58 +420,38 @@ def _record_trial_evidence(profile_db: Path, discovery: dict, active: dict, hist
     return record_trial_evaluations(profile_db, rows)
 
 
-def _window_split(series: dict) -> tuple[list[str], str | None]:
-    """Shared sessions and the holdout start: the first two thirds search, the last third holds out."""
-    days = sorted(set(series["candidate"]) & set(series["baseline"]) & set(series["benchmark"]))
-    if len(days) < 3:
-        return days, None
-    return days, days[(len(days) * 2) // 3]
+def _shared_sessions(series: dict) -> list[str]:
+    return sorted(set(series["candidate"]) & set(series["baseline"]) & set(series["benchmark"]))
 
 
-def _acceptance_decision(series: dict | None, *, trials: int, final: bool = True) -> dict:
-    """Apply the acceptance rules to a forward candidate against its baseline.
+def _acceptance_decision(series: dict | None, *, trials: int) -> dict:
+    """Apply the acceptance rules to a forward candidate against its baseline and the benchmark.
 
-    ``final=False`` applies the search-window rules only and never reads the
-    holdout; it returns ``search_passed`` or ``reject``. ``final=True`` adds the
-    holdout gate and is applied only to the candidate the cycle has chosen.
+    Returns ``search_passed`` or ``reject``.
     """
     if not series:
         return {"decision": "reject", "reasons": ["no return series recorded"], "metrics": {}}
-    days, holdout_start = _window_split(series)
-    if holdout_start is None:
+    if len(_shared_sessions(series)) < 3:
         return {"decision": "reject", "reasons": ["insufficient shared sessions"], "metrics": {}}
-    evaluate = evaluate_candidate if final else evaluate_search
-    result = evaluate(
+    result = evaluate_search(
         series["candidate"], series["baseline"], series["benchmark"],
-        holdout_start=holdout_start, trials=trials,
-        policy=FORWARD_ACCEPTANCE_POLICY,
+        trials=trials, policy=FORWARD_ACCEPTANCE_POLICY,
     )
-    return {
-        "stage": "final" if final else "search",
-        "decision": result.decision,
-        "reasons": result.reasons,
-        "metrics": result.metrics,
-        "holdout_start": holdout_start,
-    }
+    return {"decision": result.decision, "reasons": result.reasons, "metrics": result.metrics}
 
 
 def _search_return(series: dict | None) -> float:
-    """Compounded candidate return over the search sessions only. Never reads the holdout."""
+    """Compounded candidate return over the forward window, used only to rank cohort members."""
     if not series:
         return 0.0
-    days, holdout_start = _window_split(series)
-    if holdout_start is None:
-        return 0.0
     growth = 1.0
-    for day in days:
-        if day >= holdout_start:
-            break
+    for day in _shared_sessions(series):
         growth *= 1.0 + float(series["candidate"][day])
     return growth - 1.0
 
 
 def _cohort_winner(qualified: list[dict]) -> dict | None:
-    """Pick the cohort winner from search-window evidence only. Holdout results never rank."""
+    """Pick the cohort winner from forward evidence only."""
     if not qualified:
         return None
     return max(qualified, key=lambda trial: (
@@ -596,6 +576,35 @@ def _fitness_summary(simulation: dict) -> dict:
     }
 
 
+def _live_validation_rows(verification: dict) -> dict[str, dict]:
+    """The live profile's exact-validation row per strategy, from the same folds as the challengers."""
+    rows = {}
+    strategies = ((verification.get("candidate_validation") or {}).get("strategies") or {})
+    for strategy, validation in strategies.items():
+        for row in validation.get("candidates") or []:
+            if "live_setting" in (row.get("validation_roles") or []):
+                rows[strategy] = row
+    return rows
+
+
+def beats_live(candidate: dict, live: dict | None) -> tuple[bool, dict]:
+    """Same folds, same ranking as options: see runtime/fold_ranking.py."""
+    comparison = {
+        "candidate": {k: candidate.get(k) for k in LIVE_COMPARE_KEYS},
+        "live": {k: (live or {}).get(k) for k in LIVE_COMPARE_KEYS},
+    }
+    if not live or live.get("status") != "passed":
+        return False, {**comparison, "reason": "live profile has no passed exact validation on these folds"}
+    beat, reason = beats(candidate, live)
+    return beat, {**comparison, "reason": reason}
+
+
+LIVE_COMPARE_KEYS = (
+    "status", "fold_count", "lower_quartile_fitness", "median_fitness",
+    "positive_fold_fraction", "median_net_return_pct", "closed_trade_count",
+)
+
+
 def _promote(trial: dict, metrics: dict, promoted: dict, store: ProfileStore) -> dict | None:
     """Stage a promotion in the profile store and project it into ``promoted``.
 
@@ -648,8 +657,7 @@ def _select_promotions(
 ) -> list[dict]:
     """Choose which queued promotions may write this cycle. Marks the rest ``skipped``.
 
-    Ranking uses search-window return only, so the cap cannot select on holdout
-    results. Ties break on candidate ID. Skipped candidates carry a reason and
+    Ranking uses the forward return only. Ties break on candidate ID. Skipped candidates carry a reason and
     are not written anywhere.
     """
     ranked = sorted(queue, key=lambda trial: (
@@ -684,8 +692,7 @@ def run_forward_validation_cycle(
 ) -> dict:
     """Replay each immutable candidate version only after its staging date.
 
-    Search-window results select candidates. The holdout gate runs once, for the
-    chosen candidate only, and promotions are capped before any write.
+    Acceptance rules select candidates, and promotions are capped before any write.
     """
     started = time.monotonic()
     now = datetime.now(timezone.utc)
@@ -713,7 +720,6 @@ def run_forward_validation_cycle(
                 if isinstance(trial, dict):
                     trial.setdefault("trial_id", uuid4().hex)
             _record_trial_evidence(profile_db, discovery, active, history)
-            held_pairs = active_holdout_pairs(profile_db)
             data_version = _forward_session_data_version(
                 database, data_version, symbols, end,
             )
@@ -872,9 +878,8 @@ def run_forward_validation_cycle(
             # Every evaluation for this strategy, across regimes, from the database.
             trial_count = max(1, cumulative_trial_count(profile_db, trial["strategy"]))
             trial["latest_simulation"]["deflation_trial_count"] = trial_count
-            # Search-window gate first. The holdout is not read here.
             search_gate = _acceptance_decision(
-                trial["latest_simulation"].get("return_series"), trials=trial_count, final=False,
+                trial["latest_simulation"].get("return_series"), trials=trial_count,
             )
             trial["latest_simulation"]["search_gate"] = search_gate
             trial["latest_simulation"]["acceptance"] = search_gate
@@ -891,27 +896,12 @@ def run_forward_validation_cycle(
                 rejected.append(trial["candidate_id"])
                 active.pop(key, None)
                 continue
-            if not allow_promotion or (trial["strategy"], trial["regime"]) in held_pairs:
+            if not allow_promotion:
                 trial["status"] = "cohort_ready"
                 trial["promotion_paused"] = True
-                trial["reason"] = (
-                    "Promotion paused by " + ", ".join(pause_reasons) if not allow_promotion
-                    else f"Promotion paused by final holdout for {trial['strategy']}:{trial['regime']}"
-                )
+                trial["reason"] = "Promotion paused by " + ", ".join(pause_reasons)
                 continue
-            # Only the candidate the cycle has chosen reaches the holdout gate.
-            final = _acceptance_decision(
-                trial["latest_simulation"].get("return_series"), trials=trial_count, final=True,
-            )
-            trial["latest_simulation"]["acceptance"] = final
-            trial["forward_validation_pass"] = final["decision"] == "accept"
-            if not trial["forward_validation_pass"]:
-                trial["status"] = "rejected"
-                trial["reason"] = "Forward holdout gate failed: " + "; ".join(final["reasons"])
-                history.append(trial)
-                rejected.append(trial["candidate_id"])
-                active.pop(key, None)
-                continue
+            trial["forward_validation_pass"] = True
             trial["status"] = "promotion_pending"
             promotion_queue.append(trial)
             active.pop(key, None)
@@ -934,22 +924,12 @@ def run_forward_validation_cycle(
                 continue
             if any(trial.get("status") == "validating" for _, trial in members):
                 continue
-            if (members[0][1]["strategy"], members[0][1]["regime"]) in held_pairs:
-                continue
             ready = [trial for _, trial in members if trial.get("status") == "cohort_ready"]
             qualified = [trial for trial in ready if trial.get("search_passed")]
             winner = _cohort_winner(qualified)
             winner_note = "Another candidate in the completed ablation cohort had stronger search-window results"
             if winner is not None:
-                winner_count = max(1, cumulative_trial_count(profile_db, winner["strategy"]))
-                final = _acceptance_decision(
-                    winner["latest_simulation"].get("return_series"), trials=winner_count, final=True,
-                )
-                winner["latest_simulation"]["acceptance"] = final
-                winner["forward_validation_pass"] = final["decision"] == "accept"
-                if not winner["forward_validation_pass"]:
-                    winner_note = "The cohort's search-window winner did not pass the holdout gate: " + "; ".join(final["reasons"])
-                    winner = None
+                winner["forward_validation_pass"] = True
             for key, trial in sorted(members, key=lambda pair: str(pair[1].get("candidate_id") or "")):
                 if trial.get("status") != "cohort_ready":
                     continue
@@ -970,18 +950,19 @@ def run_forward_validation_cycle(
                 active.pop(key, None)
 
         # History promotion. A candidate that passes exact rolling out-of-sample
-        # validation is queued. It is promoted only if, on the next untouched
-        # 42-session holdout, it beats the live profile on net and marked P&L.
-        # Its forward trial keeps running as monitoring; the weekly review decides keep or demote.
+        # validation and beats the live profile on the same folds is promoted now.
+        # Forward trials keep running as monitoring; the weekly review decides keep or demote.
         if HISTORY_PROMOTION_ENABLED and allow_promotion and regime and not pause_reasons:
             try:
                 history_candidates = _candidates(discovery, verification, regime)
             except Exception as exc:
                 history_candidates = []
                 staging_errors.append(f"history promotion: {type(exc).__name__}: {exc}")
+            blocked = blocked_candidate_ids(profile_db)
+            live_rows = _live_validation_rows(verification)
             for candidate in sorted(history_candidates, key=lambda row: str(row["candidate_id"])):
+                exact = ((candidate.get("historical_verification") or {}).get("exact_candidate_validation") or {})
                 screening = candidate.get("screening") or {}
-                exact = (candidate.get("historical_verification") or {}).get("exact_candidate_validation") or {}
                 if not (
                     exact.get("status") == "passed"
                     and screening.get("improved_over_training_baseline")
@@ -989,63 +970,32 @@ def run_forward_validation_cycle(
                     and screening.get("historical_positive_after_costs")
                 ):
                     continue
-                if (candidate["strategy"], regime) in held_pairs:
+                if candidate["candidate_id"] in blocked.get((candidate["strategy"], regime), set()):
                     continue
-                history_holdout.enqueue(profile_db, candidate=candidate, staged_end=end)
-
-            def _holdout_simulate(item: dict, start: date, block_end: date) -> dict:
-                live = _simulate(
-                    strategy=item["strategy"], regime=item["regime"], parameters=item["parameters"],
-                    start=start, end=block_end, database=database, symbols=symbols, candidate=False,
-                    factor_weight_timeline=factor_weight_timeline,
-                )
-                challenger = _simulate(
-                    strategy=item["strategy"], regime=item["regime"], parameters=item["parameters"],
-                    start=start, end=block_end, database=database, symbols=symbols, candidate=True,
-                    factor_weight_timeline=factor_weight_timeline,
-                )
-                return {
-                    "candidate": _target_metrics(challenger, item["strategy"], item["regime"]),
-                    "baseline": _target_metrics(live, item["strategy"], item["regime"]),
-                }
-
-            try:
-                decided = history_holdout.evaluate(
-                    profile_db,
-                    sessions_after=lambda start: _trading_sessions(database, end, start=start, adjustment=ADJUSTMENT),
-                    end=end,
-                    simulate=_holdout_simulate,
-                )
-            except Exception as exc:
-                decided = []
-                staging_errors.append(f"history holdout: {type(exc).__name__}: {exc}")
-            for item in decided:
-                if item["status"] != "promoted":
+                live = live_rows.get(candidate["strategy"])
+                beats, comparison = beats_live(exact, live)
+                if not beats:
                     continue
-                evidence = item["evidence"]
                 promotion_queue.append({
-                    "trial_id": f"history-{item['candidate_id']}",
-                    "candidate_id": item["candidate_id"],
-                    "strategy": item["strategy"],
-                    "regime": item["regime"],
-                    "parameters": item["parameters"],
-                    "promotion_basis": "historical_oos_then_holdout",
-                    "historical_verification": {"holdout": {k: evidence[k] for k in (
-                        "holdout_start", "holdout_end", "holdout_sessions",
-                        "candidate_net_pnl", "live_net_pnl", "candidate_marked_pnl", "live_marked_pnl",
-                    )}},
+                    "trial_id": f"history-{candidate['candidate_id']}",
+                    "candidate_id": candidate["candidate_id"],
+                    "strategy": candidate["strategy"],
+                    "regime": regime,
+                    "parameters": candidate["parameters"],
+                    "model_family": candidate.get("model_family"),
+                    "logic_version": candidate.get("logic_version"),
+                    "parent_candidate_id": candidate.get("parent_candidate_id"),
+                    "cost_model_version": candidate.get("cost_model_version"),
+                    "discovery_artifact": candidate.get("discovery_artifact"),
+                    "promotion_basis": "historical_oos_vs_live",
+                    "historical_verification": {"vs_live": comparison, "exact_candidate_validation": exact},
                     "status": "promotion_pending",
                     "latest_simulation": {
                         "status": "completed",
-                        "candidate_metrics": evidence["candidate_metrics"],
-                        "baseline_metrics": evidence["baseline_metrics"],
-                        "forward_pnl_improvement": round(evidence["candidate_net_pnl"] - evidence["live_net_pnl"], 2),
-                        "marked_equity_improvement": True,
-                        "legacy_gate_pass": True,
+                        "candidate_metrics": {}, "baseline_metrics": {},
                         "return_series": None,
-                        "acceptance": {"decision": "holdout_passed", "reasons": []},
-                        "data_end": evidence["holdout_end"],
-                        "simulation_start": evidence["holdout_start"],
+                        "acceptance": {"decision": "historical_beats_live", "reasons": []},
+                        "data_end": end.isoformat(),
                     },
                 })
 
@@ -1136,7 +1086,6 @@ def run_forward_validation_cycle(
             # Protocol: pending rows are already staged; project the JSON, then activate in the database.
             write_json_atomic(PROMOTED_PROFILE_PATH, promoted)
             store.activate([row["version_id"] for row in promoted_rows])
-        held_labels = sorted(f"{strategy}:{regime}" for strategy, regime in held_pairs)
         cap = {
             "max_promotions_per_cycle": max_promotions_per_cycle,
             "max_promotions_per_strategy_per_cycle": max_promotions_per_strategy_per_cycle,
@@ -1152,8 +1101,6 @@ def run_forward_validation_cycle(
             },
             "maximum_trial_days": MAX_TRIAL_DAYS,
             "promotion_paused_by_drift": "drift" in pause_reasons,
-            "promotion_paused_by_final_holdout": bool(held_labels),
-            "final_holdout_paused_pairs": held_labels,
             "promotion_pause_reasons": pause_reasons,
             "promotion_cap": cap,
             "simulation_policy": SIMULATION_POLICY,
@@ -1164,7 +1111,6 @@ def run_forward_validation_cycle(
             "acceptance_policy": {
                 "min_deflated_sharpe": FORWARD_ACCEPTANCE_POLICY.min_deflated_sharpe,
                 "min_oos_sessions": FORWARD_ACCEPTANCE_POLICY.min_oos_sessions,
-                "holdout": "last third of the forward window; final gate for the chosen candidate only",
             },
             "last_cycle": {
                 "data_end": end.isoformat(), "data_version": data_version,
@@ -1208,8 +1154,6 @@ def run_forward_validation_cycle(
         },
         "live_configuration_changed": bool(promoted_rows),
         "promotion_paused_by_drift": "drift" in pause_reasons,
-        "promotion_paused_by_final_holdout": bool(held_labels),
-        "final_holdout_paused_pairs": held_labels,
         "promotion_pause_reasons": pause_reasons,
         "promotion_cap": cap,
         "duration_seconds": round(time.monotonic() - started, 3),

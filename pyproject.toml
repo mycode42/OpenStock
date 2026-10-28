@@ -55,7 +55,6 @@ python-dotenv = "^1.2.2"
 requests = "^2.33.0"
 pydantic = "^2.4.2"
 certifi = "^2026.10.19"
-duckdb = "^2.0.0"
 
 [tool.poetry.group.ai]
 optional = true

@@ -244,7 +244,6 @@ def _benchmark_config(args, output_dir: Path) -> dict:
         "oos_sessions": args.oos_sessions,
         "step_sessions": args.step_sessions,
         "minimum_oos_periods": args.minimum_oos_periods,
-        "final_holdout_sessions": args.holdout_sessions,
     })
     config.setdefault("robustness", {}).update({
         "slippage_multipliers": [1.0],
@@ -286,7 +285,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--oos-sessions", type=int, default=63)
     parser.add_argument("--step-sessions", type=int, default=126)
     parser.add_argument("--minimum-oos-periods", type=int, default=2)
-    parser.add_argument("--holdout-sessions", type=int, default=126)
     parser.add_argument("--monte-carlo-paths", type=int, default=50)
     parser.add_argument("--output-dir", help="artifact directory; defaults to a new /tmp path")
     return parser
@@ -304,7 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.workers < 1 or args.candidates < 2 or args.candidates > 100:
         raise ValueError("workers must be positive and candidates must be between 2 and 100")
     if min(args.train_sessions, args.oos_sessions, args.step_sessions,
-           args.minimum_oos_periods, args.holdout_sessions, args.monte_carlo_paths) < 1:
+           args.minimum_oos_periods, args.monte_carlo_paths) < 1:
         raise ValueError("session counts and Monte Carlo paths must be positive")
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")

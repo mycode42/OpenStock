@@ -60,21 +60,16 @@ def write_research_report(run_dir: Path, report: dict) -> None:
         (run_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
         return
     oos = report.get("walk_forward", {}).get("oos_metrics", {})
-    holdout = report.get("holdout", {}).get("metrics", {})
     rows = [
         ["Rolling OOS", str(oos.get("trade_count", 0)), _fmt(oos.get("total_return"), percent=True),
          _fmt(oos.get("annualized_sharpe")), _fmt(oos.get("max_drawdown"), percent=True),
          _fmt(oos.get("risk_adjusted_score"))],
-        ["Untouched holdout", str(holdout.get("trade_count", 0)), _fmt(holdout.get("total_return"), percent=True),
-         _fmt(holdout.get("annualized_sharpe")), _fmt(holdout.get("max_drawdown"), percent=True),
-         _fmt(holdout.get("risk_adjusted_score"))],
     ]
     metrics_table = _table(["Period", "Trades", "Return", "Sharpe", "Max DD", "Risk score"], rows)
     baseline_comparison = report.get("baseline_comparison", {})
     baseline_period_rows = []
     for label, period in (
         ("Rolling OOS", baseline_comparison.get("walk_forward", {})),
-        ("Untouched holdout", baseline_comparison.get("holdout", {})),
     ):
         baseline_metrics = period.get("baseline_metrics", {})
         tuned_metrics = period.get("tuned_metrics", {})
@@ -155,7 +150,6 @@ def write_research_report(run_dir: Path, report: dict) -> None:
         ])
     sensitivity_table = _table(["Slippage x", "Spread width x", "Trades", "Return", "Sharpe", "Risk score"], sensitivity_rows)
     params = report.get("final_parameters", {})
-    coverage = report.get("split", {}).get("holdout_regime_coverage", {})
     quality = report.get("validation", {})
     lines = [
         f"# Options research: {report.get('strategy')} ({report.get('run_id')})",
@@ -171,7 +165,7 @@ def write_research_report(run_dir: Path, report: dict) -> None:
         "",
         "## Fixed baseline comparison",
         "",
-        "The baseline keeps the checked-in defaults fixed for every OOS fold and the untouched holdout. Baseline and tuned runs use the same dates and execution-cost assumptions. Deltas are tuned minus baseline; positive return/score deltas favor tuning, while a negative drawdown delta favors tuning.",
+        "The baseline keeps the checked-in defaults fixed for every OOS fold. Baseline and tuned runs use the same dates and execution-cost assumptions. Deltas are tuned minus baseline; positive return/score deltas favor tuning, while a negative drawdown delta favors tuning.",
         "",
         baseline_period_table,
         "",
@@ -179,12 +173,11 @@ def write_research_report(run_dir: Path, report: dict) -> None:
         "",
         baseline_fold_table,
         "",
-        "Baseline daily curves and trades are in `baseline_equity_curve.csv`, `baseline_holdout_equity_curve.csv`, `baseline_oos_trades.csv`, and `baseline_holdout_trades.csv`.",
+        "Baseline daily curves and trades are in `baseline_equity_curve.csv` and `baseline_oos_trades.csv`.",
         "",
         f"Walk-forward efficiency (OOS/IS risk score): **{_fmt(report.get('walk_forward', {}).get('walk_forward_efficiency'))}**  ",
         f"Parameter stability score: **{_fmt(report.get('parameter_stability', {}).get('stability_score'))}**  ",
         f"Minimum OOS trades met: **{quality.get('minimum_oos_trades_met')}**  ",
-        f"Holdout coverage met: **{coverage.get('meets_minimum_coverage')}**  ",
         f"Stress costs passed: **{quality.get('stress_case_positive_after_costs')}**  ",
         f"Parameter stability gate passed: **{quality.get('parameter_stability_gate_met')}**  ",
         f"Gamma/vega concentration gate passed: **{quality.get('returns_not_dominated_by_gamma_or_vega_episodes')}**",

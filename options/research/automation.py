@@ -16,7 +16,6 @@ from equity_research.cpu import available_cpu_count
 from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.history_store import DEFAULT_DATABASE, OptionsHistoryStore
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
-from options.research.validation import FreshHoldoutUnavailable
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
@@ -54,7 +53,6 @@ def _strategy_summary(strategy: str, report: dict) -> dict:
         "approved": bool((report.get("validation") or {}).get("approved")),
         "validation": report.get("validation", {}),
         "walk_forward": (report.get("walk_forward") or {}).get("oos_metrics", {}),
-        "holdout": report.get("holdout", {}).get("metrics", {}),
         "final_parameters": report.get("final_parameters", {}),
         "candidate_leaderboard": candidate_leaderboard,
         "baseline_comparison": report.get("baseline_comparison", {}),
@@ -112,20 +110,23 @@ def _run_research_job(
     strategy: str, config_path: Path, data_path: Path, underlying: str,
     parallel_workers: int,
 ) -> dict:
-    try:
-        report = run_research(
-            strategy, config_path=config_path, data_path=data_path, underlying=underlying,
-            parallel_workers=parallel_workers,
-        )
-    except FreshHoldoutUnavailable as exc:
-        return {"strategy": strategy, "underlying": underlying, "status": "waiting_for_fresh_holdout", "error": str(exc)}
+    report = run_research(
+        strategy, config_path=config_path, data_path=data_path, underlying=underlying,
+        parallel_workers=parallel_workers,
+    )
     return _strategy_summary(strategy, report)
 
 
-def _input_fingerprint(paths: dict[str, Path], *, config_hash: str) -> str:
-    """Fingerprint the inputs cheaply so checkpoints are invalidated on data changes."""
+def _input_fingerprint(paths: dict[str, Path], *, config_hash: str, data_marks: dict[str, str] | None = None) -> str:
+    """Fingerprint the inputs so checkpoints are invalidated when research inputs change.
+
+    History databases are written continuously, so they are fingerprinted by their
+    content marks rather than file mtime and size.
+    """
     metadata = {}
     for symbol, path in sorted(paths.items()):
+        if path.suffix == ".sqlite3":
+            continue
         for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
             try:
                 stat = candidate.stat()
@@ -135,7 +136,10 @@ def _input_fingerprint(paths: dict[str, Path], *, config_hash: str) -> str:
                 "path": str(candidate.resolve()), "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
             }
-    payload = json.dumps({"config_sha256": config_hash, "inputs": metadata}, sort_keys=True)
+    payload = json.dumps(
+        {"config_sha256": config_hash, "inputs": metadata, "data_marks": data_marks or {}},
+        sort_keys=True,
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -233,11 +237,10 @@ def _render_markdown(report: dict) -> str:
                 lines.extend(["", f"Error: `{item['error']}`"])
             if item.get("status") == "completed":
                 wf = item.get("walk_forward", {})
-                holdout = item.get("holdout", {})
                 lines.extend([
                     "", f"Approved for paper config export: **{item.get('approved')}**  ",
                     f"Rolling OOS: trades {wf.get('trade_count', 0)}, return {float(wf.get('total_return', 0.0)):.2%}, Sharpe {float(wf.get('annualized_sharpe', 0.0)):.3f}, max drawdown {float(wf.get('max_drawdown', 0.0)):.2%}  ",
-                    f"Untouched holdout: trades {holdout.get('trade_count', 0)}, return {float(holdout.get('total_return', 0.0)):.2%}, Sharpe {float(holdout.get('annualized_sharpe', 0.0)):.3f}  ",
+                    f"Champion: promoted **{((item.get('validation') or {}).get('champion') or {}).get('promoted')}** ({((item.get('validation') or {}).get('champion') or {}).get('reason')})  ",
                     f"Parameters: `{json.dumps(item.get('final_parameters', {}), sort_keys=True)}`  ",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
@@ -295,7 +298,6 @@ def _render_markdown(report: dict) -> str:
                 comparison_rows = []
                 for label, period in (
                     ("Rolling OOS", comparison.get("walk_forward", {})),
-                    ("Untouched holdout", comparison.get("holdout", {})),
                 ):
                     baseline_metrics = period.get("baseline_metrics", {})
                     tuned_metrics = period.get("tuned_metrics", {})
@@ -422,10 +424,9 @@ def run_automated_options_research(
         if workers is not None:
             strategy_limit = min(strategy_limit, workers)
         workers_requested_by_strategy[strategy] = strategy_limit
-        # Each ticker job may itself use several fold processes over a shared
-        # copy-on-write dataset. Bound outer ticker concurrency so nested pools
-        # cannot oversubscribe the cores or multiply dataset memory.
-        outer_limit = max(1, available_cpus // fold_worker_budget)
+        # Ticker jobs run in parallel up to the configured worker count. Fold
+        # processes share the remaining cores, so the total stays within the CPU budget.
+        outer_limit = max(1, min(configured_workers, available_cpus))
         workers_used_by_strategy[strategy] = min(strategy_limit, outer_limit, len(symbols))
         fold_workers_used_by_strategy[strategy] = min(
             fold_worker_budget,
@@ -446,7 +447,12 @@ def run_automated_options_research(
     )
     if configured_rules_path:
         fingerprint_paths["__eligibility_rules__"] = _project_path(configured_rules_path)
-    input_fingerprint = _input_fingerprint(fingerprint_paths, config_hash=config_hash)
+    data_marks = {
+        symbol: OptionsHistoryStore(path, initialize=False).latest_marks(symbol)
+        for symbol, path in underlying_data_paths.items()
+        if path.suffix == ".sqlite3" and path.exists()
+    }
+    input_fingerprint = _input_fingerprint(fingerprint_paths, config_hash=config_hash, data_marks=data_marks)
     run_id = run_id or created_at.strftime("options-%Y%m%dT%H%M%S%fZ")
     checkpoint_store = OptionsHistoryStore(
         _project_path(automation_config.get("checkpoint_database") or DEFAULT_DATABASE)
@@ -537,7 +543,7 @@ def run_automated_options_research(
                 for strategy, symbols in original_by_strategy.items()
             }
             for strategy, symbols in underlyings_by_strategy.items():
-                outer_limit = max(1, available_cpus // fold_worker_budget)
+                outer_limit = max(1, min(configured_workers, available_cpus))
                 workers_used_by_strategy[strategy] = min(
                     workers_requested_by_strategy[strategy], outer_limit, len(symbols),
                 )

@@ -52,7 +52,6 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
             "underlying": "SPY", "data_mode": "historical_chains",
             "validation": {"approved": False, "minimum_oos_trades_met": True},
             "walk_forward": {"oos_metrics": {"trade_count": 10, "annualized_sharpe": 0.7}},
-            "holdout": {"metrics": {"trade_count": 4, "total_return": 0.02}},
             "final_parameters": {"min_move_edge_pct": 0.15},
         }
 

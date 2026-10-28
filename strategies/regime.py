@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
+import os
+import pickle
 from threading import RLock
 
 from strategies.indicators import closes, moving_average
@@ -10,6 +13,7 @@ from strategies.regime_features import (
     FEATURE_SETS, MODEL_CORE_FEATURES, MODEL_EXTENDED_FEATURES,
     compute_regime_feature_history,
 )
+from runtime.paths import CACHE_DIR
 from strategies.regime_models import infer_regime_model
 
 
@@ -21,6 +25,9 @@ REGIME_LABELS = (
 )
 COMMITTEE_VOTER_WEIGHTS = {"rule": 0.40, "hmm": 0.30, "gmm": 0.30}
 _FEATURE_CACHE_LOCK = RLock()
+# Bump when the feature computation changes; old disk entries are then ignored.
+_FEATURE_CACHE_VERSION = "regime-features-v1"
+_FEATURE_DISK_CACHE = CACHE_DIR / "regime-features"
 _FEATURE_CACHE_KEY = None
 _FEATURE_CACHE_VALUE: list[dict] | None = None
 
@@ -53,11 +60,36 @@ def _cached_feature_history(
     global _FEATURE_CACHE_KEY, _FEATURE_CACHE_VALUE
     with _FEATURE_CACHE_LOCK:
         if key != _FEATURE_CACHE_KEY or _FEATURE_CACHE_VALUE is None:
-            _FEATURE_CACHE_VALUE = compute_regime_feature_history(
-                spy_daily_bars, context_bars=context_bars, macro_series=macro_series,
+            _FEATURE_CACHE_VALUE = _load_or_compute_features(
+                key, spy_daily_bars, context_bars, macro_series,
             )
             _FEATURE_CACHE_KEY = key
         return _FEATURE_CACHE_VALUE
+
+
+def _load_or_compute_features(key, spy_daily_bars, context_bars, macro_series) -> list[dict]:
+    """Share one computed history across processes through the disk cache.
+
+    Research replays run in fresh worker processes, which otherwise each recompute
+    the same history for the same bars.
+    """
+    digest = hashlib.sha256(f"{_FEATURE_CACHE_VERSION}|{key!r}".encode("utf-8")).hexdigest()
+    path = _FEATURE_DISK_CACHE / f"{digest}.pkl"
+    try:
+        with path.open("rb") as handle:
+            return pickle.load(handle)
+    except (OSError, pickle.UnpicklingError, EOFError):
+        pass
+    value = compute_regime_feature_history(spy_daily_bars, context_bars=context_bars, macro_series=macro_series)
+    try:
+        _FEATURE_DISK_CACHE.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(f".{os.getpid()}.tmp")
+        with temp.open("wb") as handle:
+            pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temp, path)
+    except OSError:
+        pass
+    return value
 
 
 def _legacy_rank(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from copy import deepcopy
 from datetime import datetime
 from functools import lru_cache
 from zoneinfo import ZoneInfo
@@ -10,7 +12,10 @@ from strategies.catalog import STRATEGY_CATALOG, canonical_strategy_id
 from strategies.indicators import adx, closes, efficiency_ratio, moving_average
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from strategies.signals import Signal
-from portfolio.config import get_algo_runtime_settings, get_algo_strategy_settings, get_mode_config
+from portfolio.config import (
+    ALGO_STRATEGY_CONFIG_PATH, ALGO_STRATEGY_DEFAULTS_PATH, get_algo_runtime_settings,
+    get_algo_strategy_settings, get_mode_config,
+)
 from strategies.swing_common import SwingSignal
 from strategies.mean_reversion.swing import SwingMeanReversionConfig
 from strategies.momentum.swing import SwingMomentumConfig
@@ -199,6 +204,48 @@ def _confirmed_trend(
     return None
 
 
+_STOP_SETTINGS_CHECK_SECONDS = 1.0
+_stop_settings_checked: list = [0.0, None]  # [monotonic time of last file check, file key]
+
+
+def _algo_stop_settings() -> dict:
+    """Algo stop-distance settings, re-read when the strategy config file changes.
+
+    Signal evaluation runs once per bar and candidate. Files are checked at most
+    once per second, so a config edit takes effect within about a second.
+    """
+    now = time.monotonic()
+    if now - _stop_settings_checked[0] >= _STOP_SETTINGS_CHECK_SECONDS or _stop_settings_checked[1] is None:
+        key = tuple(
+            (path.stat().st_mtime_ns if path.exists() else None)
+            for path in (ALGO_STRATEGY_DEFAULTS_PATH, ALGO_STRATEGY_CONFIG_PATH)
+        )
+        _stop_settings_checked[0] = now
+        _stop_settings_checked[1] = key
+    return _cached_stop_settings(_stop_settings_checked[1])
+
+
+@lru_cache(maxsize=8)
+def _cached_stop_settings(_key: tuple) -> dict:
+    return deepcopy(get_mode_config("algo")["risk"])
+
+
+_RULE_PARAMETER_MEMO: dict = {}
+
+
+def _merged_rule_parameters(name: str, parameters: dict | None, algo_risk: dict) -> tuple[dict, dict]:
+    params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
+    # Stop distances are live risk settings, not research-tunable signal
+    # parameters. Apply the horizon-specific Algo values after profile merge.
+    if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
+        params["hard_stop_pct"] = algo_risk["stop_loss_pct_by_strategy"][name]
+    if name in algo_risk.get("trailing_stop_pct_by_strategy", {}):
+        params["trailing_stop_pct"] = algo_risk["trailing_stop_pct_by_strategy"][name]
+    if name in algo_risk.get("trailing_activation_pct_by_strategy", {}):
+        params["trailing_activation_pct"] = algo_risk["trailing_activation_pct_by_strategy"][name]
+    return params, _parameters(name, params)
+
+
 def evaluate_rule_signal(
     name: str, ticker: str, bars: list[dict], parameters: dict | None = None,
     *, position_qty: float = 0, entry_at: str | None = None,
@@ -220,23 +267,30 @@ def evaluate_rule_signal(
             runtime_enabled = True
         elif not runtime_enabled:
             return None
-    params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
-    # Stop distances are live risk settings, not research-tunable signal
-    # parameters. Apply the horizon-specific Algo values after profile merge.
-    algo_risk = get_mode_config("algo")["risk"]
+    algo_risk = _algo_stop_settings()
+    # Replays pass the same parameter object for every bar, so the merged rule
+    # parameters are built once per candidate instead of once per bar.
+    memo_key = (name, id(parameters), id(algo_risk))
+    memo = _RULE_PARAMETER_MEMO.get(memo_key)
+    if memo is not None and memo[0] is parameters and memo[1] is algo_risk:
+        params, rule_params = memo[2], memo[3]
+    else:
+        params, rule_params = _merged_rule_parameters(name, parameters, algo_risk)
+        if len(_RULE_PARAMETER_MEMO) > 256:
+            _RULE_PARAMETER_MEMO.clear()
+        _RULE_PARAMETER_MEMO[memo_key] = (parameters, algo_risk, params, rule_params)
     if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
         params["hard_stop_pct"] = algo_risk["stop_loss_pct_by_strategy"][name]
     if name in algo_risk.get("trailing_stop_pct_by_strategy", {}):
         params["trailing_stop_pct"] = algo_risk["trailing_stop_pct_by_strategy"][name]
     if name in algo_risk.get("trailing_activation_pct_by_strategy", {}):
         params["trailing_activation_pct"] = algo_risk["trailing_activation_pct_by_strategy"][name]
-    rule_params = _parameters(name, params)
 
     if name == "swing_mean_reversion":
-        config = SwingMeanReversionConfig.from_dict(rule_params)
         from strategies.mean_reversion.swing import signal as swing_signal
+        # The signal validates and caches the settings itself, so they are not rebuilt per bar.
         return swing_signal(
-            ticker, bars, position_qty=position_qty, parameters=config.to_dict(),
+            ticker, bars, position_qty=position_qty, parameters=rule_params,
             entry_at=entry_at, entry_price=entry_price, position_target=position_target,
         )
 

@@ -7,10 +7,10 @@ opening print or a single intraday move cannot trigger it.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import asdict, dataclass
 from datetime import date
 import math
-from statistics import mean
 from typing import Any
 
 from strategies.indicators import adx, efficiency_ratio, population_std, rsi
@@ -152,6 +152,56 @@ def _entry_distance(
     return (values[end] - reference) / deviation
 
 
+# Entry checks only read the most recent sessions, so the per-bar value list is
+# limited to that tail. Set to False to force the full-history path (for tests).
+_TAIL_OPTIMIZATION = True
+
+
+def _signal_window(rows: list, config: "SwingMeanReversionConfig") -> list:
+    """Rows the entry checks read. Fixed-lookback settings need only a recent tail."""
+    if not _TAIL_OPTIMIZATION or config.lookback_mode != "fixed" or config.regime_filter in {"adx", "combined"}:
+        return rows
+    needed = max(
+        config.lookback_days + config.slope_lookback_days,
+        config.lookback_days + config.minimum_stretch_days + 1,
+        config.efficiency_ratio_period + 2,
+        16,
+    )
+    return rows[-(needed + 5):]
+
+
+def _mean(values: list[float]) -> float:
+    """Arithmetic mean via fsum; statistics.mean is exact but much slower on this hot path."""
+    return math.fsum(values) / len(values)
+
+
+_PARAMETER_CACHE: dict[str, SwingMeanReversionConfig] = {}
+
+
+def _config_cached(key: str) -> SwingMeanReversionConfig:
+    config = _PARAMETER_CACHE.get(key)
+    if config is None:
+        config = SwingMeanReversionConfig.from_dict(dict(ast.literal_eval(key)))
+        _PARAMETER_CACHE[key] = config
+    return config
+
+
+_LAST_PARAMETERS: list = [None, None]  # [parameters object, its config] for the most recent call
+
+
+def _config_for(parameters: dict | None) -> SwingMeanReversionConfig:
+    """Parse and validate settings once per distinct parameter set; the config is frozen.
+
+    The most recent object is reused by identity, which covers replays that pass
+    the same parameters for every bar.
+    """
+    if parameters is not None and parameters is _LAST_PARAMETERS[0]:
+        return _LAST_PARAMETERS[1]
+    config = _config_cached(repr(sorted((parameters or {}).items())))
+    _LAST_PARAMETERS[0], _LAST_PARAMETERS[1] = parameters, config
+    return config
+
+
 def signal(
     ticker: str,
     bars: list[dict],
@@ -163,11 +213,10 @@ def signal(
     position_target: float | None = None,
 ) -> Signal | None:
     """Evaluate completed daily bars without an intraday time-of-day window."""
-    config = SwingMeanReversionConfig.from_dict(parameters)
+    config = _config_for(parameters)
     if not config.enabled:
         return None
     rows = clean_daily_bars(bars)
-    values = [row[2] for row in rows]
     required = max(
         config.lookback_days + config.slope_lookback_days,
         config.volatility_lookback_days + config.lookback_days + 1
@@ -175,11 +224,13 @@ def signal(
     )
     if len(rows) < required:
         return None
+    window = _signal_window(rows, config)
+    values = [row[2] for row in window]
 
     current = values[-1]
     lookback = _effective_lookback(values, len(values) - 1, config)
-    reference = mean(values[-lookback:])
-    prior_reference = mean(values[-(lookback + config.slope_lookback_days):-config.slope_lookback_days])
+    reference = _mean(values[-lookback:])
+    prior_reference = _mean(values[-(lookback + config.slope_lookback_days):-config.slope_lookback_days])
     if reference <= 0 or prior_reference <= 0:
         return None
     reference_slope = reference / prior_reference - 1
@@ -270,9 +321,9 @@ def signal(
         if trend_strength is None or trend_strength > config.adx_max:
             return None
 
-    start_index = len(rows) - config.minimum_stretch_days
+    start_index = len(values) - config.minimum_stretch_days
     recent_stretches = []
-    for index in range(start_index, len(rows)):
+    for index in range(start_index, len(values)):
         local_lookback = _effective_lookback(values, index, config)
         historical_closes = values[max(0, index - local_lookback + 1):index + 1]
         if len(historical_closes) < local_lookback:

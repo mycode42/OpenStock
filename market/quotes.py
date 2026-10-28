@@ -15,13 +15,38 @@ class QuoteParseError(ValueError):
         self.reason = reason
 
 
+_TIMESTAMP_CACHE: dict[tuple[str, str], datetime] = {}
+
+
 def parse_timestamp(
     raw_timestamp: object,
     *,
     context: str = "Alpaca price",
     assume_utc: bool = True,
 ) -> datetime:
-    """Return an aware UTC timestamp, optionally treating naive input as UTC."""
+    """Return an aware UTC timestamp, optionally treating naive input as UTC.
+
+    Identical text returns the same immutable object, so a chain of quotes that
+    share a timestamp keeps one copy of it when pickled between processes.
+    """
+    if not (isinstance(raw_timestamp, str) and assume_utc):
+        return _parse_timestamp(raw_timestamp, context=context, assume_utc=assume_utc)
+    key = (raw_timestamp, context)
+    cached = _TIMESTAMP_CACHE.get(key)
+    if cached is None:
+        cached = _parse_timestamp(raw_timestamp, context=context, assume_utc=assume_utc)
+        if len(_TIMESTAMP_CACHE) > 200_000:
+            _TIMESTAMP_CACHE.clear()
+        _TIMESTAMP_CACHE[key] = cached
+    return cached
+
+
+def _parse_timestamp(
+    raw_timestamp: object,
+    *,
+    context: str,
+    assume_utc: bool,
+) -> datetime:
     try:
         timestamp = (
             raw_timestamp

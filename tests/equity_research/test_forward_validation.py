@@ -30,22 +30,13 @@ def _trial(candidate: str, strategy: str, series: dict, fitness: float = 0.0) ->
     }
 
 
-def test_cohort_winner_is_chosen_on_search_window_results_only():
-    best_on_search = _trial("search-best", STRATEGY, _series(0.002, 0.0))
-    best_only_on_holdout = _trial("holdout-only", STRATEGY, _series(0.001, 0.05))
+def test_cohort_winner_is_the_highest_forward_return():
+    strong = _trial("strong", STRATEGY, _series(0.002, 0.0))
+    weak = _trial("weak", STRATEGY, _series(0.001, 0.0))
 
-    assert fv._cohort_winner([best_on_search, best_only_on_holdout]) is best_on_search
-    assert fv._cohort_winner([best_only_on_holdout, best_on_search]) is best_on_search
+    assert fv._cohort_winner([weak, strong]) is strong
+    assert fv._cohort_winner([strong, weak]) is strong
     assert fv._cohort_winner([]) is None
-
-
-def test_holdout_results_do_not_change_the_search_ranking():
-    first = _trial("a", STRATEGY, _series(0.002, -0.05))
-    second = _trial("b", STRATEGY, _series(0.001, 0.05))
-    assert fv._cohort_winner([first, second]) is first
-    assert fv._search_return(first["latest_simulation"]["return_series"]) > fv._search_return(
-        second["latest_simulation"]["return_series"],
-    )
 
 
 def test_promotion_cap_defaults_allow_one_and_skip_the_rest_with_reason():
@@ -120,15 +111,11 @@ def test_recorded_trial_count_never_shrinks_when_artifacts_disappear(tmp_path):
     assert after == 3
 
 
-def test_acceptance_decision_reports_its_stage():
-    series = _series(0.002, 0.0)
-    search = fv._acceptance_decision(series, trials=1, final=False)
-    final = fv._acceptance_decision(series, trials=1)
+def test_acceptance_decision_has_one_stage_and_rejects_missing_series():
+    decision = fv._acceptance_decision(_series(0.002, 0.0), trials=1)
 
-    assert search["stage"] == "search"
-    assert search["decision"] in {"search_passed", "reject"}
-    assert final["stage"] == "final"
-    assert fv._acceptance_decision(None, trials=1, final=False)["decision"] == "reject"
+    assert decision["decision"] in {"search_passed", "reject"}
+    assert fv._acceptance_decision(None, trials=1)["decision"] == "reject"
 
 
 # End-to-end cycle with replay, calendar, and regime lookups stubbed out. Every
@@ -161,16 +148,15 @@ def _pending_trial(index: int, strategy: str) -> dict:
     }
 
 
-def test_cycle_caps_promotions_and_pauses_a_pair_under_an_active_holdout(tmp_path, monkeypatch):
+def test_cycle_caps_promotions_per_cycle(tmp_path, monkeypatch):
     import json as _json
 
     from equity_research.settings import LIVE_RESEARCH_STRATEGIES
-    from equity_research.validation import final_holdout as holdout
     from strategies.registry import ALGO_DEFAULT_PARAMETERS
 
     strategies = [name for name in LIVE_RESEARCH_STRATEGIES if name in ALGO_DEFAULT_PARAMETERS][:3]
     assert len(strategies) == 3, strategies
-    first, second, held = strategies
+    first, second, third = strategies
     root = tmp_path / "research"
     root.mkdir()
     state_path = root / "forward-validation.json"
@@ -180,17 +166,11 @@ def test_cycle_caps_promotions_and_pauses_a_pair_under_an_active_holdout(tmp_pat
         "schema": "swarm_algo_forward_validation_v1",
         "active_trials": {
             "a": _pending_trial(1, first), "b": _pending_trial(2, first),
-            "c": _pending_trial(3, second), "d": _pending_trial(4, held),
+            "c": _pending_trial(3, second), "d": _pending_trial(4, third),
         },
         "history": [],
     }))
     promoted_path.write_text("{}")
-
-    # Freeze every cohort, then keep only the held strategy's pair under holdout.
-    holdout.initialize_cohort_holdouts(database=database, frozen_on=date(2025, 12, 31))
-    for name in (first, second):
-        holdout.supersede_cohort_holdouts(database=database, reason="test setup", strategy=name)
-    assert holdout.active_holdout_pairs(database) >= {(held, "range_bound")}
 
     edges = {"a": 0.004, "b": 0.0035, "c": 0.0045, "d": 0.005}
     by_parameter = {1: "a", 2: "b", 3: "c", 4: "d"}
@@ -224,17 +204,10 @@ def test_cycle_caps_promotions_and_pauses_a_pair_under_an_active_holdout(tmp_pat
 
     assert result["status"] == "completed", result
     assert len(result["promoted"]) == 1
-    assert result["promotion_paused_by_final_holdout"] is True
-    assert f"{held}:range_bound" in result["final_holdout_paused_pairs"]
-    assert f"{first}:range_bound" not in result["final_holdout_paused_pairs"]
-    # Three eligible candidates (a, b, c): one promotes, the other two are skipped.
-    assert len(result["promotion_skipped_candidate_ids"]) == 2
+    assert len(result["promotion_skipped_candidate_ids"]) == 3
     state = _json.loads(state_path.read_text())
     skipped = [row for row in state["history"] if row.get("status") == "skipped"]
     assert skipped and all("cap" in row["reason"] for row in skipped)
-    paused = [row for row in state["active_trials"].values() if row.get("promotion_paused")]
-    assert [row["strategy"] for row in paused] == [held]
-    assert "final holdout" in paused[0]["reason"]
     assert result["promotion_cap"] == {
         "max_promotions_per_cycle": 1, "max_promotions_per_strategy_per_cycle": 1,
     }
