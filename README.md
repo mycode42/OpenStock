@@ -1,3 +1,7 @@
+
+
+
+
 # OpenStock
 
 OpenStock is a self-hosted dashboard for monitoring stock prices, keeping a trading journal, and tracking performance and risk. It polls executable EUR bid and ask prices, alerts on thresholds through Telegram, and records position lots, capital events and equity history in SQLite.
@@ -30,14 +34,35 @@ Demo mode is also the default whenever Trade Republic credentials or Algo Trader
 ## Features
 
 - **Dashboard:** current prices, alert state, quick stock actions, and local hover price-history charts.
-- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through a durable outbox until Telegram confirms delivery.
+<img width="1690" height="967" alt="Screenshot 2026-10-28 at 13 20 13" src="https://github.com/user-attachments/assets/2d5c7e6e-a755-483a-98ff-c81dae24ae43" />
+
+
+- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through 
+<img width="1679" height="956" alt="Screenshot 2026-10-28 at 13 22 08" src="https://github.com/user-attachments/assets/76143c54-63b3-4117-8aba-419667b77c11" />
+
+a durable outbox until Telegram confirms delivery.
 - **Trading journal:** record position lots, then edit or close them with frozen EUR conversion rates and fees. Adding a purchase to an open position merges it using quantity-weighted entry prices, with an audit trail.
+
+
 - **Capital events:** initial capital, deposits, withdrawals and financing are tracked separately, so they never count as trading P/L.
+
+
 - **Analytics:** P/L, risk, equity curve, drawdown, monthly and per-stock performance. Figures show `N/A` or `Insufficient data` until enough history exists.
+
+
 - **Chart history:** persisted quote history with a background backfill queue; provider failures do not affect API responses.
+
+
 - **Algo Trader pages:** research, universe and performance views for a separate Algo Trader installation, with its strategy settings editable from the UI.
 
+<img width="1195" height="613" alt="Screenshot 2026-10-28 at 13 21 27" src="https://github.com/user-attachments/assets/ae0d0fc7-2303-4786-ab2f-91b396c69b73" />
+<img width="1207" height="810" alt="Screenshot 2026-10-28 at 13 20 51" src="https://github.com/user-attachments/assets/b2bdc6a4-3884-49e0-890b-bb00282a4274" />
+
+
 OpenStock does not place, change or cancel orders. Broker endpoints are read-only: they retrieve quotes, accounts, portfolio, orders and transactions.
+
+<img width="1168" height="901" alt="Screenshot 2026-10-28 at 13 22 44" src="https://github.com/user-attachments/assets/0d99c880-96bb-4782-bb4b-71c1e6569a4e" />
+
 
 ## Configuration
 
