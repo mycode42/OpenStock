@@ -1087,27 +1087,25 @@ async function readResearch(dataDir) {
 }
 
 async function readJournal(dataDir, accountId) {
-    const filePath = path.join(dataDir, 'trade_journal.jsonl');
-    let handle;
-    try { handle = await fs.open(filePath, 'r'); }
-    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    // The Algo state database holds the journal; read the newest algo rows, oldest first.
+    const databasePath = path.join(dataDir, 'algo_state.sqlite3');
+    let db;
+    try { db = new Database(databasePath, { readonly: true, fileMustExist: true }); }
+    catch (error) { if (error.code === 'SQLITE_CANTOPEN') return []; throw error; }
     try {
-        const stat = await handle.stat();
-        const length = Math.min(stat.size, 2 * 1024 * 1024);
-        const buffer = Buffer.alloc(length);
-        await handle.read(buffer, 0, length, stat.size - length);
-        let lines = buffer.toString('utf8').split(/\r?\n/);
-        if (stat.size > length) lines = lines.slice(1);
-        const rows = [];
-        for (const line of lines.slice(-300)) {
-            try {
-                const row = JSON.parse(line);
-                if (row && row.trading_mode === 'algo' && (!accountId || row.account_id === accountId)) rows.push(row);
-            } catch { /* Ignore a partial or malformed append-only row. */ }
-        }
-        return rows;
+        const sql = accountId
+            ? "SELECT payload_json FROM trade_journal WHERE trading_mode = 'algo' AND account_id = ? ORDER BY id DESC LIMIT 300"
+            : "SELECT payload_json FROM trade_journal WHERE trading_mode = 'algo' ORDER BY id DESC LIMIT 300";
+        const rows = db.prepare(sql).all(...(accountId ? [accountId] : []));
+        return rows.reverse().map(({ payload_json }) => {
+            try { return JSON.parse(payload_json); }
+            catch { return null; }
+        }).filter(Boolean);
+    } catch (error) {
+        if (/no such table/.test(error.message)) return [];
+        throw error;
     } finally {
-        await handle.close();
+        db.close();
     }
 }
 
