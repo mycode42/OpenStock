@@ -23,6 +23,7 @@ Then open http://127.0.0.1:3000. To use another port, run `PORT=3001 npm run dem
 
 - ignores any local `.env` file and every broker credential variable, so it never contacts a broker;
 - stores its data in `data/demo/openstock.db`, separate from any real database;
+- fills the trading journal with sample lots, deposits and a 150-day equity curve, so Journal and Analytics have data to show. Delete `data/demo/` to start over;
 - shows a banner in the interface listing the setup still missing.
 
 Demo mode is also the default whenever Trade Republic credentials or Algo Trader data are not configured. The application reports what is missing through `GET /api/demo-status`.
