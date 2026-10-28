@@ -78,7 +78,6 @@ optional = true
 
 [tool.poetry.group.research.dependencies]
 yfinance = "^1.2.0"
-pyarrow = "^23.0.1"
 
 [tool.poetry.group.theta]
 optional = true
