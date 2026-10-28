@@ -1,365 +1,195 @@
-# OpenStock - Stock Monitoring, Trading Journal & Performance Dashboard
+# OpenStock
 
-A private workspace for monitoring stock prices, recording position lots, and calculating performance and risk KPIs. Quotes use the read-only Handelsrepublik SDK first and the authenticated loopback Trade Republic UAPI sidecar as backup. Both return EUR executable bid/ask values.
+OpenStock is a self-hosted dashboard for monitoring stock prices, keeping a trading journal, and tracking performance and risk. It polls executable EUR bid and ask prices, alerts on thresholds through Telegram, and records position lots, capital events and equity history in SQLite.
 
-Every monitored instrument needs a verified Trade Republic EUR mapping. If both quote providers fail, OpenStock records a per-stock failure and continues the cycle.
+You can try it without any broker account. Demo mode runs the full interface on simulated quotes.
 
-## Architecture
+## Quick start
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Tailscale Access                      │
-│                    (https://openstock.tailbff3c4.ts.net)  │
-└────────────────────────────────────────┬────────────────┘
-                                         │
-┌────────────────────────────────────────▼────────────────┐
-│                 Web Application                        │
-│                 Port 3000 (127.0.0.1)                  │
-│  ┌───────────┐  ┌───────────┐  ┌──────────────┐       │
-│  │ Dashboard │  │ Journal   │  │ Config       │       │
-│  └───────────┘  └───────────┘  └──────────────┘       │
-└─────────────────────────────────────────────────────────┘
-                                 │
-                                 │
-┌────────────────────────────────▼─────────────────────────┐
-│                 SQLite Database (openstock.db)           │
-│  ┌───────────┐  ┌───────────┐  ┌──────────────┐        │
-│  │ stocks    │  │ trades    │  │ capital_     │        │
-│  │           │  │           │  │ events       │        │
-│  └───────────┘  └───────────┘  └──────────────┘        │
-└─────────────────────────────────────────────────────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              │                  │                  │
-              ▼                  │                  ▼
-┌─────────────────────────┐      │      ┌─────────────────────────┐
-│   Node.js Monitor       │      │      │  Exchange Rate Cache    │
-│      (monitor.js)       │      │      │   (JSON cache)          │
-│  - Runs every minute    │      │      │                         │
-│  - Fetches prices       │      │      └─────────────────────────┘
-│  - Uses bounded workers │      │
-│  - Evaluates triggers   │      │      ┌─────────────────────────┐
-│  - Sends Telegram       │──────┬──────│ Handelsrepublik SDK      │
-│  - Durable alert outbox │      └──────│ Trade Republic UAPI     │
-└─────────────────────────┘             └─────────────────────────┘
+Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module.
+
+```bash
+git clone https://github.com/mycode42/openstock.git
+cd openstock
+npm ci
+npm run demo
 ```
 
-## Prerequisites
+Then open http://127.0.0.1:3000. To use another port, run `PORT=3001 npm run demo`.
 
-- Node.js 22 or higher
-- Python 3, a C/C++ compiler toolchain, and `make` for native Node modules (for example, `build-essential` on Debian/Ubuntu)
-- SQLite 3.x (with CLI for debugging)
-- Telegram Bot token
-- Tailscale (pre-configured)
-- Trade Republic account access is provisioned outside the dashboard; no market-data API key is required
+### Demo mode
+
+`npm run demo` starts OpenStock with simulated quotes and charts. It:
+
+- ignores any local `.env` file and every broker credential variable, so it never contacts a broker;
+- stores its data in `data/demo/openstock.db`, separate from any real database;
+- shows a banner in the interface listing the setup still missing.
+
+Demo mode is also the default whenever Trade Republic credentials or Algo Trader data are not configured. The application reports what is missing through `GET /api/demo-status`.
+
+## Features
+
+- **Dashboard:** current prices, alert state, quick stock actions, and local hover price-history charts.
+- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through a durable outbox until Telegram confirms delivery.
+- **Trading journal:** record position lots, then edit or close them with frozen EUR conversion rates and fees. Adding a purchase to an open position merges it using quantity-weighted entry prices, with an audit trail.
+- **Capital events:** initial capital, deposits, withdrawals and financing are tracked separately, so they never count as trading P/L.
+- **Analytics:** P/L, risk, equity curve, drawdown, monthly and per-stock performance. Figures show `N/A` or `Insufficient data` until enough history exists.
+- **Chart history:** persisted quote history with a background backfill queue; provider failures do not affect API responses.
+- **Algo Trader pages:** research, universe and performance views for a separate Algo Trader installation, with its strategy settings editable from the UI.
+
+OpenStock does not place, change or cancel orders. Broker endpoints are read-only: they retrieve quotes, accounts, portfolio, orders and transactions.
 
 ## Configuration
 
-### Environment Variables
-
-Create `.env` from `.env.example`:
+Copy the example file to configure a real installation:
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Description |
-|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `DATABASE_PATH` | Path to SQLite database |
-| `PORT` | Server port (default: 3000) |
-| `MONITOR_CONCURRENCY` | Maximum parallel quote requests per monitor cycle (default: 3) |
-| `MONITOR_CYCLE_DEADLINE_MS` | Stop starting new stock work after this cycle budget (default: 45000) |
-| `TELEGRAM_BOT_USERNAME` | Your bot's username (e.g., `OpenStock_TelegramBot`) |
-| `TRADE_REPUBLIC_BASE_URL` | Loopback Trade Republic UAPI URL (default: `http://127.0.0.1:8000`) |
-| `TRADE_REPUBLIC_TIMEOUT_MS` | Broker request timeout; 30000 is recommended for portfolio synchronization |
-| `TRADE_REPUBLIC_SDK_ENABLED` | Uses the read-only Handelsrepublik SDK as the primary quote source; default `true` |
-| `TRADE_REPUBLIC_SDK_SESSION_FILE` | Private, server-side SDK session path; required when the SDK source is enabled |
-| `TRADE_REPUBLIC_SDK_MODULE_PATH` | Local compiled SDK module path (default `/opt/handelsrepublik/dist/index.js`) |
-| `LIVE_PRICE_REFRESH_MS` | Display-only Dashboard/Configure refresh cadence; minimum/default 1000 ms |
+`.env` is read from the repository directory. Set `OPENSTOCK_CONFIG_FILE` to load a different file. Keep credentials out of source control.
 
-### Trade Republic integration
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRADE_REPUBLIC_API_KEY` | empty | Key for the loopback Trade Republic UAPI sidecar. Leaving it empty, together with no SDK session, starts demo mode. |
+| `TRADE_REPUBLIC_BASE_URL` | `http://127.0.0.1:8000` | Loopback UAPI sidecar URL. |
+| `TRADE_REPUBLIC_TIMEOUT_MS` | `30000` | Broker request timeout. 30000 is recommended for portfolio synchronization. |
+| `TRADE_REPUBLIC_SDK_ENABLED` | `true` | Uses the read-only Handelsrepublik SDK as the primary quote source. Failed or disabled SDK requests fall back to UAPI. |
+| `TRADE_REPUBLIC_SDK_SESSION_FILE` | empty | Private, server-side SDK session file. Required when the SDK source is enabled. Keep it outside the repository. |
+| `TRADE_REPUBLIC_SDK_MODULE_PATH` | `../handelsrepublik/dist/index.js` | Compiled SDK module. Relative paths resolve from the checkout, so a sibling clone works without configuration. |
+| `TRADE_REPUBLIC_SDK_PHONE_NUMBER` | empty | Used only when the saved SDK session is missing or rejected. The broker may ask for approval in its mobile app. |
+| `TRADE_REPUBLIC_SDK_PIN` | empty | Used with the phone number for the same fallback login. |
+| `TRADE_REPUBLIC_SDK_AUTH_TIMEOUT_MS` | `45000` | Time allowed for SDK login. |
+| `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather for alert delivery. |
+| `TELEGRAM_CHAT_ID` | empty | Chat that receives alerts. |
+| `DATABASE_PATH` | `database/openstock.db` | SQLite database path. Relative paths resolve from the checkout, not the current directory. |
+| `PORT` | `3000` | Web server port. The server always binds to `127.0.0.1`. |
+| `MONITOR_CONCURRENCY` | `3` | Maximum parallel quote requests per monitor cycle. |
+| `MONITOR_CYCLE_DEADLINE_MS` | `45000` | Stop starting new stock work after this cycle budget. |
+| `LIVE_PRICE_REFRESH_MS` | `1000` | Display-only Dashboard refresh cadence. Minimum and default 1000 ms. |
+| `HISTORY_BACKFILL_DELAY_MS` | `1500` | Pause between chart-history backfill requests. |
+| `ALGO_TRADER_ROOT` | `../algo-trader` | Data directory of the optional Algo Trader installation. |
 
-The read-only Handelsrepublik SDK provides the primary executable EUR bid/ask. If it is disabled, unconfigured, or unavailable, OpenStock tries the loopback Trade Republic UAPI sidecar. The SDK adapter only reads executable quotes; broker account endpoints remain separate from market-data selection.
+Demo mode is automatic while either a Trade Republic credential or the Algo Trader data is missing.
 
-Prices, amounts, fees, and performance values are displayed rounded to two decimal places. Journal trade entry, close, and edit fields retain entered precision up to six decimal places; calculations and stored values use that full precision.
+### Price sources
 
-The Dashboard and Configure page poll `/api/live-prices` once per second while visible. Requests share the same SDK → UAPI selection path as the monitor, coalesce, and cache briefly. Live display requests never write stock state, history, alert state, or equity snapshots. Monitor and explicit refresh observations are stored in SQLite; BUY/SELL alerts use the executable ask/bid respectively.
+Quotes come from the Handelsrepublik SDK first and the loopback Trade Republic UAPI sidecar second. Every monitored instrument needs a verified Trade Republic EUR mapping. If both providers fail for a symbol, OpenStock records a per-stock failure and continues the cycle.
 
-### Telegram Setup
+BUY alerts compare against the executable ask; SELL alerts compare against the executable bid.
 
-1. Chat with [@BotFather](https://t.me/BotFather) to create a bot
-2. Get your bot token
-3. Add your bot as a member to your Telegram channel/group
-4. Add your Telegram user ID to `telegram-default-allowFrom.json` in OpenClaw credentials
+Prices, amounts, fees and performance values are displayed rounded to two decimals. Journal fields keep the precision you enter, up to six decimals; calculations and stored values use full precision.
 
-## Installation
+The Dashboard polls `/api/live-prices` once per second while visible. That endpoint is display-only: it never writes stock state, history, alert state or equity snapshots.
 
-```bash
-# Clone the repository
-git clone git@github.com:mycode42/openstock.git
-cd openstock
+## Monitoring behavior
 
-# Install dependencies
-npm install
+`scripts/monitor.js` runs one cycle per invocation:
 
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys
+1. Reads enabled stocks from the database.
+2. Fetches an executable EUR quote for each stock, SDK first, UAPI second.
+3. Stores price and quote-side data in SQLite.
+4. Evaluates buy and sell thresholds against ask and bid.
+5. Sends Telegram alerts on threshold crossing.
+6. Writes a durable alert-outbox record, and retires an alert level only after confirmed delivery.
+7. Stores a local price observation and, when capital is configured, an equity snapshot.
 
-# Initialize database (automatic on first run)
-npm start
-```
-
-The server loads `.env` from the repository directory by default. Set
-`OPENSTOCK_CONFIG_FILE` only when you want to load a different environment
-file. The default database path in `.env.example` is relative to the checkout,
-so the setup also works locally at `http://localhost:3000`.
-
-## Running
-
-### Start the web application
+The cycle uses bounded concurrency, a deadline, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock.
 
 ```bash
-npm start
-# Or directly:
-node server.js
+npm run monitor            # run one cycle
+npm run monitor -- --help  # print usage only
 ```
 
-### Start the monitoring timer
+### Alert levels
 
-```bash
-sudo systemctl enable --now openstock-monitor.timer
-```
-
-### Check service status
-
-```bash
-sudo systemctl status openstock.service
-sudo systemctl status openstock-monitor.timer
-sudo systemctl list-timers | grep openstock
-```
-
-## Viewing Logs
-
-```bash
-# Web server logs
-journalctl -u openstock.service -f
-
-# Monitor logs
-tail -f /opt/openstock/memory/monitor.log
-
-# Error logs
-tail -f /opt/openstock/memory/monitor-error.log
-```
-
-## Database Location
-
-```bash
-# View database location
-cat .env | grep DATABASE_PATH
-
-# Query directly
-sqlite3 /opt/openstock/database/openstock.db "SELECT * FROM stocks;"
-sqlite3 /opt/openstock/database/openstock.db ".tables"
-```
-
-## Monitoring Behavior
-
-The `scripts/monitor.js` process runs every minute via a systemd timer. For each verified EUR mapping it tries the Handelsrepublik SDK first and the loopback UAPI sidecar second. If both fail, that stock fails for the cycle without stopping other symbols. The monitor:
-
-1. Reads enabled stocks from database
-2. Fetches an executable EUR quote through SDK → UAPI
-3. Stores price and quote-side data in SQLite
-4. Evaluates buy/sell thresholds against ask/bid
-5. Sends Telegram alerts on threshold crossing
-6. Creates a durable alert-outbox record, then retires a level only after confirmed delivery
-7. Stores a local price observation and, when capital is configured, an equity snapshot
-8. Uses bounded concurrency, a cycle deadline, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock
-
-Run one monitoring cycle manually as the `openclaw` user with `npm run monitor` (`npm run monitor -- --help` only prints usage). Use the tracked systemd override in `ops/systemd/` when deploying monitor configuration changes.
-
-### Trigger Debouncing
-
-- Each alert level is independently one-shot and is retired only after Telegram confirms delivery.
-- Rearm a retired level explicitly through the alert-level API/UI.
-- `trigger_state` and the stock-level threshold columns are legacy compatibility data; `alert_levels` and open Journal trades are authoritative.
+- Each alert level is independently one-shot. It retires only after Telegram confirms delivery.
+- Rearm a retired level explicitly through the alert-level API or the UI.
+- `trigger_state` and the stock-level threshold columns are legacy compatibility data. `alert_levels` and open journal trades are authoritative.
 
 ### Journal positions
 
-Position summaries and SELL eligibility use the total quantity in open Journal
-trades. Without an open position, SELL levels remain configured but do not fire.
-Adding another open purchase merges it into the oldest open trade using
-quantity-weighted entry prices while preserving the entered precision and a full
-source snapshot in `trade_merge_events`. Closed trades never merge. Archiving a
-stock preserves its history; restoring it re-enables non-retired alert levels,
-while retired levels need explicit rearming.
+Position summaries and SELL eligibility use the total quantity of open journal trades. Without an open position, SELL levels stay configured but do not fire. Archiving a stock preserves its history; restoring it re-enables non-retired alert levels.
 
-### Historical chart backfill
+### Chart history backfill
 
-The server queues missing history for active, non-archived stocks with verified
-Trade Republic EUR mappings. It uses the sidecar multi-range history endpoint;
-incomplete ranges remain eligible for retry. Stocks without a verified mapping
-remain visible but have no quote/history until mapped. Backfill runs in the
-background so provider failures do not affect API responses or server
-availability.
-
-The same prepared, idempotent queue can be run manually:
+The server queues missing history for active, non-archived stocks with verified Trade Republic EUR mappings. Incomplete ranges stay eligible for retry. Run the queue manually with:
 
 ```bash
 npm run backfill-history
 # Optional: HISTORY_BACKFILL_DELAY_MS=2000 npm run backfill-history
 ```
 
-Charts use persisted quote and Trade Republic history rows. Tests use mocked
-provider calls and temporary SQLite databases.
+## Performance data model
 
-## Web Interface
+- `trades` records one position lot. An open trade has no close date; a completed trade keeps entry and exit prices, fees, currency and EUR conversion rates.
+- `capital_events` never count as P/L.
+- `equity_snapshots` are captured by the monitor and by state-changing journal operations, so equity curves and drawdown do not depend on today's prices.
+- Analytics GET requests are read-only.
+- Annualized return and estimated yearly profit need at least 30 calendar days since initial capital. Volatility and Sharpe need 30 equity observations.
 
-Access the web app:
-
-- **Local:** `http://localhost:3000`
-- **Tailscale:** `https://openstock.tailbff3c4.ts.net` (configure Tailscale Serve)
-
-### Features
-
-- **Dashboard:** The original stock-monitoring overview with current prices, trigger state, quick stock actions, and local hover price-history charts.
-- **Trading Journal:** Record position lots, then explicitly edit or close them with frozen EUR conversion rates and fees. Its analytics section contains capital, P/L, risk, equity curve, monthly, and per-stock performance data.
-- **Capital events:** Record initial capital, deposits, withdrawals, and financing separately from trading performance.
-- **Configure Stocks:** Add stocks and manage monitoring thresholds.
-
-### Performance data model
-
-`trades` records one position lot. An open trade has no close date; a completed trade retains entry/exit prices, fees, currency and EUR conversion rates. `capital_events` never count as P/L. `equity_snapshots` are captured by the monitor and state-changing Journal operations so equity curves and drawdown do not have to be reconstructed from today's prices. Analytics GET requests are read-only.
-
-The dashboard deliberately shows `N/A` or `Insufficient data` until the relevant history exists. Annualized return and estimated yearly profit require at least 30 calendar days since initial capital; volatility and Sharpe require 30 equity observations.
-
-## Updating the Application
-
-```bash
-# Pull changes
-git pull origin main
-
-# Install updates
-npm install
-
-# Restart service
-sudo systemctl restart openstock.service
-```
-
-## Backup Considerations
-
-```bash
-# Backup database
-mkdir -p /var/backups/openstock
-cp /opt/openstock/database/openstock.db /var/backups/openstock/openstock.db.$(date +%F-%H%M%S)
-
-# Include memory for audit trail
-tar -czf openstock-backup-$(date +%F).tar.gz \
-    database/openstock.db \
-    memory/*.log \
-```
-
-## Troubleshooting
-
-### Monitoring not running
-
-```bash
-sudo systemctl status openstock-monitor.timer
-sudo systemctl list-timers | grep openstock
-journalctl -u openstock-monitor.service -n 50
-```
-
-### Prices not updating
-
-Check `/api/broker/trade-republic/health`, then verify the SDK session and UAPI sidecar are reachable from the OpenStock service.
-
-### Telegram alerts not sending
-
-```bash
-# Check bot token
-curl "https://api.telegram.org/botYOUR_TOKEN/getMe"
-
-# Check chat ID
-cat /home/openclaw/.openclaw/credentials/telegram-default-allowFrom.json
-
-# Check monitor error log
-cat /opt/openstock/memory/monitor-error.log
-```
-
-### Database locked or corrupted
-
-```bash
-# Check integrity
-sqlite3 /opt/openstock/database/openstock.db "PRAGMA integrity_check;"
-
-# If issues, restart the web server to release locks
-sudo systemctl restart openstock.service
-```
-
-### Web interface not accessible
-
-```bash
-# Check if server is running
-ss -tlnp | grep 3000
-
-# Check process
-ps aux | grep "node server.js"
-
-# Check logs
-journalctl -u openstock.service -n 50 --no-pager
-```
-
-## API Endpoints
+## API
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/stocks` | GET | List all stocks |
-| `/api/stocks/:id` | GET | Get specific stock |
-| `/api/stocks` | POST | Add new stock |
-| `/api/stocks/:id` | PUT | Update stock |
-| `/api/stocks/:id` | DELETE | Remove stock |
-| `/api/trades` | GET/POST | List or record position lots |
-| `/api/trades/:id` | PUT | Explicitly edit a trade |
+| `/health` | GET | Health check and version |
+| `/api/demo-status` | GET | Whether demo mode is active and what setup is missing |
+| `/api/dashboard` | GET | Stock dashboard data |
+| `/api/live-prices` | GET | Display-only executable prices |
+| `/api/stocks` | GET, POST | List or add stocks |
+| `/api/stocks/archived` | GET | Archived stocks kept for journal and history |
+| `/api/stocks/:id` | GET, PUT, DELETE | Read, update or remove a stock |
+| `/api/stocks/:id/restore` | POST | Restore an archived stock |
+| `/api/stocks/:id/history` | GET | Chart history for a stock |
+| `/api/stocks/:id/alert-levels` | GET, POST | List or add alert levels |
+| `/api/alert-levels/:id` | PUT, DELETE | Update or remove an alert level |
+| `/api/alert-levels/:id/rearm` | POST | Rearm a retired alert level |
+| `/api/trades` | GET, POST | List or record position lots |
+| `/api/trades/:id` | PUT | Edit a trade |
 | `/api/trades/:id/close` | POST | Close an open trade |
-| `/api/capital-events` | GET/POST | List or record capital movements |
+| `/api/capital-events` | GET, POST | List or record capital movements |
 | `/api/analytics/dashboard` | GET | Performance, risk and equity-curve data |
-| `/api/dashboard` | GET | Backward-compatible stock dashboard data |
-| `/api/stocks/archived` | GET | Archived stocks retained for journal/history management |
-| `/api/stocks/:id/restore` | POST | Restore an archived stock by identity |
 | `/api/broker/trade-republic/health` | GET | Sanitized broker connectivity status |
-| `/api/broker/trade-republic/mappings` | GET/POST | List or broker-verify stock instrument mappings |
-| `/api/broker/trade-republic/sync` | POST | Synchronize normalized account, portfolio, order, and transaction data |
+| `/api/broker/trade-republic/mappings` | GET, POST | List or verify instrument mappings |
 | `/api/broker/trade-republic/quote/:stockId` | GET | Fetch and persist a sanitized executable quote |
-| `/health` | GET | Health check |
+| `/api/broker/trade-republic/sync` | POST | Synchronize account, portfolio, order and transaction data |
 
-## Architecture and migrations
+Mutating requests must come from the same origin as the page.
 
-The browser uses native ES modules: `www/app.js` is the bootstrap, while
-`www/modules/` contains API access, state, chart, dashboard, journal, and
-configuration behavior. The app supports pointer, touch, focus, and keyboard
-chart interaction.
+## Architecture
 
-Server construction is separated from listening with `createApp()` exported by
-`server.js`; route handlers live in `server/routes/`. This allows
-route/integration tests to use temporary SQLite files and mocked providers.
-Production startup remains `node server.js`.
+```
+server.js                 HTTP app setup (loopback only) and demo-mode detection
+server/routes/            Route handlers
+server/algo-trader/       Algo Trader data readers, settings, and payload builders
+server/demo-data.js       Simulated data for demo mode
+lib/                      Quote service, monitor, analytics, history backfill, broker clients
+database/                 SQLite access; migrations/ is append-only once applied
+scripts/                  monitor, history backfill, equity snapshot and rebuild tools
+www/                      Browser UI as native ES modules; www/app.js is the bootstrap
+test/                     node:test suites, one per module
+```
 
-Database startup applies ordered, transactional migrations from
-`database/migrations/` and records versions in `schema_migrations`. Existing
-databases are adopted in place: archived stock state, trade dividends, and
-older journal entries are preserved. Database operations are grouped under
-`database/domains/`, with `database/db.js` composing the public database class.
-Tests use isolated temporary databases and do not open the live database.
+Server construction is separate from listening: `createApp()` in `server.js` builds the app, so route tests run against temporary SQLite files and mocked providers. Database startup applies ordered, transactional migrations from `database/migrations/` and records them in `schema_migrations`.
 
-Run verification with:
+## Development
 
 ```bash
-npm test
-for f in $(find . -path './node_modules' -prune -o -name '*.js' -print); do node --check "$f"; done
-git diff --check
+npm test          # full test suite
+npm run check     # syntax check and PWA asset consistency
+npm run audit:prod
 ```
+
+Tests use isolated temporary databases and mocked provider calls. They never open the live database.
+
+## Project history
+
+The commit history contains entries under several author names: `mycode42`, `Andreas Gerster`, `Andreas`, and `Stocky`. `Stocky` is the author identity of an OpenClaw AI agent used to develop this project, so those commits are AI-authored. Three further commits carry a `Co-Authored-By: Claude Haiku 5.5` trailer, marking AI-assisted work. List them with `git log --grep "Co-Authored-By"`.
+
+## Deployment
+
+The single-host setup with systemd, Tailscale and the OpenClaw Telegram credentials is documented in [DEPLOY.md](DEPLOY.md).
 
 ## License
 
-MIT - Built for the OpenClaw ecosystem
+ISC. See [LICENSE](LICENSE).

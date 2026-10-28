@@ -6,7 +6,7 @@ const OpenStockDB = require('../database/db');
 const { calculateDashboard } = require('../lib/analytics');
 const { buildCashFlowEvents, buildReplaySnapshots } = require('../lib/equity-replay');
 
-const db = new OpenStockDB(process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db');
+const db = new OpenStockDB(require('../lib/paths').databasePath());
 try {
     const sql = db.db;
     const trades = sql.prepare('SELECT t.*,s.symbol,s.name,s.asset_type,s.current_price_eur FROM trades t JOIN stocks s ON s.id=t.stock_id ORDER BY t.opened_at,t.id').all();

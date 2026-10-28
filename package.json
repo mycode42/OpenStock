@@ -1,12 +1,16 @@
 {
   "name": "openstock",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "SDK-first Trade Republic stock monitoring and trading journal with UAPI quote backup",
   "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "test": "NODE_ENV=test node --test --test-reporter=dot",
     "test:verbose": "NODE_ENV=test node --test --test-reporter=spec",
     "start": "node server.js",
+    "demo": "node scripts/demo.js",
     "monitor": "node scripts/monitor.js",
     "backfill-history": "node scripts/backfill-history.js",
     "check": "node scripts/check-pwa-assets.js && find . -path './node_modules' -prune -o -name '*.js' -type f -print0 | xargs -0 -n1 node --check",
