@@ -6,6 +6,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { initDatabase } = require('../database/init');
+const OpenStockDB = require('../database/db');
+const { seedDemoJournal } = require('../server/demo-journal');
 
 const appDir = path.join(__dirname, '..');
 const demoDir = path.join(appDir, 'data', 'demo');
@@ -24,6 +27,12 @@ const env = {
     TRADE_REPUBLIC_SDK_PHONE_NUMBER: '',
     TRADE_REPUBLIC_SDK_PIN: '',
 };
+
+// Sample journal rows go into the demo database only; seeding is skipped once it has trades.
+initDatabase({ dbPath: env.DATABASE_PATH, silent: true });
+const demoDb = new OpenStockDB(env.DATABASE_PATH);
+seedDemoJournal({ db: demoDb });
+demoDb.db.close();
 
 const port = env.PORT || 3000;
 process.stdout.write(`OpenStock demo mode: simulated data on http://127.0.0.1:${port}\n`);
