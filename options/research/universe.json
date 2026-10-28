@@ -146,10 +146,32 @@
     ]
   },
   "history_start_dates": {
+    "CEG": "2022-02-02",
     "PLTR": "2020-10-01",
     "COIN": "2021-04-01",
     "NU": "2022-01-01",
-    "GEV": "2024-04-01",
+    "VRT": "2020-02-10",
+    "GEV": "2024-04-02",
     "SPCX": "2026-06-16"
+  },
+  "history_ticker_aliases": {
+    "META": [
+      {"source_symbol": "FB", "through": "2022-06-08"}
+    ],
+    "RTX": [
+      {"source_symbol": "UTX", "through": "2020-04-02"}
+    ]
+  },
+  "history_notes": {
+    "CEG": "Standalone CEG began regular-way trading on 2022-02-02 after its Exelon spin-off; do not use EXC as a historical alias.",
+    "PLTR": "Public trading began on 2020-09-30; options-history collection is configured from October 2020.",
+    "COIN": "Public trading began on 2021-04-14; collection starts with the April 2021 month.",
+    "NU": "IPO was on 2021-12-09; collection starts in January 2022.",
+    "VRT": "Vertiv began NYSE trading on 2020-02-10; its prior GSAH security was a SPAC, not Vertiv equity.",
+    "GEV": "GE Vernova began regular-way trading on 2024-04-02 after its GE spin-off; do not use GE as a historical alias.",
+    "META": "Facebook changed its ticker from FB to META on 2022-06-09.",
+    "RTX": "The continuing UTX common stock began trading as RTX on 2020-04-03; RTN was the merger partner, not the ticker predecessor.",
+    "MSTR": "The legal name changed from MicroStrategy to Strategy in 2025; the common-stock ticker remains MSTR.",
+    "SPCX": "This is SpaceX, not the unrelated fund that previously used SPCX; SpaceX began trading on 2026-06-12 and options-history collection starts 2026-06-16."
   }
 }

@@ -11,6 +11,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -19,7 +20,16 @@ from zoneinfo import ZoneInfo
 from market.store import SQLiteBarStore
 from options.research.history_store import OptionsHistoryStore
 from options.research.archive import session_labels as _classify_sessions
-from options.research.universe import history_start_date, history_underlyings
+from options.research.universe import (
+    history_source_ranges,
+    history_start_date,
+    history_underlyings,
+    load_history_universe,
+)
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,10 +42,10 @@ MIN_EXPLORATORY_RESEARCH_SESSIONS = 60
 MAX_RESEARCH_DTE = 60
 STRIKE_RANGE = 20
 ET = ZoneInfo("America/New_York")
-META_TICKER_CHANGE_DATE = date(2022, 6, 9)
-# Per-symbol start dates live in options/research/universe.json. PLTR and later
-# listings start at the first month with available option history; SPCX is the
-# current SpaceX ticker, not the former SPCX ETF.
+# Per-symbol start dates and historical ticker aliases live in
+# options/research/universe.json. Unlisted symbols use FIRST_DATA_DATE; explicit
+# no-data responses are archived as empty months so sparse history cannot stall
+# the whole universe.
 
 
 def _read_api_key() -> str:
@@ -65,6 +75,15 @@ def _theta_client(api_key: str):
     except ImportError as error:
         raise RuntimeError("ThetaData client is not installed; install the optional theta dependency group") from error
     return ThetaClient(api_key=api_key, dataframe_type="polars")
+
+
+def _is_no_data_error(error: Exception) -> bool:
+    """ThetaData represents a valid empty result with NoDataFoundError."""
+    try:
+        from thetadata.errors import NoDataFoundError
+    except ImportError:
+        return False
+    return isinstance(error, NoDataFoundError)
 
 
 def _records(frame: Any) -> list[dict]:
@@ -193,35 +212,27 @@ def _load_gzip_rows(path: Path) -> list[dict]:
     return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
 
-def _archive_covers_through(path: Path, end_date: date) -> bool:
-    """Return whether an existing month archive was requested through end_date."""
+def _archive_covers_period(path: Path, start_date: date, end_date: date) -> bool:
+    """Return whether an archive contains the complete requested date interval."""
     if not path.is_file():
         return False
     try:
         with gzip.open(path, "rt", encoding="utf-8") as stream:
             payload = json.load(stream)
+        archived_start = date.fromisoformat(str(payload.get("start_date", "")))
         archived_end = date.fromisoformat(str(payload.get("end_date", "")))
     except (OSError, EOFError, json.JSONDecodeError, TypeError, ValueError):
         return False
-    return archived_end >= end_date
+    return archived_start <= start_date and archived_end >= end_date
 
 
 def _source_symbol_ranges(symbol: str, start_date: date, end_date: date) -> list[tuple[str, date, date]]:
     """Map canonical underlyings to the symbols ThetaData used at the time."""
-    if symbol != "META":
-        return [(symbol, start_date, end_date)]
-    if end_date < META_TICKER_CHANGE_DATE:
-        return [("FB", start_date, end_date)]
-    if start_date >= META_TICKER_CHANGE_DATE:
-        return [("META", start_date, end_date)]
-    return [
-        ("FB", start_date, META_TICKER_CHANGE_DATE - timedelta(days=1)),
-        ("META", META_TICKER_CHANGE_DATE, end_date),
-    ]
+    return history_source_ranges(symbol, start_date, end_date)
 
 
 def _archive_matches_source_ranges(path: Path, source_ranges: list[tuple[str, date, date]]) -> bool:
-    """Check whether a historical META month was fetched with its correct ticker."""
+    """Check whether an archive month was fetched with its expected source tickers."""
     if not path.is_file():
         return False
     expected = [
@@ -420,8 +431,8 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
     )
     archive_chunks = list(_month_chunks(start_date, end_date))
     archive_complete = all(
-        _archive_covers_through(eod_dir / f"{month_start:%Y-%m}.json.gz", month_end)
-        and _archive_covers_through(oi_dir / f"{month_start:%Y-%m}.json.gz", month_end)
+        _archive_covers_period(eod_dir / f"{month_start:%Y-%m}.json.gz", month_start, month_end)
+        and _archive_covers_period(oi_dir / f"{month_start:%Y-%m}.json.gz", month_start, month_end)
         for month_start, month_end in archive_chunks
     )
     standard_research_ready = len(rows) >= REQUIRED_RESEARCH_SESSIONS
@@ -440,8 +451,8 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         "archive_start_date": start_date.isoformat(),
         "archive_end_date": end_date.isoformat(),
         "archive_months_complete": sum(
-            _archive_covers_through(eod_dir / f"{month_start:%Y-%m}.json.gz", month_end)
-            and _archive_covers_through(oi_dir / f"{month_start:%Y-%m}.json.gz", month_end)
+            _archive_covers_period(eod_dir / f"{month_start:%Y-%m}.json.gz", month_start, month_end)
+            and _archive_covers_period(oi_dir / f"{month_start:%Y-%m}.json.gz", month_start, month_end)
             for month_start, month_end in archive_chunks
         ),
         "archive_months_expected": len(archive_chunks),
@@ -480,7 +491,14 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
     return manifest
 
 
-def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> dict:
+def _fetch_symbol(
+    client,
+    symbol: str,
+    *,
+    start_date: date,
+    end_date: date,
+    compile_after: bool = True,
+) -> dict | None:
     symbol_dir = RESEARCH_DIR / symbol
     archive = symbol_dir / "archive"
     eod_dir, oi_dir = archive / "eod", archive / "open_interest"
@@ -492,28 +510,24 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
         month_key = month_start.strftime("%Y-%m")
         eod_path, oi_path = eod_dir / f"{month_key}.json.gz", oi_dir / f"{month_key}.json.gz"
         source_ranges = _source_symbol_ranges(symbol, month_start, month_end)
-        # Completed months are immutable. Refresh only the active month so a
-        # rerun extends the archive with recently completed sessions.
-        refresh = month_end == end_date
         if eod_path.is_file() and oi_path.is_file():
-            # META's June 2022 archive crosses the FB -> META ticker change.
-            # Re-fetch older META months that lack provenance so pre-change
-            # quotes are not silently omitted or requested under the wrong ticker.
+            # Repair archives created before historical ticker aliases were
+            # configured so quotes are not silently fetched under the wrong root.
             needs_alias_repair = (
-                symbol == "META"
-                and month_start < META_TICKER_CHANGE_DATE
+                any(source_symbol != symbol for source_symbol, _, _ in source_ranges)
                 and (
                     not _archive_matches_source_ranges(eod_path, source_ranges)
                     or not _archive_matches_source_ranges(oi_path, source_ranges)
                 )
             )
             archive_covers_month = (
-                _archive_covers_through(eod_path, month_end)
-                and _archive_covers_through(oi_path, month_end)
+                _archive_covers_period(eod_path, month_start, month_end)
+                and _archive_covers_period(oi_path, month_start, month_end)
             )
-            if not needs_alias_repair and (not refresh or archive_covers_month):
+            if not needs_alias_repair and archive_covers_month:
                 continue
         eod, oi = [], []
+        no_data_ranges = []
         for source_symbol, source_start, source_end in source_ranges:
             request = {
                 "symbol": source_symbol,
@@ -528,8 +542,26 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
             with ThreadPoolExecutor(max_workers=2) as pool:
                 eod_future = pool.submit(client.option_history_eod, **request)
                 oi_future = pool.submit(client.option_history_open_interest, **request)
-                eod.extend(_records(eod_future.result()))
-                oi.extend(_records(oi_future.result()))
+                for endpoint, future, rows in (
+                    ("eod", eod_future, eod),
+                    ("open_interest", oi_future, oi),
+                ):
+                    try:
+                        rows.extend(_records(future.result()))
+                    except Exception as error:
+                        if not _is_no_data_error(error):
+                            raise
+                        no_data_ranges.append({
+                            "endpoint": endpoint,
+                            "source_symbol": source_symbol,
+                            "start_date": source_start.isoformat(),
+                            "end_date": source_end.isoformat(),
+                        })
+                        print(
+                            f"ThetaData {symbol} {month_key} ({source_symbol} "
+                            f"{source_start}..{source_end}): {endpoint} returned no data; "
+                            "recording an empty archive for that endpoint"
+                        )
         for path, endpoint, rows in (
             (eod_path, "option_history_eod", eod),
             (oi_path, "option_history_open_interest", oi),
@@ -544,19 +576,22 @@ def _fetch_symbol(client, symbol: str, *, start_date: date, end_date: date) -> d
                     for ticker, start, end in source_ranges
                 ],
                 "retrieved_at": datetime.now(ET).isoformat(),
+                "no_data_ranges": no_data_ranges,
                 "rows": rows,
             })
         print(f"ThetaData {symbol} {month_key}: EOD rows={len(eod)}, OI rows={len(oi)}")
         # Publish a usable recent-history dataset as soon as a ticker has
         # accumulated enough months, then refresh it periodically while the
         # deeper archive continues. Dataset replacement is atomic.
-        if index >= 48 and (index in {48, 49} or index % 12 == 0):
+        if compile_after and index >= 48 and (index in {48, 49} or index % 12 == 0):
             partial = _compile_symbol(symbol, start_date=start_date, end_date=end_date)
             print(
                 f"ThetaData {symbol} partial compile: sessions={partial['dataset_sessions']}/"
                 f"{REQUIRED_RESEARCH_SESSIONS}, status={partial['status']}"
             )
 
+    if not compile_after:
+        return None
     manifest = _compile_symbol(symbol, start_date=start_date, end_date=end_date)
     print(
         f"ThetaData {symbol}: sessions={manifest['dataset_sessions']}/"
@@ -572,6 +607,31 @@ def _research_symbols() -> list[str]:
     return sorted(symbols, key=lambda symbol: (priority.index(symbol) if symbol in priority else len(priority), symbols.index(symbol)))
 
 
+def _recent_session_window(end_date: date, session_count: int) -> tuple[date, date]:
+    """Use the latest completed SPY sessions as the shared options priority window."""
+    if session_count < 1:
+        raise ValueError("recent session count must be positive")
+    lookback_start = end_date - timedelta(days=max(30, session_count * 4))
+    bars = SQLiteBarStore().bars(
+        symbols=["SPY"], feed="sip", timeframe="1Day",
+        start=lookback_start.isoformat(), end=end_date.isoformat(), adjustment="raw",
+    ).get("SPY", [])
+    sessions = sorted({
+        date.fromisoformat(str(row.get("t", ""))[:10])
+        for row in bars
+        if row.get("t") and date.fromisoformat(str(row["t"])[:10]) <= end_date
+    })
+    if not sessions:
+        raise RuntimeError(f"No SPY SIP daily bars available to plan the last {session_count} sessions")
+    if len(sessions) < session_count:
+        print(
+            f"ThetaData priority window: only {len(sessions)} SPY sessions are available "
+            f"through {sessions[-1]}; using all of them"
+        )
+        return sessions[0], sessions[-1]
+    return sessions[-session_count], sessions[-1]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill daily ThetaData option chains for Algo symbols")
     parser.add_argument(
@@ -580,12 +640,18 @@ def main() -> int:
     )
     parser.add_argument("--start-date", type=date.fromisoformat, default=FIRST_DATA_DATE)
     parser.add_argument(
+        "--recent-sessions", type=int, default=20,
+        help="SPY trading sessions to fetch for every symbol before deeper history; use 0 to disable",
+    )
+    parser.add_argument(
         "--end-date", type=date.fromisoformat,
         default=datetime.now(ET).date() - timedelta(days=1),
     )
     args = parser.parse_args()
     if args.end_date < args.start_date:
         parser.error("--end-date must be on or after --start-date")
+    if args.recent_sessions < 0:
+        parser.error("--recent-sessions must be zero or greater")
     symbols = [item.strip().upper() for item in args.underlying] if args.underlying else _research_symbols()
     if not symbols or any(not item or not item.replace(".", "").isalnum() for item in symbols):
         parser.error("underlying symbols must be non-empty alphanumeric ticker names")
@@ -598,7 +664,10 @@ def main() -> int:
             except BlockingIOError:
                 print("ThetaData backfill is already running; this invocation skipped.")
                 return 0
-            return _run_symbols(symbols, args.start_date, args.end_date)
+            return _run_symbols(
+                symbols, args.start_date, args.end_date,
+                recent_sessions=args.recent_sessions,
+            )
     except Exception as error:
         message = str(error)
         try:
@@ -610,7 +679,13 @@ def main() -> int:
         return 1
 
 
-def _run_symbols(symbols: list[str], start_date: date, end_date: date) -> int:
+def _run_symbols(
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    *,
+    recent_sessions: int = 20,
+) -> int:
     api_key = _read_api_key()
     client = _theta_client(api_key)
     manifests = []
@@ -624,6 +699,87 @@ def _run_symbols(symbols: list[str], start_date: date, end_date: date) -> int:
     ))
     if ordered_symbols != list(dict.fromkeys(symbols)):
         print(f"ThetaData resume order: {', '.join(ordered_symbols)}")
+    universe = load_history_universe()
+    notes = universe.get("history_notes", {})
+    expectations = []
+    exception_symbols = set()
+    for symbol in ordered_symbols:
+        symbol_start = _effective_start_date(symbol, start_date)
+        source_ranges = _source_symbol_ranges(symbol, symbol_start, end_date)
+        has_alias = any(source_symbol != symbol for source_symbol, _, _ in source_ranges)
+        note = notes.get(symbol) if isinstance(notes, dict) else None
+        if symbol_start > start_date or has_alias or note:
+            exception_symbols.add(symbol)
+            sources = " -> ".join(
+                f"{source_symbol} {source_start}..{source_end}"
+                for source_symbol, source_start, source_end in source_ranges
+            )
+            expectation = f"{symbol}: {sources}"
+            if note:
+                expectation += f" ({note})"
+            expectations.append(expectation)
+    if expectations:
+        default_count = len(ordered_symbols) - len(exception_symbols)
+        print(
+            f"ThetaData history plan: default {start_date} for {default_count} symbols; "
+            f"special history for {len(exception_symbols)} symbols: {'; '.join(expectations)}"
+        )
+
+    if recent_sessions:
+        priority_start, priority_end = _recent_session_window(end_date, recent_sessions)
+        print(
+            f"ThetaData recent-history priority: {recent_sessions} SPY sessions "
+            f"from {priority_start} through {priority_end}; collecting all symbols before older history"
+        )
+        priority_errors = []
+        for symbol in ordered_symbols:
+            symbol_start_date = _effective_start_date(symbol, start_date)
+            symbol_priority_start = max(symbol_start_date, priority_start)
+            if symbol_priority_start > priority_end:
+                print(
+                    f"ThetaData {symbol}: no public-history window by {priority_end}; "
+                    "skipping recent priority pass"
+                )
+                continue
+            try:
+                _fetch_symbol(
+                    client,
+                    symbol,
+                    start_date=symbol_priority_start,
+                    end_date=priority_end,
+                    compile_after=False,
+                )
+            except Exception as error:
+                message = str(error).replace(api_key, "[redacted]")
+                print(f"ThetaData recent pass {symbol} stopped: {type(error).__name__}: {message[:400]}")
+                priority_errors.append(symbol)
+        if priority_errors:
+            print(f"ThetaData recent pass incomplete; will retry: {', '.join(priority_errors)}")
+            return 1
+
+        compile_errors = []
+        for symbol in ordered_symbols:
+            symbol_start_date = _effective_start_date(symbol, start_date)
+            if symbol_start_date > priority_end:
+                continue
+            try:
+                manifest = _compile_symbol(
+                    symbol, start_date=symbol_start_date, end_date=priority_end,
+                )
+                print(
+                    f"ThetaData {symbol} recent dataset: sessions={manifest['dataset_sessions']}, "
+                    f"status={manifest['status']}"
+                )
+            except Exception as error:
+                message = str(error).replace(api_key, "[redacted]")
+                print(f"ThetaData recent compile {symbol} stopped: {type(error).__name__}: {message[:400]}")
+                compile_errors.append(symbol)
+        if compile_errors:
+            print(f"ThetaData recent compile incomplete; will retry: {', '.join(compile_errors)}")
+            return 1
+
+        print("ThetaData recent-history pass complete; beginning deeper archive backfill")
+
     for symbol in ordered_symbols:
         try:
             symbol_start_date = _effective_start_date(symbol, start_date)
