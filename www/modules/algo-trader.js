@@ -181,7 +181,7 @@ function strategyDisplayName(value, isOptions = false) {
     return displayStrategy.split('_').map(part => part ? part[0].toUpperCase() + part.slice(1) : '').join(' ');
 }
 
-function renderStrategyPerformance(performance, isOptions, settings = {}) {
+function renderStrategyPerformance(performance, isOptions, settings = {}, demoMode = false) {
     const scorecard = performance || {};
     const sourceStrategies = Array.isArray(scorecard.strategies) ? scorecard.strategies : [];
     const byName = new Map();
@@ -234,7 +234,9 @@ function renderStrategyPerformance(performance, isOptions, settings = {}) {
         if (b === null) return -1;
         return b - a;
     });
-    const fxNote = scorecard.status === 'loading'
+    const fxNote = demoMode
+        ? 'Simulated EUR amounts'
+        : scorecard.status === 'loading'
         ? 'Waiting for fill reconciliation'
         : scorecard.fx_rate
             ? `EUR converted at USD/EUR ${Number(scorecard.fx_rate).toFixed(4)}${scorecard.fx_date ? ` · ${scorecard.fx_date}` : ''}${scorecard.fx_source ? ` · ${scorecard.fx_source}` : ''}`
@@ -248,7 +250,7 @@ function renderStrategyPerformance(performance, isOptions, settings = {}) {
                 ? 'No confirmed fills with strategy attribution have been recorded yet.'
                 : 'No strategy P/L records are available yet.';
     return `<section class="card algo-panel algo-strategy-pnl-panel" aria-labelledby="algo-strategy-pnl-title">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">STRATEGY SCORECARD</span><h2 id="algo-strategy-pnl-title">Strategy P/L</h2><p>Latest confirmed activity and cumulative P/L by ${isOptions ? 'options' : 'equity'} strategy.</p></div><span class="algo-status-pill ${normalizedScorecard.status === 'ready' ? 'promising' : ''}">${escapeHtml(String(normalizedScorecard.status || 'unavailable').toUpperCase())}</span></div>
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">${demoMode ? 'DEMO STRATEGY RESULTS' : 'STRATEGY SCORECARD'}</span><h2 id="algo-strategy-pnl-title">Strategy P/L</h2><p>${demoMode ? 'Example results by strategy for preview only.' : `Latest confirmed activity and cumulative P/L by ${isOptions ? 'options' : 'equity'} strategy.`}</p></div><span class="algo-status-pill ${normalizedScorecard.status === 'ready' ? 'promising' : ''}">${escapeHtml(String(normalizedScorecard.status || 'unavailable').toUpperCase())}</span></div>
         <div class="algo-strategy-pnl-meta"><span>Amounts in EUR · ${escapeHtml(basisNote)}</span><span>${escapeHtml(fxNote)}</span></div>
         ${rows.length ? `<div class="algo-strategy-pnl-grid algo-strategy-pnl-header" role="row"><span>Strategy</span><span>Latest activity</span><span>Latest P/L</span><span>Cumulative P/L</span></div><div class="algo-strategy-pnl-rows">${rows.map(strategy => {
             const latest = strategy.latest_activity || {};
@@ -274,7 +276,7 @@ function renderStrategyPerformance(performance, isOptions, settings = {}) {
                 : strategyDisplayName(strategy.strategy);
             return `<div class="algo-strategy-pnl-grid algo-strategy-pnl-row" role="row"><div class="algo-strategy-pnl-name"><strong>${escapeHtml(displayName)}</strong>${badge}</div><div class="algo-strategy-pnl-activity"><strong>${escapeHtml(activityTitle)}</strong><small>${escapeHtml(activityDetail || activityFallback)}</small></div><div class="algo-strategy-pnl-value"><strong class="${classForReturn(strategy.latest_pnl_eur)}">${signedMoney(strategy.latest_pnl_eur, 'EUR')}</strong><small class="${classForReturn(strategy.latest_pnl_pct)}">${signedPercent(strategy.latest_pnl_pct)}</small></div><div class="algo-strategy-pnl-value"><strong class="${pnlClass}">${signedMoney(strategy.cumulative_pnl_eur, 'EUR')}</strong><small class="${classForReturn(strategy.cumulative_pnl_pct)}">${signedPercent(strategy.cumulative_pnl_pct)}</small></div></div>`;
         }).join('')}</div>` : `<div class="algo-empty algo-strategy-pnl-empty">${escapeHtml(emptyMessage)}</div>`}
-        <p class="algo-strategy-pnl-note">${escapeHtml(normalizedScorecard.message || 'Only recorded, strategy-attributed activity is included.')}${normalizedScorecard.source ? ` · Source: ${escapeHtml(normalizedScorecard.source)}` : ''} · Gross P/L before fees.</p>
+        <p class="algo-strategy-pnl-note">${escapeHtml(normalizedScorecard.message || (demoMode ? 'Simulated example figures.' : 'Only recorded, strategy-attributed activity is included.'))}${normalizedScorecard.source ? ` · Source: ${escapeHtml(normalizedScorecard.source)}` : ''}${demoMode ? '' : ' · Gross P/L before fees.'}</p>
     </section>`;
 }
 
@@ -461,6 +463,7 @@ export function createAlgoTrader({ request, charts }) {
         }
 
         const account = snapshot.account || {};
+        const demoMode = snapshot.demo_mode === true;
         const performance = snapshot.performance || {};
         const metrics = performance.metrics || {};
         const history = performance.history || [];
@@ -476,7 +479,7 @@ export function createAlgoTrader({ request, charts }) {
         const marketStatus = String(account.market_status || account.market_state || '').toUpperCase();
         const regimeLabel = String(account.regime || 'unknown').replaceAll('_', ' ').toUpperCase();
         const scanStatus = String(account.last_scan_status || 'unknown').trim() || 'unknown';
-        const coordinatorStatusLabel = ['ok', 'complete', 'completed', 'success', 'succeeded'].includes(scanStatus.toLowerCase())
+        const coordinatorStatusLabel = demoMode ? 'DEMO' : ['ok', 'complete', 'completed', 'success', 'succeeded'].includes(scanStatus.toLowerCase())
             ? 'OK' : scanStatus.replaceAll('_', ' ').toUpperCase();
         const regimeEngineLabel = String(account.regime_engine || 'unknown').replaceAll('_', ' ').toUpperCase();
         const closedMarketQuotePause = marketStatus === 'CLOSED'
@@ -505,9 +508,10 @@ export function createAlgoTrader({ request, charts }) {
         host.innerHTML = `<main class="algo-page">
             <header class="algo-page-header">
                 <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountSwitch()}</div>
-                <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ALPACA ${isOptions ? 'OPTIONS ' : ''}PAPER</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
+                <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${demoMode ? 'SIMULATED DEMO' : `ALPACA ${isOptions ? 'OPTIONS ' : ''}PAPER`}</span><span class="${entryClass}"><i></i> ${entryStatus}</span></div>
             </header>
 
+            ${demoMode ? '<section class="algo-demo-notice"><span class="algo-notice-mark">i</span><p><strong>Example data only.</strong> Prices, account values, signals and activity below are simulated. No strategy is running and no orders are sent.</p></section>' : ''}
             ${account.entries_paused && pauseReasons.length ? `<section class="algo-paused-notice ${marketClosedPause ? 'market-closed' : ''}"><strong>${pauseNoticeTitle}</strong><span>${escapeHtml(pauseNoticeDetail)}</span></section>` : ''}
 
             <section class="algo-kpi-grid" aria-label="Algo account KPIs">
@@ -523,30 +527,30 @@ export function createAlgoTrader({ request, charts }) {
                     <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Recorded paper-account equity · USD</p></div><div class="algo-chart-summary"><strong data-chart-value data-default-chart-value="${money(metrics.equity)}">${money(metrics.equity)}</strong><span class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)} since first snapshot</span></div></div>
                     <div class="algo-range-controls" role="group" aria-label="Chart time range">${RANGES.map(value => `<button type="button" class="algo-range-btn ${range === value ? 'active' : ''}" data-range="${value}" aria-pressed="${range === value}">${value}</button>`).join('')}</div>
                     <div class="algo-chart-wrap">${renderChart(history, range, charts)}</div>
-                    <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Source: ${isOptions ? 'Options paper risk journal' : 'Algo intraday and close snapshots'}</span></div>
+                    <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Source: ${demoMode ? 'simulated sample series' : isOptions ? 'Options paper risk journal' : 'Algo intraday and close snapshots'}</span></div>
                 </article>
 
                 <article class="card algo-panel algo-strategy-panel">
                     <div class="algo-section-heading"><div><span class="algo-eyebrow">COORDINATOR</span><h2>${escapeHtml(regimeLabel)}</h2></div><span class="algo-state-pill"><i></i> ${escapeHtml(coordinatorStatusLabel)}</span></div>
                     <div class="algo-strategy-score"><div class="algo-score-ring"><span>${account.active_strategies?.length ?? 0}</span><small>/strats</small></div><div><strong>${escapeHtml(strategyListLabel)}</strong><span>${isOptions ? escapeHtml(strategyScope) : strategyScope}</span></div></div>
                     <div class="algo-active-strategy-list">${(account.active_strategies || []).map(strategy => `<span>${escapeHtml(strategy)}</span>`).join('') || `<span class="algo-muted-text">${escapeHtml(noStrategiesMessage)}</span>`}</div>
-                    <div class="algo-strategy-list"><div><span>Last scan</span><strong>${escapeHtml(dateTime(account.last_scan_at))}</strong></div><div><span>Account mode</span><strong>Alpaca ${isOptions ? 'options ' : ''}paper</strong></div><div><span>Sharpe ratio</span><strong>${metrics.sharpe_ratio === null ? '—' : metrics.sharpe_ratio.toFixed(2)} <small>snapshot based</small></strong></div></div>
-                    <button type="button" class="algo-text-link" data-action="open-config">Manage ${isOptions ? 'options' : 'runtime'} settings <span>↗</span></button>
+                    <div class="algo-strategy-list"><div><span>Last scan</span><strong>${escapeHtml(dateTime(account.last_scan_at))}</strong></div><div><span>Account mode</span><strong>${demoMode ? 'Simulated demo' : `Alpaca ${isOptions ? 'options ' : ''}paper`}</strong></div><div><span>Sharpe ratio</span><strong>${metrics.sharpe_ratio === null ? '—' : metrics.sharpe_ratio.toFixed(2)} <small>${demoMode ? 'sample series' : 'snapshot based'}</small></strong></div></div>
+                    ${demoMode ? '' : `<button type="button" class="algo-text-link" data-action="open-config">Manage ${isOptions ? 'options' : 'runtime'} settings <span>↗</span></button>`}
                 </article>
             </section>
 
-            ${renderStrategyPerformance(snapshot.strategy_performance, isOptions, settings)}
+            ${renderStrategyPerformance(snapshot.strategy_performance, isOptions, settings, demoMode)}
 
-            <section class="card algo-panel algo-config-panel" id="algo-config">
+            ${demoMode ? '<section class="algo-demo-notice"><span class="algo-notice-mark">i</span><p><strong>Setup required.</strong> Connect Trade Republic and the Algo Trader service to load real account history and edit strategy settings.</p></section>' : `<section class="card algo-panel algo-config-panel" id="algo-config">
                 <div class="algo-section-heading algo-config-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS CONFIGURATION' : 'RUNTIME CONFIGURATION'}</span><h2>${isOptions ? 'Options strategy settings' : 'Algo strategy settings'}</h2><p>${isOptions ? 'Independent settings for the options paper account and research engine.' : 'These settings are read by the Algo coordinator and autoresearch runtime.'}</p></div><span class="algo-local-save">${isOptions ? 'OPTIONS CONFIG' : 'CONNECTED CONFIG'}</span></div>
                 ${renderSettings(settings, accountMode, snapshot.settings_readonly_fields || [])}
-            </section>
+            </section>`}
 
             <section class="algo-secondary-grid algo-secondary-grid-equity">
                 <article class="card algo-panel algo-activity-panel">
-                    <div class="algo-section-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS ENGINE &amp; JOURNAL' : 'COORDINATOR &amp; JOURNAL'}</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> REFRESHING</span></div>
+                    <div class="algo-section-heading"><div><span class="algo-eyebrow">${isOptions ? 'OPTIONS ENGINE &amp; JOURNAL' : 'COORDINATOR &amp; JOURNAL'}</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> ${demoMode ? 'SIMULATED' : 'REFRESHING'}</span></div>
                     ${activities.length ? `<ol class="algo-activity-list">${visibleActivities.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-content"><div class="algo-activity-title"><strong>${escapeHtml(item.title)}</strong><time>${escapeHtml(timeOnly(item.at))}</time></div><p>${escapeHtml(item.detail || '')}</p><span class="algo-activity-tag ${statusClass(item.status)}">${escapeHtml(item.status || item.kind)}</span></div></li>`).join('')}</ol><div class="journal-pagination algo-activity-pagination"><span>Showing ${activityStart + 1}–${Math.min(activityStart + visibleActivities.length, activities.length)} of ${activities.length} entries · ${ACTIVITY_PAGE_SIZE} per page</span>${activityPageCount > 1 ? `<div class="journal-pagination-actions"><button type="button" class="btn btn-secondary" data-activity-page="${activityPage - 1}" ${activityPage === 0 ? 'disabled' : ''} aria-label="Previous activity page">Previous</button><span>Page ${activityPage + 1} of ${activityPageCount}</span><button type="button" class="btn btn-secondary" data-activity-page="${activityPage + 1}" ${activityPage >= activityPageCount - 1 ? 'disabled' : ''} aria-label="Next activity page">Next</button></div>` : ''}</div>` : '<div class="algo-empty">No recent scans, signals or order journal entries are available.</div>'}
-                    <div class="algo-view-more"><span>Entries are read from the Algo state and trade journal</span><span aria-hidden="true">↻</span></div>
+                    <div class="algo-view-more"><span>${demoMode ? 'All entries shown here are simulated' : 'Entries are read from the Algo state and trade journal'}</span><span aria-hidden="true">↻</span></div>
                 </article>
             </section>
 
@@ -571,17 +575,18 @@ export function createAlgoTrader({ request, charts }) {
         }
 
         const research = snapshot.research || { history: [] };
+        const demoMode = snapshot.demo_mode === true;
         const runs = visibleRuns(researchMode);
         if (!runs.some(run => run.date === selectedRunDates[researchMode])) selectedRunDates[researchMode] = runs[0]?.date || null;
         const selectedRun = runs.find(run => run.date === selectedRunDates[researchMode]) || null;
         const filter = researchFilters[researchMode];
         const title = isOptions ? 'Options research history' : 'Equity autoresearch history';
-        const description = isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from /opt/algo-trader/data/research.';
+        const description = demoMode ? 'Example strategy research reports for preview only.' : isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from /opt/algo-trader/data/research.';
 
         researchHost.innerHTML = `<main class="algo-page algo-research-page">
             <header class="algo-page-header">
                 <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> RESEARCH ARCHIVE</div><h1>Research</h1>${renderResearchAccountSwitch()}</div>
-                <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${modeLabel.toUpperCase()} RESEARCH</span></div>
+                <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${demoMode ? 'DEMO RESEARCH' : `${modeLabel.toUpperCase()} RESEARCH`}</span></div>
             </header>
             <section class="card algo-panel algo-history-panel" id="algo-history">
                 <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${title}</h2><p>${description}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${filter === key ? 'active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div></div>

@@ -1,12 +1,12 @@
 import { apiRequest } from './modules/api.js';
 import { createState, sortedStocks, indexStocks } from './modules/state.js';
-import { createCharts } from './modules/charts.js';
-import { createDashboard } from './modules/dashboard.js?title-cleanup=1';
+import { createCharts } from './modules/charts.js?demo-mode=1';
+import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1';
 import { createConfig } from './modules/config.js?title-cleanup=1';
 import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1';
-import { createAlgoTrader } from './modules/algo-trader.js?v=1.4.3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1';
+import { createAlgoTrader } from './modules/algo-trader.js?v=2.0.0&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1';
 import { createSettings } from './modules/settings.js';
-import { createAlgoUniverse } from './modules/algo-universe.js?cards=1';
+import { createAlgoUniverse } from './modules/algo-universe.js?cards=1&demo-mode=1';
 
 const state = createState();
 let pageLoadId = 0;
@@ -22,6 +22,15 @@ function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/',
 function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','algo-universe','config','journal','algo-trader','algo-research','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
 function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
 async function af(path, options={}, onError) { return apiRequest(path, options, (message, details)=>onError ? onError(message, details) : showA(message,'error')); }
+apiRequest('/demo-status').then(status => {
+    if (!status?.demo_mode) return;
+    const banner = document.getElementById('demo-mode-banner');
+    const message = document.getElementById('demo-mode-message');
+    if (!banner || !message) return;
+    const setup = Array.isArray(status.setup) ? status.setup : [];
+    message.textContent = `Sample prices, positions and activity are simulated. ${setup.length ? `Complete setup to connect live data: ${setup.join('; ')}.` : 'Complete Trade Republic and Algo Trader setup to connect live data.'}`;
+    banner.hidden = false;
+});
 const charts = createCharts({ request:af, historyCache:state.historyCache });
 function renderCurrentPage() { const page=pageFromHash(); showPage(page); if(page==='dashboard')dashboard.renderDashboard(); else if(page==='journal')journal.renderJournal(); else if(page==='algo-trader')algoTrader.render(); else if(page==='algo-research')algoTrader.renderResearch(); else if(page==='algo-universe')algoUniverse.render(); else if(page==='settings')settings.render(); else config.renderConfig(); }
 const context = { getStocks:()=>state.stocks, getStockMap:()=>state.stockMap, getTrades:()=>state.trades, getTradePagination:()=>state.tradePagination, getCapitalEvents:()=>state.capitalEvents, getAnalytics:()=>state.analytics, request:af, replaceStocks, upsertStock, removeStockFromState, beginStockMutation, isCurrentStockMutation, getStockRevision:()=>stockRevision, incrementStockRevision:()=>++stockRevision, showA, renderCurrentPage, pageFromHash, nav, charts, actions: {}, setJournalPage:page=>{state.journalPage=page;}, reloadJournal:(page=state.journalPage)=>loadPage('journal', page) };

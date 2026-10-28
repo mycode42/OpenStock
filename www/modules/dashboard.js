@@ -22,6 +22,7 @@ function formatPriceChange(currentPrice, buyInPrice) {
 }
 
 function liveQuoteSourceLabel(source) {
+    if (source === 'demo') return 'Simulated market data';
     if (source === 'trade_republic_sdk_order_price') return 'Handelsrepublik SDK';
     if (source === 'trade_republic_order_price') return 'Trade Republic UAPI sidecar';
     return 'Trade Republic history';
@@ -63,7 +64,7 @@ export function createDashboard(context) {
             const ask = card.querySelector('[data-live-ask]');
             if (ask) ask.textContent = quoteMoney(quote.ask_eur);
             const status = card.querySelector('[data-live-status]');
-            if (status) status.textContent = `${liveQuoteSourceLabel(quote.source)} · live`;
+            if (status) status.textContent = `${liveQuoteSourceLabel(quote.source)} · ${quote.source === 'demo' ? 'demo' : 'live'}`;
         }
     }
     async function pollLivePrices() {
@@ -108,6 +109,7 @@ function renderDashboard() {
     // Configure, but are intentionally excluded from every dashboard metric
     // and card.
     const monitoredStocks = monitoredStockList(stockList());
+    const demoMode = monitoredStocks.some(stock => stock.market_data?.source === 'demo');
     let ownedCount = 0;
     let enabledCount = 0;
     let triggerCount = 0;
@@ -141,10 +143,10 @@ function renderDashboard() {
             <div class="quote-sides" aria-label="Live bid and ask prices"><span>Bid <strong data-live-bid>${quoteMoney(bid)}</strong></span><span>Ask <strong data-live-ask>${quoteMoney(ask)}</strong></span></div>
             ${heldValue}
             <div class="level-summary"><strong>Active alerts</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertText(level))}</span>`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(alertText(level))} · ${level.retired ? 'retired' : 'triggered'}</span>`).join('') : 'None'}</div></div>
-            <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div><button type="button" class="btn btn-sm btn-secondary dashboard-alert-link" data-stock-action="configureAlerts" data-stock-id="${escapeHtml(stock.id)}">Manage alerts</button><div class="history-popover" role="status" aria-live="polite"></div>
+            <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div>${stock.market_data?.source === 'demo' ? '<div class="position-summary">Sample alerts · read only in demo mode</div>' : `<button type="button" class="btn btn-sm btn-secondary dashboard-alert-link" data-stock-action="configureAlerts" data-stock-id="${escapeHtml(stock.id)}">Manage alerts</button>`}<div class="history-popover" role="status" aria-live="polite"></div>
         </div>`;
     }).join('');
-    container.innerHTML = `<header><h1>OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} held</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} triggered/retired level(s)</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Held</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggered levels</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Open a stock chart with mouse, keyboard focus, or a tap.</div>${monitoredStocks.length ? `<div class="stock-grid">${cards}</div>` : '<div class="card empty-state">No stocks are enabled. Enable a stock in Configure to monitor it here.</div>'}`;
+    container.innerHTML = `<header><h1>OpenStock</h1><p class="subtitle">Monitoring ${enabledCount} stocks · ${ownedCount} held${demoMode ? ' · Simulated data' : ''}</p></header><div id="ac"></div>${triggerCount ? `<div class="alert-box success">⚡ ${triggerCount} triggered/retired level(s)</div>` : ''}<div class="summary"><div class="summary-card"><div class="summary-label">Monitored</div><div class="summary-value">${enabledCount}/25</div></div><div class="summary-card"><div class="summary-label">Held</div><div class="summary-value">${ownedCount}</div></div><div class="summary-card"><div class="summary-label">Triggered levels</div><div class="summary-value">${triggerCount}</div></div></div><div class="last-update">Last: ${formatLocalDateTime(lastUpdate)} · Open a stock chart with mouse, keyboard focus, or a tap.</div>${monitoredStocks.length ? `<div class="stock-grid">${cards}</div>` : '<div class="card empty-state">No stocks are enabled. Enable a stock in Configure to monitor it here.</div>'}`;
     container.querySelectorAll('[data-stock-action]').forEach(button => button.addEventListener('click', () => actions[button.dataset.stockAction]?.(button.dataset.stockId || button.dataset.stockSymbol)));
     attachChartHovers(container);
     startLivePolling();

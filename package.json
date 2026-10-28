@@ -1,6 +1,6 @@
 {
   "name": "openstock",
-  "version": "1.4.3",
+  "version": "2.0.0",
   "description": "SDK-first Trade Republic stock monitoring and trading journal with UAPI quote backup",
   "main": "server.js",
   "scripts": {

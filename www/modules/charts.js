@@ -240,7 +240,7 @@ async function loadQuoteCardHistory(card, range = '1d', { force = false, showLoa
     const key = `algo-universe:${symbol}:${range}`;
     panel.dataset.requestedRange = range;
     panel.dataset.requestedSymbol = symbol;
-    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD</div>${chartRangeControls(range)}</div><div class="history-loading">loading Alpaca price history</div>`;
+    if (showLoading) panel.innerHTML = `<div class="history-header"><div class="history-title">${chartRangeLabel(range)} · USD</div>${chartRangeControls(range)}</div><div class="history-loading">loading price history</div>`;
     let history = force ? null : historyCache.get(key);
     if (!history) {
         let pending = historyRequests.get(key);
@@ -257,10 +257,10 @@ async function loadQuoteCardHistory(card, range = '1d', { force = false, showLoa
     }
     if (panel.dataset.requestedRange !== range || panel.dataset.requestedSymbol !== symbol) return;
     if (!history || !Array.isArray(history.points)) {
-        panel.innerHTML = '<div class="history-empty">Alpaca history is unavailable.</div>';
+        panel.innerHTML = '<div class="history-empty">Price history is unavailable.</div>';
         return;
     }
-    renderHistoryPanel(panel, history, range, { currency: 'USD', priceField: 'price', sampleLabel: 'Alpaca bars' });
+    renderHistoryPanel(panel, history, range, { currency: 'USD', priceField: 'price', sampleLabel: history.demo_mode ? 'demo samples' : 'Alpaca bars' });
 }
 
 async function refreshOpenHistoryPanels(container = document, { includePreviouslyOpened = false } = {}) {

@@ -1,14 +1,16 @@
 const path = require('node:path');
+const fs = require('node:fs');
 require('dotenv').config({ path: process.env.OPENSTOCK_CONFIG_FILE || path.join(__dirname, '.env'), quiet: true });
 const express = require('express');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
 const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('./lib/analytics');
 const { HistoryBackfillQueue } = require('./lib/history-backfill');
-const { TradeRepublicClient, BrokerError } = require('./lib/brokers/trade-republic');
+const { TradeRepublicClient, BrokerError, configuredKey } = require('./lib/brokers/trade-republic');
 const { resolveVerifiedInstrument, resolveCryptoCandidates, resolveVerifiedCryptoInstrument } = require('./lib/instrument-resolution');
 const { QuoteService } = require('./lib/quote-service');
 const { HandelsrepublikQuoteClient } = require('./lib/brokers/handelsrepublik');
+const demoData = require('./server/demo-data');
 const APP_VERSION = require('./package.json').version;
 
 // Convert SQLite or already-ISO UTC timestamps to one valid ISO 8601 value.
@@ -237,7 +239,22 @@ function brokerError(res, error) {
     return res.status(error instanceof BrokerError ? error.status : 502).json({ error: error.message || 'Broker unavailable', code: error.code || 'BROKER_ERROR' });
 }
 
-function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, sdkClient = null, now = () => new Date() } = {}) {
+function detectDemoSetup({ algoTraderRoot = process.env.ALGO_TRADER_ROOT || '/opt/algo-trader', env = process.env, sdkClient = null } = {}) {
+    const tradeRepublicKey = configuredKey(env, env.OPENSTOCK_CONFIG_FILE || (env === process.env ? '/opt/openstock/.env' : ''));
+    const sessionFile = String(env.TRADE_REPUBLIC_SDK_SESSION_FILE || '').trim();
+    const modulePath = env.TRADE_REPUBLIC_SDK_MODULE_PATH || '/opt/handelsrepublik/dist/index.js';
+    const sdkEnabled = String(env.TRADE_REPUBLIC_SDK_ENABLED ?? 'true').toLowerCase() === 'true' && sdkClient?.isEnabled?.() !== false;
+    const sdkConfigured = sdkEnabled && Boolean(sessionFile) && fs.existsSync(modulePath)
+        && (fs.existsSync(sessionFile) || Boolean(env.TRADE_REPUBLIC_SDK_PHONE_NUMBER && env.TRADE_REPUBLIC_SDK_PIN));
+    const tradeRepublicConfigured = Boolean(String(tradeRepublicKey || '').trim() || sdkConfigured);
+    const algoTraderConfigured = fs.existsSync(path.join(algoTraderRoot, 'data', 'algo_state.sqlite3'));
+    const setup = [];
+    if (!tradeRepublicConfigured) setup.push('Add Trade Republic API key or SDK session details to .env');
+    if (!algoTraderConfigured) setup.push(`Install/start Algo Trader and provide its data at ${algoTraderRoot}`);
+    return { demo_mode: setup.length > 0, setup };
+}
+
+function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt/openstock/database/openstock.db', fetchImpl = globalThis.fetch, backfill = null, sdkClient = null, now = () => new Date(), demoMode = null, algoTraderRoot = process.env.ALGO_TRADER_ROOT || '/opt/algo-trader' } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const historyBackfill = backfill || new HistoryBackfillQueue({
         db,
@@ -257,6 +274,12 @@ function createApp({ db: suppliedDb, dbPath = process.env.DATABASE_PATH || '/opt
         timeoutMs: Number(process.env.TRADE_REPUBLIC_TIMEOUT_MS || 30000)
     });
     app.locals.sdkClient = sdkClient || new HandelsrepublikQuoteClient();
+    const detectedDemoSetup = detectDemoSetup({ algoTraderRoot, sdkClient: app.locals.sdkClient });
+    app.locals.demoMode = demoMode === null ? (process.env.NODE_ENV === 'test' ? false : detectedDemoSetup.demo_mode) : Boolean(demoMode);
+    app.locals.demoStatus = demoMode === null
+        ? { ...detectedDemoSetup, demo_mode: app.locals.demoMode, setup: app.locals.demoMode ? detectedDemoSetup.setup : [] }
+        : { demo_mode: app.locals.demoMode, setup: demoMode ? (detectedDemoSetup.setup.length ? detectedDemoSetup.setup : ['Demo mode was enabled manually']) : [] };
+    app.locals.demoData = demoData;
     historyBackfill.brokerClient = app.locals.brokerClient;
     historyBackfill.sdkClient = app.locals.sdkClient;
     const serializeConfiguredStock = stock => serializeBrokerStock(stock, db);
@@ -285,7 +308,7 @@ require('./server/routes/journal')({ app, serializeTrade, normaliseTrade, number
 
 require('./server/routes/dashboard')({ app, dashboardData, captureEquitySnapshot, serializeConfiguredStock, quoteServiceFor, now });
 
-require('./server/routes/algo-trader')({ app });
+require('./server/routes/algo-trader')({ app, root: algoTraderRoot, now });
 
 require('./server/routes/trade-republic')({ app, resolveVerifiedInstrument, serializeConfiguredStock, brokerError, serializeTrade });
 
@@ -300,11 +323,14 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'www', 'index.html'));
 });
 
-// Seed charts in the background. Queue failures are isolated from API startup.
-try {
-    historyBackfill.enqueueMissing();
-} catch (error) {
-    console.error('Unable to queue startup history backfill:', error.message);
+// Seed real charts only after broker setup is present. The demo feed is synthetic
+// and must not trigger writes to the user's stock history.
+if (!app.locals.demoMode) {
+    try {
+        historyBackfill.enqueueMissing();
+    } catch (error) {
+        console.error('Unable to queue startup history backfill:', error.message);
+    }
 }
     return app;
 }
@@ -320,4 +346,4 @@ if (require.main === module) {
     process.on('SIGINT', shutdown);
 }
 
-module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart, berlinTradingDayEnd, createLiveQuoteFeed };
+module.exports = { createApp, serializeStock, serializeTrade, berlinTradingDayStart, berlinTradingDayEnd, createLiveQuoteFeed, detectDemoSetup };

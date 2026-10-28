@@ -13,7 +13,7 @@ function label(value) {
 }
 
 function quoteStatus(snapshot) {
-    if (snapshot.quote_status === 'ok') return `${snapshot.quote_feed || 'Alpaca'} · quotes received`;
+    if (snapshot.quote_status === 'ok') return snapshot.demo_mode ? 'Simulated sample quotes' : `${snapshot.quote_feed || 'Alpaca'} · quotes received`;
     if (snapshot.quote_status === 'partial') return 'Some quotes unavailable';
     if (snapshot.quote_status === 'stale') return 'Alpaca unavailable · showing last quotes';
     if (snapshot.quote_status === 'empty') return 'No selected symbols to quote';
@@ -44,7 +44,7 @@ export function createAlgoUniverse({ request, charts }) {
             <div class="stock-name algo-universe-sector">${escapeHtml(label(item.sector))}</div>
             <div class="stock-price usd algo-universe-midpoint" data-universe-midpoint>${price(quote.midpoint)}</div>
             <div class="quote-sides" aria-label="Alpaca bid and ask"><span>Bid <strong data-universe-bid>${price(quote.bid)}</strong></span><span>Ask <strong data-universe-ask>${price(quote.ask)}</strong></div>
-            <div class="algo-universe-card-footer"><span>Alpaca SIP</span><time data-universe-quote-time>${escapeHtml(timestamp)}</time></div>
+            <div class="algo-universe-card-footer"><span>${snapshot?.demo_mode ? 'Simulated quote' : 'Alpaca SIP'}</span><time data-universe-quote-time>${escapeHtml(timestamp)}</time></div>
             <div class="history-popover" role="status" aria-live="polite"></div>
         </article>`;
     }
@@ -82,12 +82,13 @@ export function createAlgoUniverse({ request, charts }) {
         }
         const symbols = Array.isArray(snapshot.symbols) ? snapshot.symbols : [];
         const selectionDate = snapshot.selector_as_of || snapshot.selection_date;
+        const demoMode = snapshot.demo_mode === true;
         const emptyMessage = snapshot.selection_status === 'error'
             ? 'The selector could not load a current eligible universe. Check the Algo Trader status page.'
             : 'The current algo-trader universe is empty.';
         host.innerHTML = `<main class="algo-universe-page">
             <header class="algo-universe-header">
-                <div><span class="algo-universe-eyebrow">ALGO TRADER · LIVE EQUITY SELECTION</span><h1>Current universe</h1><p class="subtitle">Hover or focus a card to explore Alpaca price history. On touch screens, tap a card to open its chart.</p></div>
+                <div><span class="algo-universe-eyebrow">${demoMode ? 'DEMO · SAMPLE EQUITY SELECTION' : 'ALGO TRADER · LIVE EQUITY SELECTION'}</span><h1>Current universe</h1><p class="subtitle">${demoMode ? 'Sample symbols and simulated quotes. Hover or focus a card to explore the example price history.' : 'Hover or focus a card to explore Alpaca price history. On touch screens, tap a card to open its chart.'}</p></div>
                 <div class="algo-universe-header-actions"><span id="algo-universe-quote-status" class="algo-universe-status ${snapshot.quote_status === 'ok' ? 'ready' : ''}"><i aria-hidden="true"></i>${escapeHtml(quoteStatus(snapshot))}</span><button type="button" class="btn btn-sm btn-secondary" data-universe-refresh>Refresh</button></div>
             </header>
             <section class="algo-universe-summary" aria-label="Universe summary">
@@ -100,7 +101,7 @@ export function createAlgoUniverse({ request, charts }) {
             <section class="algo-universe-card-section" aria-label="Selected algo-trader symbols">
                 <div class="algo-universe-card-toolbar"><div><h2>Eligible symbols</h2><p class="algo-universe-result-count">${symbols.length} of ${symbols.length} symbols</p></div><label class="algo-universe-search"><span class="sr-only">Search the universe</span><input id="algo-universe-search" type="search" value="${escapeHtml(filter)}" placeholder="Search symbol, category, sector" autocomplete="off"></label></div>
                 <div class="algo-universe-stock-grid">${symbols.length ? visibleSymbols().map(renderCard).join('') : `<div class="card algo-universe-empty">${escapeHtml(emptyMessage)}</div>`}</div>
-                <footer class="algo-universe-footer"><span>Quote refresh <time id="algo-universe-quote-updated">${snapshot.quotes_observed_at ? escapeHtml(formatLocalDateTime(snapshot.quotes_observed_at)) : 'unavailable'}</time></span><span>Quote values are in USD · history uses split-adjusted Alpaca bars</span></footer>
+                <footer class="algo-universe-footer"><span>${demoMode ? 'Sample data updated' : 'Quote refresh'} <time id="algo-universe-quote-updated">${snapshot.quotes_observed_at ? escapeHtml(formatLocalDateTime(snapshot.quotes_observed_at)) : 'unavailable'}</time></span><span>${demoMode ? 'Simulated USD quote values and history' : 'Quote values are in USD · history uses split-adjusted Alpaca bars'}</span></footer>
             </section>
         </main>`;
         charts.attachQuoteChartHovers(host);

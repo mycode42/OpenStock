@@ -39,7 +39,7 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     assert.match(source, /smooth: true/);
     assert.match(source, /\.sort\(\(left, right\) => parseOpenStockDate\(left\._chartTime\)\.getTime\(\) - parseOpenStockDate\(right\._chartTime\)\.getTime\(\)\)/);
     assert.doesNotMatch(source, /history-gap-line|maxGapMs|coordinateSegments|gapSegments/);
-    assert.match(source, /renderHistoryPanel\(panel, history, range, \{ currency: 'USD', priceField: 'price', sampleLabel: 'Alpaca bars' \}\)/);
+    assert.match(source, /renderHistoryPanel\(panel, history, range, \{ currency: 'USD', priceField: 'price', sampleLabel: history\.demo_mode \? 'demo samples' : 'Alpaca bars' \}\)/);
     assert.doesNotMatch(source, /point\.price_usd/);
 });
 

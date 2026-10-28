@@ -1798,12 +1798,16 @@ async function buildOptionsPayload(root) {
     };
 }
 
-module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALGO_TRADER_ROOT || '/opt/algo-trader' }) {
+module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALGO_TRADER_ROOT || '/opt/algo-trader', now = () => new Date() }) {
     app.get('/api/algo-trader/universe/:symbol/history', async (req, res) => {
         const symbol = String(req.params?.symbol || '').trim().toUpperCase();
         const range = String(req.query?.range || '1d');
         if (!/^[A-Z0-9.-]{1,16}$/.test(symbol)) return res.status(400).json({ error: 'Invalid universe symbol' });
         if (!Object.hasOwn(UNIVERSE_HISTORY_RANGES, range)) return res.status(400).json({ error: 'Unsupported history range' });
+        if (app.locals?.demoMode) {
+            const history = app.locals.demoData.universeHistory(symbol, range, now());
+            return history ? res.json(history) : res.status(404).json({ error: 'Symbol is not in the demo universe' });
+        }
         try {
             const state = await readCoordinatorState(root);
             const universe = safeObject(safeObject(state.strategy_portfolio).universe);
@@ -1818,6 +1822,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALG
     });
 
     app.get('/api/algo-trader/universe', async (_req, res) => {
+        if (app.locals?.demoMode) return res.json(app.locals.demoData.universePayload(now()));
         try {
             res.set('Cache-Control', 'no-store');
             res.json(await buildUniversePayload(root));
@@ -1830,6 +1835,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALG
     app.get('/api/algo-trader', async (req, res) => {
         const account = req.query?.account || 'equity';
         if (!['equity', 'options'].includes(account)) return res.status(400).json({ error: 'Unsupported Algo Trader account' });
+        if (app.locals?.demoMode) return res.json(app.locals.demoData.algoPayload(account, now()));
         try { res.json(account === 'options' ? await buildOptionsPayload(root) : await buildPayload(root)); }
         catch (error) {
             console.error(`Algo Trader dashboard unavailable: ${error.message}`);
@@ -1838,6 +1844,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = process.env.ALG
     });
 
     app.put('/api/algo-trader/config', async (req, res) => {
+        if (app.locals?.demoMode) return res.status(409).json({ error: 'Algo Trader settings are read-only in demo mode. Complete setup to edit live settings.' });
         const account = req.query?.account || req.body?.account || 'equity';
         if (!['equity', 'options'].includes(account)) return res.status(400).json({ error: 'Unsupported Algo Trader account' });
         try {
