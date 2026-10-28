@@ -4,11 +4,6 @@ node_modules/
 /data/auth.json
 /data/*.log
 /data/*.pid
-/AGENTS.md
-/IDENTITY.md
-/SOUL.md
-/USER.md
-/memory/
 memory/*.log
 memory/*.json
 *.db

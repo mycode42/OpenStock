@@ -1,6 +1,12 @@
 # OpenStock
 
-OpenStock is a self-hosted dashboard for monitoring stock prices, keeping a trading journal, and tracking performance and risk. It polls executable EUR bid and ask prices, alerts on thresholds through Telegram, and records position lots, capital events and equity history in SQLite.
+OpenStock is a self-hosted dashboard for monitoring stock prices, keeping a trading journal, and tracking performance and risk. 
+It polls executable EUR bid and ask prices, alerts on thresholds through Telegram, and records position lots, capital events and equity history in SQLite.
+
+It is also the frontend for the algo-trader repository: https://github.com/mycode42/algo-trader.git
+
+<img width="800" alt="Screenshot 2026-10-28 at 13 40 08" src="https://github.com/user-attachments/assets/51ec9bbc-aff4-44e4-ae12-9d2480047462" />
+
 
 You can try it without any broker account. Demo mode runs the full interface on simulated quotes.
 
@@ -31,14 +37,40 @@ Demo mode is also the default whenever Trade Republic credentials or Algo Trader
 ## Features
 
 - **Dashboard:** current prices, alert state, quick stock actions, and local hover price-history charts.
-- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through a durable outbox until Telegram confirms delivery.
+  
+<img width="800" alt="Screenshot 2026-10-28 at 13 48 03" src="https://github.com/user-attachments/assets/8a077760-4125-43cc-83d0-3141a5f4bd0c" />
+<br><br>
+- **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks every configured stock against its BUY and SELL thresholds. Alerts fire once per episode and are retried through 
+a durable outbox until Telegram confirms delivery. 
+<br>
+<img width="800"  alt="Screenshot 2026-10-28 at 13 22 08" src="https://github.com/user-attachments/assets/76143c54-63b3-4117-8aba-419667b77c11" />
+<br><br>
 - **Trading journal:** record position lots, then edit or close them with frozen EUR conversion rates and fees. Adding a purchase to an open position merges it using quantity-weighted entry prices, with an audit trail.
+<br>  
+<img width="800" alt="Screenshot 2026-10-28 at 13 34 18" src="https://github.com/user-attachments/assets/9a7c47a9-cffd-4236-98e1-7b2860158c21" />
+<br><br>
 - **Capital events:** initial capital, deposits, withdrawals and financing are tracked separately, so they never count as trading P/L.
+<br>
+<img width="800" alt="Screenshot 2026-10-28 at 13 38 43" src="https://github.com/user-attachments/assets/daeb17d4-47c6-4541-be2f-2d83fbcab2c8" />
+<br><br>
 - **Analytics:** P/L, risk, equity curve, drawdown, monthly and per-stock performance. Figures show `N/A` or `Insufficient data` until enough history exists.
+<br>
+<img width="800" alt="Screenshot 2026-10-28 at 13 35 05" src="https://github.com/user-attachments/assets/7c4db67e-85fc-40b0-8472-8a50cacef214" />
+<br><br>
 - **Chart history:** persisted quote history with a background backfill queue; provider failures do not affect API responses.
+<br>
+<ima width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/0005f313-bbe9-4d65-853a-326d917f799d" />
+<br><br>
 - **Algo Trader pages:** research, universe and performance views for a separate Algo Trader installation, with its strategy settings editable from the UI.
-
+<br>  
+<img width="800" alt="Screenshot 2026-10-28 at 13 21 27" src="https://github.com/user-attachments/assets/ae0d0fc7-2303-4786-ab2f-91b396c69b73" />
+<br><br>
+<img width="800" alt="Screenshot 2026-10-28 at 13 20 51" src="https://github.com/user-attachments/assets/b2bdc6a4-3884-49e0-890b-bb00282a4274" />
+<br><br>
 OpenStock does not place, change or cancel orders. Broker endpoints are read-only: they retrieve quotes, accounts, portfolio, orders and transactions.
+<br>
+<img width="800" alt="Screenshot 2026-10-28 at 13 22 44" src="https://github.com/user-attachments/assets/0d99c880-96bb-4782-bb4b-71c1e6569a4e" />
+
 
 ## Configuration
 
@@ -185,7 +217,7 @@ Tests use isolated temporary databases and mocked provider calls. They never ope
 
 ## Project history
 
-The commit history contains entries under several author names: `mycode42`, `Andreas Gerster`, `Andreas`, and `Stocky`. `Stocky` is the author identity of an OpenClaw AI agent used to develop this project, so those commits are AI-authored. Three further commits carry a `Co-Authored-By: Claude Haiku 5.5` trailer, marking AI-assisted work. List them with `git log --grep "Co-Authored-By"`.
+The commit history contains entries under several author names: `mycode42`, `Andreas Gerster`, `Andreas`, and `Stocky`. `Stocky` is the author identity of an OpenClaw AI agent used to develop this project, so those commits are AI-authored. Five commits on `main` carry a `Co-Authored-By: Claude Haiku 5.5` trailer, marking AI-assisted work; two of them are from the v2.0.1 release. List them with `git log --grep "Co-Authored-By"`.
 
 ## Deployment
 
