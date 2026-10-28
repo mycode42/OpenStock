@@ -280,6 +280,8 @@ def execute_scan_candidates(
             f"{scope.mode}:{scope.today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:"
             f"{item.get('event_id') or ''}:{item.get('signal_bar_time') or ''}"
         )
+        state = (scope.strategy_states or {}).get(item["strategy"], {}).get(item["ticker"], {})
+        pending_intent = state.get("pending_exit_intent") if isinstance(state, dict) else None
         retryable_intent = (
             pending_intent
             if isinstance(pending_intent, dict) and pending_intent.get("retryable") is True
@@ -289,8 +291,8 @@ def execute_scan_candidates(
             item.get("retry_client_order_id")
             or (retryable_intent or {}).get("client_order_id")
             or (
-            f"rule-{scope.today.replace('-', '')}-"
-            f"{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
+                f"rule-{scope.today.replace('-', '')}-"
+                f"{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             )
         )
         trade["signal_bar_time"] = item.get("signal_bar_time")
@@ -312,8 +314,6 @@ def execute_scan_candidates(
             trade["event_id"] = item["event_id"]
         item_orders = scope.pending_by_symbol.get(item["ticker"], [])
         held_qty = float((scope.positions.get(item["ticker"]) or {}).get("qty", 0) or 0)
-        state = (scope.strategy_states or {}).get(item["strategy"], {}).get(item["ticker"], {})
-        pending_intent = state.get("pending_exit_intent") if isinstance(state, dict) else None
         if (
             trade["action"] in {"sell", "cover"}
             and isinstance(pending_intent, dict)

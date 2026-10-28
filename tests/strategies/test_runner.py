@@ -195,15 +195,14 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
     assert result["data_status"]["historical_bars"] == "degraded"
     assert result["entries_paused"] is True
     assert result["scan_errors"]
-    assert result["trades"] == []
+    assert len(result["trades"]) == 1, result["signals"]
+    assert result["trades"][0]["action"] == "sell"
+    assert result["trades"][0]["extended_hours"] is True
+    assert result["trades"][0]["order_type"] == "limit"
     assert result["signals"][0]["software_protection"] is True
-    intent = states["swing_trend_following"]["AAPL"]["pending_exit_intent"]
-    assert intent["retryable"] is True
-    assert intent["status"] == "deferred_until_regular_hours"
-    assert intent["software_protection"] is True
 
 
-def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(monkeypatch):
+def test_extended_hours_software_exit_is_submitted_with_active_broker_bracket(monkeypatch):
     position = {"AAPL": {"symbol": "AAPL", "qty": "2"}}
     bracket_stop = [{
         "id": "stop-1", "symbol": "AAPL", "side": "sell", "type": "stop",
@@ -228,14 +227,12 @@ def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(mon
         extended_hours=True, data_feed="boats", quote_feed="overnight",
         overnight_tradable_tickers={"AAPL"},
     )
-    assert result["trades"] == []
-    intent = states["swing_trend_following"]["AAPL"]["pending_exit_intent"]
-    assert intent["status"] == "deferred_until_regular_hours"
-    assert intent["retryable"] is True
+    assert len(result["trades"]) == 1, result["signals"]
+    assert result["trades"][0]["action"] == "sell"
+    assert result["trades"][0]["extended_hours"] is True
+    assert result["trades"][0]["order_type"] == "limit"
     assert result["signals"][0]["software_protection"] is True
-    assert result["signals"][0]["suppressed_reason"] == (
-        "persisted strategy exit deferred until regular hours"
-    )
+    assert not result["signals"][0].get("suppressed_reason")
 
 
 @pytest.mark.parametrize("order_class", ["bracket"])
@@ -248,7 +245,7 @@ def test_extended_hours_software_exit_is_deferred_with_active_broker_bracket(mon
         ("premarket", True, datetime(2026, 10, 8, 4, 5, tzinfo=ET)),
     ],
 )
-def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
+def test_strategy_rule_sell_is_submitted_in_regular_and_extended_sessions(
     monkeypatch, order_class, session_name, extended_hours, frozen_now,
 ):
     class FrozenClock(datetime):
@@ -306,22 +303,15 @@ def test_strategy_rule_sell_is_regular_hours_only_and_deferred_otherwise(
         overnight_tradable_tickers={"AAPL"} if extended_hours else None,
     )
 
+    assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
+    assert result["trades"][0]["action"] == "sell"
+    assert result["trades"][0]["qty"] == 2
     if extended_hours:
-        assert result["trades"] == []
-        intent = states["swing_trend_following"]["AAPL"]["pending_exit_intent"]
-        assert intent["status"] == "deferred_until_regular_hours"
-        assert intent["retryable"] is True
-        assert result["signals"][0]["suppressed_reason"] == (
-            "persisted strategy exit deferred until regular hours"
-        )
-    else:
-        assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
-        assert result["trades"][0]["action"] == "sell"
-        assert result["trades"][0]["qty"] == 2
-        # Broker legs are never cancelled for a software exit; no cancel flag is emitted.
-        assert "cancel_open_orders" not in result["trades"][0]
-        assert not result["trades"][0].get("software_protection")
-        assert not result["signals"][0].get("suppressed_reason")
+        assert result["trades"][0]["order_type"] == "limit"
+        assert result["trades"][0]["extended_hours"] is True
+    # Broker legs are never cancelled for a software exit; no cancel flag is emitted.
+    assert "cancel_open_orders" not in result["trades"][0]
+    assert not result["signals"][0].get("suppressed_reason")
     if session_name == "overnight" and frozen_now.hour == 4:
         assert (frozen_now.hour, frozen_now.minute) == (4, 0)
     if session_name == "premarket":
