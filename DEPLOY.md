@@ -1,6 +1,6 @@
 # Deploying OpenStock
 
-This guide describes the single-host deployment that OpenStock is built for: a Linux server under `/opt/OpenStock`, run by systemd, reachable through Tailscale. For a local try-out, see the quick start in the [README](README.md).
+This guide describes a single-host deployment: a Linux server running OpenStock from any directory, under systemd, reachable through Tailscale. For a local try-out, see the quick start in the [README](README.md).
 
 ## Architecture
 
@@ -53,8 +53,8 @@ This guide describes the single-host deployment that OpenStock is built for: a L
 ## Install
 
 ```bash
-git clone git@github.com:mycode42/OpenStock.git /opt/OpenStock
-cd /opt/OpenStock
+git clone git@github.com:mycode42/OpenStock.git
+cd OpenStock
 npm install
 
 cp .env.example .env
@@ -103,8 +103,8 @@ The monitor unit's settings, including its sandboxing and its 30-second timer, a
 journalctl --user -u openstock.service -f
 
 # Monitor
-tail -f /opt/OpenStock/memory/monitor.log
-tail -f /opt/OpenStock/memory/monitor-error.log
+tail -f memory/monitor.log
+tail -f memory/monitor-error.log
 ```
 
 ## Database
@@ -114,15 +114,15 @@ tail -f /opt/OpenStock/memory/monitor-error.log
 grep DATABASE_PATH .env
 
 # Query directly
-sqlite3 /opt/OpenStock/database/openstock.db ".tables"
-sqlite3 /opt/OpenStock/database/openstock.db "SELECT * FROM stocks;"
+sqlite3 database/openstock.db ".tables"
+sqlite3 database/openstock.db "SELECT * FROM stocks;"
 ```
 
 Backing up:
 
 ```bash
 mkdir -p /var/backups/openstock
-cp /opt/OpenStock/database/openstock.db /var/backups/openstock/openstock.db.$(date +%F-%H%M%S)
+cp database/openstock.db /var/backups/openstock/openstock.db.$(date +%F-%H%M%S)
 
 # Include the audit trail
 tar -czf openstock-backup-$(date +%F).tar.gz \
@@ -153,7 +153,7 @@ Check the bot and the chat:
 ```bash
 curl "https://api.telegram.org/botYOUR_TOKEN/getMe"
 cat ~/.openclaw/credentials/telegram-default-allowFrom.json
-cat /opt/OpenStock/memory/monitor-error.log
+cat memory/monitor-error.log
 ```
 
 ## Tailscale
@@ -176,7 +176,7 @@ journalctl --user -u openstock-monitor.service -n 50
 ### Database locked or corrupted
 
 ```bash
-sqlite3 /opt/OpenStock/database/openstock.db "PRAGMA integrity_check;"
+sqlite3 database/openstock.db "PRAGMA integrity_check;"
 # If there are issues, restart the web server to release locks
 systemctl --user restart openstock.service
 ```

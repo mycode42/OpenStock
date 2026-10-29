@@ -1,6 +1,6 @@
 # Algo Trader automations
 
-The scheduled Algo jobs run from `/opt/OpenStock/algo-trader`, the OpenStock subtree. The former `/opt/algo-trader` checkout is retired. Market-time jobs use `America/New_York`. The definitions are in [`ops/automations.json`](automations.json), installed by `scripts/setup_automations.py`, and described in the README under "Scheduled automations".
+The scheduled Algo jobs run from this `algo-trader/` subtree, wherever OpenStock is checked out. Market-time jobs use `America/New_York`. The definitions are in [`ops/automations.json`](automations.json), installed by `scripts/setup_automations.py`, and described in the README under "Scheduled automations".
 
 | Job | Schedule | Purpose |
 | --- | --- | --- |
