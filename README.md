@@ -12,7 +12,7 @@ Try it without any broker account: `npm run demo` runs the full interface on sim
 
 ## Quick start
 
-Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module.
+Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module. The Algo Trader also needs Python 3.11 or 3.12 and Poetry 2.x; see [Algo Trader](#algo-trader).
 
 ```bash
 git clone https://github.com/mycode42/OpenStock.git
@@ -26,8 +26,32 @@ npm start
 
 Then open http://127.0.0.1:3000. The `.env` file is ignored by Git; never commit live credentials. To use another port, set `PORT=3001` before `npm start`.
 
-### Algo Trader (optional)
-For a no-account demo, run `npm run demo` instead. It uses a separate database and ignores broker credentials.
+### Algo Trader
+
+The Algo Trader is an optional research and paper-trading subtree in [algo-trader/](algo-trader/). The dashboard works without it.
+
+- **Equity sleeve:** a rule-based coordinator picks strategies with a regime committee and trades a live universe on Alpaca Paper.
+- **Options sleeve:** a separate paper account for volatility, long-volatility and event structures.
+- **Research:** equity AutoResearch and options research, with walk-forward validation, execution costs and regime breakdowns.
+- **Dashboard pages:** the Algo Trader, Research and Universe pages read its data from `ALGO_TRADER_ROOT`.
+
+Setup:
+
+1. Install Python 3.11 or 3.12 and Poetry 2.x. Python 3.13 is not supported.
+2. Add `ALPACA_EQUITY_API_KEY`, `ALPACA_EQUITY_API_SECRET` and `ALPACA_EQUITY_ACCOUNT_ID` to the root `.env`. For the options sleeve, add the `ALPACA_OPTIONS_*` set. Keep the Alpaca URLs on paper.
+3. Leave `ALGO_TRADER_ROOT` at `./algo-trader`, or point it at another checkout.
+4. Run the one-time installer from the subtree, with the Telegram chat that receives reports:
+
+   ```bash
+   cd algo-trader
+   export ALGO_REPORT_TELEGRAM_TO=<chat id>
+   scripts/setup.sh            # or --dry-run to preview first
+   ```
+
+   This runs `poetry install`, installs the scheduled automations, and renders the systemd user units. It needs no root.
+5. Start the services: `systemctl --user enable --now equity options`.
+
+Details: [Algo setup](algo-trader/docs/setup.md), [Scheduled automations](algo-trader/docs/automations.md) and [Operations](algo-trader/docs/operations.md).
 
 ### Demo mode
 
@@ -50,7 +74,7 @@ Normal startup uses Alpaca when its API key and secret are configured. Without A
 
   <img width="800" alt="Screenshot 2026-10-28 at 15 15 38" src="https://github.com/user-attachments/assets/249c61da-0a47-489f-8650-b91414a8fc06" />
 
-- **Trading journal:** reads Alpaca account balances, positions, and fills in USD. OpenStock does not submit orders.
+- **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
   
   <img width="800" alt="Screenshot 2026-10-28 at 13 34 18" src="https://github.com/user-attachments/assets/9a7c47a9-cffd-4236-98e1-7b2860158c21" />
 
@@ -75,8 +99,6 @@ Normal startup uses Alpaca when its API key and secret are configured. Without A
   <img width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/34114b8a-af13-4e7d-8a9a-67d89ca7b0ab" />
 
 
-OpenStock does not place, change or cancel orders. Broker endpoints are read-only: they retrieve quotes, accounts, portfolio, orders and transactions.
-
   <img width="800" alt="Screenshot 2026-10-28 at 13 22 44" src="https://github.com/user-attachments/assets/0d99c880-96bb-4782-bb4b-71c1e6569a4e" />
 
 
@@ -94,8 +116,11 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALPACA_ALGO_API_KEY` | empty | Alpaca Trading API key for the USD account. |
-| `ALPACA_ALGO_API_SECRET` | empty | Alpaca Trading API secret. Keep it in the ignored `.env` file. |
+| `ALPACA_MANUAL_API_KEY` | empty | Alpaca API key for the dashboard account. |
+| `ALPACA_MANUAL_API_SECRET` | empty | Its secret. Keep it in the ignored `.env` file. |
+| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account. Paper unless you set the live URL. |
+| `ORDER_NOTIONAL_USD` | `250` | Default USD budget for a BUY placed from the dashboard. |
+| `ALPACA_EQUITY_*`, `ALPACA_OPTIONS_*` | empty | Keys, secrets and account IDs for the Algo equity and options sleeves. See [Algo Trader](#algo-trader). |
 | `ALPACA_DATA_FEED` | `sip` | Preferred Alpaca stock-data feed. OpenStock falls back between SIP and IEX when feed access is denied. |
 | `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather for alert delivery. |
 | `TELEGRAM_CHAT_ID` | empty | Chat that receives alerts. |
@@ -105,7 +130,8 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 | `MONITOR_CYCLE_DEADLINE_MS` | `45000` | Stop starting new stock work after this cycle budget. |
 | `LIVE_PRICE_REFRESH_MS` | `1000` | Display-only Dashboard refresh cadence. Minimum and default 1000 ms. |
 | `HISTORY_BACKFILL_DELAY_MS` | `1500` | Pause between chart-history backfill requests. |
-| `ALGO_TRADER_ROOT` | `../algo-trader` | Data directory of the optional Algo Trader installation. |
+| `ALGO_TRADER_ROOT` | `./algo-trader` | Directory of the optional Algo Trader installation. |
+| `ALGO_TRADER_PYTHON` | empty | Python interpreter the Algo Trader services use. Set it to the Poetry environment's `python`. |
 
 ### Price sources
 
@@ -116,16 +142,6 @@ OpenStock requests SIP quotes when available and falls back to the free IEX vers
 Prices, amounts, fees and performance values are displayed rounded to two decimals. Journal fields keep the precision you enter, up to six decimals; calculations and stored values use full precision.
 
 The Dashboard polls `/api/live-prices` while visible. That endpoint is display-only: it never writes stock state, history, alert state or equity snapshots.
-
-To copy an existing watchlist and its alert levels into the Alpaca USD watchlist, configure Alpaca credentials first, then run this once:
-
-```bash
-cd algo-trader
-export ALGO_REPORT_TELEGRAM_TO=<chat id>
-scripts/setup.sh
-```
-
-This installs the Python dependencies, the scheduled automations, and the Algo systemd user units. Nothing needs root. Start the services with `systemctl --user enable --now equity options`. Details are in [Algo setup](algo-trader/docs/setup.md) and [Scheduled automations](algo-trader/docs/automations.md).
 
 ### No account? Run the demo
 
@@ -143,7 +159,7 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 | Monitoring | One-shot cycle checks BUY and SELL levels; alerts fire once per episode via Telegram | [Monitoring](docs/monitoring.md) |
 | Trading journal | Alpaca balances, positions and fills; capital events kept apart from P/L | [Features](docs/features.md) |
 | Analytics | P/L, risk, equity curve, drawdown, per-stock performance | [Performance data](docs/performance-data.md) |
-| Manual limit orders | Limit orders from alert levels, behind a flag and a token; paper by default | [Features](docs/features.md#manual-limit-orders) |
+| Manual limit orders | Limit orders from alert levels, confirmed in a preview; paper by default | [Features](docs/features.md) |
 | Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/README.md) |
 | Configuration | Environment variables, price sources, watchlist migration | [Configuration](docs/configuration.md) |
 | API | Endpoints for the dashboard, journal, orders and health | [API](docs/api.md) |
@@ -160,6 +176,9 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 
 Screenshots of every screen are in [Features](docs/features.md).
 
-## License
+## License and credits
 
-ISC. See [LICENSE](LICENSE).
+OpenStock's own code is licensed under the ISC licence ([LICENSE](LICENSE)).
+
+The Algo Trader in [algo-trader/](algo-trader/) is MIT-licensed ([its LICENSE](algo-trader/LICENSE)). It builds on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), an MIT-licensed project by Virat Singh (© 2024). That MIT notice is kept in the subtree's LICENSE. Credits are also in the [Algo Trader README](algo-trader/README.md#credits).
+

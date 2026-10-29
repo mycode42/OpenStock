@@ -18,7 +18,7 @@ scripts/setup.sh --dry-run                 # preview the automation changes firs
 
 ## Environment
 
-The live systemd units read the OpenStock root `.env` (`EnvironmentFile=/opt/OpenStock/.env`), so the Algo keys belong there, not in a second file. `ALGO_TRADER_ROOT=./algo-trader` in that file points OpenStock at this directory. The variable names are in `algo-trader/.env.example`.
+The live systemd units read the OpenStock root `.env` (the `EnvironmentFile` in the rendered units), so the Algo keys belong there, not in a second file. `ALGO_TRADER_ROOT=./algo-trader` in that file points OpenStock at this directory. The variable names are in `algo-trader/.env.example`.
 
 - Equity uses `ALPACA_EQUITY_API_KEY`, `ALPACA_EQUITY_API_SECRET`, and `ALPACA_EQUITY_ACCOUNT_ID`.
 - The options sleeve uses the `ALPACA_OPTIONS_*` equivalents.

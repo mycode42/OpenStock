@@ -1,0 +1,34 @@
+# Secrets, runtime state and databases never go into the image. Mount them at run time instead.
+.git
+.github
+node_modules
+**/node_modules
+data
+memory
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+**/auth.json
+**/*.backup
+**/*.bak
+**/*.log
+**/*.db
+**/*.db-*
+**/*.db.*
+**/*.sqlite
+**/*.sqlite3
+**/*.sqlite3-*
+database/backups
+algo-trader/data
+algo-trader/backups
+algo-trader/.venv
+algo-trader/dist
+algo-trader/build
+# The Algo Trader runs outside the image. The dashboard reads its data directory, which is mounted at run time.
+algo-trader
+**/.cache
+# Local session files and credentials.
+private
+**/*session*.json

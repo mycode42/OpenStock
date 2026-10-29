@@ -150,6 +150,9 @@ def _report_created_at(report: dict | None) -> datetime | None:
     return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
 
 
+FILE_TIME_TOLERANCE = timedelta(seconds=1)
+
+
 def _report_written_after(path: Path, started_at: str | None) -> dict | None:
     report = _read_json(path)
     if report is None:
@@ -169,7 +172,9 @@ def _report_written_after(path: Path, started_at: str | None) -> dict | None:
         modified = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
     except OSError:
         return None
-    if started and (created is None or created < started or modified < started):
+    # File times come from a coarse kernel clock and can sit a few milliseconds before the
+    # high-resolution start time. The report's own created_at is the authoritative check.
+    if started and (created is None or created < started or modified + FILE_TIME_TOLERANCE < started):
         return None
     return report
 
@@ -397,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
                             [
                                 sys.executable, "-m", "research.options",
                                 "--config", str(ROOT / "options/research/config.portfolio.json"),
-                                "--workers", str(args.workers),
+                                "--workers", "1",
                                 "--run-id", run_id,
                             ],
                             cwd=ROOT, stdout=options_log, stderr=subprocess.STDOUT,
