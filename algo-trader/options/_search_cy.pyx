@@ -32,6 +32,9 @@ cpdef void prepare_surrogate_arrays(
         if candidate.is_baseline:
             active[index] = 0
             continue
+        if not grid_indices:
+            # Pinned champions have no grid position; the caller sets their distance.
+            continue
 
         regime_index = grid_indices[0]
         squared = 0.0
