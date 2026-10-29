@@ -46,6 +46,10 @@ Before writing memory files, read them first. Write concrete updates, never empt
 - Learned a lesson: update `AGENTS.md` or the relevant skill.
 - Made a mistake: document it so you do not repeat it.
 
+### Decisions and documentation
+
+- Whenever a user and agent settle a product, runtime, schedule, data-source, or safety decision, update the canonical documentation in the same task and verify it against current code, configuration, or live schedules where applicable. Replace or remove superseded claims and obsolete duplicate docs so conflicting instructions do not remain.
+
 ### Memory Maintenance
 
 Every few days, use a scheduled automation to review recent daily notes. Fold stable directives into `USER.md` and durable non-profile facts into `MEMORY.md`; keep `MEMORY.md` maintenance confined to main sessions. Remove outdated entries so the curated files do not become raw logs.
