@@ -46,7 +46,7 @@ This guide describes the single-host deployment that OpenStock is built for: a L
 - Node.js 22 or higher
 - Python 3, a C/C++ compiler toolchain, and `make` for native Node modules (for example, `build-essential` on Debian/Ubuntu)
 - SQLite 3.x with the CLI, for debugging
-- Alpaca live Trading API key and secret
+- Alpaca Trading API key and secret (paper by default; live only when `ALPACA_LIVE_BASE_URL` is set to the live endpoint)
 - Telegram bot token (optional; required for Telegram alerts)
 - Tailscale, configured for the host
 
@@ -58,7 +58,7 @@ cd /opt/OpenStock
 npm install
 
 cp .env.example .env
-# Set ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET for the live USD profile.
+# Set ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET. Keep ALPACA_LIVE_BASE_URL on paper unless you intend to trade live.
 # Keep .env out of source control. No Alpaca account ID is needed by OpenStock.
 
 # Initialize the database (automatic on first run)

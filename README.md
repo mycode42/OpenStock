@@ -2,7 +2,9 @@
 
 OpenStock is a self-hosted stock dashboard and trading journal built around Alpaca accounts and market data in USD. It uses SIP quotes when available and falls back to IEX when the account cannot access SIP.
 
-It is also the frontend for the algo-trader repository: https://github.com/mycode42/algo-trader.git
+It is also the frontend for the algo-trader repository, which lives in [algo-trader/](algo-trader/) in this checkout.
+
+> **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
 <img width="800" alt="Screenshot 2026-10-28 at 13 40 08" src="https://github.com/user-attachments/assets/51ec9bbc-aff4-44e4-ae12-9d2480047462" />
 
@@ -72,7 +74,15 @@ Normal startup uses Alpaca when its API key and secret are configured. Without A
   <img width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/34114b8a-af13-4e7d-8a9a-67d89ca7b0ab" />
 
 
-OpenStock does not place, change or cancel orders. Broker endpoints are read-only: they retrieve quotes, accounts, portfolio, orders and transactions.
+**Manual limit orders.** Each active Alpaca alert level has a *Place limit* button. It places a day limit order at the level's price on the Alpaca account set by `ALPACA_LIVE_BASE_URL`:
+
+- BUY levels buy `ORDER_NOTIONAL_USD` worth of whole shares (capped by `ORDER_MAX_NOTIONAL_USD`). Buys are refused if they would fill immediately at the current ask, or if they exceed `ORDER_DAILY_BUY_LIMIT_USD` for the UTC day.
+- SELL levels sell the whole open position. They are refused if there is no position, or if they would fill immediately at the current bid.
+- One live order per level. Cancel from the same card. The monitor cycle syncs order status from Alpaca every minute.
+- Every order shows a preview (account, side, quantity, notional) and needs your confirmation.
+- Order routes return 403 unless `ORDERS_ENABLED=true` and `OPENSTOCK_ORDER_TOKEN` is set. The browser asks for the token once per session.
+
+Orders go to the paper account unless `ALPACA_LIVE_BASE_URL` is set to `https://api.alpaca.markets`. Other endpoints remain read-only: quotes, accounts, portfolio, orders and transactions.
 
   <img width="800" alt="Screenshot 2026-10-28 at 13 22 44" src="https://github.com/user-attachments/assets/0d99c880-96bb-4782-bb4b-71c1e6569a4e" />
 
@@ -87,7 +97,7 @@ cp .env.example .env
 
 `.env` is read from the repository directory. Set `OPENSTOCK_CONFIG_FILE` to load a different file. Keep credentials out of source control.
 
-Add the Alpaca Trading API key and secret to `.env`. The account is resolved from those credentials; OpenStock does not need an account ID. `ALPACA_DATA_FEED` defaults to `sip` and falls back to `iex` if SIP access is denied.
+Add the Alpaca Trading API key and secret to `.env`. `ALPACA_LIVE_BASE_URL` defaults to the paper endpoint, so a fresh install cannot reach the live account until you set it. The account is resolved from those credentials; OpenStock does not need an account ID. `ALPACA_DATA_FEED` defaults to `sip` and falls back to `iex` if SIP access is denied.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -102,7 +112,15 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 | `MONITOR_CYCLE_DEADLINE_MS` | `45000` | Stop starting new stock work after this cycle budget. |
 | `LIVE_PRICE_REFRESH_MS` | `1000` | Display-only Dashboard refresh cadence. Minimum and default 1000 ms. |
 | `HISTORY_BACKFILL_DELAY_MS` | `1500` | Pause between chart-history backfill requests. |
-| `ALGO_TRADER_ROOT` | `./algo-trader` (set to `/opt/algo-trader` until cutover) | Data directory of the optional Algo Trader installation. |
+| `ALPACA_LIVE_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for manual orders and the dashboard. Set to `https://api.alpaca.markets` only for the live account. |
+| `ALPACA_ALGO_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Algo Trader trading endpoint. Refused unless it is the paper endpoint. |
+| `ALPACA_OPTIONS_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Options paper endpoint. Refused unless it is the paper endpoint. |
+| `ORDERS_ENABLED` | `false` | Allows order routes. Nothing is sent to Alpaca while this is `false`. |
+| `OPENSTOCK_ORDER_TOKEN` | empty | Shared secret the browser sends with order requests. Required when orders are enabled. |
+| `ORDER_NOTIONAL_USD` | `250` | Target size of a BUY limit order. |
+| `ORDER_MAX_NOTIONAL_USD` | `500` | Largest BUY order allowed, and the highest price a BUY level can use. |
+| `ORDER_DAILY_BUY_LIMIT_USD` | `2000` | Total BUY notional allowed per UTC day. |
+| `ALGO_TRADER_ROOT` | `./algo-trader` | Data directory of the optional Algo Trader installation. |
 
 ### Price sources
 
@@ -171,6 +189,10 @@ Alpaca chart ranges use Alpaca bars directly.
 | `/api/live-prices` | GET | Display-only Alpaca quotes |
 | `/api/alpaca/journal` | GET | Read-only Alpaca account, positions, and fills |
 | `/api/alpaca/alert-levels/:id/rearm` | POST | Rearm a copied Alpaca alert level |
+| `/api/alpaca/orders/config` | GET | Order settings and trading mode (`paper` or `live`) |
+| `/api/alpaca/orders` | GET | Recent orders |
+| `/api/alpaca/alert-levels/:id/orders` | POST | Place a limit order for a level. Body `{"preview": true}` returns the plan only; `{"confirm": true}` submits. Needs `X-OpenStock-Order-Token`. |
+| `/api/alpaca/orders/:id/cancel` | POST | Cancel a live order. Needs `X-OpenStock-Order-Token`. |
 | `/api/stocks/:id/history?broker=alpaca` | GET | Alpaca chart history |
 
 Mutating requests must come from the same origin as the page.

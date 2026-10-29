@@ -42,6 +42,8 @@ Review and optimization run only when asked. Stay inside the modules named in th
 - Quote fallback order is SDK, then UAPI sidecar. Monitor BUY/SELL semantics use executable ask/bid.
 - An alert fires once per episode. Outbox plus retired level. A poll must not spam Telegram.
 - `/api/live-prices` is display-only. It must not write stock state, history, alert state, or equity snapshots.
+- Orders are placed only from `lib/alpaca-orders.js`, behind `ORDERS_ENABLED=true` and the `X-OpenStock-Order-Token` check. The trading URL defaults to paper. The algo sleeves stay paper-only, and `algo-trader/broker/endpoints.py` refuses any other URL.
+- One live order per alert level, enforced by a partial unique index in migration 025. Never weaken it.
 - Provider failure is data. One symbol does not kill the cycle.
 - Cap remains 25 monitored names unless the task changes it.
 

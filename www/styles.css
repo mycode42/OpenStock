@@ -557,3 +557,5 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 @media(max-width:760px) and (min-width:641px){#page-algo-universe .history-popover{position:relative;left:auto!important;right:auto!important;top:auto;width:100%;margin-top:.75rem;box-shadow:none}}
 #page-dashboard .stock-card[data-broker="alpaca"] [data-live-price],
 #page-algo-universe .algo-universe-midpoint{color:#fbbf24!important}
+
+.research-disclaimer { margin: 2rem auto 1rem; max-width: 60rem; padding: 0 1rem; font-size: 0.8rem; opacity: 0.7; text-align: center; }

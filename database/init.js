@@ -25,6 +25,7 @@ const migrations = [
   ,require('./migrations/022_percentage_move_alerts')
   ,require('./migrations/023_alpaca_usd_profile')
   ,require('./migrations/024_alpaca_alert_outbox')
+  ,require('./migrations/025_alpaca_orders')
 ];
 
 function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true } = {}) {

@@ -1,6 +1,7 @@
 'use strict';
 
 const { makeQuote } = require('../lib/brokers/alpaca');
+const { openOrdersByLevel } = require('../lib/alpaca-orders');
 
 function rawDatabase(db) {
     return db?.db || db;
@@ -12,7 +13,11 @@ function configuredWatchlist(db) {
         FROM alpaca_watchlist WHERE enabled=1 AND archived=0 ORDER BY symbol`).all();
     const levels = db.prepare(`SELECT * FROM alpaca_alert_levels WHERE watchlist_id=?
         ORDER BY side, price_usd, id`);
-    return rows.map(row => ({ ...row, alert_levels: levels.all(row.id) }));
+    const openOrders = openOrdersByLevel(db);
+    return rows.map(row => ({
+        ...row,
+        alert_levels: levels.all(row.id).map(level => ({ ...level, open_order: openOrders.get(level.id) || null })),
+    }));
 }
 
 async function alpacaDashboardData(app) {
