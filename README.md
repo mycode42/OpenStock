@@ -86,15 +86,11 @@ Normal startup uses Alpaca when its API key and secret are configured. Without A
   
   <img width="800" alt="Screenshot 2026-10-28 at 13 35 05" src="https://github.com/user-attachments/assets/7c4db67e-85fc-40b0-8472-8a50cacef214" />
 
-- **Algo Trader pages:** performance research and universe views for a separate Algo Trader installation, with its strategy settings editable from the UI.
+- **Algo Trader pages:** performance, research and universe views for the Algo Trader installation, with its strategy settings editable from the UI.
 
   <img width="800" alt="Screenshot 2026-10-28 at 13 20 51" src="https://github.com/user-attachments/assets/b2bdc6a4-3884-49e0-890b-bb00282a4274" />
 
-- **Algo Trader pages:** research
-  
   <img width="800" alt="Screenshot 2026-10-28 at 13 21 27" src="https://github.com/user-attachments/assets/ae0d0fc7-2303-4786-ab2f-91b396c69b73" />
-
-- **Algo Trader pages:** universe
 
   <img width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/34114b8a-af13-4e7d-8a9a-67d89ca7b0ab" />
 

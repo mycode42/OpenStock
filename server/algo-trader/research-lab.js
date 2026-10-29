@@ -254,7 +254,7 @@ class ResearchLab {
         const args = ['-m', 'options.research.lab_run', '--config', configPath, '--strategy', request.strategy,
             '--underlyings', request.underlyings.join(','), '--workers', '8'];
         const configured = this.python;
-        const executable = configured || '/usr/local/bin/poetry';
+        const executable = configured || 'poetry';
         const command = configured ? args : ['run', 'python', ...args];
         const child = this.spawnImpl(executable, command, {
             cwd: this.root,
