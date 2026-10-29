@@ -29,6 +29,6 @@ curl -X POST http://127.0.0.1:3000/api/stocks \
   -d '{"symbol":"AAPL","name":"Apple"}'
 ```
 
-Behind a reverse proxy, set `OPENSTOCK_TRUST_PROXY=1` so the server honours the proxy's `X-Forwarded-Host` and `X-Forwarded-Proto`, and send the public origin, for example `https://openstock.example.com`. Without that setting, the forwarded headers are ignored, so a client cannot make a foreign origin match.
+Behind a reverse proxy, set `OPENSTOCK_TRUST_PROXY=1` so the server honours the proxy's `X-Forwarded-Host` and `X-Forwarded-Proto`, and send the public origin, for example `https://openstock.example.com`. When that setting is on, the proxy must overwrite any `X-Forwarded-Host` and `X-Forwarded-Proto` the client sends, so a client cannot supply its own. Without the setting, the forwarded headers are ignored, so a client cannot make a foreign origin match.
 
 Live orders additionally need `ALPACA_ALLOW_LIVE=1` and the `X-OpenStock-Order-Token` header. See [Configuration](configuration.md).
