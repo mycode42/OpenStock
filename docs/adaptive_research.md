@@ -63,7 +63,7 @@ promote. It is not scheduled.
 - `data/research/algo-auto/optimizer/`: reports from manual optimization-only runs.
 - `data/research/algo-auto/forward-validation.json`: trial history.
 - `data/research/algo-auto/research.sqlite3`: ledger, archive, profile versions, and trial counts.
-- `data/research/algo-auto/logs/auto-research.log`: stage timings (UTC).
+- `data/research/logs/equity.log` (equity) and `data/research/logs/options.log` (options): stage timings (UTC).
 
 Profile history and revert:
 

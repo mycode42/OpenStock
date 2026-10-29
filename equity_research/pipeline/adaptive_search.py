@@ -114,8 +114,9 @@ def _baseline_improvement(search: dict) -> dict:
 
 
 def _worker_context():
-    """Fork shares the replay context copy-on-write; spawn pickles it into every worker."""
-    return mp.get_context("fork" if "fork" in mp.get_all_start_methods() else "spawn")
+    """Spawn workers: candidate pools are created from threads, and forking a multi-threaded
+    process can deadlock on locks held by other threads. Spawn costs more per pool but is safe."""
+    return mp.get_context("spawn")
 
 
 def _run_search_with_bars(

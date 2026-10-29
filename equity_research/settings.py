@@ -18,7 +18,12 @@ ET = ZoneInfo("America/New_York")
 
 DEFAULT_OUTPUT_DIR = DATA_DIR / "research" / "algo-auto"
 
-LOCK_FILE = DATA_DIR / "locks" / "algo-auto-research.lock"
+LOCK_FILE = DATA_DIR / "locks" / "algo-research.lock"
+
+# Central research logs: one file per pipeline, rotated by size.
+RESEARCH_LOG_DIR = DATA_DIR / "research" / "logs"
+EQUITY_LOG_PATH = RESEARCH_LOG_DIR / "equity.log"
+OPTIONS_LOG_PATH = RESEARCH_LOG_DIR / "options.log"
 
 FEED = "sip"
 

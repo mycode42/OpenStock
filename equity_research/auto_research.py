@@ -37,6 +37,7 @@ from .artifacts.live_manifest import live_configuration_manifest
 from .artifacts.research_ledger import ResearchLedger
 from .weekly_review import REVIEW_DIR, REVIEW_PATH, build_review, write_review
 from .settings import (
+    EQUITY_LOG_PATH,
     RECENT_VERIFICATION_YEARS,
     ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
     ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
@@ -956,7 +957,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _configure_progress_logging(output_dir: Path) -> Path | None:
     """Log to the terminal and a bounded file so a running job can be tailed."""
     handlers = [logging.StreamHandler()]
-    log_path = output_dir / "logs" / "auto-research.log"
+    log_path = EQUITY_LOG_PATH
     file_error = None
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -968,7 +969,7 @@ def _configure_progress_logging(output_dir: Path) -> Path | None:
         log_path = None
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s [auto-research] %(message)s",
+        format="%(asctime)s %(levelname)s [research] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=handlers,
         force=True,
@@ -1077,7 +1078,7 @@ def main(argv: list[str] | None = None) -> int:
                 except_invocation_id=invocation_id,
             )
             if interrupted:
-                logger.warning("Marked %d abandoned AutoResearch invocations interrupted", interrupted)
+                logger.warning("Marked %d abandoned research invocations as interrupted", interrupted)
             ledger.start_invocation(invocation_id, request={
                 "workers": args.workers, "no_refresh": args.no_refresh,
                 "factor_only": args.factor_only,

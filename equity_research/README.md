@@ -124,8 +124,8 @@ still gate promotion to live settings.
 Equity compounds across OOS folds within a run, not across nightly reports.
 
 AutoResearch logs stage changes and per-strategy completions to the console and
-to a rotating file at `data/research/algo-auto/logs/auto-research.log`. Follow
-the current run with `tail -f data/research/algo-auto/logs/auto-research.log`.
+to a rotating file at `data/research/logs/equity.log`. Follow
+the current run with `tail -f data/research/logs/equity.log`.
 When `--output-dir` is set, the log is written under that directory instead.
 
 `auto_research.py` owns the scheduled entry point and top-level orchestration.
