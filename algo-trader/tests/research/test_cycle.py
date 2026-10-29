@@ -74,3 +74,20 @@ def test_research_cycle_checkpoint_is_resumed_from_research_database(tmp_path, m
     resumed, cached = research._cycle_checkpoint(tmp_path, args)
     assert cached is True
     assert resumed["final_result"] == {"exit_code": 0}
+
+
+def test_report_timestamp_check_tolerates_coarse_file_clock(tmp_path):
+    import os
+    from datetime import timedelta
+
+    report_path = tmp_path / "options-latest.json"
+    started = datetime.now(timezone.utc)
+    atomic_write_json(report_path, {"schema": "swarm_options_nightly_research_v1", "created_at": started.isoformat()})
+    # The file clock can read a few milliseconds before the start time; the check must still accept the report.
+    early = (started - timedelta(milliseconds=5)).timestamp()
+    os.utime(report_path, (early, early))
+
+    assert research._report_written_after(report_path, started.isoformat()) is not None
+    too_early = (started - timedelta(seconds=30)).timestamp()
+    os.utime(report_path, (too_early, too_early))
+    assert research._report_written_after(report_path, started.isoformat()) is None

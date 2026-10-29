@@ -45,18 +45,3 @@ Research view:
 Universe view:
 
 <img width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/34114b8a-af13-4e7d-8a9a-67d89ca7b0ab" />
-
-## Manual limit orders
-
-Each active Alpaca alert level has a *Place limit* button. It places a day limit order at the level's price on the account set by `ALPACA_MANUAL_BASE_URL`:
-
-- BUY levels ask for a USD amount (default `ORDER_NOTIONAL_USD`) and buy as many whole shares as it covers. There is no OpenStock cap on size; Alpaca's buying-power check is the limit.
-- SELL levels sell the whole open position and need an open position.
-- A limit never pays more than its price. If the level is already marketable, it fills at the better market price. OpenStock never sends market orders.
-- One live order per level. Cancel from the same card. The monitor cycle syncs order status from Alpaca every minute.
-- Every order shows a preview (account, side, quantity, notional) and needs your confirmation.
-- Order routes need no switch or token. The preview and budget you confirm in the UI are the check.
-
-Orders go to the paper account unless `ALPACA_MANUAL_BASE_URL` is set to `https://api.alpaca.markets`. Other endpoints remain read-only: quotes, accounts, portfolio, orders and transactions.
-
-<img width="800" alt="Screenshot 2026-10-28 at 13 22 44" src="https://github.com/user-attachments/assets/0d99c880-96bb-4782-bb4b-71c1e6569a4e" />

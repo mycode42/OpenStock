@@ -152,7 +152,7 @@ Check the bot and the chat:
 
 ```bash
 curl "https://api.telegram.org/botYOUR_TOKEN/getMe"
-cat /home/openclaw/.openclaw/credentials/telegram-default-allowFrom.json
+cat ~/.openclaw/credentials/telegram-default-allowFrom.json
 cat /opt/OpenStock/memory/monitor-error.log
 ```
 

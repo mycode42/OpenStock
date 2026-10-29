@@ -21,3 +21,11 @@ Signal → coordinator → risk gate → Alpaca Paper. The risk gate has the fin
 - [Operations](docs/operations.md): common commands, the live universe, and state backups
 - [Research and configuration](docs/research-and-config.md): promotion, config files, and the shared rule set
 - Strategy and research guides: [options research](docs/options_research.md), [options trading](docs/options_trading.md), [equity research](docs/adaptive_research.md), [LLM-driven strategy](docs/llm_driven_strategy.md), [options long volatility](docs/options-long-volatility.md)
+
+## Credits
+
+This Algo Trader builds on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), an MIT-licensed project by Virat Singh (© 2024). Its history is in this repository, and the original MIT notice is kept in [LICENSE](LICENSE).
+
+## License
+
+The Algo Trader subtree is MIT-licensed ([LICENSE](LICENSE)). The rest of OpenStock, the dashboard and server at the repository root, is ISC-licensed ([../LICENSE](../LICENSE)).
