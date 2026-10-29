@@ -1,5 +1,6 @@
 import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js';
 import { renderResearchPage } from './algo-trader/research-view.js';
+import { mountResearchLab } from './algo-trader/research-lab.js';
 import { readSettingsFromForm as readFormSettings, renderSettingsForm } from './algo-trader/settings-form.js';
 
 export function createAlgoTrader({ request, charts }) {
@@ -83,6 +84,7 @@ export function createAlgoTrader({ request, charts }) {
         });
         selectedRunDates[researchMode] = view.selectedDate;
         researchHost.innerHTML = view.html;
+        if (researchMode === 'options') mountResearchLab(document.getElementById('research-lab-host'));
     }
 
     async function loadAccount(mode, { silent = false } = {}) {

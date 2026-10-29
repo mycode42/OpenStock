@@ -5,7 +5,8 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor
 from collections import defaultdict
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+import dataclasses
 import fcntl
 import hashlib
 import json
@@ -480,6 +481,24 @@ def run_research(
             model_surface_config=research_config.get("model_surface", {}),
             workers=loader_worker_count,
         )
+        # Optional research window from the UI or config: keep only observations inside it.
+        date_range = research_config.get("date_range") or {}
+        if date_range.get("start") or date_range.get("end"):
+            range_start = date.fromisoformat(date_range["start"]) if date_range.get("start") else None
+            range_end = date.fromisoformat(date_range["end"]) if date_range.get("end") else None
+            def _as_day(value):
+                return value.date() if isinstance(value, datetime) else value
+            kept = tuple(
+                item for item in dataset.observations
+                if (range_start is None or _as_day(item.as_of) >= range_start)
+                and (range_end is None or _as_day(item.as_of) <= range_end)
+            )
+            print(
+                f"Options research {strategy}/{underlying}: date range {range_start or 'start'} to "
+                f"{range_end or 'end'} keeps {len(kept)} of {len(dataset.observations)} observations",
+                flush=True,
+            )
+            dataset = dataclasses.replace(dataset, observations=kept)
         database_source = selected_data_path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
         read_stage = "SQLite read" if database_source else "JSONL parse/normalize"
         read_seconds = dataset.loading_parallelism.get(

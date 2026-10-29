@@ -23,12 +23,15 @@ async function loadSettings(root) {
 async function writeSettings(root, settings) {
     const dataDir = path.join(root, 'data');
     await fs.mkdir(dataDir, { recursive: true });
+    // Store only what differs from the defaults, so future default changes still reach the live config.
+    const defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
+    const override = minimalOverride(settings, defaults);
     const destination = path.join(dataDir, 'algo-strategy-config.json');
     const temporary = path.join(dataDir, `.algo-strategy-config.${process.pid}.${randomUUID()}.tmp`);
     try {
         const handle = await fs.open(temporary, 'wx', 0o600);
         try {
-            await handle.writeFile(`${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+            await handle.writeFile(`${JSON.stringify(override, null, 2)}\n`, 'utf8');
             await handle.sync();
         } finally {
             await handle.close();
@@ -38,6 +41,21 @@ async function writeSettings(root, settings) {
         await fs.rm(temporary, { force: true });
         throw error;
     }
+}
+
+// The smallest override that reproduces `settings` on top of `defaults`: only leaves that differ are kept.
+function minimalOverride(settings, defaults) {
+    const override = {};
+    for (const [key, value] of Object.entries(safeObject(settings))) {
+        const base = safeObject(defaults)[key];
+        if (value && typeof value === 'object' && !Array.isArray(value) && base && typeof base === 'object' && !Array.isArray(base)) {
+            const nested = minimalOverride(value, base);
+            if (Object.keys(nested).length) override[key] = nested;
+        } else if (JSON.stringify(value) !== JSON.stringify(base)) {
+            override[key] = value;
+        }
+    }
+    return override;
 }
 
 function mergeConfig(base, override) {
@@ -125,16 +143,18 @@ async function loadOptionsSettings(root) {
 
 async function writeOptionsSettings(root, settings) {
     const defaults = await readJson(path.join(root, 'options', 'config.default.json'));
-    const merged = mergeConfig(await loadOptionsSettings(root), settings);
+    const current = await readJson(optionsConfigPath(root), { optional: true }) || {};
+    const merged = mergeConfig(mergeConfig(defaults, current), settings);
     validateConfigShape(merged, defaults);
     validateOptionsConfig(merged);
+    const override = minimalOverride(merged, defaults);
     const destination = optionsConfigPath(root);
     await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
     try {
         const handle = await fs.open(temporary, 'wx', 0o600);
         try {
-            await handle.writeFile(`${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+            await handle.writeFile(`${JSON.stringify(override, null, 2)}\n`, 'utf8');
             await handle.sync();
         } finally {
             await handle.close();
@@ -151,6 +171,7 @@ module.exports = {
     loadSettings,
     writeSettings,
     mergeConfig,
+    minimalOverride,
     validateConfigShape,
     validateOptionsConfig,
     optionsConfigPath,
