@@ -6,17 +6,18 @@ The definitions live in [`ops/automations.json`](../ops/automations.json). Marke
 
 | Job | Schedule | Runs | Kind |
 | --- | --- | --- | --- |
-| `health` | Hourly | `python -m portfolio.healthcheck` (combined equity and options read-only check) | command |
-| `options-opening-capture` | 09:35 weekdays | `scripts.options.alpaca_daily_capture --phase open --universe research` | command |
-| `options-history-capture` | 15:45 weekdays | `scripts.options.alpaca_daily_capture --universe research` | command |
-| `ThetaData historical options backfill` | Every 25 hours (cron fallback: 03:00 daily) | `scripts/options/theta_historical_backfill.py` | command |
-| `llm-driven` | Hourly 04:00–20:00 ET, weekdays | Refresh the `swing_llm_driven` snapshot; prompt in `ops/openclaw_prompts/event-briefing.md` | agent turn |
-| `options-research` | 17:00 daily | `python -m research.options`; prompt in `ops/openclaw_prompts/options-research.md` | agent turn |
-| `equity-research` | 20:00 daily | `python -m research.equity`; prompt in `ops/openclaw_prompts/equity-research.md` | agent turn |
+| `health` | Hourly | `poetry run python -m portfolio.healthcheck` (read-only equity and options health check) | command |
+| `options-opening-capture` | 09:35 weekdays | Alpaca OPRA opening snapshot for the research universe | command |
+| `options-history-capture` | 15:45 weekdays | Same-session Alpaca OPRA option-chain capture before the close | command |
+| `ThetaData historical options backfill` | Every 25 hours (cron fallback: 03:00 daily) | Resume historical ThetaData EOD archives for the research universe | command |
+| `llm-driven` | Hourly 04:00–20:00 ET, weekdays | Silent run: refresh the `swing_llm_driven` snapshot, including owned-position reviews; prompt in `ops/openclaw_prompts/llm-silent-run.md`. No delivery. | agent turn |
+| `llm-digest` | 07:45 ET, weekdays | One briefing from the latest snapshot: owned positions, keep or sell, market context; prompt in `ops/openclaw_prompts/llm-digest.md`; delivered to Telegram | agent turn |
+| `options-research` | 17:00 daily | `python -m research.options`; prompt in `ops/openclaw_prompts/options-research.md`; delivered to Telegram | agent turn |
+| `equity-research` | 20:00 daily | `python -m research.equity`; prompt in `ops/openclaw_prompts/equity-research.md`; delivered to Telegram | agent turn |
 
 ## Install or update
 
-`scripts/setup.sh` runs this for you. To run only the installer:
+`scripts/setup.sh` runs this for you, so every job is set up in one step. To run only the installer:
 
 ```sh
 ALGO_REPORT_TELEGRAM_TO=<chat id> python scripts/setup_automations.py --dry-run

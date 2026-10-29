@@ -93,7 +93,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
         if (app.locals?.demoMode) return res.status(409).json({ error: 'Research lab runs are disabled in demo mode.' });
         return labRoute(handler)(req, res, next);
     };
-    app.get('/api/algo-trader/research/lab', labRoute(() => lab.overview()));
+    app.get('/api/algo-trader/research/lab', labRoute(req => lab.overview(String(req.query?.account || 'options'))));
     app.post('/api/algo-trader/research/jobs', labWrite(async (req, res) => {
         const job = await lab.startJob(req.body);
         res.status(202);

@@ -18,6 +18,9 @@ function fixtureRoot(t, { memoryKb = 9 * 1024 * 1024 } = {}) {
     fs.copyFileSync(path.join(REPO, 'options', 'config.default.json'), path.join(root, 'options', 'config.default.json'));
     fs.copyFileSync(path.join(REPO, 'options', 'research', 'config.default.json'), path.join(root, 'options', 'research', 'config.default.json'));
     fs.copyFileSync(path.join(REPO, 'options', 'research', 'config.portfolio.json'), path.join(root, 'options', 'research', 'config.portfolio.json'));
+    fs.mkdirSync(path.join(root, 'portfolio'), { recursive: true });
+    fs.copyFileSync(path.join(REPO, 'portfolio', 'algo-strategy-config.default.json'), path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
+    fs.copyFileSync(path.join(REPO, 'portfolio', 'algo-strategy-rules.json'), path.join(root, 'portfolio', 'algo-strategy-rules.json'));
     fs.mkdirSync(path.join(root, 'data', 'options'), { recursive: true });
     const meminfo = path.join(root, 'meminfo');
     fs.writeFileSync(meminfo, `MemTotal: 16000000 kB\nMemAvailable: ${memoryKb} kB\n`);
@@ -169,12 +172,17 @@ test('promote keeps existing override values and rollback puts them back', async
     assert.equal(restored.vrp.min_iv_minus_rv, 0.05);
 });
 
-test('overview lists options strategies with tunable keys and equity as not startable', async t => {
+test('overview returns one strategies list per account; equity is read-only for now', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });
-    const overview = await lab.overview();
-    const vrp = overview.options.find(item => item.id === 'vrp');
+    const options = await lab.overview('options');
+    const vrp = options.strategies.find(item => item.id === 'vrp');
     assert.ok(vrp.tunable.includes('min_iv_minus_rv'));
-    assert.ok(overview.equity.every(item => item.start_available === false));
-    assert.equal(overview.limits.maxUnderlyings, 20);
+    assert.equal(options.start_available, true);
+    assert.equal(options.limits.maxUnderlyings, 20);
+    const equity = await lab.overview('equity');
+    assert.equal(equity.start_available, false);
+    assert.equal(equity.strategies.length, 7);
+    assert.ok(equity.strategies.every(item => item.account === 'equity' && item.tunable.length === 0));
+    await assert.rejects(lab.overview('crypto'), /account must be/);
 });

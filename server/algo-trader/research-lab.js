@@ -4,7 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { readJson } = require('./io');
-const { loadOptionsSettings, mergeConfig, optionsConfigPath, validateConfigShape, validateOptionsConfig } = require('./settings');
+const { loadOptionsSettings, loadSettings, mergeConfig, optionsConfigPath, validateConfigShape, validateOptionsConfig } = require('./settings');
 
 const LIMITS = Object.freeze({
     maxUnderlyings: 20,
@@ -21,6 +21,16 @@ const LOG_CHUNK_BYTES = 64 * 1024;
 const TICKER_PATTERN = /^[A-Z][A-Z0-9.]{0,9}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
+
+// Keeps the values a panel can show as plain text: numbers, booleans, strings, and short lists of strings.
+function scalarParameters(section) {
+    const out = {};
+    for (const [key, value] of Object.entries(section && typeof section === 'object' ? section : {})) {
+        const list = Array.isArray(value) && value.every(item => typeof item === 'string');
+        if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string' || list) out[key] = value;
+    }
+    return out;
+}
 
 class LabError extends Error {
     constructor(message, status = 400) {
@@ -449,8 +459,22 @@ class ResearchLab {
         return { strategy, restored: target.id, applied: 'next options paper cycle' };
     }
 
-    async overview() {
-        const options = await Promise.all(OPTIONS_STRATEGIES.map(async strategy => ({
+    async overview(account = 'options') {
+        const limits = { maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart, concurrentJobs: 1 };
+        const base = { account, limits, active_job: this.activeJob() };
+        if (account === 'equity') {
+            // Equity panels show the live parameters; equity runs start from the lab in a later step.
+            const settings = await loadSettings(this.root);
+            return {
+                ...base,
+                start_available: false,
+                strategies: EQUITY_STRATEGIES.map(id => ({
+                    id, account: 'equity', parameters: scalarParameters(settings.strategies?.[id]), tunable: [], profiles: [], history: [],
+                })),
+            };
+        }
+        if (account !== 'options') throw new LabError('account must be options or equity');
+        const strategies = await Promise.all(OPTIONS_STRATEGIES.map(async strategy => ({
             id: strategy,
             account: 'options',
             parameters: await this.livePresent(strategy),
@@ -458,12 +482,7 @@ class ResearchLab {
             profiles: await this.listProfiles(strategy),
             history: (await this.history(strategy)).slice(-10),
         })));
-        return {
-            limits: { maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart, concurrentJobs: 1 },
-            active_job: this.activeJob(),
-            options,
-            equity: EQUITY_STRATEGIES.map(id => ({ id, account: 'equity', start_available: false })),
-        };
+        return { ...base, start_available: true, strategies };
     }
 }
 

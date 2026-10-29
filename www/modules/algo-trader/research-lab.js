@@ -1,14 +1,16 @@
 import { apiRequest } from '../api.js';
 import { escapeHtml } from '../escape.js';
+import { renderSystemGauge, startSystemGauge } from '../system-gauge.js?system-gauge=1';
 
-// Interactive options research: start a run, follow its log, read results, and promote a profile with rollback.
-const HOST_ID = 'research-lab-host';
+// Interactive research: start a run, follow its log, read results, and promote a profile with rollback.
+// The lab keeps its DOM node across the archive refresh, and re-renders only when its own state changes.
 const POLL_MS = 2000;
 const LOG_TAIL_LINES = 200;
 
 const state = {
+    account: 'options',
     overview: null,
-    strategy: 'vrp',
+    strategy: null,
     form: { underlyings: '', start: '', end: '', profile: '' },
     job: null,
     results: null,
@@ -23,7 +25,7 @@ const state = {
 const boundHosts = new WeakSet();
 
 function host() {
-    return document.getElementById(HOST_ID);
+    return document.getElementById('research-lab-host');
 }
 
 function tail(text) {
@@ -40,8 +42,12 @@ function isRunning(job) {
     return job?.state === 'running' || job?.state === 'cancelling';
 }
 
-function tunableFor(strategy) {
-    return state.overview?.options.find(item => item.id === strategy)?.tunable || [];
+function strategies() {
+    return state.overview?.strategies || [];
+}
+
+function current() {
+    return strategies().find(item => item.id === state.strategy) || null;
 }
 
 function renderParameterTable(parameters) {
@@ -52,13 +58,13 @@ function renderParameterTable(parameters) {
 }
 
 function renderStrategyTabs() {
-    const tabs = state.overview.options.map(item => `<button type="button" class="lab-tab ${item.id === state.strategy ? 'active' : ''}" data-lab-strategy="${escapeHtml(item.id)}">${escapeHtml(item.id.replaceAll('_', ' '))}</button>`).join('');
+    const tabs = strategies().map(item => `<button type="button" class="lab-tab ${item.id === state.strategy ? 'active' : ''}" data-lab-strategy="${escapeHtml(item.id)}">${escapeHtml(item.id.replaceAll('_', ' '))}</button>`).join('');
     return `<div class="lab-tabs" role="tablist">${tabs}</div>`;
 }
 
 function renderLive() {
     const job = state.job;
-    if (!job) return '<p class="lab-muted">No run in this session yet.</p>';
+    if (!job || job.account !== state.account) return '<p class="lab-muted">No run in this session yet.</p>';
     const progress = job.progress || {};
     const extras = [
         progress.current ? `now ${escapeHtml(progress.current)}` : '',
@@ -77,7 +83,7 @@ function renderLive() {
 function renderResults() {
     const data = state.results;
     if (!data?.results?.length) return '<p class="lab-muted">Results appear here as each underlying finishes.</p>';
-    const tunable = tunableFor(data.strategy);
+    const tunable = current()?.tunable || [];
     const rows = data.results.map(item => {
         if (item.status === 'error') {
             return `<tr><td>${escapeHtml(item.underlying)}</td><td colspan="4" class="lab-bad">${escapeHtml(item.error || 'error')}</td></tr>`;
@@ -90,28 +96,28 @@ function renderResults() {
     }).join('');
     return `<table class="lab-table lab-results"><thead><tr><th>Underlying</th><th>Status</th><th>OOS Sharpe</th><th>OOS trades</th><th>Final tunable parameters</th></tr></thead><tbody>${rows}</tbody></table>
         <div class="lab-save"><input type="text" data-lab-input="saveName" placeholder="profile name" value="${escapeHtml(state.saveName)}" maxlength="40">
-        <button type="button" class="btn btn-secondary" data-lab-action="save-profile">Save first approved-or-finished parameters as profile</button></div>`;
+        <button type="button" class="btn btn-secondary" data-lab-action="save-profile">Save first finished parameters as profile</button></div>`;
 }
 
 function renderStartForm() {
-    const profiles = state.overview.options.find(item => item.id === state.strategy)?.profiles || [];
+    const profiles = current()?.profiles || [];
     const options = ['<option value="">Live settings (no profile)</option>']
         .concat(profiles.map(item => `<option value="${escapeHtml(item.name)}" ${state.form.profile === item.name ? 'selected' : ''}>${escapeHtml(item.name)}</option>`))
         .join('');
     const busy = Boolean(state.overview.active_job);
     return `<form class="lab-form" data-lab-form="start">
         <label>Underlyings (max ${state.overview.limits.maxUnderlyings}, comma separated)
-            <input type="text" name="underlyings" value="${escapeHtml(state.form.underlyings)}" placeholder="SPY, QQQ, GLD" required></label>
-        <label>Start <input type="date" name="start" value="${escapeHtml(state.form.start)}" min="${escapeHtml(state.overview.limits.earliestStart)}"></label>
-        <label>End <input type="date" name="end" value="${escapeHtml(state.form.end)}"></label>
-        <label>Profile <select name="profile">${options}</select></label>
+            <input type="text" name="underlyings" data-lab-field value="${escapeHtml(state.form.underlyings)}" placeholder="SPY, QQQ, GLD" required></label>
+        <label>Start <input type="date" name="start" data-lab-field value="${escapeHtml(state.form.start)}" min="${escapeHtml(state.overview.limits.earliestStart)}"></label>
+        <label>End <input type="date" name="end" data-lab-field value="${escapeHtml(state.form.end)}"></label>
+        <label>Profile <select name="profile" data-lab-field>${options}</select></label>
         <button type="submit" class="btn btn-primary" ${busy ? 'disabled' : ''}>Start research</button>
         ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : ''}
     </form>`;
 }
 
 function renderPromotion() {
-    const strategy = state.overview.options.find(item => item.id === state.strategy);
+    const strategy = current();
     const profiles = strategy?.profiles || [];
     const choices = profiles.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join('');
     const history = (strategy?.history || []).slice().reverse()
@@ -133,30 +139,43 @@ function renderPromotion() {
 }
 
 function renderLab() {
-    if (!state.overview) return '<section class="card algo-panel lab-panel"><p class="lab-muted">Loading research lab…</p></section>';
+    if (!state.overview) {
+        const message = state.error ? `<p class="lab-bad">Research lab could not load: ${escapeHtml(state.error)}</p>` : '<p class="lab-muted">Loading research lab…</p>';
+        return `<section class="card algo-panel lab-panel">${message}</section>`;
+    }
     const notice = [
         state.message ? `<p class="lab-ok">${escapeHtml(state.message)}</p>` : '',
         state.error ? `<p class="lab-bad">${escapeHtml(state.error)}</p>` : '',
     ].join('');
-    const strategy = state.overview.options.find(item => item.id === state.strategy);
-    return `<section class="card algo-panel lab-panel" id="research-lab">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">RESEARCH LAB</span><h2>Interactive options research</h2>
-        <p>One job at a time, on the shared universe. Lab runs never change the live champion; promotion is a separate, confirmed step.</p></div></div>
-        ${notice}
-        ${renderStrategyTabs()}
-        <div class="lab-grid">
+    const isOptions = state.account === 'options';
+    const strategy = current();
+    const heading = isOptions
+        ? '<p>One job at a time, on the shared universe. Lab runs never change the live champion; promotion is a separate, confirmed step.</p>'
+        : '<p>Live parameters for each equity strategy. Equity runs and promotion from the lab are the next step.</p>';
+    const body = isOptions
+        ? `<div class="lab-grid">
             <div><h3>Live parameters</h3>${strategy ? renderParameterTable(strategy.parameters) : ''}</div>
             <div><h3>Start a run</h3>${renderStartForm()}</div>
-        </div>
-        <h3>Progress and log</h3><div id="lab-live">${renderLive()}</div>
-        <h3>Results</h3>${renderResults()}
-        <h3>Promotion</h3>${renderPromotion()}
+          </div>
+          <h3>Progress and log</h3><div id="lab-live">${renderLive()}</div>
+          <h3>Results</h3>${renderResults()}
+          <h3>Promotion</h3>${renderPromotion()}`
+        : `<div><h3>Live parameters</h3>${strategy ? renderParameterTable(strategy.parameters) : '<p class="lab-muted">No equity strategies found.</p>'}</div>`;
+    return `<section class="card algo-panel lab-panel" id="research-lab">
+        <div class="lab-head"><div class="algo-section-heading"><div><span class="algo-eyebrow">RESEARCH LAB</span><h2>Interactive ${isOptions ? 'options' : 'equity'} research</h2>${heading}</div></div>
+            <div id="system-gauge" class="sys-gauge" aria-label="Host load"></div></div>
+        ${notice}
+        ${renderStrategyTabs()}
+        ${body}
     </section>`;
 }
 
 function render() {
     const element = host();
-    if (element) element.innerHTML = renderLab();
+    if (!element) return;
+    element.innerHTML = renderLab();
+    startSystemGauge();
+    renderSystemGauge();
 }
 
 function stopPolling() {
@@ -170,10 +189,15 @@ function startPolling() {
 }
 
 async function refreshOverview() {
-    const overview = await apiRequest('/api/algo-trader/research/lab', {}, message => { state.error = message; });
-    if (overview) state.overview = overview;
+    const requested = state.account;
+    const overview = await apiRequest(`/algo-trader/research/lab?account=${encodeURIComponent(requested)}`, {}, message => { state.error = message; });
+    if (requested !== state.account) return;
+    if (overview) {
+        state.overview = overview;
+        if (!strategies().some(item => item.id === state.strategy)) state.strategy = strategies()[0]?.id || null;
+    }
     if (overview?.active_job && !state.job) {
-        const job = await apiRequest(`/api/algo-trader/research/jobs/${encodeURIComponent(overview.active_job)}`);
+        const job = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(overview.active_job)}`);
         if (job) {
             state.job = job;
             state.logText = '';
@@ -187,17 +211,17 @@ async function refreshOverview() {
 async function pollJob() {
     const id = state.job?.id;
     if (!id) return stopPolling();
-    const job = await apiRequest(`/api/algo-trader/research/jobs/${encodeURIComponent(id)}`);
-    if (!job) return;
+    const job = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(id)}`);
+    if (!job) return undefined;
     state.job = job;
-    const chunk = await apiRequest(`/api/algo-trader/research/jobs/${encodeURIComponent(id)}/log?offset=${state.logOffset}`);
+    const chunk = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(id)}/log?offset=${state.logOffset}`);
     if (chunk) {
         state.logText += chunk.text;
         state.logOffset = chunk.next;
     }
     if (!isRunning(job)) {
         stopPolling();
-        state.results = await apiRequest(`/api/algo-trader/research/jobs/${encodeURIComponent(id)}/results`);
+        state.results = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(id)}/results`);
         state.message = `Run ${job.state}.`;
         return refreshOverview();
     }
@@ -215,16 +239,9 @@ async function postJson(url, body) {
     }, message => { state.error = message; });
 }
 
-async function startRun(form) {
-    const data = new FormData(form);
-    state.form = {
-        underlyings: String(data.get('underlyings') || ''),
-        start: String(data.get('start') || ''),
-        end: String(data.get('end') || ''),
-        profile: String(data.get('profile') || ''),
-    };
+async function startRun() {
     state.error = '';
-    const job = await postJson('/api/algo-trader/research/jobs', {
+    const job = await postJson('/algo-trader/research/jobs', {
         account: 'options',
         strategy: state.strategy,
         underlyings: state.form.underlyings.split(/[\s,]+/).filter(Boolean),
@@ -246,17 +263,17 @@ async function startRun(form) {
 async function handleAction(action) {
     state.error = '';
     if (action === 'cancel' && state.job) {
-        const job = await postJson(`/api/algo-trader/research/jobs/${encodeURIComponent(state.job.id)}/cancel`, {});
+        const job = await postJson(`/algo-trader/research/jobs/${encodeURIComponent(state.job.id)}/cancel`, {});
         if (job) state.message = 'Cancelling after the current underlying.';
     } else if (action === 'save-profile') {
         const name = state.saveName.trim();
-        const tunable = tunableFor(state.strategy);
+        const tunable = current()?.tunable || [];
         const best = state.results?.results?.find(item => item.final_parameters) || null;
         if (!name) state.error = 'Enter a profile name first.';
         else if (!best) state.error = 'No finished results to save yet.';
         else {
             const parameters = Object.fromEntries(tunable.filter(key => key in best.final_parameters).map(key => [key, best.final_parameters[key]]));
-            const saved = await postJson('/api/algo-trader/research/profiles', { strategy: state.strategy, name, parameters, source_job: state.job?.id || null });
+            const saved = await postJson('/algo-trader/research/profiles', { strategy: state.strategy, name, parameters, source_job: state.job?.id || null });
             if (saved) {
                 state.message = `Saved profile ${name}.`;
                 state.saveName = '';
@@ -265,16 +282,16 @@ async function handleAction(action) {
         }
     } else if (action === 'preview-promote') {
         const profile = host()?.querySelector('[data-lab-input="promoteProfile"]')?.value;
-        state.preview = await postJson('/api/algo-trader/research/promote', { account: 'options', strategy: state.strategy, profile });
+        state.preview = await postJson('/algo-trader/research/promote', { account: 'options', strategy: state.strategy, profile });
     } else if (action === 'confirm-promote' && state.preview) {
-        const result = await postJson('/api/algo-trader/research/promote', {
+        const result = await postJson('/algo-trader/research/promote', {
             account: 'options', strategy: state.strategy, profile: state.preview.profile, confirm: true,
         });
         if (result) state.message = `Promoted ${state.preview.profile} to live ${state.strategy} (${result.applied}).`;
         state.preview = null;
         return refreshOverview();
     } else if (action === 'rollback') {
-        const result = await postJson('/api/algo-trader/research/rollback', { strategy: state.strategy });
+        const result = await postJson('/algo-trader/research/rollback', { strategy: state.strategy });
         if (result) state.message = `Rolled back ${state.strategy} (restored ${result.restored}).`;
         state.preview = null;
         return refreshOverview();
@@ -283,8 +300,8 @@ async function handleAction(action) {
     return undefined;
 }
 
-// Bind once per host element. Handlers look up the current host so a page re-render never leaves a stale timer or listener.
-export function mountResearchLab(element) {
+// Mounted once per account. Switching the Equity/Options switch changes the account; the archive refresh does not.
+export function mountResearchLab(element, account = 'options') {
     if (!element) return;
     if (!boundHosts.has(element)) {
         boundHosts.add(element);
@@ -303,14 +320,24 @@ export function mountResearchLab(element) {
         element.addEventListener('submit', event => {
             if (event.target.matches('[data-lab-form="start"]')) {
                 event.preventDefault();
-                startRun(event.target);
+                startRun();
             }
         });
-        element.addEventListener('input', event => {
-            if (event.target.matches('[data-lab-input="saveName"]')) state.saveName = event.target.value;
-        });
+        // Keep what the user typed in state, so a re-render never clears it.
+        const capture = event => {
+            const target = event.target;
+            if (target.matches('[data-lab-field]')) state.form[target.name] = target.value;
+            if (target.matches('[data-lab-input="saveName"]')) state.saveName = target.value;
+        };
+        element.addEventListener('input', capture);
+        element.addEventListener('change', capture);
     }
+    if (element.dataset.account === account && state.overview) return;
+    element.dataset.account = account;
+    state.account = account;
+    state.overview = null;
+    state.preview = null;
+    state.message = '';
+    state.error = '';
     refreshOverview();
 }
-
-export { HOST_ID as RESEARCH_LAB_HOST_ID };

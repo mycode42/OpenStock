@@ -118,6 +118,7 @@ function createApp({
     });
 
     require('./server/routes/algo-trader')({ app, root: algoTraderRoot, now });
+    require('./server/routes/system')({ app, root: algoTraderRoot });
 
     // Health check
     app.get('/health', (req, res) => {
