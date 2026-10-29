@@ -1,5 +1,6 @@
 import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js';
 import { renderResearchPage } from './algo-trader/research-view.js';
+import { mountResearchLab } from './algo-trader/research-lab.js';
 import { readSettingsFromForm as readFormSettings, renderSettingsForm } from './algo-trader/settings-form.js';
 
 export function createAlgoTrader({ request, charts }) {
@@ -82,7 +83,15 @@ export function createAlgoTrader({ request, charts }) {
             error: errors[researchMode],
         });
         selectedRunDates[researchMode] = view.selectedDate;
+        // The lab keeps its DOM node across the 15-second archive refresh, so typed values and the live log survive.
+        const existingLab = researchHost.querySelector('#research-lab-host');
         researchHost.innerHTML = view.html;
+        const slot = researchHost.querySelector('#research-lab-slot');
+        const lab = existingLab || Object.assign(document.createElement('div'), { id: 'research-lab-host' });
+        if (slot) {
+            slot.replaceWith(lab);
+            mountResearchLab(lab, researchMode);
+        }
     }
 
     async function loadAccount(mode, { silent = false } = {}) {

@@ -124,19 +124,6 @@
       "EWJ",
       "INDA"
     ],
-    "underlyings_by_strategy": {
-      "long_volatility": [
-        "SPY",
-        "QQQ",
-        "GLD",
-        "TLT",
-        "NVDA",
-        "AMD",
-        "TSLA",
-        "PLTR",
-        "SPCX"
-      ]
-    },
     "data_path_template": "data/options/research/options_history.sqlite3"
   },
   "search": {

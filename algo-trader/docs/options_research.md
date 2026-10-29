@@ -237,9 +237,8 @@ long-volatility retains its explicit nine-symbol list. The candidate scan is a
 research backtest and does not submit orders.
 
 To narrow the nightly batch, set `automation.underlyings` in
-`config.portfolio.json`; strategy-specific lists can be set with
-`automation.underlyings_by_strategy`. VRP defaults to the 117 history symbols,
-while long-volatility remains on its explicit nine names. The collectors write
+`config.portfolio.json`. Every strategy runs on that shared list; there are no
+per-strategy lists. The collectors write
 directly to `data/options/research/options_history.sqlite3`; custom datasets can use
 `automation.data_path_template` or per-symbol `automation.data_paths`. The
 automation keeps one result per strategy and underlying. Symbols remain in the

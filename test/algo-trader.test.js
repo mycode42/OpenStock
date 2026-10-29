@@ -47,6 +47,7 @@ function routeHandlers(root) {
   const app = {
     get: (route, handler) => { handlers[`GET ${route}`] = handler; },
     put: (route, handler) => { handlers[`PUT ${route}`] = handler; },
+    post: (route, handler) => { handlers[`POST ${route}`] = handler; },
   };
   registerAlgoTraderRoutes({ app, root });
   return handlers;
@@ -231,8 +232,8 @@ test('options settings save to their own config without changing equity override
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.settings.enabled, false);
   const savedOptions = JSON.parse(await fs.readFile(path.join(root, 'data', 'options', 'config.json'), 'utf8'));
-  assert.equal(savedOptions.enabled, false);
-  assert.equal(savedOptions.long_volatility.max_iv_to_realized_ratio, null);
+  // Only the changed value is stored; defaults such as max_iv_to_realized_ratio stay in the defaults file.
+  assert.deepEqual(savedOptions, { enabled: false });
   await assert.rejects(fs.access(path.join(root, 'data', 'dashboard-runtime-overrides.json')));
 });
 

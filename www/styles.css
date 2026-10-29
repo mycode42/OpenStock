@@ -574,3 +574,54 @@ a.alert-link{text-decoration:none;color:inherit}
 #page-config .config-real-order{min-height:2.1rem}
 #page-config .config-alert-row .config-switch,#page-config .config-retired-row>span{white-space:nowrap}
 
+
+/* Research lab: interactive options research on the research page. */
+.lab-panel { margin-bottom: 16px; }
+.lab-muted { opacity: 0.72; font-size: 0.9em; }
+.lab-ok { color: var(--positive, #2e7d32); }
+.lab-bad { color: var(--negative, #c62828); }
+.lab-tabs { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.lab-tab { border: 1px solid currentColor; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; }
+.lab-tab.active { font-weight: 600; }
+.lab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.lab-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.9em; }
+.lab-table th, .lab-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.25); vertical-align: top; }
+.lab-changed th, .lab-changed td { font-weight: 600; }
+.lab-form { display: grid; gap: 8px; }
+.lab-form label, .lab-promote label, .lab-save { display: grid; gap: 4px; }
+.lab-progress { height: 8px; border-radius: 4px; background: rgba(127, 127, 127, 0.25); overflow: hidden; margin: 8px 0; }
+.lab-progress > div { height: 100%; background: currentColor; transition: width 0.4s ease; }
+.lab-log { max-height: 280px; overflow: auto; white-space: pre-wrap; font-size: 0.8em; padding: 10px; border-radius: 6px; background: rgba(127, 127, 127, 0.12); }
+.lab-history { font-size: 0.9em; padding-left: 18px; }
+.lab-save { grid-auto-flow: column; align-items: center; justify-content: start; gap: 8px; margin-top: 8px; }
+
+/* Top-bar host load gauge with an htop-style panel. */
+.sys-gauge { margin-left: auto; position: relative; display: flex; align-items: center; }
+.sys-toggle { display: flex; align-items: center; gap: 6px; background: #0f0f0f; border: 1px solid #1f1f1f; color: #cbd5e1; border-radius: .5rem; padding: .35rem .6rem; font-size: .8rem; cursor: pointer; }
+.sys-toggle:hover { border-color: #3f3f3f; }
+.sys-label { color: #94a3b8; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; }
+.sys-value { font-variant-numeric: tabular-nums; min-width: 4.5ch; }
+.sys-bar { display: inline-block; height: 6px; border-radius: 3px; background: #1f1f1f; overflow: hidden; vertical-align: middle; }
+.sys-bar > span { display: block; height: 100%; background: currentColor; }
+.sys-bar-mini { width: 46px; }
+.sys-bar-wide { width: 180px; }
+.sys-bar-core { width: 120px; height: 5px; }
+.sys-ok { color: #84cc16; }
+.sys-warn { color: #facc15; }
+.sys-high { color: #f87171; }
+.sys-muted { color: #64748b; }
+.sys-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 50; width: min(640px, 92vw); background: #0a0a0a; border: 1px solid #1f1f1f; border-radius: .6rem; padding: .9rem; box-shadow: 0 12px 30px rgba(0, 0, 0, .5); font-size: .82rem; color: #cbd5e1; }
+.sys-panel[hidden] { display: none; }
+.sys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.sys-section { color: #94a3b8; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; margin: 4px 0 8px; }
+.sys-cores { display: grid; gap: 4px; }
+.sys-core { display: grid; grid-template-columns: 1.5rem 120px 3rem; align-items: center; gap: 6px; }
+.sys-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+.sys-research { color: #e2e8f0; }
+.sys-table { width: 100%; border-collapse: collapse; font-size: .78rem; font-variant-numeric: tabular-nums; }
+.sys-table th, .sys-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #1a1a1a; }
+.sys-table th:nth-child(n+2), .sys-table td:nth-child(n+2) { text-align: right; }
+@media (max-width: 720px) { .sys-gauge { margin-left: 0; } .sys-grid { grid-template-columns: 1fr; } .sys-panel { position: fixed; left: 4vw; right: 4vw; top: 6rem; width: auto; } }
+
+.lab-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; }
+.lab-head > .algo-section-heading { flex: 1 1 auto; min-width: 0; }

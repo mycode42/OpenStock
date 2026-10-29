@@ -6,6 +6,7 @@ const { loadRules } = require('../algo-trader/settings-rules');
 const { buildPayload } = require('../algo-trader/equity');
 const { UNIVERSE_HISTORY_RANGES, buildUniversePayload, fetchAlpacaUniverseHistory } = require('../algo-trader/universe');
 const { buildOptionsPayload } = require('../algo-trader/options');
+const { LabError, ResearchLab } = require('../algo-trader/research-lab');
 
 module.exports = function registerAlgoTraderRoutes({ app, root = require('../../lib/paths').algoTraderRoot(), now = () => new Date() }) {
     app.get('/api/algo-trader/universe/:symbol/history', async (req, res) => {
@@ -76,6 +77,42 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
             res.status(isValidationError ? 400 : 503).json({ error: isValidationError ? error.message : 'Algo Trader settings could not be saved' });
         }
     });
+
+    // Research lab: one job at a time, profiles, and promotion with rollback.
+    const lab = new ResearchLab({ root });
+    const labRoute = (handler) => async (req, res) => {
+        try {
+            res.json(await handler(req, res));
+        } catch (error) {
+            if (error instanceof LabError) return res.status(error.status).json({ error: error.message });
+            console.error(`Research lab request failed: ${error.message}`);
+            res.status(503).json({ error: 'Research lab is unavailable' });
+        }
+    };
+    const labWrite = (handler) => (req, res, next) => {
+        if (app.locals?.demoMode) return res.status(409).json({ error: 'Research lab runs are disabled in demo mode.' });
+        return labRoute(handler)(req, res, next);
+    };
+    app.get('/api/algo-trader/research/lab', labRoute(req => lab.overview(String(req.query?.account || 'options'))));
+    app.post('/api/algo-trader/research/jobs', labWrite(async (req, res) => {
+        const job = await lab.startJob(req.body);
+        res.status(202);
+        return job;
+    }));
+    app.get('/api/algo-trader/research/jobs/:id', labRoute(req => lab.jobStatus(req.params.id)));
+    app.get('/api/algo-trader/research/jobs/:id/log', labRoute(req => lab.readLogChunk(req.params.id, req.query.offset)));
+    app.get('/api/algo-trader/research/jobs/:id/results', labRoute(req => lab.jobResults(req.params.id)));
+    app.post('/api/algo-trader/research/jobs/:id/cancel', labWrite(req => lab.cancelJob(req.params.id)));
+    app.post('/api/algo-trader/research/profiles', labWrite(async req => ({
+        profiles: await lab.saveProfile({ ...safeObject(req.body), source_job: safeObject(req.body).source_job || null }),
+    })));
+    app.post('/api/algo-trader/research/promote', labWrite(async req => {
+        const body = safeObject(req.body);
+        if (body.account !== 'options') throw new LabError('only options profiles can be promoted yet', 409);
+        if (body.confirm !== true) return { ...(await lab.promotePreview(body.strategy, body.profile)), confirm_required: true };
+        return lab.promote(body.strategy, body.profile);
+    }));
+    app.post('/api/algo-trader/research/rollback', labWrite(req => lab.rollback(safeObject(req.body).strategy)));
 };
 
 module.exports.buildPayload = buildPayload;
