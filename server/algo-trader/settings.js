@@ -2,10 +2,10 @@ const fs = require('node:fs/promises');
 const { evaluateRules, loadRules } = require('./settings-rules');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
-const FALLBACK_DEFAULT_SETTINGS = require('../algo-strategy-config.default.json');
 const { finite, readJson, safeObject } = require('./io');
 
-function validateSettings(value, defaults = FALLBACK_DEFAULT_SETTINGS, rules) {
+function validateSettings(value, defaults, rules) {
+    if (!defaults || typeof defaults !== 'object') throw new Error('Algo default settings must be loaded before validating settings');
     if (!Array.isArray(rules)) throw new Error('Algo rule set must be loaded before validating settings');
     const settings = mergeConfig(defaults, safeObject(value));
     validateConfigShape(settings, defaults);
@@ -14,12 +14,7 @@ function validateSettings(value, defaults = FALLBACK_DEFAULT_SETTINGS, rules) {
 }
 
 async function loadSettings(root) {
-    let defaults = FALLBACK_DEFAULT_SETTINGS;
-    try {
-        defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
-    } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-    }
+    const defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
     const overrides = await readJson(path.join(root, 'data', 'algo-strategy-config.json'), { optional: true });
     const rules = await loadRules(root);
     return validateSettings(overrides || {}, defaults, rules);
