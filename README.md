@@ -118,7 +118,7 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 |----------|---------|-------------|
 | `ALPACA_MANUAL_API_KEY` | empty | Alpaca API key for the dashboard account. |
 | `ALPACA_MANUAL_API_SECRET` | empty | Its secret. Keep it in the ignored `.env` file. |
-| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account. Paper unless you set the live URL. |
+| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account.|
 | `ORDER_NOTIONAL_USD` | `250` | Default USD budget for a BUY placed from the dashboard. |
 | `ALPACA_EQUITY_*`, `ALPACA_OPTIONS_*` | empty | Keys, secrets and account IDs for the Algo equity and options sleeves. See [Algo Trader](#algo-trader). |
 | `ALPACA_DATA_FEED` | `sip` | Preferred Alpaca stock-data feed. OpenStock falls back between SIP and IEX when feed access is denied. |
@@ -171,7 +171,7 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 
 - **Alerts that fire once.** Each level queues one alert in a durable outbox. The outbox retries delivery and never sends twice.
 - **A journal that never invents P/L.** Deposits and withdrawals are tracked separately from trading results.
-- **Orders you confirm.** Every order shows a preview and needs your confirmation. Orders go to paper unless you change the endpoint.
+- **Orders you confirm.** Every paper order shows a preview and needs your confirmation.
 - **Figures that admit missing data.** Metrics show `N/A` or `Insufficient data` until enough history exists.
 
 Screenshots of every screen are in [Features](docs/features.md).
