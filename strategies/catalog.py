@@ -70,6 +70,7 @@ STRATEGY_ID_ALIASES = MappingProxyType({
     "momentum": "swing_momentum",
     "intraday_trend": "intraday_trend_following",
     "multi_factor": "swing_multi_factor",
+    "cash_sleeve": "cash_reserve",
 })
 
 

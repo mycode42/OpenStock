@@ -224,6 +224,33 @@ def _journal_index(journal_entries: Iterable[dict], mode: str) -> tuple[dict[str
     }, conflicts
 
 
+def _normalize_fill_side_from_journal(fill: Fill, journal_order: _JournalOrder | None) -> Fill:
+    """Use the exact journaled order intent to disambiguate Alpaca FILL sides.
+
+    Alpaca reports a buy-to-close FILL with activity side ``buy`` and may report
+    a sell-to-open FILL as ``sell``. The matching order journal row distinguishes
+    those from a long entry or a long close, respectively.
+    """
+    if journal_order is None or journal_order.symbol != fill.symbol:
+        return fill
+    normalized_side = fill.side
+    if fill.side == "buy" and journal_order.side == "buy_to_cover":
+        normalized_side = "buy_to_cover"
+    elif fill.side == "sell" and journal_order.side == "sell_short":
+        normalized_side = "sell_short"
+    if normalized_side == fill.side:
+        return fill
+    return Fill(
+        activity_id=fill.activity_id,
+        order_id=fill.order_id,
+        symbol=fill.symbol,
+        side=normalized_side,
+        qty=fill.qty,
+        price=fill.price,
+        transaction_time=fill.transaction_time,
+    )
+
+
 def _broker_quantities(positions: Iterable[dict] | Mapping[str, object]) -> dict[str, Decimal]:
     quantities: dict[str, Decimal] = {}
     if isinstance(positions, Mapping):
@@ -269,14 +296,21 @@ def calculate_realized_pnl(
     until_at = _period_bound(until, "until")
     if since_at and until_at and since_at >= until_at:
         raise ValueError("since must precede until")
-    parsed = [_parse_fill(raw) for raw in activities]
+    journal_by_order, journal_conflicts = _journal_index(journal_entries, mode)
+    parsed = [
+        _normalize_fill_side_from_journal(
+            _parse_fill(raw),
+            journal_by_order.get(str(raw.get("order_id") or ""))
+            if isinstance(raw, dict) else None,
+        )
+        for raw in activities
+    ]
     ids = [fill.activity_id for fill in parsed]
     if len(ids) != len(set(ids)):
         raise FillHistoryError("FILL activity IDs are repeated")
     # Keep Alpaca's ascending activity order when executions share a timestamp.
     parsed.sort(key=lambda fill: fill.transaction_time)
 
-    journal_by_order, journal_conflicts = _journal_index(journal_entries, mode)
     parent_by_child = {
         str(child): str(parent)
         for child, parent in (bracket_parent_by_child or {}).items()

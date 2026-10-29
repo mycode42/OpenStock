@@ -1,13 +1,16 @@
 """Trade journal stored in the Algo state database.
 
-The table is append-only and de-duplicates on the same keys as the JSONL journal:
-one submission per broker order ID or stable client order ID. Writes run in one
-transaction, and any failure raises so the caller never silently loses a trade.
+The table is append-only for order activity and de-duplicates on the same keys
+as the JSONL journal: one submission per broker order ID or stable client order
+ID. Versioned strategy-identity migrations may correct a strategy ID without
+changing any order facts. Writes run in one transaction, and any failure raises
+so the caller never silently loses a trade.
 """
 
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
@@ -28,7 +31,13 @@ CREATE TABLE IF NOT EXISTS trade_journal (
 );
 CREATE INDEX IF NOT EXISTS trade_journal_order_idx ON trade_journal(order_id);
 CREATE INDEX IF NOT EXISTS trade_journal_client_idx ON trade_journal(client_order_id);
+CREATE TABLE IF NOT EXISTS journal_migrations (
+    migration_id TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
 """
+
+_CASH_SLEEVE_MIGRATION = "20261029_cash_sleeve_to_cash_reserve"
 
 
 def order_keys(entry: dict) -> set[tuple[str, str, str]]:
@@ -44,13 +53,50 @@ def order_keys(entry: dict) -> set[tuple[str, str, str]]:
 def _connect(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path, timeout=30)
     connection.executescript(_SCHEMA)
+    _apply_migrations(connection)
     return connection
+
+
+def _apply_migrations(connection: sqlite3.Connection) -> None:
+    """Apply idempotent journal data migrations before reads or appends."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        applied = connection.execute(
+            "SELECT 1 FROM journal_migrations WHERE migration_id = ?",
+            (_CASH_SLEEVE_MIGRATION,),
+        ).fetchone()
+        if not applied:
+            rows = connection.execute(
+                "SELECT id, payload_json FROM trade_journal WHERE payload_json LIKE '%cash_sleeve%'"
+            ).fetchall()
+            for row_id, payload in rows:
+                entry = json.loads(payload)
+                if entry.get("strategy") != "cash_sleeve":
+                    continue
+                entry["strategy"] = "cash_reserve"
+                connection.execute(
+                    "UPDATE trade_journal SET payload_json = ? WHERE id = ?",
+                    (json.dumps(entry, sort_keys=True), row_id),
+                )
+            connection.execute(
+                "INSERT INTO journal_migrations (migration_id, applied_at) VALUES (?, ?)",
+                (_CASH_SLEEVE_MIGRATION, datetime.now(timezone.utc).isoformat()),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def append_entries(path: Path | str, entries: list[dict], *, recorded_at: str) -> list[dict]:
     """Append journal entries that are not already recorded. Returns the entries actually written."""
     if not entries:
         return []
+    entries = [
+        {**entry, "strategy": "cash_reserve"}
+        if entry.get("strategy") == "cash_sleeve" else entry
+        for entry in entries
+    ]
     with closing(_connect(Path(path))) as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         existing: set[tuple[str, str, str]] = set()
