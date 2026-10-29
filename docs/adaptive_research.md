@@ -3,14 +3,18 @@
 Equity AutoResearch improves the seven researchable Algo strategies over time:
 intraday mean reversion, intraday trend following, intraday momentum, swing
 trend following, swing momentum, swing mean reversion, and swing Multi Factor.
-Event Driven is not researched.
+`swing_llm_driven` is included in portfolio replay when enabled, but is not an
+AutoResearch candidate.
 
 Entry points:
 
 ```bash
-poetry run python -m research                        # options, then equity; target about 6h
+poetry run python -m research                        # manual aggregate: options, then equity; target about 6h
 poetry run python -m equity_research.auto_research --optimization-only --no-refresh --workers 8
 ```
+
+The scheduled OpenClaw jobs run options and equity research separately; see
+[`ops/openclaw-crons.md`](../ops/openclaw-crons.md).
 
 ## The loop
 

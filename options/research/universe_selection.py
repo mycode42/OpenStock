@@ -621,6 +621,108 @@ def last_completed_session(now: datetime) -> date:
     return day
 
 
+def _append_alpaca_spy_bar_fallback(
+    *, database: str | Path, expected: date,
+) -> dict:
+    """Fill missing SPY market bars from Alpaca without inventing option data."""
+    from broker.options import OptionsPaperClient
+    from options.research.archive import session_labels
+
+    store = OptionsHistoryStore(database)
+    connection = sqlite3.connect(Path(database).resolve(), timeout=60)
+    try:
+        existing = _read_history(connection, "SPY", limit=1)
+    finally:
+        connection.close()
+    latest_stored = date.fromisoformat(existing[-1]["session_date"]) if existing else None
+
+    client = OptionsPaperClient()
+    start = expected - timedelta(days=500)
+    bars = None
+    chosen_feed = None
+    feed_errors = []
+    for feed in ("sip", "iex"):
+        try:
+            candidate = client.stock_bars(
+                "SPY", start=start, end=expected + timedelta(days=1),
+                limit=10000, adjustment="split", feed=feed,
+            )
+            if candidate:
+                bars = candidate
+                chosen_feed = feed
+                break
+            feed_errors.append(f"{feed}: no bars")
+        except Exception as exc:
+            feed_errors.append(f"{feed}: {type(exc).__name__}")
+    if bars is None:
+        raise RuntimeError("Alpaca SPY bars unavailable (" + ", ".join(feed_errors) + ")")
+
+    closes: dict[date, float] = {}
+    volumes: dict[date, int] = {}
+    for row in bars:
+        raw_stamp = str(row.get("t", "")).replace("Z", "+00:00")
+        try:
+            stamp = datetime.fromisoformat(raw_stamp)
+            close = float(row.get("c"))
+            volume = int(float(row.get("v", 0)))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            continue
+        session = stamp.astimezone(ET).date()
+        if session > expected or close <= 0 or not math.isfinite(close) or volume < 0:
+            continue
+        closes[session] = close
+        volumes[session] = volume
+    if not closes:
+        raise RuntimeError(f"Alpaca returned no completed SPY bars through {expected.isoformat()}")
+
+    recent_floor = expected - timedelta(days=14)
+    missing_days = sorted(
+        session for session in closes
+        if session <= expected and session >= recent_floor
+        and (latest_stored is None or session > latest_stored)
+    )
+    if not missing_days:
+        raise RuntimeError(
+            f"Alpaca has no SPY bar newer than stored history through "
+            f"{latest_stored.isoformat() if latest_stored else 'unknown'}"
+        )
+
+    labels = session_labels(closes)
+    snapshots = []
+    for session in missing_days:
+        schedule = client.market_calendar(session)
+        if schedule is None:
+            continue
+        close_at = datetime.combine(
+            session, time.fromisoformat(str(schedule["close"])), tzinfo=ET,
+        )
+        regime, volatility = labels.get(session, ("range_bound", "normal"))
+        price = closes[session]
+        snapshots.append({
+            "underlying": "SPY",
+            "spot": price,
+            "underlying_close": price,
+            "equity_volume": volumes[session],
+            "as_of": close_at.isoformat(),
+            "snapshot_phase": "daily_close",
+            "feed": f"alpaca_{chosen_feed}_daily_bar_fallback",
+            "regime": regime,
+            "volatility_state": volatility,
+            "contracts": [],
+        })
+    if not snapshots:
+        raise RuntimeError("Alpaca SPY bars did not map to a market-calendar session")
+
+    written = store.write_snapshots("SPY", "alpaca", snapshots, replace_source=False)
+    return {
+        "feed": chosen_feed,
+        "sessions_written": written["sessions_written"],
+        "latest_session": max(missing_days).isoformat(),
+    }
+
+
 def _weekdays_between(earlier: date, later: date) -> int:
     count = 0
     day = earlier
@@ -647,13 +749,36 @@ def live_eligible_universe(
     live = rules.get("live_selection") or {}
     max_lag = int(live.get("max_staleness_sessions", 1))
     min_eligible = int(live.get("min_eligible_tickers", 6))
+    expected = last_completed_session(now)
     try:
         result = build_eligible_cache(database=database, rules_path=rules_path)
     except (ValueError, sqlite3.Error) as exc:
-        raise EligibleUniverseError(f"selector history unavailable: {exc}") from exc
+        if not (isinstance(exc, ValueError) and "no daily_close SPY history" in str(exc)):
+            raise EligibleUniverseError(f"selector history unavailable: {exc}") from exc
+        try:
+            fallback = _append_alpaca_spy_bar_fallback(database=database, expected=expected)
+            result = build_eligible_cache(database=database, rules_path=rules_path)
+            result["market_data_fallback"] = fallback
+        except Exception as fallback_exc:
+            raise EligibleUniverseError(
+                f"selector history unavailable: {exc}; Alpaca bar fallback failed: "
+                f"{type(fallback_exc).__name__}: {str(fallback_exc)[:240]}"
+            ) from fallback_exc
     as_of = date.fromisoformat(result["as_of_date"])
-    expected = last_completed_session(now)
     lag = _weekdays_between(as_of, expected)
+    if lag > max_lag:
+        try:
+            fallback = _append_alpaca_spy_bar_fallback(database=database, expected=expected)
+            result = build_eligible_cache(database=database, rules_path=rules_path)
+            as_of = date.fromisoformat(result["as_of_date"])
+            lag = _weekdays_between(as_of, expected)
+            result["market_data_fallback"] = fallback
+        except Exception as exc:
+            raise EligibleUniverseError(
+                f"selection as of {as_of.isoformat()} is {lag} sessions behind "
+                f"{expected.isoformat()}; Alpaca bar fallback failed: "
+                f"{type(exc).__name__}: {str(exc)[:240]}"
+            ) from exc
     if lag > max_lag:
         raise EligibleUniverseError(
             f"selection as of {as_of.isoformat()} is {lag} sessions behind {expected.isoformat()}"

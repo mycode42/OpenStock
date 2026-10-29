@@ -56,8 +56,12 @@ Each session the daemon runs the eligible-universe selector over the 117-name
 pool in `options/research/universe.json`. The result is stored as a dated
 snapshot in `data/options/research/options_history.sqlite3`. Entries pause if
 the snapshot is more than one session old, or if fewer than six names are
-eligible. Positions that leave the universe are still managed until they exit.
-Regime context stays on the static 24-name set in `portfolio/config.py`.
+eligible. If the SPY market-date anchor is missing or stale, the live selector
+retries from completed Alpaca daily bars, preferring SIP and falling back to
+IEX. Those recovery rows contain SPY price and volume only; they do not supply
+option-chain liquidity metrics. Positions that leave the universe are still
+managed until they exit. Regime context stays on the static 24-name set in
+`portfolio/config.py`.
 
 ## State and backups
 

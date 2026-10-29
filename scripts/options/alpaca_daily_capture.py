@@ -270,7 +270,8 @@ def capture_symbol(
         str(row.get("symbol") or "").upper(): row for row in selected if row.get("symbol")
     }
     snapshots = _fetch_snapshots(client, list(symbol_by_contract), feed=feed)
-    snapshot_as_of = datetime.now(ET) if opening else close_at
+    captured_at = datetime.now(ET)
+    snapshot_as_of = captured_at if opening else min(captured_at, close_at)
     rows = []
     for option_symbol, contract in symbol_by_contract.items():
         raw = snapshots.get(option_symbol) or snapshots.get(option_symbol.lower()) or {}
@@ -339,7 +340,7 @@ def capture_symbol(
         "equity_volume": equity_volumes.get(equity_volume_date) if equity_volume_date else None,
         "as_of": snapshot_as_of.isoformat(),
         "snapshot_phase": "opening" if opening else "daily_close",
-        "target_time": (open_at + timedelta(minutes=5)).isoformat() if opening else close_at.isoformat(),
+        "target_time": (open_at + timedelta(minutes=5)).isoformat() if opening else snapshot_as_of.isoformat(),
         "feed": f"alpaca_{feed}_opening" if opening else f"alpaca_{feed}_daily_close",
         "regime": labels[0],
         "volatility_state": labels[1],
@@ -373,7 +374,7 @@ def capture_symbol(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Archive daily Alpaca OPRA chains for options research")
     parser.add_argument("--underlying", action="append", help="ticker to capture; repeatable")
-    parser.add_argument("--phase", choices=("open", "close"), default="close", help="opening or daily-close snapshot")
+    parser.add_argument("--phase", choices=("open", "close"), default="close", help="opening or close-side snapshot")
     parser.add_argument(
         "--universe", choices=("portfolio", "research"), default="portfolio",
         help="configured Algo portfolio or expanded options research history universe",
@@ -416,12 +417,14 @@ def main() -> int:
                 if now > target_at + timedelta(minutes=15):
                     print(f"Alpaca opening capture skipped: {target_at.isoformat()} window has passed.")
                     return 0
-            elif now < close_at + timedelta(minutes=5):
-                print(
-                    f"Alpaca options history capture skipped: wait until "
-                    f"{(close_at + timedelta(minutes=5)).isoformat()} for the completed session bar."
-                )
-                return 0
+            else:
+                capture_start = close_at - timedelta(minutes=15)
+                if now < capture_start:
+                    print(
+                        f"Alpaca options history capture skipped: wait until "
+                        f"{capture_start.isoformat()} for the close-side capture window."
+                    )
+                    return 0
 
             results, failures = [], []
             for symbol in symbols:

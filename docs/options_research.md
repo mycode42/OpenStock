@@ -48,35 +48,41 @@ approved candidate becomes champion. Decisions are stored in
 
 ## Nightly automation
 
-The scheduled AutoResearch automation runs `research`, which starts
-the existing equity research command and an independent options job concurrently.
-The options job currently runs VRP and long-volatility. VRP screens the 117-symbol
-history candidate pool one ticker at a time; long-volatility keeps its explicit
-9-symbol list. Event-driven options remains excluded until point-in-time event
-recommendations are available. Each ticker reads its effective ThetaData and
+The OpenClaw Gateway schedules options and equity research as separate jobs:
+`options-research` runs `python -m research.options` at 17:00 ET, and
+`equity-research` runs `python -m research.equity` at 20:00 ET. The options job
+currently runs VRP and long-volatility. VRP screens the 117-symbol history
+candidate pool one ticker at a time; long-volatility keeps its explicit
+9-symbol list. LLM-driven options research remains outside the nightly preset
+until frozen point-in-time recommendations are available. Each ticker reads its effective ThetaData and
 Alpaca history from `data/options/research/options_history.sqlite3`, selected
 through `automation.data_path_template`;
 missing or not-yet-long-enough datasets are reported per ticker while available
 datasets continue through research. Edit `automation.strategies` in
 `config.portfolio.json` to select a different subset, including
-`directional_overlay`. The options job uses the same worker budget as equity
-AutoResearch (8 by default), capped by the CPUs available to the process.
-Options research runs at lower process priority and writes a separate dated
+`directional_overlay`. The options job uses the worker budget in its portfolio
+config (8 by default), capped by the CPUs available to the process. Options
+research runs at lower process priority and writes a separate dated
 JSON/Markdown report plus `latest.json` and `latest.md` under
 `data/options/research/automation/`. The report records the requested and used
-worker counts. The equity report also contains a top-level `options_research`
-summary section. Candidates remain research-only and are never applied
+worker counts. Candidates remain research-only and are never applied
 automatically.
 
+The manual aggregate command `python -m research` runs options first, then
+equity; it does not run the stages concurrently. Its combined report includes
+an `options_research` summary. The scheduled jobs call their separate entry
+points and produce separate reports.
+
 If the configured chain dataset does not exist, the options report uses
-`waiting_for_data` and records the missing path. The equity research cycle still
-completes independently. Supply historical option-chain snapshots (or explicitly
-marked point-in-time IV-surface rows) before expecting options validation runs.
+`waiting_for_data` and records the missing path. The aggregate command still
+continues to equity research, and the scheduled equity job runs independently.
+Supply historical option-chain snapshots (or explicitly marked point-in-time
+IV-surface rows) before expecting options validation runs.
 
 ## Eligible universe snapshots and portfolio exposure checks
 
 The optional research selector starts with the 117-symbol history universe and
-uses only completed daily-close snapshots. It applies a rolling 20-session
+reads dated `daily_close` rows from the normalized history store. It applies a rolling 20-session
 options activity gate (average contract volume or total open interest), equity
 share volume and dollar volume gates, and a median option spread gate around the
 money. Thresholds, liquidity coverage requirements, sector proxy mappings,
@@ -99,6 +105,12 @@ archives and writes the refreshed snapshots and liquidity summaries directly
 to SQLite. Until summary coverage exists, the selector fails closed and returns
 no eligible tickers. Underlying historical NBBO spread
 is not stored, so the hard spread gate currently uses option spreads.
+
+For live selection, if SPY's daily-close date is missing or too stale, the
+selector fills the missing SPY market bars from Alpaca (SIP first, IEX fallback)
+and retries. These fallback rows contain completed SPY close and share-volume
+data only; they do not create option contracts or liquidity summaries. ThetaData
+remains a historical chain source, not the live market-date fallback.
 
 After the history import is current, store a dated selector snapshot and run the
 separate selection walk-forward report:
@@ -186,15 +198,19 @@ after the opening quote backfill, rebuild those derived rows with
 
 ## Daily Alpaca capture
 
-The `options-history-capture` OpenClaw automation runs at 16:15
-America/New_York on weekdays, after the regular close. It saves OPRA quotes from the current session and the
-session's underlying close for all 117 options research history tickers. It captures options
-expiring within 60 days and up to 20 strikes on each side of spot per expiry.
-Snapshots with fewer than 20 valid same-session quotes are rejected and logged
-per ticker. The collector reads only the Alpaca options account credentials;
-it does not read or call ThetaData.
+The `options-history-capture` OpenClaw automation starts at 15:45
+America/New_York on weekdays, in the final 15 minutes before the regular close.
+It saves same-session OPRA quotes for all 117 options research history tickers,
+for expirations within 60 days and up to 20 strikes on each side of spot per
+expiry. Snapshots with fewer than 20 valid same-session quotes are rejected and
+logged per ticker. The collector reads only the Alpaca options account
+credentials; it does not read or call ThetaData. Its `as_of` is the actual
+capture time capped at the session close. A daily stock bar fetched before
+16:00 ET may still be forming, so this is a close-side snapshot rather than a
+guarantee of the final stock closing print.
 
-Alpaca rows are upserted directly into `options_history.sqlite3`. Research keeps
+Alpaca rows are upserted directly into `options_history.sqlite3`; this job does
+not rebuild legacy merged JSONL datasets. Research keeps
 one effective row per New York session and prefers Alpaca when both providers
 have that date. Thus Theta remains the historical backfill source, while daily
 research advances from Alpaca. The capture can also be run manually with
