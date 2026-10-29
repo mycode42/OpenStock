@@ -3,6 +3,7 @@ const FALLBACK_DEFAULT_SETTINGS = require('../algo-strategy-config.default.json'
 const { readCoordinatorState, readJson, safeObject } = require('../algo-trader/io');
 const { attachEuroAmounts, equityStrategyPerformance, optionsStrategyPerformance } = require('../algo-trader/performance');
 const { loadOptionsSettings, loadSettings, mergeConfig, validateSettings, writeOptionsSettings, writeSettings } = require('../algo-trader/settings');
+const { loadRules } = require('../algo-trader/settings-rules');
 const { buildPayload } = require('../algo-trader/equity');
 const { UNIVERSE_HISTORY_RANGES, buildUniversePayload, fetchAlpacaUniverseHistory } = require('../algo-trader/universe');
 const { buildOptionsPayload } = require('../algo-trader/options');
@@ -70,7 +71,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
                 if (error.code !== 'ENOENT') throw error;
                 return FALLBACK_DEFAULT_SETTINGS;
             });
-            const settings = validateSettings(mergeConfig(current, body.settings), defaults);
+            const settings = validateSettings(mergeConfig(current, body.settings), defaults, await loadRules(root));
             await writeSettings(root, settings);
             res.json({ settings, applied: 'next portfolio scan' });
         } catch (error) {
