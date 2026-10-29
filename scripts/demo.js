@@ -22,6 +22,12 @@ const env = {
     ALGO_TRADER_ROOT: path.join(demoDir, 'no-algo-trader'),
     ALPACA_MANUAL_API_KEY: '',
     ALPACA_MANUAL_API_SECRET: '',
+    ALPACA_EQUITY_API_KEY: '',
+    ALPACA_EQUITY_API_SECRET: '',
+    ALPACA_EQUITY_ACCOUNT_ID: '',
+    ALPACA_OPTIONS_API_KEY: '',
+    ALPACA_OPTIONS_API_SECRET: '',
+    ALPACA_OPTIONS_ACCOUNT_ID: '',
 };
 
 // Sample journal rows go into the demo database only; seeding is skipped once it has trades.

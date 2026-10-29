@@ -186,3 +186,12 @@ test('overview returns one strategies list per account; equity is read-only for 
     assert.ok(equity.strategies.every(item => item.account === 'equity' && item.tunable.length === 0));
     await assert.rejects(lab.overview('crypto'), /account must be/);
 });
+
+test('research lab overview in demo mode returns the strategy list without Algo Trader files', () => {
+    const { labOverview } = require('../server/demo-data');
+    const overview = labOverview('options');
+    assert.deepEqual(overview.strategies.map(strategy => strategy.id), ['vrp', 'long_volatility']);
+    assert.equal(overview.start_available, false);
+    assert.equal(overview.active_job, null);
+    assert.throws(() => labOverview('bogus'), /account must be/);
+});

@@ -11,7 +11,7 @@ from market.data import regular_feed
 from market.quotes import QuoteParseError, parse_quote
 
 
-from broker.endpoints import ALGO_TRADING_BASE as PAPER_BASE
+from broker.endpoints import ALGO_TRADING_BASE
 DATA_BASE = "https://data.alpaca.markets/v2"
 
 
@@ -44,7 +44,7 @@ class AlgoAlpaca:
         return response.json()
 
     def account(self) -> dict:
-        account = self._get(f"{PAPER_BASE}/account")
+        account = self._get(f"{ALGO_TRADING_BASE}/account")
         configured_id = self.account_id.strip()
         # Alpaca exposes both its UUID `id` and human-facing `account_number`.
         # Accept either representation while still binding keys to the intended
@@ -59,10 +59,10 @@ class AlgoAlpaca:
         return account
 
     def clock(self) -> dict:
-        return self._get(f"{PAPER_BASE}/clock")
+        return self._get(f"{ALGO_TRADING_BASE}/clock")
 
     def calendar(self, start: str, end: str) -> list[dict]:
-        return self._get(f"{PAPER_BASE}/calendar", params={"start": start, "end": end})
+        return self._get(f"{ALGO_TRADING_BASE}/calendar", params={"start": start, "end": end})
 
     def previous_close(self, symbol: str, session_day: str) -> float:
         start = (datetime.fromisoformat(session_day) - timedelta(days=12)).date().isoformat()
@@ -113,7 +113,7 @@ class AlgoAlpaca:
         return output
 
     def positions(self) -> list[dict]:
-        return self._get(f"{PAPER_BASE}/positions")
+        return self._get(f"{ALGO_TRADING_BASE}/positions")
 
     def orders(self, status: str = "open", *, nested: bool = False, symbols: str | None = None) -> list[dict]:
         params = {"status": status, "limit": 500}
@@ -121,18 +121,18 @@ class AlgoAlpaca:
             params["nested"] = "true"
         if symbols:
             params["symbols"] = symbols
-        return self._get(f"{PAPER_BASE}/orders", params=params)
+        return self._get(f"{ALGO_TRADING_BASE}/orders", params=params)
 
     def orders_after(self, after: str | None, *, status: str = "all", limit: int = 500) -> list[dict]:
         """Oldest-first page of orders submitted after a timestamp, for ledger sync."""
         params: dict = {"status": status, "limit": limit, "direction": "asc"}
         if after:
             params["after"] = after
-        return self._get(f"{PAPER_BASE}/orders", params=params)
+        return self._get(f"{ALGO_TRADING_BASE}/orders", params=params)
 
     def order_by_client_id(self, client_order_id: str) -> dict | None:
         response = self.session.get(
-            f"{PAPER_BASE}/orders:by_client_order_id",
+            f"{ALGO_TRADING_BASE}/orders:by_client_order_id",
             headers=self.headers,
             params={"client_order_id": client_order_id},
             timeout=10,
@@ -143,14 +143,14 @@ class AlgoAlpaca:
         return response.json()
 
     def order(self, order_id: str, *, nested: bool = False) -> dict:
-        url = f"{PAPER_BASE}/orders/{order_id}"
+        url = f"{ALGO_TRADING_BASE}/orders/{order_id}"
         return self._get(url, params={"nested": "true"}) if nested else self._get(url)
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel one open order in the Algo Paper account; used only by the protection migration."""
         if not order_id:
             raise ValueError("Algo cancellation requires an order ID")
-        response = self.session.delete(f"{PAPER_BASE}/orders/{order_id}", headers=self.headers, timeout=10)
+        response = self.session.delete(f"{ALGO_TRADING_BASE}/orders/{order_id}", headers=self.headers, timeout=10)
         if response.status_code not in (200, 204):
             response.raise_for_status()
 

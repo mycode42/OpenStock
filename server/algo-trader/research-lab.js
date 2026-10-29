@@ -487,8 +487,10 @@ class ResearchLab {
 }
 
 module.exports = {
+    EQUITY_STRATEGIES,
     LIMITS,
     LabError,
+    OPTIONS_STRATEGIES,
     ResearchLab,
     buildJobConfig,
     diffParameters,

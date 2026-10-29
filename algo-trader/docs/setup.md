@@ -22,6 +22,6 @@ The live systemd units read the OpenStock root `.env` (the `EnvironmentFile` in 
 
 - Equity uses `ALPACA_EQUITY_API_KEY`, `ALPACA_EQUITY_API_SECRET`, and `ALPACA_EQUITY_ACCOUNT_ID`.
 - The options sleeve uses the `ALPACA_OPTIONS_*` equivalents.
-- Keep the Alpaca URLs on paper. The Algo routes refuse any other endpoint.
+- Keep the Alpaca URLs on paper. They default to paper; any other endpoint is an explicit override.
 
 Keep `.env` out of source control.
