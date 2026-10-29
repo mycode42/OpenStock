@@ -28,7 +28,7 @@ test('blank environment values fall back to the default', () => {
     assert.equal(paths.databasePath({ DATABASE_PATH: '   ' }), path.join(repo, 'database', 'openstock.db'));
 });
 
-test('sibling installs are the default external locations', () => {
-    assert.equal(paths.algoTraderRoot({}), path.join(path.dirname(repo), 'algo-trader'));
-    assert.equal(paths.sdkModulePath({}), path.join(path.dirname(repo), 'handelsrepublik', 'dist', 'index.js'));
+test('the Algo Trader subtree is the default location inside the checkout', () => {
+    assert.equal(paths.algoTraderRoot({}), path.join(repo, 'algo-trader'));
+    assert.equal(paths.algoTraderRoot({ ALGO_TRADER_ROOT: './elsewhere' }), path.join(repo, 'elsewhere'));
 });

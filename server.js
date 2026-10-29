@@ -4,14 +4,6 @@ require('dotenv').config({ path: paths.configFilePath(), quiet: true });
 const express = require('express');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
-const { HistoryBackfillQueue } = require('./lib/history-backfill');
-const { TradeRepublicClient } = require('./lib/brokers/trade-republic');
-const {
-    resolveVerifiedInstrument,
-    resolveCryptoCandidates,
-    resolveVerifiedCryptoInstrument,
-} = require('./lib/instrument-resolution');
-const { HandelsrepublikQuoteClient } = require('./lib/brokers/handelsrepublik');
 const demoData = require('./server/demo-data');
 const APP_VERSION = require('./package.json').version;
 
@@ -26,7 +18,7 @@ const {
     serializeTrade,
 } = require('./server/serializers');
 const { alertLevelInput, booleanField, toDatabaseDate, numberField, normaliseTrade } = require('./server/input');
-const { dashboardData, captureEquitySnapshot, queueStockHistory, brokerError } = require('./server/services');
+const { dashboardData, captureEquitySnapshot, brokerError } = require('./server/services');
 const { detectDemoSetup, hasAlpacaCredentials } = require('./server/demo-setup');
 const { AlpacaClient } = require('./lib/brokers/alpaca');
 const { createAlpacaQuoteFeed } = require('./server/alpaca-quote-feed');
@@ -35,19 +27,11 @@ function createApp({
     db: suppliedDb,
     dbPath = paths.databasePath(),
     fetchImpl = globalThis.fetch,
-    backfill = null,
-    sdkClient = null,
     now = () => new Date(),
     demoMode = null,
     algoTraderRoot = paths.algoTraderRoot(),
 } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
-    const historyBackfill =
-        backfill ||
-        new HistoryBackfillQueue({
-            db,
-            delayMs: process.env.HISTORY_BACKFILL_DELAY_MS || 1500,
-        });
     const app = express();
     // OpenStock is published behind the OpenClaw reverse proxy.  Express sees
     // the final hop as HTTP unless it trusts that proxy, while browsers send
@@ -55,13 +39,7 @@ function createApp({
     // X-Forwarded-Proto for the same-origin mutation check below.
     app.set('trust proxy', 1);
     app.locals.db = db;
-    app.locals.historyBackfill = historyBackfill;
     app.locals.fetchImpl = fetchImpl;
-    app.locals.brokerClient = new TradeRepublicClient({
-        fetchImpl,
-        timeoutMs: Number(process.env.TRADE_REPUBLIC_TIMEOUT_MS || 30000),
-    });
-    app.locals.sdkClient = sdkClient || new HandelsrepublikQuoteClient();
     app.locals.alpacaClient = new AlpacaClient({ fetchImpl, timeoutMs: Number(process.env.ALPACA_TIMEOUT_MS || 10000) });
     const detectedDemoSetup = detectDemoSetup({ algoTraderRoot });
     app.locals.demoMode =
@@ -82,8 +60,6 @@ function createApp({
                       : [],
               };
     app.locals.demoData = demoData;
-    historyBackfill.brokerClient = app.locals.brokerClient;
-    historyBackfill.sdkClient = app.locals.sdkClient;
     const serializeConfiguredStock = (stock) => serializeBrokerStock(stock, db);
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
@@ -115,11 +91,6 @@ function createApp({
         alertLevelInput,
         numberField,
         booleanField,
-        queueStockHistory,
-        resolveVerifiedInstrument,
-        resolveCryptoCandidates,
-        resolveVerifiedCryptoInstrument,
-        brokerError,
         now,
         berlinTradingDayStart,
         berlinTradingDayEnd,

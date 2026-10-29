@@ -1,4 +1,5 @@
 import { escapeHtml } from './escape.js';
+import { sessionWindow, sessionTicks, formatSessionTime } from './session-window.js';
 import { money, parseOpenStockDate, formatChartHoverTime, formatChartDate, formatChartTime, chartRangeLabel } from './formatting.js';
 
 export function createCharts({ request, historyCache }) {
@@ -152,11 +153,28 @@ function chartPrice(value, currency) {
     return `€${money(value)}`;
 }
 
-function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, now = new Date(), priceField = 'price_eur', currency = 'EUR' } = {}) {
-    const clean = points
+function renderHistoryChart(points, range, { now = new Date(), priceField = 'price_eur', currency = 'EUR' } = {}) {
+    const session = range === '1d' ? sessionWindow(now) : null;
+    const sorted = points
         .map(point => ({ ...point, _chartPrice: Number(point[priceField]), _chartTime: point.recorded_at || point.timestamp }))
         .filter(point => Number.isFinite(point._chartPrice) && parseOpenStockDate(point._chartTime))
         .sort((left, right) => parseOpenStockDate(left._chartTime).getTime() - parseOpenStockDate(right._chartTime).getTime());
+    // A 1D line starts at its first point inside the session window; earlier points would pin to the left edge.
+    // 1W draws each day as its own 09:00–01:00 block, so the regular-session bars sit inside a fixed day window.
+    const isWeek = range === '1w';
+    const timeOf = point => parseOpenStockDate(point._chartTime).getTime();
+    const clean = session
+        ? sorted.filter(point => { const time = timeOf(point); return time >= session.start.getTime() && time <= session.end.getTime(); })
+        : isWeek
+            ? sorted.filter(point => timeOf(point) <= sessionWindow(new Date(timeOf(point))).end.getTime())
+            : sorted;
+    const weekStarts = isWeek ? [...new Set(clean.map(point => sessionWindow(new Date(timeOf(point))).start.getTime()))].sort((left, right) => left - right) : [];
+    const weekX = point => {
+        const time = timeOf(point);
+        const window = sessionWindow(new Date(time));
+        const index = weekStarts.indexOf(window.start.getTime());
+        return (index + (time - window.start.getTime()) / (window.end.getTime() - window.start.getTime())) / weekStarts.length * width;
+    };
     if (clean.length < 2) {
         const message = range === '1d' && isMarketClosedWeekend(now) ? 'market closed' : 'collecting price history';
         return `<div class="history-empty">${message}</div>`;
@@ -165,13 +183,13 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, n
     const min = Math.min(...values), max = Math.max(...values);
     const padding = Math.max((max - min) * 0.08, max * 0.002, 0.01);
     const low = min - padding, high = max + padding, width = 264, height = 82;
-    const sessionStart = range === '1d' ? parseOpenStockDate(startAt) : null;
-    const sessionEnd = range === '1d' ? parseOpenStockDate(endAt) : null;
+    const sessionStart = session?.start ?? null;
+    const sessionEnd = session?.end ?? null;
     const sessionDuration = sessionEnd?.getTime() - sessionStart?.getTime();
     const hasFixedDayScale = Number.isFinite(sessionDuration) && sessionDuration > 0;
     const coordinates = clean.map((point, index) => {
         const timestamp = parseOpenStockDate(point._chartTime)?.getTime();
-        const sessionX = hasFixedDayScale && Number.isFinite(timestamp)
+        const sessionX = isWeek ? weekX(point) : hasFixedDayScale && Number.isFinite(timestamp)
             ? Math.max(0, Math.min(width, (timestamp - sessionStart.getTime()) / sessionDuration * width))
             : index / (clean.length - 1) * width;
         return { point, x: sessionX, y: height - ((point._chartPrice - low) / (high - low || 1) * height) };
@@ -184,15 +202,18 @@ function renderHistoryChart(points, range, { start_at: startAt, end_at: endAt, n
     const ariaLabel = `${chartRangeLabel(range)} ${currency} price chart from ${formatChartDate(first._chartTime)} to ${formatChartDate(last._chartTime)}`;
     const chart = interactiveChartSvg({ className: 'history-chart', width, height, grid: `<path class="history-grid" d="M0 20H${width} M0 41H${width} M0 62H${width}"/>`, lineClass: `history-line ${changeClass}`, linePoints, smooth: true, hoverPoints, ariaLabel });
     const changeText = `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`;
-    const axisStart = hasFixedDayScale ? formatChartTime(startAt) : formatChartDate(first._chartTime);
-    const axisEnd = hasFixedDayScale ? formatChartTime(endAt) : formatChartDate(last._chartTime);
-    const axisTicks = [0, 0.25, 0.5, 0.75, 1].map(fraction => {
-        if (fraction === 0) return { fraction, label: axisStart };
-        if (fraction === 1) return { fraction, label: axisEnd };
-        if (hasFixedDayScale) return { fraction, label: formatChartTime(new Date(sessionStart.getTime() + sessionDuration * fraction).toISOString()) };
-        const point = clean[Math.round((clean.length - 1) * fraction)];
-        return { fraction, label: formatChartDate(point._chartTime) };
-    });
+    const axisStart = hasFixedDayScale ? formatSessionTime(sessionStart.toISOString()) : formatChartDate(first._chartTime);
+    const axisEnd = hasFixedDayScale ? formatSessionTime(sessionEnd.toISOString()) : formatChartDate(last._chartTime);
+    const axisTicks = isWeek
+        ? weekStarts.map((start, index) => ({ fraction: (index + .5) / weekStarts.length, label: formatChartDate(new Date(start).toISOString()) }))
+        : hasFixedDayScale
+        ? sessionTicks(session).map(({ fraction, time }) => ({ fraction, label: formatSessionTime(time.toISOString()) }))
+        : [0, 0.25, 0.5, 0.75, 1].map(fraction => {
+            if (fraction === 0) return { fraction, label: axisStart };
+            if (fraction === 1) return { fraction, label: axisEnd };
+            const point = clean[Math.round((clean.length - 1) * fraction)];
+            return { fraction, label: formatChartDate(point._chartTime) };
+        });
     const axisLabels = axisTicks.map(({ fraction, label }) => `<span style="left:${(fraction * 100).toFixed(0)}%">${label}</span>`).join('');
     const priceRange = `${chartPrice(min, currency)} – ${chartPrice(max, currency)}`;
     return `<div class="history-chart-readout" data-chart-readout><div class="history-meta"><span class="history-price" data-chart-value data-default-chart-value="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates" aria-label="Chart time axis">${axisLabels}</div></div>`;
@@ -206,7 +227,7 @@ function renderHistoryPanel(panel, history, range, { currency = 'EUR', priceFiel
 
 async function loadCardHistory(card, range = '1d', { force = false, showLoading = true } = {}) {
     const stockId = Number(card.dataset.stockId);
-    const broker = card.dataset.broker === 'alpaca' ? 'alpaca' : 'trade_republic';
+    const broker = 'alpaca';
     const currency = broker === 'alpaca' ? 'USD' : 'EUR';
     const panel = card.querySelector('.history-popover');
     if (!Number.isInteger(stockId) || !panel) return;
@@ -302,22 +323,8 @@ function attachChartHovers(container) {
     container.querySelectorAll('.stock-card[data-stock-id]').forEach(card => {
         const panel = card.querySelector('.history-popover');
         const refreshCardHistory = () => loadCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false });
-        let closeTimer;
-        const cancelPopoverClose = () => {
-            clearTimeout(closeTimer);
-            closeTimer = undefined;
-        };
-        const delayPopoverClose = () => {
-            cancelPopoverClose();
-            panel.classList.add('is-open');
-            closeTimer = setTimeout(() => panel.classList.remove('is-open'), 300);
-        };
-
+        bindPopoverGrace(card, panel, usesMobileChartInteraction);
         card.addEventListener('mouseenter', () => { if (!usesMobileChartInteraction()) refreshCardHistory(); });
-        card.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
-        card.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
-        panel.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
-        panel.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
         card.addEventListener('focusin', () => { if (!usesMobileChartInteraction()) refreshCardHistory(); });
         card.addEventListener('click', event => {
             if (!usesMobileChartInteraction() || event.target.closest('.history-popover')) return;
@@ -333,6 +340,25 @@ function attachChartHovers(container) {
             loadCardHistory(card, button.dataset.historyRange, { force: true });
         });
     });
+}
+
+// Keeps a card's popover open for POPOVER_GRACE_MS after the pointer leaves, so crossing the gap to the panel is easy.
+const POPOVER_GRACE_MS = 200;
+function bindPopoverGrace(card, panel, usesMobileChartInteraction) {
+    let closeTimer;
+    const cancelPopoverClose = () => {
+        clearTimeout(closeTimer);
+        closeTimer = undefined;
+    };
+    const delayPopoverClose = () => {
+        cancelPopoverClose();
+        panel.classList.add('is-open');
+        closeTimer = setTimeout(() => panel.classList.remove('is-open'), POPOVER_GRACE_MS);
+    };
+    card.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
+    card.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
+    panel.addEventListener('pointerenter', () => { if (!usesMobileChartInteraction()) cancelPopoverClose(); });
+    panel.addEventListener('pointerleave', () => { if (!usesMobileChartInteraction()) delayPopoverClose(); });
 }
 
 function attachQuoteChartHovers(container) {
@@ -351,6 +377,7 @@ function attachQuoteChartHovers(container) {
         const panel = card.querySelector('.history-popover');
         if (!panel) return;
         const refreshHistory = () => loadQuoteCardHistory(card, panel.dataset.requestedRange || '1d', { force: true, showLoading: false });
+        bindPopoverGrace(card, panel, usesMobileChartInteraction);
         card.addEventListener('mouseenter', () => { if (!usesMobileChartInteraction()) refreshHistory(); });
         card.addEventListener('focusin', () => { if (!usesMobileChartInteraction()) refreshHistory(); });
         card.addEventListener('click', event => {

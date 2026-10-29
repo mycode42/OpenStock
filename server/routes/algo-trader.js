@@ -1,8 +1,8 @@
 const path = require('node:path');
-const FALLBACK_DEFAULT_SETTINGS = require('../algo-strategy-config.default.json');
 const { readCoordinatorState, readJson, safeObject } = require('../algo-trader/io');
 const { attachEuroAmounts, equityStrategyPerformance, optionsStrategyPerformance } = require('../algo-trader/performance');
 const { loadOptionsSettings, loadSettings, mergeConfig, validateSettings, writeOptionsSettings, writeSettings } = require('../algo-trader/settings');
+const { loadRules } = require('../algo-trader/settings-rules');
 const { buildPayload } = require('../algo-trader/equity');
 const { UNIVERSE_HISTORY_RANGES, buildUniversePayload, fetchAlpacaUniverseHistory } = require('../algo-trader/universe');
 const { buildOptionsPayload } = require('../algo-trader/options');
@@ -66,11 +66,8 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
             const current = await loadSettings(root);
             const body = safeObject(req.body);
             if (!req.body || !req.body.settings || typeof req.body.settings !== 'object' || Array.isArray(req.body.settings)) throw new Error('settings must be an object');
-            const defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json')).catch(error => {
-                if (error.code !== 'ENOENT') throw error;
-                return FALLBACK_DEFAULT_SETTINGS;
-            });
-            const settings = validateSettings(mergeConfig(current, body.settings), defaults);
+            const defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
+            const settings = validateSettings(mergeConfig(current, body.settings), defaults, await loadRules(root));
             await writeSettings(root, settings);
             res.json({ settings, applied: 'next portfolio scan' });
         } catch (error) {

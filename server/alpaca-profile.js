@@ -1,6 +1,8 @@
 'use strict';
 
 const { makeQuote } = require('../lib/brokers/alpaca');
+const { openOrdersByLevel } = require('../lib/alpaca-orders');
+const { buildJournalAnalytics } = require('../lib/alpaca-journal');
 
 function rawDatabase(db) {
     return db?.db || db;
@@ -12,7 +14,11 @@ function configuredWatchlist(db) {
         FROM alpaca_watchlist WHERE enabled=1 AND archived=0 ORDER BY symbol`).all();
     const levels = db.prepare(`SELECT * FROM alpaca_alert_levels WHERE watchlist_id=?
         ORDER BY side, price_usd, id`);
-    return rows.map(row => ({ ...row, alert_levels: levels.all(row.id) }));
+    const openOrders = openOrdersByLevel(db);
+    return rows.map(row => ({
+        ...row,
+        alert_levels: levels.all(row.id).map(level => ({ ...level, open_order: openOrders.get(level.id) || null })),
+    }));
 }
 
 async function alpacaDashboardData(app) {
@@ -62,44 +68,52 @@ async function alpacaDashboardData(app) {
 }
 
 async function alpacaJournalData(app) {
-    const [account, positions, fills] = await Promise.all([
-        app.locals.alpacaClient.getAccount(),
-        app.locals.alpacaClient.getPositions(),
-        app.locals.alpacaClient.getFillActivities({ pageSize: 100 })
+    const client = app.locals.alpacaClient;
+    const [account, positions, fills, activities, history] = await Promise.all([
+        client.getAccount(),
+        client.getPositions(),
+        client.getActivities('FILL'),
+        client.getActivities('CSD,CSW'),
+        client.getPortfolioHistory({ period: '1A', timeframe: '1D' }).catch(() => null),
     ]);
+    const accountView = {
+        status: account.status,
+        currency: account.currency || 'USD',
+        cash: Number(account.cash),
+        equity: Number(account.equity),
+        last_equity: Number(account.last_equity),
+        portfolio_value: Number(account.portfolio_value ?? account.equity),
+        buying_power: Number(account.buying_power),
+        daytrade_count: Number(account.daytrade_count || 0)
+    };
+    const positionView = (positions || []).map(position => ({
+        symbol: String(position.symbol || '').toUpperCase(),
+        qty: Number(position.qty),
+        side: position.side || (Number(position.qty) < 0 ? 'short' : 'long'),
+        avg_entry_price: Number(position.avg_entry_price),
+        current_price: Number(position.current_price),
+        market_value: Number(position.market_value),
+        cost_basis: Number(position.cost_basis),
+        unrealized_pl: Number(position.unrealized_pl),
+        unrealized_plpc: Number(position.unrealized_plpc)
+    }));
+    const fillView = (fills || []).map(fill => ({
+        id: fill.id,
+        order_id: fill.order_id,
+        symbol: String(fill.symbol || '').toUpperCase(),
+        side: fill.side,
+        qty: Number(fill.qty),
+        price: Number(fill.price),
+        transaction_time: fill.transaction_time || fill.date || null
+    }));
     return {
         broker: 'alpaca',
         currency: 'USD',
-        account: {
-            status: account.status,
-            currency: account.currency || 'USD',
-            cash: Number(account.cash),
-            equity: Number(account.equity),
-            last_equity: Number(account.last_equity),
-            portfolio_value: Number(account.portfolio_value ?? account.equity),
-            buying_power: Number(account.buying_power),
-            daytrade_count: Number(account.daytrade_count || 0)
-        },
-        positions: (positions || []).map(position => ({
-            symbol: String(position.symbol || '').toUpperCase(),
-            qty: Number(position.qty),
-            side: position.side || (Number(position.qty) < 0 ? 'short' : 'long'),
-            avg_entry_price: Number(position.avg_entry_price),
-            current_price: Number(position.current_price),
-            market_value: Number(position.market_value),
-            cost_basis: Number(position.cost_basis),
-            unrealized_pl: Number(position.unrealized_pl),
-            unrealized_plpc: Number(position.unrealized_plpc)
-        })),
-        fills: (fills || []).map(fill => ({
-            id: fill.id,
-            order_id: fill.order_id,
-            symbol: String(fill.symbol || '').toUpperCase(),
-            side: fill.side,
-            qty: Number(fill.qty),
-            price: Number(fill.price),
-            transaction_time: fill.transaction_time || fill.date || null
-        }))
+        account: accountView,
+        positions: positionView,
+        // Recent fills for the table; the analytics below use the full history.
+        fills: fillView.slice(-100).reverse(),
+        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, now: new Date() })
     };
 }
 

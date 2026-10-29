@@ -1,0 +1,102 @@
+{
+  "captured_on": "2026-10-27",
+  "source": "GET https://data.alpaca.markets/v1beta1/options/snapshots/SPY?feed=opra (six contracts selected by moneyness and right)",
+  "underlying": "SPY",
+  "spot": 769.57,
+  "spot_source": "GET https://data.alpaca.markets/v2/stocks/snapshots dailyBar.c",
+  "rate": 0.04,
+  "dividend_yield": 0.0,
+  "time_convention": "calendar days / 365",
+  "contracts": [
+    {
+      "symbol": "SPY261127C00770000",
+      "right": "call",
+      "strike": 770.0,
+      "expiration": "2026-11-27",
+      "dte": 31,
+      "implied_volatility": 0.1421,
+      "greeks": {
+        "delta": 0.5373,
+        "gamma": 0.0125,
+        "theta": -0.247,
+        "vega": 0.891,
+        "rho": 0.3395
+      }
+    },
+    {
+      "symbol": "SPY261127C00785000",
+      "right": "call",
+      "strike": 785.0,
+      "expiration": "2026-11-27",
+      "dte": 31,
+      "implied_volatility": 0.1266,
+      "greeks": {
+        "delta": 0.3364,
+        "gamma": 0.0128,
+        "theta": -0.1943,
+        "vega": 0.8186,
+        "rho": 0.2146
+      }
+    },
+    {
+      "symbol": "SPY261218C00824000",
+      "right": "call",
+      "strike": 824.0,
+      "expiration": "2026-12-18",
+      "dte": 52,
+      "implied_volatility": 0.1197,
+      "greeks": {
+        "delta": 0.0871,
+        "gamma": 0.0046,
+        "theta": -0.0601,
+        "vega": 0.4603,
+        "rho": 0.0935
+      }
+    },
+    {
+      "symbol": "SPY261127P00770000",
+      "right": "put",
+      "strike": 770.0,
+      "expiration": "2026-11-27",
+      "dte": 31,
+      "implied_volatility": 0.1399,
+      "greeks": {
+        "delta": -0.4624,
+        "gamma": 0.0127,
+        "theta": -0.1617,
+        "vega": 0.891,
+        "rho": -0.3119
+      }
+    },
+    {
+      "symbol": "SPY261127P00785000",
+      "right": "put",
+      "strike": 785.0,
+      "expiration": "2026-11-27",
+      "dte": 31,
+      "implied_volatility": 0.1284,
+      "greeks": {
+        "delta": -0.6613,
+        "gamma": 0.0127,
+        "theta": -0.1135,
+        "vega": 0.8208,
+        "rho": -0.4484
+      }
+    },
+    {
+      "symbol": "SPY261218P00824000",
+      "right": "put",
+      "strike": 824.0,
+      "expiration": "2026-12-18",
+      "dte": 52,
+      "implied_volatility": 0.1738,
+      "greeks": {
+        "delta": -0.821,
+        "gamma": 0.0052,
+        "theta": -0.0525,
+        "vega": 0.7598,
+        "rho": -0.9777
+      }
+    }
+  ]
+}

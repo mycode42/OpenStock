@@ -1,0 +1,20 @@
+# Template: rendered by scripts/install-user-units.sh (see openstock.service).
+[Unit]
+Description=OpenStock Price Monitor
+After=network-online.target openstock.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory={ROOT}
+EnvironmentFile={ROOT}/.env
+ExecStart={NODE} {ROOT}/scripts/monitor.js
+TimeoutStartSec=75s
+UMask=0077
+RuntimeDirectory=openstock-monitor
+Environment=MONITOR_LOCK_PATH=%t/openstock-monitor/monitor.lock
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths={ROOT}/database {ROOT}/memory

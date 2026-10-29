@@ -16,7 +16,7 @@ export function createAlgoTrader({ request, charts }) {
     let accountMode = 'equity';
     let researchMode = 'equity';
     let saving = false;
-    let range = '1M';
+    let range = '1D';
     const researchFilters = { equity: 'all', options: 'all' };
     const selectedRunDates = { equity: null, options: null };
     let activityPage = 0;

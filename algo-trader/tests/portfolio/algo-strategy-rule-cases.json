@@ -1,0 +1,150 @@
+{
+  "description": "Shared cases for the Algo settings rule set. Python (tests/portfolio/test_settings_rules.py) and OpenStock (test/algo-trader-rules.test.js) both apply each case to the shipped defaults and must agree.",
+  "cases": [
+    {
+      "name": "defaults pass",
+      "set": {},
+      "error": null
+    },
+    {
+      "name": "risk per trade above cap",
+      "set": {
+        "general.risk_per_trade_pct": 0.03
+      },
+      "error": "general.risk_per_trade_pct must be between 0 and 0.02"
+    },
+    {
+      "name": "gross above cash floor",
+      "set": {
+        "portfolio.max_gross_pct": 0.95
+      },
+      "error": "portfolio.max_gross_pct cannot exceed the configured cash floor"
+    },
+    {
+      "name": "entry budgets exceed daily",
+      "set": {
+        "portfolio.max_daily_entries": 4
+      },
+      "error": "portfolio intraday and swing entry limits cannot exceed the daily entry limit"
+    },
+    {
+      "name": "unknown regime engine",
+      "set": {
+        "general.regime_engine": "foo"
+      },
+      "error": "general.regime_engine must be committee, rule, hmm, or gmm"
+    },
+    {
+      "name": "training window too short",
+      "set": {
+        "general.model_training_window": 100
+      },
+      "error": "general.model_training_window must be at least 252"
+    },
+    {
+      "name": "strategy above portfolio cap",
+      "set": {
+        "strategies.swing_mean_reversion.max_position_pct": 0.5
+      },
+      "error": "strategies.swing_mean_reversion.max_position_pct must be positive and within the portfolio strategy cap"
+    },
+    {
+      "name": "horizon is fixed by catalog",
+      "set": {
+        "strategies.swing_momentum.horizon": "intraday"
+      },
+      "error": "Strategy horizon and bar interval are fixed by the catalog"
+    },
+    {
+      "name": "sector cap above gross cap",
+      "set": {
+        "portfolio.sector_caps.core_tech": 0.99
+      },
+      "error": "portfolio.sector_caps.core_tech must be within the gross exposure cap"
+    },
+    {
+      "name": "regime gross cap above gross cap",
+      "set": {
+        "portfolio.regime_gross_caps.trending_up:calm": 0.99
+      },
+      "error": "portfolio.regime_gross_caps.trending_up:calm must be within the gross exposure cap"
+    },
+    {
+      "name": "regime weight too large",
+      "set": {
+        "strategies.swing_mean_reversion.regime_weights.trending_up": 2.0
+      },
+      "error": "strategies.swing_mean_reversion.regime_weights.trending_up must be between 0 and 1.5"
+    },
+    {
+      "name": "volatility scale too large",
+      "set": {
+        "general.volatility_risk_scales.calm": 2
+      },
+      "error": "general.volatility_risk_scales.calm must be between 0 and 1.5"
+    },
+    {
+      "name": "llm confidence out of range",
+      "set": {
+        "strategies.swing_llm_driven.minimum_confidence": 101
+      },
+      "error": "strategies.swing_llm_driven.minimum_confidence must be an integer between 0 and 100"
+    },
+    {
+      "name": "net short percent above one",
+      "set": {
+        "portfolio.max_net_short_pct": 1.2
+      },
+      "error": "portfolio.max_net_short_pct must be between 0 and 1"
+    },
+    {
+      "name": "fractional position count",
+      "set": {
+        "strategies.swing_momentum.max_positions": 1.5
+      },
+      "error": "strategies.swing_momentum.max_positions must be a non-negative integer"
+    },
+    {
+      "name": "zero name cap",
+      "set": {
+        "portfolio.max_name_pct": 0
+      },
+      "error": "portfolio.max_name_pct must be positive"
+    },
+    {
+      "name": "stop above half",
+      "set": {
+        "strategies.swing_momentum.hard_stop_pct": 0.6
+      },
+      "error": "strategies.swing_momentum stop settings must be between 0 and 0.5"
+    },
+    {
+      "name": "quote windows inverted",
+      "set": {
+        "execution.quote_stale_seconds": 400
+      },
+      "error": "execution.quote_stale_seconds cannot exceed execution.extended_quote_stale_seconds"
+    },
+    {
+      "name": "entry band negative",
+      "set": {
+        "execution.entry_limit_band_bps": -1
+      },
+      "error": "execution.entry_limit_band_bps must be between 0 and 100"
+    },
+    {
+      "name": "candidate sector cap above gross",
+      "set": {
+        "portfolio.candidate_sector_cap": 0.95
+      },
+      "error": "portfolio.candidate_sector_cap must be positive and within the gross exposure cap"
+    },
+    {
+      "name": "cash reserve proxy share above one",
+      "set": {
+        "cash_reserve.max_proxy_pct": 1.5
+      },
+      "error": "cash_reserve.max_proxy_pct must be between 0 and 1"
+    }
+  ]
+}

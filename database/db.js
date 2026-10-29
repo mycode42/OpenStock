@@ -1,3 +1,3 @@
 'use strict';
 
-module.exports = require('./domains/brokers');
+module.exports = require('./domains/ledger');

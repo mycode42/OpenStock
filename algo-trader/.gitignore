@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+
+# Environment Variables
+.env
+/MEMORY.md
+/ops/openclaw/MEMORY.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursorrules
+.cursorignore
+.cursorindexingignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# graph
+*.png
+!docs/*.png
+
+# Txt files
+*.txt
+!ops/openclaw_prompts/*.txt
+
+# PDF files
+*.pdf
+
+# Frontend
+node_modules
+
+# Outputs
+outputs/
+
+# Database files (users will have their own local databases)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Alembic (keep migration files, but ignore generated/cache files)
+app/backend/alembic/versions/__pycache__/.cache/
+.cache/
+
+# Runtime data (generated per-deployment)
+data/
+ops/openclaw/DREAMS.md
+ops/openclaw/memory/

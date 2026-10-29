@@ -1,6 +1,6 @@
 {
   "name": "openstock",
-  "version": "2.0.4",
+  "version": "3.0.0",
   "description": "Alpaca-native stock dashboard and journal",
   "main": "server.js",
   "engines": {
@@ -12,7 +12,6 @@
     "start": "node server.js",
     "demo": "node scripts/demo.js",
     "monitor": "node scripts/monitor.js",
-    "backfill-history": "node scripts/backfill-history.js",
     "check": "node scripts/check-pwa-assets.js && find . -path './node_modules' -prune -o -name '*.js' -type f -print0 | xargs -0 -n1 node --check",
     "audit:prod": "npm audit --omit=dev"
   },

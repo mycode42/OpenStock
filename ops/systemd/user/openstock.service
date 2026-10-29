@@ -1,0 +1,17 @@
+# Template: scripts/install-user-units.sh renders {ROOT} and {NODE} into
+# ~/.config/systemd/user. Runs as the invoking user; no root needed.
+[Unit]
+Description=OpenStock Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={ROOT}
+EnvironmentFile={ROOT}/.env
+ExecStart={NODE} {ROOT}/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

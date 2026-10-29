@@ -10,3 +10,6 @@ memory/*.json
 *.db-wal
 *.db-shm
 database/*.db.backup
+
+# Database backups hold live trade data; never commit them.
+database/*.backup

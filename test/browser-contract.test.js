@@ -62,13 +62,18 @@ test('dashboard cards show the Journal buy-in and a live current-price percentag
     assert.match(dashboard, /history-change \$\{formatted\.className\}/);
 });
 
-test('public navigation has no local broker configuration page', () => {
-    const index = fs.readFileSync(path.join(__dirname, '..', 'www', 'index.html'), 'utf8');
-    const app = fs.readFileSync(path.join(__dirname, '..', 'www', 'app.js'), 'utf8');
+test('Configure page manages Alpaca alert levels without a broker configuration path', () => {
+    const root = path.join(__dirname, '..', 'www');
+    const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+    const config = fs.readFileSync(path.join(root, 'modules', 'config.js'), 'utf8');
 
-    assert.doesNotMatch(index, /data-page="config"|id="page-config"/);
-    assert.doesNotMatch(app, /modules\/config|broker-profile|trade_republic/);
-    assert.equal(fs.existsSync(path.join(__dirname, '..', 'www', 'modules', 'config.js')), false);
+    assert.match(index, /data-page="config"[\s\S]*Configure/);
+    assert.match(index, /id="page-config"/);
+    assert.match(app, /modules\/config\.js/);
+    assert.doesNotMatch(app, /broker-profile|trade_republic/);
+    assert.doesNotMatch(config, /trade_republic|\/stocks|instruments\/resolve/);
+    assert.match(config, /\/alpaca\/alert-levels\/\$\{encodeURIComponent\(levelId\)\}\/order/);
 });
 
 test('dashboard exposes Alpaca alert rearming and Journal trade rows remain read-only', () => {
@@ -124,8 +129,8 @@ test('Journal displays instrument and quantity with trades without exposing trad
     assert.doesNotMatch(journal, /dividendHeader|tradeHeaders|<th>Dividends<\/th>/);
     assert.match(journal, /trade\.trade_number/);
     assert.match(journal, /journalTradeOpenedDate\(trade\.opened_at\)/);
-    assert.match(journal, /journalTradePrice\(trade\.entry_price, trade\.currency, trade\.asset_type\)/);
-    assert.match(journal, /journalTradePrice\(trade\.exit_price, trade\.currency, trade\.asset_type\)/);
+    assert.match(journal, /journalTradePrice\(trade\.entry_price_usd, trade\.currency, trade\.asset_type\)/);
+    assert.match(journal, /journalTradePrice\(trade\.exit_price_usd, trade\.currency, trade\.asset_type\)/);
 });
 
 test('standalone PWA supports pull-to-refresh and refreshes its cached entry assets', () => {

@@ -1,5 +1,5 @@
 const { calculateTrade, calculateDashboard, snapshotBucketAt } = require('../lib/analytics');
-const { TradeRepublicClient, BrokerError, configuredKey } = require('../lib/brokers/trade-republic');
+const { BrokerError } = require('../lib/brokers/broker-client');
 
 function dashboardData(db) {
     return calculateDashboard({
@@ -26,14 +26,6 @@ function captureEquitySnapshot(db, source = 'dashboard') {
     return at;
 }
 
-function queueStockHistory(historyBackfill, stock) {
-    try {
-        historyBackfill.enqueue(stock);
-    } catch (error) {
-        console.error(`Unable to queue history for ${stock?.symbol || 'stock'}:`, error.message);
-    }
-}
-
 function brokerError(res, error) {
     return res
         .status(error instanceof BrokerError ? error.status : 502)
@@ -43,6 +35,5 @@ function brokerError(res, error) {
 module.exports = {
     dashboardData,
     captureEquitySnapshot,
-    queueStockHistory,
     brokerError,
 };

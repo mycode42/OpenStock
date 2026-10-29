@@ -87,49 +87,17 @@ function serializeStock(stock) {
 
 function serializeBrokerStock(stock, db) {
     if (!stock) return stock;
-    const mapping = db.getBrokerMapping(stock.id);
-    const quote = mapping ? db.getLatestBrokerQuote(mapping.isin, mapping.exchange) : null;
     const observation = db.getLatestPriceObservation(stock.id);
-    const isTradeRepublicPrice = (source) => String(source || '').startsWith('trade_republic');
-    const brokerPriceIsCurrent = Boolean(quote && isTradeRepublicPrice(observation?.source));
-    const safeQuote = brokerPriceIsCurrent
-        ? {
-              bid_eur: quote.bid_eur,
-              ask_eur: quote.ask_eur,
-              spread_eur: quote.bid_eur !== null && quote.ask_eur !== null ? quote.ask_eur - quote.bid_eur : null,
-              quote_time: quote.quote_time,
-              observed_at: quote.observed_at,
-              source: quote.source,
-          }
-        : null;
-    const fallback = observation?.source === 'trade_republic_order_price';
-    const marketLabel = !observation
-        ? 'No quote'
-        : observation.source === 'trade_republic_sdk_order_price'
-          ? 'Handelsrepublik SDK'
-          : observation.source === 'trade_republic_order_price'
-            ? 'Trade Republic UAPI sidecar'
-            : 'Trade Republic history';
+    const isAlpacaPrice = Boolean(observation?.source?.startsWith('alpaca_'));
     return {
         ...serializeStock(stock),
         asset_type: stock.asset_type || 'stock',
-        broker_mapping: mapping
-            ? {
-                  broker: mapping.broker,
-                  ticker: mapping.ticker,
-                  isin: mapping.isin,
-                  exchange: mapping.exchange,
-                  currency: mapping.currency,
-                  asset_type: stock.asset_type || 'stock',
-                  verified_at: mapping.verified_at,
-                  source: mapping.source,
-              }
-            : null,
-        broker_quote: safeQuote,
+        broker_mapping: null,
+        broker_quote: null,
         market_data: {
             source: observation?.source || null,
-            label: marketLabel,
-            fallback,
+            label: !observation ? 'No quote' : isAlpacaPrice ? 'Alpaca' : 'No live quote',
+            fallback: false,
             quote_time: toISODateTime(observation?.quote_time),
         },
         position: db.getPositionSummary(stock.id),

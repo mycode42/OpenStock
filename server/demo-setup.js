@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const paths = require('../lib/paths');
 
 function hasAlpacaCredentials(env = process.env) {
-    return Boolean(String(env.ALPACA_ALGO_API_KEY || '').trim() && String(env.ALPACA_ALGO_API_SECRET || '').trim());
+    return Boolean(String(env.ALPACA_MANUAL_API_KEY || '').trim() && String(env.ALPACA_MANUAL_API_SECRET || '').trim());
 }
 
 function detectDemoSetup({ algoTraderRoot = paths.algoTraderRoot(), env = process.env } = {}) {

@@ -24,8 +24,8 @@ async function readAlgoAlpacaCredentials(root) {
         if (error.code !== 'ENOENT') throw error;
     }
     return {
-        key: process.env.ALPACA_ALGO_API_KEY || fileEnvironment.ALPACA_ALGO_API_KEY || '',
-        secret: process.env.ALPACA_ALGO_API_SECRET || fileEnvironment.ALPACA_ALGO_API_SECRET || '',
+        key: process.env.ALPACA_EQUITY_API_KEY || fileEnvironment.ALPACA_EQUITY_API_KEY || '',
+        secret: process.env.ALPACA_EQUITY_API_SECRET || fileEnvironment.ALPACA_EQUITY_API_SECRET || '',
     };
 }
 

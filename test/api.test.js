@@ -13,29 +13,16 @@ async function fixture({ now } = {}) {
     const file = path.join(dir, 'test.db');
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     const db = new OpenStockDB(file);
-    const backfill = { enqueue() {}, enqueueMissing() { return 0; } };
-    const fetchImpl = async () => { throw new Error('unexpected external fetch'); };
-    const app = createApp({ db, backfill, fetchImpl, now, sdkClient: { isEnabled: () => false } });
-    app.locals.brokerClient = {
-        getQuote: async ({ isin }) => {
-            const symbol = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, '');
-            if (symbol === 'BAD') throw new Error('mock quote failure');
-            return { bid_eur: 89.999999, ask_eur: 90.000001, currency: 'EUR', bid_unit: 'EUR', ask_unit: 'EUR', observed_at: '2026-09-17T12:00:00Z' };
-        },
-        getInstrument: async isin => { const decoded = Buffer.from(isin.slice(2), 'hex').toString('ascii').replace(/\0/g, ''); const symbol = /^[A-Z0-9.-]+$/.test(decoded) && decoded ? decoded : `M${isin.slice(-5)}`; return { isin, name: `Mock ${symbol}`, shortName: `Mock ${symbol}`, intlSymbol: symbol, tradable: true, listings: [{ exchange: 'XNAS', symbolAtExchange: symbol }] }; },
-        getTradeRepublicInstrument: async isin => ({ isin, exchange: 'TIB', currency: 'EUR', tradable: true }),
-        getInstrumentHistory: async () => ({ points: [] })
+    const fetchImpl = async (url) => {
+        // Stock add verifies the symbol against Alpaca's asset list; everything else is unexpected.
+        const match = /\/v2\/assets\/([A-Z.\-]+)$/.exec(new URL(url).pathname);
+        if (match) return new Response(JSON.stringify({ symbol: match[1], name: `${match[1]} Inc.`, class: 'us_equity', tradable: true, status: 'active' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        throw new Error('unexpected external fetch');
     };
+    const app = createApp({ db, fetchImpl, now });
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     const base = `http://127.0.0.1:${server.address().port}`;
-    const request = (url, options = {}) => {
-        if (url === '/api/stocks' && options.method === 'POST' && options.body) {
-            const body = JSON.parse(options.body);
-            if (!body.isin && body.symbol) body.isin = `US${Buffer.from(body.symbol).toString('hex').toUpperCase().padEnd(10, '0').slice(0, 10)}`;
-            options = { ...options, body: JSON.stringify(body) };
-        }
-        return fetch(base + url, options);
-    };
+    const request = (url, options = {}) => fetch(base + url, options);
     return { app, db, dir, server, request };
 }
 
@@ -44,17 +31,6 @@ function addAlpacaStock(fixture, stock) {
         VALUES (?, ?, ?, 1)`).run(stock.symbol, stock.name, stock.id);
     return Number(result.lastInsertRowid);
 }
-
-test('Berlin trading day starts at 07:30 with daylight-saving offsets', () => {
-    assert.equal(berlinTradingDayStart(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T05:30:00.000Z');
-    assert.equal(berlinTradingDayStart(new Date('2026-12-16T12:00:00Z')).toISOString(), '2026-12-16T06:30:00.000Z');
-    assert.equal(berlinTradingDayStart(new Date('2026-09-16T04:00:00Z')).toISOString(), '2026-09-15T05:30:00.000Z');
-});
-
-test('Berlin one-day chart ends at 22:00 local time', () => {
-    assert.equal(berlinTradingDayEnd(new Date('2026-09-16T15:45:00Z')).toISOString(), '2026-09-16T20:00:00.000Z');
-    assert.equal(berlinTradingDayEnd(new Date('2026-12-16T12:00:00Z')).toISOString(), '2026-12-16T21:00:00.000Z');
-});
 
 test('mutation origin check accepts the public HTTPS origin forwarded by the reverse proxy', async t => {
     const f = await fixture();
@@ -148,57 +124,6 @@ test('live prices label the Alpaca feed returned by the provider', async t => {
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS count FROM price_history WHERE stock_id=?').get(stock.id).count, 0);
 });
 
-test('one-day history starts at 07:30 Berlin time and uses fifteen-minute buckets', async t => {
-    const chartNow = new Date();
-    const tradingStart = berlinTradingDayStart(chartNow);
-    const f = await fixture({ now: () => chartNow });
-    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'DAY', name: 'Trading day', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
-    const stock = (await response.json()).stock;
-    f.db.addPriceSnapshot(stock.id, null, 99, null, 'trade_republic_history', new Date(tradingStart.getTime() - 600000).toISOString(), new Date(tradingStart.getTime() - 600000).toISOString().replace('T', ' ').replace('.000Z', ''));
-    for (let minute = 0; minute < 60; minute += 1) {
-        const timestamp = new Date(tradingStart.getTime() + minute * 60000).toISOString();
-        f.db.addPriceSnapshot(stock.id, null, 100 + minute, null, 'trade_republic_history', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
-    }
-    const sdkTimestamp = new Date(tradingStart.getTime() + 60 * 60000).toISOString();
-    f.db.addPriceSnapshot(stock.id, null, 160, null, 'trade_republic_sdk_order_price', sdkTimestamp, sdkTimestamp.replace('T', ' ').replace('.000Z', ''));
-    const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1d`)).json();
-    assert.equal(history.start_at, tradingStart.toISOString());
-    assert.equal(history.end_at, new Date(tradingStart.getTime() + (14 * 60 + 30) * 60000).toISOString());
-    assert.equal(history.bucket_seconds, 900);
-    assert.equal(history.points.length, 48);
-    assert.equal(history.points[0].recorded_at, tradingStart.toISOString());
-    assert.equal(history.points.at(-1).recorded_at, sdkTimestamp);
-    assert.equal(history.points[0].price_eur, 100);
-    assert.equal(history.points.at(-1).price_eur, 160);
-    assert.equal(history.points.at(-1).source, 'trade_republic_sdk_order_price');
-
-    const weekly = await (await f.request(`/api/stocks/${stock.id}/history?range=1w`)).json();
-    assert.equal(weekly.range, '1w');
-    assert.equal(weekly.bucket_seconds, 3600);
-    assert.equal(weekly.max_gap_seconds, 21600);
-    assert.equal(weekly.points.length, 2);
-    assert.equal(weekly.points.at(-1).price_eur, 160);
-});
-
-test('verified-instrument charts exclude observations from legacy providers', async t => {
-    const f = await fixture();
-    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GAP', name: 'Gap', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
-    const stock = (await response.json()).stock;
-    f.db.saveBrokerMapping({ stock_id: stock.id, broker: 'trade_republic', ticker: 'GAP', isin: stock.isin, exchange: 'TIB', currency: 'EUR', verified_at: '2026-09-01T00:00:00Z', source: 'test', broker_metadata_json: '{}' });
-    const timestampAt = offsetMs => new Date(Date.now() + offsetMs).toISOString();
-    for (const timestamp of [-5, -4, -3, -2].map(days => timestampAt(days * 24 * 60 * 60 * 1000))) {
-        f.db.addPriceSnapshot(stock.id, null, 100, null, 'legacy_import', timestamp, timestamp.replace('T', ' ').replace('.000Z', ''));
-    }
-    const legacyTimestamp = timestampAt(-2 * 60 * 60 * 1000);
-    const verifiedTimestamp = timestampAt(-60 * 60 * 1000);
-    f.db.addPriceSnapshot(stock.id, null, 101, null, 'legacy_import', legacyTimestamp, legacyTimestamp.replace('T', ' ').replace('.000Z', ''));
-    f.db.addPriceSnapshot(stock.id, null, 102, null, 'trade_republic_order_price', verifiedTimestamp, verifiedTimestamp.replace('T', ' ').replace('.000Z', ''));
-    const history = await (await f.request(`/api/stocks/${stock.id}/history?range=1w`)).json();
-    assert.deepEqual(history.points.map(point => [point.recorded_at, point.price_eur]), [[verifiedTimestamp, 102]]);
-});
-
 test('API factory covers lifecycle, history, journal, analytics, refresh isolation, and archive restore', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
@@ -211,21 +136,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
     assert.equal(response.status, 201);
     const good = (await response.json()).stock;
-    f.db.addPriceSnapshot(good.id, 100, 90, 0.9, 'legacy_import', null, '2026-01-01 12:00:00');
-    f.db.addPriceSnapshot(good.id, null, 91, null, 'trade_republic_history', '2026-01-01T00:00:00.000Z', '2026-01-01 00:00:00');
-    response = await f.request(`/api/stocks/${good.id}/history?range=1y`);
-    const history = await response.json();
-    assert.equal(history.currency, 'EUR');
-    assert.equal(history.native_eur, true);
-    assert.equal(history.source, 'trade_republic');
-    assert.equal(history.points.length, 1);
-    assert.equal(history.points[0].price_eur, 91);
-    assert.equal(history.points[0].price_usd, null);
-    assert.equal(history.points[0].source, 'trade_republic_history');
-    assert.equal(history.points[0].recorded_at, '2026-01-01T00:00:00.000Z');
-    assert.equal(history.points[0].quote_time, '2026-01-01T00:00:00.000Z');
-    assert.equal(history.bucket_seconds, 345600);
-    assert.equal(history.max_gap_seconds, 172800);
+    // Chart history is Alpaca bars for watchlist symbols; see the alpaca watchlist tests.
     assert.equal((await f.request('/api/stocks?includeArchived=1')).status, 200);
 
     await f.request('/api/capital-events', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event_type: 'INITIAL', amount_eur: 10000, occurred_at: '2026-01-01T00:00:00Z', notes: 'seed' }) });
@@ -244,7 +155,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal((await f.request('/api/analytics/dashboard')).status, 200);
 
     addAlpacaStock(f, good);
-    f.app.locals.alpacaClient = { getLatestQuotes: async () => ({ feed: 'iex', quotes: { GOOD: { bp: 89.99, ap: 90.01, t: '2026-01-01T12:00:00.000Z' } } }) };
+    f.app.locals.alpacaClient = { getAsset: async symbol => ({ symbol, name: symbol, class: 'us_equity', tradable: true, status: 'active' }), getLatestQuotes: async () => ({ feed: 'iex', quotes: { GOOD: { bp: 89.99, ap: 90.01, t: '2026-01-01T12:00:00.000Z' } } }) };
     const bad = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'BAD', name: 'Bad', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
     assert.equal(bad.status, 201);
     response = await f.request('/api/refresh-prices', { method: 'POST' });
@@ -268,7 +179,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
         assert.equal(response.status, 201);
     }
     response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'OVER', name: 'Over', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 201);
 });
 
 test('new purchases merge into an existing open position and return the authoritative aggregate', async t => {
@@ -351,7 +262,7 @@ test('stock routes validate, update authoritatively, hard-delete, and archive jo
     assert.equal((await (await f.request('/api/stocks/archived')).json()).some(stock => stock.id === archived.id), true);
 });
 
-test('history range, restore capacity, and capital duplicate validation are explicit errors', async t => {
+test('history range and capital duplicate validation are explicit errors; monitored names are uncapped', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     let response = await bodyRequest(f, '/api/stocks', { symbol: 'RANGE', name: 'Range', buy_threshold_eur: 1, sell_threshold_eur: 2 });
@@ -373,7 +284,7 @@ test('history range, restore capacity, and capital duplicate validation are expl
     const full = (await (await f.request('/api/stocks/archived')).json());
     assert.equal(full.some(item => item.id === stock.id), true);
     response = await bodyRequest(f, `/api/stocks/${stock.id}/restore`, {});
-    assert.equal(response.status, 400);
+    assert.equal(response.status, 200);
 });
 
 test('paginated trade endpoint returns twenty entries with stable totals', async t => {

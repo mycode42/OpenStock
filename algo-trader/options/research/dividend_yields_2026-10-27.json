@@ -1,0 +1,127 @@
+{
+  "as_of": "2026-10-27",
+  "dividend_yields": {
+    "AAPL": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.003068017366136035
+    },
+    "AMD": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0
+    },
+    "AMZN": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0
+    },
+    "AVGO": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.007582827811479235
+    },
+    "CRM": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.00716703822970853
+    },
+    "GLD": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0
+    },
+    "GOOGL": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.002677959768325341
+    },
+    "JNJ": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.01973684210526316
+    },
+    "JPM": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.013370572854765866
+    },
+    "KO": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.02285963098024275
+    },
+    "META": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.003365438548694691
+    },
+    "MSFT": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.006836707862214042
+    },
+    "NVDA": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0023825887743413516
+    },
+    "PANW": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0
+    },
+    "PG": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.020361415438861604
+    },
+    "PLTR": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0
+    },
+    "QQQ": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.004287257423751846
+    },
+    "SPCX": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.02389809675916683
+    },
+    "SPY": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.007397727627065793
+    },
+    "TLT": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.04767096655641308
+    },
+    "TSLA": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0
+    },
+    "TSM": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.0068134036420204975
+    },
+    "UNH": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.022113202020941643
+    },
+    "V": {
+      "as_of": "2026-10-27",
+      "source": "alpaca:corporate_actions.cash_dividends",
+      "value": 0.006707378115927521
+    }
+  },
+  "lookback_days": 365,
+  "schema": "options_dividend_snapshot_v1"
+}

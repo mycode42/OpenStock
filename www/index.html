@@ -1,6 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script>
+// Applies the saved theme and colour mode before any stylesheet or content paints.
+(function () {
+  // The saved theme and colour mode go on <html> here too, so the first paint already uses them.
+  try {
+    var themes = ['openstock', 'claw', 'knot', 'dash', 'absolutely', 'tide', 'beacon', 'phosphor', 'crt', 'miami', 'manuscript', 'rose'];
+    var theme = localStorage.getItem('openstock.theme');
+    var mode = localStorage.getItem('openstock.colorMode');
+    var root = document.documentElement;
+    root.dataset.theme = themes.indexOf(theme) >= 0 ? theme : 'openstock';
+    root.dataset.colorMode = ['system', 'light', 'dark'].indexOf(mode) >= 0 ? mode : 'system';
+    var effective = root.dataset.colorMode === 'system'
+      ? (window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : root.dataset.colorMode;
+    root.dataset.themeMode = effective;
+    root.style.colorScheme = effective;
+  } catch (error) {}
+})();
+</script>
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <base href="./">
@@ -16,14 +36,15 @@
 <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
 <link rel="icon" type="image/png" sizes="256x256" href="favicon-256.png">
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-<link rel="stylesheet" href="styles.css?v=2.0.4&amp;pull-refresh=1&amp;algo-account-switch=1&amp;strategy-pnl=1&amp;appearance=1&amp;optimizer-table=1&amp;quote-theme=1&amp;algo-universe=1&amp;universe-cards=1&amp;demo-mode=1&amp;chart-range-theme=2&amp;alpaca-usd-profile=1&amp;alpaca-price-yellow=2&amp;universe-chart-black=1&amp;kpi-colors=2">
-<link rel="stylesheet" href="themes.css?v=2.0.4&amp;appearance=9">
+<link rel="stylesheet" href="styles.css?v=3.0.0&amp;pull-refresh=1&amp;algo-account-switch=1&amp;strategy-pnl=1&amp;appearance=1&amp;optimizer-table=1&amp;quote-theme=1&amp;algo-universe=1&amp;universe-cards=1&amp;demo-mode=1&amp;chart-range-theme=2&amp;alpaca-usd-profile=1&amp;alpaca-price-yellow=2&amp;universe-chart-black=1&amp;kpi-colors=2">
+<link rel="stylesheet" href="themes.css?v=3.0.0&amp;appearance=9">
 <meta name="theme-color" content="#000000">
 </head>
 <body>
 <nav>
-<a href="#/dashboard" class="active" data-page="dashboard">Dashboard</a>
+<a href="#/dashboard" data-page="dashboard">Dashboard</a>
 <a href="#/journal" data-page="journal">Journal</a>
+<a href="#/config" data-page="config">Configure</a>
 <a href="#/algo-universe" data-page="algo-universe">Algo Universe</a>
 <a href="#/algo-trader" data-page="algo-trader">Algo-trader</a>
 <a href="#/algo-research" data-page="algo-research">Research</a>
@@ -36,13 +57,26 @@
 <span class="pull-refresh-icon" aria-hidden="true">↓</span><span class="pull-refresh-label">Pull to refresh</span>
 </div>
 <div class="container">
-<div id="page-dashboard"></div>
+<div id="page-dashboard" class="hidden"></div>
 <div id="page-journal" class="hidden"></div>
+<div id="page-config" class="hidden"></div>
 <div id="page-algo-universe" class="hidden"></div>
 <div id="page-algo-trader" class="hidden"></div>
 <div id="page-algo-research" class="hidden"></div>
 <div id="page-settings" class="hidden"></div>
 </div>
-<script type="module" src="./app.js?v=2.0.4&amp;pull-refresh=1&amp;strategy-scorecard=2&amp;appearance=2&amp;optimizer-table=1&amp;chart-range=1&amp;coordinator-regime=1&amp;trade-pagination=2&amp;title-cleanup=1&amp;algo-universe=1&amp;universe-cards=1&amp;research-page=1&amp;demo-mode=1&amp;alpaca-usd-profile=1&amp;demo-banner=1"></script>
+<footer class="research-disclaimer">For research and personal use only. Not investment advice. Orders you place are your own decisions and carry market risk.</footer>
+<script>
+// Applies the page from the URL before the first paint, so the wrong nav item or page never flashes.
+(function () {
+  var pages = ['dashboard', 'journal', 'config', 'algo-universe', 'algo-trader', 'algo-research', 'settings'];
+  var page = location.hash.replace('#/', '').split('?')[0] || 'dashboard';
+  if (pages.indexOf(page) < 0) page = 'dashboard';
+
+  document.querySelectorAll('nav a').forEach(function (link) { link.classList.toggle('active', link.dataset.page === page); });
+  document.querySelectorAll('div[id^="page-"]').forEach(function (el) { el.classList.toggle('hidden', el.id !== 'page-' + page); });
+})();
+</script>
+<script type="module" src="./app.js?v=3.0.0&amp;pull-refresh=1&amp;strategy-scorecard=2&amp;appearance=2&amp;optimizer-table=1&amp;chart-range=1&amp;coordinator-regime=1&amp;trade-pagination=2&amp;title-cleanup=1&amp;algo-universe=1&amp;universe-cards=1&amp;research-page=1&amp;demo-mode=1&amp;alpaca-usd-profile=1&amp;demo-banner=1"></script>
 </body>
 </html>

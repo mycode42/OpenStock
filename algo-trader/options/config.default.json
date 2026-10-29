@@ -1,0 +1,188 @@
+{
+  "enabled": true,
+  "market_data_feed": "opra",
+  "max_quote_age_seconds": 120,
+  "max_quote_spread_pct": 0.15,
+  "min_open_interest": 100,
+  "rate": 0.04,
+  "dividend_yield": 0.015,
+  "dividend_yields": {
+    "GLD": 0.0
+  },
+  "assignment_extrinsic_threshold": 0.02,
+  "dividends": {},
+  "regime_risk_multipliers": {
+    "range_bound": 1.0,
+    "trending_up": 0.75,
+    "trending_down": 0.5,
+    "volatile": 1.0,
+    "unknown": 0.5
+  },
+  "costs": {
+    "commission_per_contract_usd": 0.65,
+    "slippage_per_contract_usd": 5.0,
+    "slippage_fraction_of_spread": 0.5,
+    "max_slippage_per_contract_usd": 25.0
+  },
+  "risk": {
+    "max_risk_per_trade_pct": 0.07,
+    "max_total_defined_risk_pct": 0.1,
+    "max_open_structures": 4,
+    "max_entries_per_day": 10,
+    "max_daily_loss_pct": 0.02,
+    "max_contracts_per_trade": 5,
+    "equity_per_contract_usd": 50000,
+    "single_contract_max_risk_pct": 0.1,
+    "max_delta_notional_pct": 0.75,
+    "max_vega_per_vol_point_pct": 0.015,
+    "max_gamma_1pct_loss_pct": 0.01,
+    "max_theta_loss_per_day_pct": 0.0025,
+    "max_assignment_shares": 300,
+    "max_margin_pct": 0.15,
+    "stress_spot_shocks": [
+      0.05,
+      0.1
+    ],
+    "stress_iv_shock": 0.1,
+    "stress_gate_loss_pct": 0.2,
+    "sleeve_limits": {
+      "options_vrp": {
+        "max_vega_per_vol_point_pct": 0.015,
+        "max_gamma_1pct_loss_pct": 0.005
+      },
+      "options_long_volatility_sleeve": {
+        "max_vega_per_vol_point_pct": 0.015,
+        "max_gamma_1pct_loss_pct": 0.01
+      },
+      "options_directional_overlay": {
+        "max_vega_per_vol_point_pct": 0.01,
+        "max_gamma_1pct_loss_pct": 0.005
+      },
+      "options_llm_driven": {
+        "max_vega_per_vol_point_pct": 0.01,
+        "max_gamma_1pct_loss_pct": 0.005
+      }
+    }
+  },
+  "vrp": {
+    "enabled": true,
+    "underlyings": [
+      "SPY",
+      "QQQ",
+      "GLD",
+      "TLT"
+    ],
+    "min_dte": 25,
+    "max_dte": 45,
+    "min_iv_minus_rv": 0.04,
+    "realized_lookback_sessions": 20,
+    "short_delta_min": 0.1,
+    "short_delta_max": 0.2,
+    "wing_delta_max": 0.07,
+    "allowed_regimes": [
+      "range_bound",
+      "trending_up",
+      "trending_down"
+    ],
+    "max_entries_per_day": 2
+  },
+  "llm_driven": {
+    "enabled": true,
+    "min_llm_confidence": 0.7,
+    "min_dte": 3,
+    "max_dte": 35,
+    "target_dte": 21,
+    "max_symbols_per_cycle": 3,
+    "max_spread_pct": 0.2,
+    "min_open_interest": 100
+  },
+  "directional_overlay": {
+    "enabled": true,
+    "underlyings": [
+      "NVDA",
+      "AVGO",
+      "TSM",
+      "MSFT",
+      "AAPL",
+      "GOOGL",
+      "META",
+      "AMZN",
+      "AMD",
+      "JPM",
+      "V",
+      "UNH",
+      "JNJ",
+      "PG",
+      "KO",
+      "SPY",
+      "QQQ",
+      "GLD",
+      "TLT",
+      "PLTR",
+      "CRM",
+      "PANW",
+      "TSLA",
+      "SPCX"
+    ],
+    "min_dte": 25,
+    "max_dte": 60,
+    "target_dte": 40,
+    "long_delta": 0.5,
+    "short_delta": 0.25,
+    "min_signal_confidence": 0.6,
+    "max_signal_age_seconds": 900,
+    "max_spread_pct": 0.2,
+    "min_open_interest": 100,
+    "max_risk_per_trade_pct": 0.07,
+    "max_holding_days": 21,
+    "close_dte": 5,
+    "profit_target_pct": 0.5,
+    "stop_loss_pct": 0.5
+  },
+  "long_volatility": {
+    "enabled": true,
+    "mode": "alongside",
+    "underlyings": [
+      "SPY",
+      "QQQ",
+      "GLD",
+      "TLT",
+      "NVDA",
+      "AMD",
+      "TSLA",
+      "PLTR",
+      "SPCX"
+    ],
+    "exercise_style_by_underlying": {
+      "SPX": "european"
+    },
+    "allowed_regimes": [
+      "volatile"
+    ],
+    "activation_mode": "regime_only",
+    "min_realized_volatility": 0.3,
+    "threshold_risk_multiplier": 0.5,
+    "structure": "strangle",
+    "min_dte": 7,
+    "max_dte": 45,
+    "target_dte": 30,
+    "otm_delta": 0.25,
+    "iv_percentile_lookback_sessions": 252,
+    "iv_rank_min_samples": 20,
+    "atm_delta_tolerance": 0.2,
+    "bootstrap_iv_history_from_theta": true,
+    "iv_percentile_ceiling": 75.0,
+    "max_risk_per_trade_pct": 0.07,
+    "realized_lookback_sessions": 20,
+    "max_iv_to_realized_ratio": null,
+    "max_spread_pct": 0.15,
+    "min_open_interest": 100,
+    "max_premium_per_trade_usd": 1000.0,
+    "profit_target_pct": 0.4,
+    "stop_loss_pct": 0.5,
+    "close_dte": 3,
+    "max_holding_days": 14,
+    "close_on_regime_exit": false,
+    "max_entries_per_day": 1
+  }
+}

@@ -1,0 +1,897 @@
+"""Continuous regime-selected, rule-based Algo strategy portfolio service."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import logging
+import math
+import os
+import secrets
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
+from portfolio.config import get_algo_execution_settings, get_cash_reserve_settings, get_mode_config, is_cash_proxy
+from strategies.runner.cash_reserve import plan_cash_reserve, plan_entry_cash
+from portfolio.incidents import open_incident_symbols, record_incident
+from portfolio.order_ledger import BrokerOrderLedger
+from portfolio.protection.software import build_protection_rows
+from portfolio.reconciliation import reconcile_startup
+from market.sessions import ET, get_trading_window, next_session_start
+from runtime.paths import DATA_DIR
+from portfolio.state_store import AlgoStateStore, StateStoreError
+from portfolio.config import ALGO_SERVICE_CONFIG
+from execution.strategy import execute_strategy_trades
+from strategies.runner.scan import scan as scan_strategy_portfolio
+from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
+from strategies.universe import current_selector_rules_sha256, load_algo_universe
+from equity_research.settings import DEFAULT_OUTPUT_DIR
+from reporting.performance import take_snapshot, write_live_drift_feed_for_account
+
+
+LOG = logging.getLogger("algo_trader.algo")
+STOP = False
+# Equity points are recorded around the clock, so the 1D chart always has a current session.
+INTRADAY_SNAPSHOT_INTERVAL_SECONDS = 5 * 60
+CLOSE_SNAPSHOT_RETRY_SECONDS = 5 * 60
+STATE_BACKUP_DIR = DATA_DIR / "backups" / "algo_state"
+STATE_BACKUP_KEEP = 30
+DRIFT_FEED_PATH = DEFAULT_OUTPUT_DIR / "live-drift-feed.json"
+DRIFT_FEED_AFTER_CLOSE = timedelta(minutes=10)
+DRIFT_FEED_MAX_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class ReconciliationOrders:
+    all_orders: list[dict]
+    nested_orders: list[dict]
+    exact_entry_orders: dict[str, dict]
+    exact_incident_orders: dict[str, dict]
+    history_complete: bool
+
+
+def _state_path() -> Path:
+    path = Path(ALGO_SERVICE_CONFIG["state_db"])
+    if not path.is_absolute():
+        from runtime.paths import ROOT
+        path = ROOT / path
+    return path
+
+
+def _backup_state_daily(store: AlgoStateStore, day) -> bool:
+    """Write the day's fail-safe copy of coordinator state; never stops trading."""
+    try:
+        written = store.backup_daily(STATE_BACKUP_DIR, day, keep=STATE_BACKUP_KEEP)
+    except Exception:
+        LOG.exception("[ALGO] Daily coordinator state backup failed; coordinator continues")
+        return False
+    if written is not None:
+        LOG.info("[ALGO] Daily coordinator state backup written: %s", written)
+    return True
+
+
+def _load_portfolio_state(path: Path) -> dict:
+    return AlgoStateStore(path).load()[1]
+
+
+def _save(path: Path, market_state: str, portfolio_state: dict) -> None:
+    AlgoStateStore(path).save(market_state, portfolio_state)
+
+
+def _capture_equity_snapshot(snapshot_kind: str, now: datetime, account: dict, broker) -> bool:
+    """Capture account equity without interrupting the trading coordinator."""
+    try:
+        equity = float(account["equity"])
+        cash = float(account["cash"])
+        last_equity = float(account.get("last_equity", equity))
+        account_id = str(account.get("id") or account.get("account_number") or "")
+        if not account_id:
+            raise ValueError("Algo broker account omitted its ID")
+        positions = broker.positions()
+        portfolio_data = {
+            "equity": equity,
+            "cash": cash,
+            "invested": equity - cash,
+            "position_count": len(positions),
+            "account_name": "Algo",
+            "account_id": account_id,
+            "daily_pnl": equity - last_equity,
+            "daily_pnl_pct": (equity - last_equity) / last_equity if last_equity else 0.0,
+        }
+        snapshot = take_snapshot(
+            mode="algo",
+            snapshot_kind=snapshot_kind,
+            now=now,
+            portfolio_data=portfolio_data,
+            include_benchmarks=snapshot_kind == "close",
+        )
+    except Exception:
+        LOG.exception("[ALGO] %s equity snapshot failed; coordinator continues", snapshot_kind)
+        return False
+    if snapshot is None:
+        LOG.error("[ALGO] %s equity snapshot returned no account data; coordinator continues", snapshot_kind)
+        return False
+    if snapshot.get("skipped"):
+        LOG.info("[ALGO] %s equity snapshot skipped: %s", snapshot_kind, snapshot.get("reason", "unspecified"))
+        return True
+    LOG.info(
+        "[ALGO] %s equity snapshot saved: %s equity=$%s",
+        snapshot_kind,
+        snapshot.get("timestamp", snapshot.get("date", "unknown time")),
+        f"{float(snapshot['equity']):,.2f}",
+    )
+    return True
+
+
+def _run_drift_feed_job(
+    portfolio: dict, window, *, now: datetime, account_id: str, path: Path = DRIFT_FEED_PATH,
+) -> None:
+    """Write the live drift feed once per session after the close; never affects trading."""
+    status = portfolio.get("drift_feed") or {}
+    if status.get("date") != window.trade_date:
+        status = {"date": window.trade_date, "status": "pending", "attempts": 0}
+    portfolio["drift_feed"] = status
+    if window.name != "after_hours" or status["status"] == "written":
+        return
+    if now < window.regular_close + DRIFT_FEED_AFTER_CLOSE or status["attempts"] >= DRIFT_FEED_MAX_ATTEMPTS:
+        return
+    status["attempts"] += 1
+    try:
+        result = write_live_drift_feed_for_account(path, mode="algo", account_id=account_id)
+    except Exception as exc:
+        status["status"] = "failed" if status["attempts"] >= DRIFT_FEED_MAX_ATTEMPTS else "retrying"
+        status["last_error"] = f"{type(exc).__name__}: {exc}"
+        LOG.exception("[ALGO] Live drift feed for %s failed (attempt %d); trading continues",
+                      window.trade_date, status["attempts"])
+        return
+    status.pop("last_error", None)
+    status.update(
+        status="written", written_at=now.isoformat(), path=str(path),
+        sessions=result["sessions"], realized_pnl_complete=result["realized_pnl_complete"],
+    )
+    LOG.info("[ALGO] Live drift feed written for %s: %s", window.trade_date, path)
+
+
+def _load_reconciliation_orders(portfolio: dict, broker, *, ledger: BrokerOrderLedger, open_orders: list[dict]) -> ReconciliationOrders:
+    """Sync the broker order ledger and load exact references for reconciliation."""
+    account_id = str(portfolio.get("account_id") or "")
+    ledger.sync(broker, account_id=account_id, today=datetime.now(ET).date(), open_orders=open_orders)
+    all_orders = [o for o in ledger.orders(account_id) if not is_cash_proxy(o.get("symbol"))]
+    history_complete = ledger.history_complete(account_id)
+    recent_order_ids = {str(order.get("id")) for order in all_orders}
+    exact_entry_orders = {}
+    if not history_complete:
+        for ticker, owner in portfolio["position_owners"].items():
+            state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
+            entry_id = state.get("entry_order_id")
+            if entry_id and entry_id not in recent_order_ids:
+                try:
+                    exact_entry_orders[entry_id] = broker.order(entry_id)
+                except Exception as exc:
+                    LOG.warning("[ALGO] Exact entry lookup failed for %s: %s", ticker, exc)
+
+    nested_page = broker.orders("all", nested=True)
+    if not isinstance(nested_page, list):
+        raise ValueError("Broker nested order history is malformed")
+    exact_nested: dict[str, dict] = {}
+    for ticker, owner in portfolio["position_owners"].items():
+        state = (portfolio["strategy_states"].get(owner) or {}).get(ticker, {})
+        relevant_ids = [state.get("entry_order_id")]
+        recovery = state.get("protection_recovery") or {}
+        if isinstance(recovery, dict):
+            relevant_ids.append(recovery.get("order_id"))
+            if recovery.get("client_order_id") and not recovery.get("order_id"):
+                found = broker.order_by_client_id(recovery["client_order_id"])
+                if found:
+                    relevant_ids.append(found.get("id"))
+        for order_id in relevant_ids:
+            if not order_id or order_id in exact_nested:
+                continue
+            exact = broker.order(str(order_id), nested=True)
+            if not isinstance(exact, dict) or str(exact.get("id") or "") != str(order_id):
+                raise ValueError(f"Exact nested broker order {order_id} is unavailable")
+            exact_nested[str(order_id)] = exact
+    nested_orders = list(exact_nested.values()) + [
+        order for order in nested_page
+        if isinstance(order, dict) and str(order.get("id") or "") not in exact_nested
+    ]
+
+    exact_incident_orders = {}
+    incident = portfolio.get("execution_incident") or {}
+    for event in (incident.get("events") or {}).values():
+        if not isinstance(event, dict) or not event.get("client_order_id"):
+            continue
+        found = broker.order_by_client_id(event["client_order_id"])
+        if found:
+            exact_incident_orders[event["client_order_id"]] = found
+    return ReconciliationOrders(
+        all_orders=all_orders,
+        nested_orders=nested_orders,
+        exact_entry_orders=exact_entry_orders,
+        exact_incident_orders=exact_incident_orders,
+        history_complete=history_complete,
+    )
+
+
+def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, window) -> float:
+    """Reconcile persisted ownership and protection against one broker snapshot."""
+    try:
+        positions = [p for p in broker.positions() if not is_cash_proxy(p.get("symbol"))]
+        open_orders = [o for o in broker.orders("open") if not is_cash_proxy(o.get("symbol"))]
+        orders = _load_reconciliation_orders(
+            portfolio, broker, ledger=BrokerOrderLedger(state_path), open_orders=open_orders,
+        )
+        report = reconcile_startup(
+            portfolio,
+            positions=positions,
+            all_orders=orders.all_orders,
+            nested_orders=orders.nested_orders,
+            open_orders=open_orders,
+            journal_path=state_path,
+            exact_entry_orders=orders.exact_entry_orders,
+            exact_incident_orders=orders.exact_incident_orders,
+            regular_session=window.name == "regular",
+            history_complete=orders.history_complete,
+        )
+        _restore_pre_submit_exit_intents(portfolio, positions, open_orders)
+        store.save(window.name.upper(), portfolio)
+        checked_monotonic = time.monotonic()
+        startup_verified = report["status"] == "verified"
+        if startup_verified:
+            LOG.info(
+                "[ALGO] Startup reconciliation verified %d positions; recovered %d owners",
+                len(report["verified_positions"]), len(report["recovered_owners"]),
+            )
+        else:
+            LOG.error("[ALGO] Startup reconciliation degraded: %s", "; ".join(report["entry_pause_reasons"]))
+        return checked_monotonic
+    except Exception as exc:
+        portfolio["entries_paused"] = True
+        portfolio["entry_pause_reasons"] = [f"startup broker reconciliation unavailable: {type(exc).__name__}: {exc}"]
+        portfolio["startup_reconciliation"] = {
+            "status": "error", "entries_paused": True,
+            "entry_pause_reasons": portfolio["entry_pause_reasons"],
+            "checked_at": datetime.now(ET).isoformat(),
+        }
+        store.save("DEGRADED", portfolio)
+        checked_monotonic = time.monotonic()
+        LOG.exception("[ALGO] Startup reconciliation failed; new entries paused")
+        return checked_monotonic
+
+
+def _restore_pre_submit_exit_intents(
+    portfolio: dict, positions: list[dict], open_orders: list[dict],
+) -> None:
+    """Recover exits known to have stopped before an order reached Alpaca."""
+    incident = portfolio.get("execution_incident") or {}
+    events = incident.get("events") or {}
+    positions_by_symbol = {
+        str(row.get("symbol") or "").upper(): row
+        for row in positions if isinstance(row, dict)
+    }
+    open_client_ids = {
+        str(order.get("client_order_id") or "")
+        for order in open_orders if isinstance(order, dict)
+    }
+    owners = portfolio.get("position_owners") or {}
+    states = portfolio.get("strategy_states") or {}
+    for event in events.values():
+        if not isinstance(event, dict) or event.get("kind") != "exit_submission":
+            continue
+        symbol = str(event.get("ticker") or "").upper()
+        client_id = str(event.get("client_order_id") or "")
+        reason = str(event.get("reason") or "")
+        if (
+            not symbol
+            or not client_id
+            or event.get("order_id")
+            or not reason.startswith(f"Open {symbol} orders remained after cancellation:")
+            or client_id in open_client_ids
+        ):
+            continue
+        position = positions_by_symbol.get(symbol)
+        owner = owners.get(symbol)
+        state = ((states.get(owner) or {}).get(symbol) or {}) if owner else {}
+        try:
+            quantity = float((position or {}).get("qty", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if not owner or not state or not math.isfinite(quantity) or quantity == 0:
+            continue
+        if isinstance(state.get("pending_exit_intent"), dict):
+            continue
+        state["pending_exit_intent"] = {
+            "action": "cover" if quantity < 0 else "sell",
+            "strategy": owner,
+            "reason": "resume strategy exit blocked before broker submission",
+            "timeframe": None,
+            "signal_bar_time": event.get("detected_at"),
+            "event_id": None,
+            "client_order_id": client_id,
+            "software_protection": False,
+            "coordinator_force_flatten": False,
+            "retryable": True,
+            "status": "restored_pre_submission_failure",
+            "created_at": event.get("detected_at"),
+        }
+
+
+def _sync_software_protection(store: AlgoStateStore, portfolio: dict, broker, *, now: datetime) -> list[str]:
+    """Persist protection rows for held positions and return owned tickers lacking levels.
+
+    Exit markers whose broker order is no longer open are released so the
+    position can be exited again on a later scan.
+    """
+    positions = broker.positions()
+    rows, gaps = build_protection_rows(
+        portfolio, positions, risk=get_mode_config("algo")["risk"], now=now,
+    )
+    store.sync_protection(rows)
+    open_client_ids = {str(order.get("client_order_id") or "") for order in broker.orders("open")}
+    for ticker, row in store.read_protection().items():
+        marker = row.get("exit_client_order_id")
+        if marker and marker not in open_client_ids:
+            store.clear_exit_marker(ticker)
+    startup = portfolio.get("startup_reconciliation")
+    if not isinstance(startup, dict):
+        startup = {}
+        portfolio["startup_reconciliation"] = startup
+    startup["protection_gaps"] = gaps
+    return gaps
+
+
+def _status(path: Path) -> None:
+    state_error = None
+    try:
+        market_state, portfolio = AlgoStateStore(path).read()
+    except StateStoreError as exc:
+        market_state, portfolio = "STATE_ERROR", {}
+        state_error = str(exc)
+    try:
+        active = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", "equity.service"],
+            check=False,
+            timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        active = None
+    universe = portfolio.get("universe") or {}
+    print(json.dumps({
+        "service": "equity.service",
+        "service_active": active,
+        "runtime_mode": portfolio.get("runtime_mode", "algo"),
+        "market_state": market_state or "UNKNOWN",
+        "market_timezone": "America/New_York",
+        "universe": universe.get("tickers", []),
+        "state_error": state_error,
+        "portfolio": portfolio,
+    }, indent=2))
+    if state_error:
+        raise SystemExit(2)
+
+
+def _scan_strategy_portfolio(
+    portfolio: dict,
+    *,
+    window,
+    broker=None,
+    persist_before_execution=None,
+    dry_run: bool = False,
+) -> dict:
+    """Evaluate the selected strategies and execute via the shared risk path."""
+    scan_result = scan_strategy_portfolio(
+        mode="algo",
+        universe_result=portfolio.get("universe") or {"tickers": []},
+        position_owners=portfolio.setdefault("position_owners", {}),
+        strategy_states=portfolio.setdefault("strategy_states", {}),
+        session_name=window.name,
+        trading_date=window.trade_date,
+        extended_hours=window.extended_hours,
+        regular_open=getattr(window, "regular_open", None),
+        regular_close=getattr(window, "regular_close", None),
+        data_feed=window.bar_feed,
+        quote_feed=window.quote_feed,
+    )
+    portfolio["market_regime"] = scan_result.get("market_regime", {"regime": "unknown"})
+    portfolio["active_strategies"] = list(portfolio["market_regime"].get("active", []))
+    portfolio["last_signals"] = scan_result.get("signals", [])
+    portfolio["multi_factor_execution_mode"] = "live"
+    portfolio["multi_factor_parameter_profile"] = scan_result.get("multi_factor_parameter_profile")
+    portfolio["last_scan_at"] = datetime.now(ET).isoformat()
+    portfolio["last_execution"] = None
+    portfolio["scan_errors"] = list(scan_result.get("scan_errors") or [])
+    portfolio["data_status"] = scan_result.get("data_status") or {}
+    historical_status = portfolio["data_status"].get("historical_bars")
+    portfolio["last_scan_status"] = "degraded" if portfolio["scan_errors"] or historical_status != "ok" else "ok"
+    if portfolio["last_scan_status"] == "ok":
+        portfolio["last_successful_scan_at"] = portfolio["last_scan_at"]
+    startup = portfolio.get("startup_reconciliation") or {}
+    startup_reasons = list(startup.get("entry_pause_reasons") or [])
+    if startup.get("protection_gaps"):
+        startup_reasons.append("Algo protection rows missing: " + ", ".join(startup["protection_gaps"]))
+    scan_reasons = scan_result.get("entry_pause_reasons") or []
+    portfolio["entry_pause_reasons"] = list(dict.fromkeys([*startup_reasons, *scan_reasons]))
+    portfolio["entries_paused"] = bool(
+        startup.get("entries_paused") or scan_result.get("entries_paused") or startup.get("protection_gaps")
+    )
+    if historical_status != "ok":
+        portfolio["entries_paused"] = True
+        reason = f"historical bar scan is {historical_status or 'unavailable'}"
+        if reason not in portfolio["entry_pause_reasons"]:
+            portfolio["entry_pause_reasons"].append(reason)
+    portfolio["unowned_positions"] = sorted(set(startup.get("unowned_positions") or []) | set(scan_result.get("unowned_positions") or []))
+    if portfolio["unowned_positions"] and not portfolio["entries_paused"]:
+        portfolio["entries_paused"] = True
+        portfolio["entry_pause_reasons"].append("Algo has unattributed broker holdings")
+    unproven_owners = sorted(
+        ticker for ticker, owner in portfolio["position_owners"].items()
+        if (portfolio["strategy_states"].get(owner) or {}).get(ticker, {}).get("phase") in ACTIVE_PHASES
+        and not (portfolio["strategy_states"].get(owner) or {}).get(ticker, {}).get("entry_order_id")
+    )
+    if unproven_owners:
+        portfolio["entries_paused"] = True
+        portfolio["entry_pause_reasons"].append(
+            "Algo entry provenance is unresolved: " + ", ".join(unproven_owners)
+        )
+    incident_symbols = open_incident_symbols(portfolio)
+    if incident_symbols:
+        portfolio["entries_paused"] = True
+        portfolio["last_scan_status"] = "degraded"
+        portfolio["entry_pause_reasons"].append(
+            "Algo execution incident needs broker resolution: " + ", ".join(incident_symbols)
+        )
+
+    if broker is not None and not dry_run:
+        extra_pause_reasons = [
+            reason for reason in portfolio.get("entry_pause_reasons") or []
+            if reason not in startup_reasons and reason not in scan_reasons
+        ]
+        startup = portfolio.get("startup_reconciliation") or {}
+        portfolio["entry_pause_reasons"] = list(dict.fromkeys([
+            *startup_reasons,
+            *scan_reasons,
+            *extra_pause_reasons,
+        ]))
+        portfolio["entries_paused"] = bool(
+            portfolio["entries_paused"] or extra_pause_reasons
+        )
+
+    trades = [
+        trade for trade in scan_result.get("trades", [])
+        if not (portfolio["entries_paused"] and str(trade.get("action", "")).lower() in {"buy", "short"})
+    ]
+    if any(str(trade.get("action", "")).lower() in {"sell", "cover"} for trade in trades):
+        # Defer all entries until the reducing orders have been examined.
+        trades = [trade for trade in trades if str(trade.get("action", "")).lower() in {"sell", "cover"}]
+    entry_notional = sum(
+        float(trade.get("qty") or 0) * float(trade.get("limit_price") or trade.get("entry_price") or 0)
+        for trade in trades if str(trade.get("action", "")).lower() in {"buy", "short"}
+    )
+    reserve = _run_cash_reserve(
+        broker, window=window, dry_run=dry_run, entry_notional=entry_notional,
+    )
+    if reserve is not None:
+        scan_result["cash_reserve"] = reserve["result"]
+        if reserve["defer_entries"]:
+            # Cash is being raised from the reserve ETF; entries retry next cycle.
+            trades = [
+                trade for trade in trades
+                if str(trade.get("action", "")).lower() not in {"buy", "short"}
+            ]
+    if trades:
+        machine = RuleStrategyStateMachine(
+            portfolio["strategy_states"], portfolio["position_owners"],
+        )
+        for trade in trades:
+            machine.prepare(trade)
+        if persist_before_execution:
+            persist_before_execution()
+        try:
+            execution = execute_strategy_trades(trades, mode="algo", dry_run=dry_run)
+        except Exception as exc:
+            for trade in trades:
+                if not dry_run and str(trade.get("action") or "").lower() in {"sell", "cover"}:
+                    record_incident(
+                        portfolio, kind="exit_submission", ticker=trade["ticker"],
+                        client_order_id=trade.get("client_order_id"),
+                        reason=f"executor call failed: {type(exc).__name__}: {exc}",
+                    )
+            if persist_before_execution:
+                persist_before_execution()
+            raise
+        if not isinstance(execution, dict) or not isinstance(execution.get("results"), list):
+            execution = {"status": "invalid_response", "results": []}
+            portfolio["entries_paused"] = True
+            portfolio["last_scan_status"] = "error"
+            portfolio["entry_pause_reasons"].append("Algo executor returned a malformed result")
+        portfolio["last_execution"] = execution
+        execution_rows = execution["results"]
+        results_by_symbol_action = {
+            (str(item.get("ticker", "")).upper(), str(item.get("action", "")).lower()): item
+            for item in (execution_rows if isinstance(execution_rows, list) else [])
+            if isinstance(item, dict)
+        }
+        for trade in trades:
+            order_result = results_by_symbol_action.get((trade["ticker"].upper(), trade["action"].lower()))
+            machine.resolve(
+                trade,
+                order_result,
+            )
+            if not dry_run and str(trade.get("action") or "").lower() in {"sell", "cover"} and not (
+                order_result and order_result.get("status") == "submitted" and order_result.get("order_id")
+                and order_result.get("success") is not False
+            ):
+                if (order_result or {}).get("safe_to_retry") is True:
+                    # A retryable refusal sent no order. The state machine keeps the
+                    # exit intent for a later regular-hours scan; entries stay open.
+                    continue
+                reason = (order_result or {}).get("error") or (order_result or {}).get("reason") or "executor did not confirm a position-reducing order"
+                record_incident(
+                    portfolio, kind="exit_submission", ticker=trade["ticker"],
+                    client_order_id=trade.get("client_order_id"),
+                    order_id=(order_result or {}).get("order_id"), reason=str(reason),
+                )
+                portfolio["entries_paused"] = True
+                portfolio["last_scan_status"] = "degraded"
+                issue = "Algo exit submission failed; broker resolution required"
+                if issue not in portfolio["entry_pause_reasons"]:
+                    portfolio["entry_pause_reasons"].append(issue)
+        if persist_before_execution:
+            persist_before_execution()
+    return scan_result
+
+
+def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -> dict | None:
+    """Keep idle cash in the reserve ETF; sell it first when entries need cash.
+
+    The reserve ETF counts as free cash. When this cycle's entries exceed the raw
+    cash above the floor, the reserve is sold and the entries wait one cycle for
+    the proceeds. Otherwise idle cash above the floor is parked. Orders are flagged
+    so execution skips the risk gate. Reserve results never pause entries or open
+    incidents, and failures leave strategies unaffected.
+    """
+    if dry_run or window.name != "regular" or not get_cash_reserve_settings()["enabled"]:
+        return None
+    proxy = str(get_cash_reserve_settings()["proxy_symbol"]).upper()
+    try:
+        account = broker.account()
+        positions = broker.positions()
+        open_orders = broker.orders("open")
+        proxy_orders_open = any(is_cash_proxy(order.get("symbol")) for order in open_orders)
+        equity = float(account["equity"])
+        cash = float(account["cash"])
+        invested = sum(
+            abs(float(position.get("market_value") or 0))
+            for position in positions if not is_cash_proxy(position.get("symbol"))
+        )
+        held = next((p for p in positions if is_cash_proxy(p.get("symbol"))), None)
+        proxy_qty = int(float(held["qty"])) if held else 0
+        if proxy_orders_open:
+            return {"defer_entries": entry_notional > 0, "result": {"status": "proxy_order_pending"}}
+        quote = (broker.latest_quotes([proxy], feed="sip") or {}).get(proxy) or {}
+        bid = float(quote.get("bid") or 0)
+        ask = float(quote.get("ask") or 0)
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return {"defer_entries": entry_notional > 0, "result": {"status": "no_quote"}}
+        mid = (bid + ask) / 2
+        band = get_algo_execution_settings()["entry_limit_band_bps"] / 10_000.0
+
+        if entry_notional > 0:
+            hop = plan_entry_cash(
+                equity=equity, cash=cash, entry_notional=entry_notional,
+                min_cash_pct=get_mode_config("algo")["risk"]["min_cash_pct"], proxy_price=mid, proxy_qty=proxy_qty,
+            )
+            if hop["sell_qty"] <= 0:
+                return {"defer_entries": hop["defer_entries"], "result": {"status": "cash_sufficient" if not hop["defer_entries"] else "cannot_raise_cash"}}
+            plan = {"action": "sell", "qty": hop["sell_qty"], "reason": "raise cash for pending entries"}
+        else:
+            plan = plan_cash_reserve(
+                equity=equity, cash=cash, invested_value=invested, proxy_price=mid,
+                proxy_qty=proxy_qty, config=get_cash_reserve_settings(),
+            )
+            if plan["action"] == "hold":
+                return {"defer_entries": False, "result": {"status": "hold", "reason": plan["reason"]}}
+
+        limit = round(ask * (1 + band), 2) if plan["action"] == "buy" else round(bid * (1 - band), 2)
+        stamp = datetime.now(ET).strftime("%Y%m%d%H%M%S")
+        trade = {
+            "ticker": proxy,
+            "action": plan["action"],
+            "qty": plan["qty"],
+            "order_type": "limit",
+            "limit_price": limit,
+            "entry_price": mid,
+            "strategy": "cash_reserve",
+            "reasoning": plan["reason"],
+            "cash_reserve": True,
+            "client_order_id": f"cash-{stamp}-{plan['action']}"[:48],
+        }
+        LOG.info("[ALGO] Cash reserve %s %d %s @ limit %.2f (%s)", plan["action"], plan["qty"], proxy, limit, plan["reason"])
+        result = execute_strategy_trades([trade], mode="algo")
+        return {"defer_entries": plan["action"] == "sell" and entry_notional > 0, "result": result}
+    except Exception:
+        LOG.exception("[ALGO] Cash reserve step failed; strategies unaffected")
+        return {"defer_entries": entry_notional > 0, "result": {"status": "error"}}
+
+
+def run_loop(
+    *,
+    dry_run: bool = False,
+    max_cycles: int | None = None,
+    broker_client=None,
+    mode: str = "algo",
+) -> None:
+    global STOP
+    if mode != "algo":
+        raise ValueError("Daemon mode must be 'algo'")
+    STOP = False
+    state_path = _state_path()
+    store = AlgoStateStore(state_path)
+    _, portfolio = store.load()
+    broker = broker_client if broker_client is not None else AlgoAlpaca()
+    coordinator_token = secrets.token_urlsafe(32)
+    coordinator_pid = os.getpid()
+    store.activate_coordinator(coordinator_token, coordinator_pid)
+    os.environ["ALGO_COORDINATOR_TOKEN"] = coordinator_token
+    cycle = 0
+    last_scan_monotonic: float | None = None
+    last_universe_attempt_monotonic: float | None = None
+    last_reconciliation_monotonic: float | None = None
+    last_recovery_monotonic: float | None = None
+    last_recovery_wait_signature: tuple[str, ...] | None = None
+    last_recovery_wait_log_monotonic: float | None = None
+    last_intraday_snapshot_attempt: float | None = None
+    close_snapshot_trade_date: str | None = None
+    next_close_snapshot_attempt = 0.0
+    last_window_name: str | None = None
+    last_loop_error: str | None = None
+    last_backup_day = None
+
+    try:
+        while not STOP and (max_cycles is None or cycle < max_cycles):
+            cycle += 1
+            try:
+                now = datetime.now(ET)
+                if last_backup_day != now.date() and _backup_state_daily(store, now.date()):
+                    last_backup_day = now.date()
+                calendar = broker.calendar(
+                    (now.date() - timedelta(days=2)).isoformat(),
+                    (now.date() + timedelta(days=14)).isoformat(),
+                )
+                window = get_trading_window(now, calendar)
+                if window is None:
+                    last_window_name = None
+                    store.save("CLOSED", portfolio)
+                    if last_intraday_snapshot_attempt is None or time.monotonic() - last_intraday_snapshot_attempt >= INTRADAY_SNAPSHOT_INTERVAL_SECONDS:
+                        last_intraday_snapshot_attempt = time.monotonic()
+                        try:
+                            _capture_equity_snapshot("intraday", now, broker.account(), broker)
+                        except Exception:
+                            LOG.exception("[ALGO] off-hours equity snapshot failed; loop continues")
+                    if not STOP and (max_cycles is None or cycle < max_cycles):
+                        _sleep_before_next_session(now, calendar)
+                    continue
+
+                if window.name != last_window_name:
+                    last_reconciliation_monotonic = None
+                    last_window_name = window.name
+
+                snapshot_monotonic = time.monotonic()
+                intraday_snapshot_due = (
+                    last_intraday_snapshot_attempt is None
+                    or snapshot_monotonic - last_intraday_snapshot_attempt >= INTRADAY_SNAPSHOT_INTERVAL_SECONDS
+                )
+                close_snapshot_due = (
+                    window.name == "after_hours"
+                    and close_snapshot_trade_date != window.trade_date
+                    and snapshot_monotonic >= next_close_snapshot_attempt
+                )
+
+                account = broker.account()  # validates that Algo keys identify the configured account
+                if intraday_snapshot_due:
+                    last_intraday_snapshot_attempt = time.monotonic()
+                    _capture_equity_snapshot("intraday", now, account, broker)
+                elif close_snapshot_due:
+                    next_close_snapshot_attempt = time.monotonic() + CLOSE_SNAPSHOT_RETRY_SECONDS
+                    if _capture_equity_snapshot("close", now, account, broker):
+                        close_snapshot_trade_date = window.trade_date
+                broker_account_id = str(account.get("id") or account.get("account_number") or "")
+                if not broker_account_id:
+                    raise AlgoAccountMismatchError("Alpaca omitted the Algo broker account ID")
+                persisted_account_id = portfolio.get("account_id")
+                if persisted_account_id and persisted_account_id != broker_account_id:
+                    raise AlgoAccountMismatchError(
+                        "Persisted Algo strategy state belongs to a different paper account"
+                    )
+                portfolio["account_id"] = broker_account_id
+                retry_seconds = max(15, int(get_algo_execution_settings().get("universe_retry_seconds", 300)))
+                if (
+                    last_reconciliation_monotonic is None
+                    or time.monotonic() - last_reconciliation_monotonic >= retry_seconds
+                ):
+                    last_reconciliation_monotonic = _reconcile_broker_state(
+                        portfolio, broker, store, state_path, window,
+                    )
+
+                # Software protection rows are persisted before the strategy scan
+                # so that every held position has its stop and target recorded
+                # in the database. Owned positions without levels pause entries.
+                if not dry_run:
+                    _sync_software_protection(store, portfolio, broker, now=datetime.now(ET))
+                    store.write_heartbeat(datetime.now(ET), window.name, os.getpid())
+                session_day = window.trade_date
+                if portfolio.get("session_date") != session_day:
+                    portfolio["session_date"] = session_day
+                    portfolio["universe"] = None
+                    portfolio["active_strategies"] = []
+                    portfolio["market_regime"] = {
+                        "regime": "unknown",
+                        "reason": "waiting for today's completed-bar scan",
+                        "active": [],
+                    }
+
+                universe = portfolio.get("universe") or {}
+                universe_due = (
+                    universe.get("selection_date") != session_day
+                    or universe.get("source") != "eligible_universe"
+                    or universe.get("selector_rules_sha256") != current_selector_rules_sha256()
+                    or bool(universe.get("error"))
+                )
+                universe_retry_due = (
+                    last_universe_attempt_monotonic is None
+                    or time.monotonic() - last_universe_attempt_monotonic >= retry_seconds
+                )
+                if universe_due and universe_retry_due:
+                    last_universe_attempt_monotonic = time.monotonic()
+                    try:
+                        portfolio["universe"] = load_algo_universe()
+                        portfolio["universe"]["selection_date"] = session_day
+                        LOG.info(
+                            "[ALGO] Selected universe loaded: %d tickers",
+                            len(portfolio["universe"].get("tickers", [])),
+                        )
+                    except Exception as exc:
+                        portfolio["universe"] = {
+                            "tickers": [], "selection_date": session_day,
+                            "error": str(exc),
+                        }
+                        LOG.exception("[ALGO] Universe refresh failed; new entries paused")
+
+                scan_interval = int(get_algo_execution_settings()["portfolio_scan_seconds"])
+                if last_scan_monotonic is None or time.monotonic() - last_scan_monotonic >= scan_interval:
+                    prior_regime = (portfolio.get("market_regime") or {}).get("regime")
+                    market_state = window.name.upper()
+                    save_before_execution = lambda: store.save(market_state, portfolio)
+                    try:
+                        result = _scan_strategy_portfolio(
+                            portfolio,
+                            window=window,
+                            broker=broker,
+                            persist_before_execution=save_before_execution,
+                            dry_run=dry_run,
+                        )
+                        if not dry_run:
+                            for item in (portfolio.get("last_execution") or {}).get("results") or []:
+                                if (
+                                    str(item.get("action", "")).lower() in {"sell", "cover"}
+                                    and item.get("status") == "submitted" and item.get("order_id")
+                                ):
+                                    store.set_exit_marker(
+                                        str(item.get("ticker", "")).upper(), str(item.get("client_order_id") or ""),
+                                        str(item["order_id"]), datetime.now(ET).isoformat(),
+                                    )
+                        new_regime = (portfolio.get("market_regime") or {}).get("regime")
+                        if new_regime != prior_regime:
+                            LOG.info(
+                                "[ALGO] Session=%s regime=%s active=%s (%s)",
+                                window.name,
+                                new_regime,
+                                ",".join(portfolio.get("active_strategies", [])) or "none",
+                                (portfolio.get("market_regime") or {}).get("reason", ""),
+                            )
+                        if portfolio.get("last_execution"):
+                            LOG.info(
+                                "[ALGO] Shared executor handled %d strategy orders",
+                                len(portfolio["last_execution"].get("results", [])),
+                            )
+                        if result.get("universe", {}).get("tickers"):
+                            portfolio["universe"] = result["universe"]
+                        if any(
+                            state.get("phase") in ACTIVE_PHASES
+                            and not state.get("entry_order_id")
+                            for by_symbol in portfolio["strategy_states"].values()
+                            for state in by_symbol.values()
+                        ):
+                            last_reconciliation_monotonic = None
+                    except Exception as exc:
+                        portfolio["active_strategies"] = []
+                        portfolio["entries_paused"] = True
+                        portfolio["entry_pause_reasons"] = [f"strategy scan failed: {type(exc).__name__}: {exc}"]
+                        portfolio["scan_errors"] = portfolio["entry_pause_reasons"]
+                        portfolio["last_scan_status"] = "error"
+                        portfolio["market_regime"] = {
+                            "regime": (portfolio.get("market_regime") or {}).get("regime", "unknown"),
+                            "reason": f"strategy scan failed; new entries paused: {exc}",
+                            "active": [],
+                        }
+                        LOG.exception("[ALGO] Rule scan failed; new entries paused")
+                        last_scan_monotonic = time.monotonic() - scan_interval + min(
+                            15, max(1, int(ALGO_SERVICE_CONFIG["poll_seconds"]))
+                        )
+                    else:
+                        last_scan_monotonic = time.monotonic()
+
+                if not dry_run:
+                    _run_drift_feed_job(portfolio, window, now=datetime.now(ET), account_id=broker_account_id)
+                store.save(window.name.upper(), portfolio)
+                last_loop_error = None
+            except AlgoAccountMismatchError as exc:
+                LOG.error("[ALGO] %s; stopping until Algo account credentials and account ID agree", exc)
+                portfolio["entries_paused"] = True
+                portfolio["entry_pause_reasons"] = [str(exc)]
+                store.save("CONFIG_ERROR", portfolio)
+                return
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {exc}"
+                portfolio["entries_paused"] = True
+                portfolio["entry_pause_reasons"] = [f"Algo loop failure: {message}"]
+                portfolio["last_scan_status"] = "error"
+                try:
+                    store.save("DEGRADED", portfolio)
+                except StateStoreError:
+                    LOG.exception("[ALGO] Failed to persist degraded loop status")
+                if message != last_loop_error:
+                    LOG.exception("[ALGO] Temporary API/loop failure; retrying")
+                    last_loop_error = message
+
+            if not STOP and (max_cycles is None or cycle < max_cycles):
+                time.sleep(max(1, int(ALGO_SERVICE_CONFIG["poll_seconds"])))
+    finally:
+        store.clear_coordinator(coordinator_token, coordinator_pid)
+        os.environ.pop("ALGO_COORDINATOR_TOKEN", None)
+
+
+def _sleep_before_next_session(now: datetime, calendar: list[dict]) -> None:
+    wake_at = next_session_start(now, calendar)
+    seconds = max(1, (wake_at - now).total_seconds()) if wake_at else 3600
+    time.sleep(min(3600, seconds, INTRADAY_SNAPSHOT_INTERVAL_SECONDS))
+
+
+def _request_stop() -> None:
+    global STOP
+    STOP = True
+    LOG.info("[ALGO] shutdown requested; saving state on clean exit")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Continuous rule-based strategy portfolio daemon")
+    parser.add_argument("--status", action="store_true", help="show the last persisted Algo portfolio state")
+    parser.add_argument("--mode", choices=["algo"], default="algo", help="run the Algo strategy portfolio")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.status:
+        _status(_state_path())
+        return
+
+    lock_path = Path(ALGO_SERVICE_CONFIG["lock_file"])
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            LOG.error("[ALGO] another daemon instance holds the lock")
+            raise SystemExit(3)
+        signal.signal(signal.SIGTERM, lambda *_: _request_stop())
+        signal.signal(signal.SIGINT, lambda *_: _request_stop())
+        run_loop(mode="algo")
+
+
+if __name__ == "__main__":
+    main()

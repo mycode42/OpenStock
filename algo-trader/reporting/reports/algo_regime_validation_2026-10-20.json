@@ -1,0 +1,387 @@
+{
+  "data": {
+    "adjustment": "split",
+    "context_daily_rows": {
+      "AAPL": 2221,
+      "AMD": 2221,
+      "AMZN": 2221,
+      "AVGO": 2221,
+      "CRM": 2221,
+      "GLD": 2221,
+      "GOOGL": 2221,
+      "HYG": 2221,
+      "JNJ": 2220,
+      "JPM": 2221,
+      "KO": 2220,
+      "LQD": 2221,
+      "META": 2221,
+      "MSFT": 2221,
+      "NVDA": 2221,
+      "PANW": 2221,
+      "PG": 2221,
+      "PLTR": 1319,
+      "QQQ": 2221,
+      "SPY": 2221,
+      "TLT": 2221,
+      "TSM": 2221,
+      "UNH": 2221,
+      "V": 2220
+    },
+    "feed": "sip",
+    "macro_cache": {
+      "observations_by_series": {
+        "BAMLH0A0HYM2": 784,
+        "VIXCLS": 9297,
+        "VXVCLS": 4747
+      },
+      "status": "cached"
+    },
+    "spy_daily_rows": 2221
+  },
+  "feature_distributions": {
+    "adx_14": {
+      "coverage_pct": 100.0,
+      "p10": 14.189657,
+      "p50": 22.770986,
+      "p90": 32.845947
+    },
+    "atr_percentile_252d": {
+      "coverage_pct": 100.0,
+      "p10": 0.015873,
+      "p50": 0.388889,
+      "p90": 0.936508
+    },
+    "average_pairwise_corr_20d": {
+      "coverage_pct": 100.0,
+      "p10": 0.129803,
+      "p50": 0.274064,
+      "p90": 0.558395
+    },
+    "average_pairwise_corr_percentile_252d": {
+      "coverage_pct": 100.0,
+      "p10": 0.035714,
+      "p50": 0.420635,
+      "p90": 0.916667
+    },
+    "breadth_positive_20d": {
+      "coverage_pct": 100.0,
+      "p10": 0.166667,
+      "p50": 0.611111,
+      "p90": 0.833333
+    },
+    "efficiency_ratio_20d": {
+      "coverage_pct": 100.0,
+      "p10": 0.046937,
+      "p50": 0.227256,
+      "p90": 0.452453
+    },
+    "high_yield_spread_percentile_252d": {
+      "coverage_pct": 39.2,
+      "p10": 0.02381,
+      "p50": 0.297619,
+      "p90": 0.761905
+    },
+    "hyg_lqd_relative_return_20d": {
+      "coverage_pct": 100.0,
+      "p10": -0.014973,
+      "p50": 0.002668,
+      "p90": 0.019898
+    },
+    "median_dollar_volume_percentile_252d": {
+      "coverage_pct": 100.0,
+      "p10": 0.130952,
+      "p50": 0.702381,
+      "p90": 0.980159
+    },
+    "realized_vol_percentile_252d": {
+      "coverage_pct": 100.0,
+      "p10": 0.031746,
+      "p50": 0.384921,
+      "p90": 0.940476
+    },
+    "vix_percentile_252d": {
+      "coverage_pct": 100.0,
+      "p10": 0.027778,
+      "p50": 0.384921,
+      "p90": 0.912698
+    },
+    "vix_term_slope": {
+      "coverage_pct": 100.0,
+      "p10": -0.186109,
+      "p50": -0.119077,
+      "p90": -0.026939
+    }
+  },
+  "feature_set_results": {
+    "core": {
+      "future_20d_vol_top_decile_cutoff": 0.2453994486752252,
+      "high_vol_mean_reversion_only": {
+        "mean_forward_5d_proxy_return_pct": 0.50437,
+        "observations": 187,
+        "win_rate_pct": 54.011
+      },
+      "observations": 1235,
+      "risk_off_vs_next_20d_vol_top_decile": {
+        "actual_top_decile_days": 125,
+        "precision": 0.29411764705882354,
+        "predicted_days": 187,
+        "recall": 0.44
+      },
+      "rule_state_counts": {
+        "ambiguous": 239,
+        "range_bound": 696,
+        "trending_down": 9,
+        "trending_up": 104,
+        "volatile": 187
+      },
+      "structural_mean_reversion_in_range": {
+        "mean_forward_5d_proxy_return_pct": 0.01326,
+        "observations": 696,
+        "win_rate_pct": 46.839
+      },
+      "trend_direction_hit_rate": {
+        "forward_20d": 0.6460176991150443,
+        "forward_5d": 0.5486725663716814,
+        "observations": 113
+      },
+      "trend_momentum_only": {
+        "mean_forward_5d_proxy_return_pct": -0.34645,
+        "observations": 113,
+        "win_rate_pct": 41.593
+      },
+      "volatility_overlay_state_counts": {
+        "calm": 968,
+        "elevated": 85,
+        "extreme": 182
+      }
+    },
+    "macro": {
+      "future_20d_vol_top_decile_cutoff": 0.2453994486752252,
+      "high_vol_mean_reversion_only": {
+        "mean_forward_5d_proxy_return_pct": 0.49217,
+        "observations": 310,
+        "win_rate_pct": 55.161
+      },
+      "observations": 1235,
+      "risk_off_vs_next_20d_vol_top_decile": {
+        "actual_top_decile_days": 125,
+        "precision": 0.2967741935483871,
+        "predicted_days": 310,
+        "recall": 0.736
+      },
+      "rule_state_counts": {
+        "ambiguous": 375,
+        "range_bound": 447,
+        "trending_down": 5,
+        "trending_up": 98,
+        "volatile": 310
+      },
+      "structural_mean_reversion_in_range": {
+        "mean_forward_5d_proxy_return_pct": 0.0513,
+        "observations": 447,
+        "win_rate_pct": 48.77
+      },
+      "trend_direction_hit_rate": {
+        "forward_20d": 0.6213592233009708,
+        "forward_5d": 0.5728155339805825,
+        "observations": 103
+      },
+      "trend_momentum_only": {
+        "mean_forward_5d_proxy_return_pct": -0.181,
+        "observations": 103,
+        "win_rate_pct": 44.66
+      },
+      "volatility_overlay_state_counts": {
+        "calm": 859,
+        "elevated": 77,
+        "extreme": 299
+      }
+    },
+    "marketwide": {
+      "future_20d_vol_top_decile_cutoff": 0.2453994486752252,
+      "high_vol_mean_reversion_only": {
+        "mean_forward_5d_proxy_return_pct": 0.32073,
+        "observations": 329,
+        "win_rate_pct": 52.888
+      },
+      "observations": 1235,
+      "risk_off_vs_next_20d_vol_top_decile": {
+        "actual_top_decile_days": 125,
+        "precision": 0.303951367781155,
+        "predicted_days": 329,
+        "recall": 0.8
+      },
+      "rule_state_counts": {
+        "ambiguous": 357,
+        "range_bound": 446,
+        "trending_down": 5,
+        "trending_up": 98,
+        "volatile": 329
+      },
+      "structural_mean_reversion_in_range": {
+        "mean_forward_5d_proxy_return_pct": 0.04628,
+        "observations": 446,
+        "win_rate_pct": 48.655
+      },
+      "trend_direction_hit_rate": {
+        "forward_20d": 0.6213592233009708,
+        "forward_5d": 0.5728155339805825,
+        "observations": 103
+      },
+      "trend_momentum_only": {
+        "mean_forward_5d_proxy_return_pct": -0.181,
+        "observations": 103,
+        "win_rate_pct": 44.66
+      },
+      "volatility_overlay_state_counts": {
+        "calm": 845,
+        "elevated": 74,
+        "extreme": 316
+      }
+    },
+    "technical": {
+      "future_20d_vol_top_decile_cutoff": 0.2453994486752252,
+      "high_vol_mean_reversion_only": {
+        "mean_forward_5d_proxy_return_pct": 0.42893,
+        "observations": 223,
+        "win_rate_pct": 54.26
+      },
+      "observations": 1235,
+      "risk_off_vs_next_20d_vol_top_decile": {
+        "actual_top_decile_days": 125,
+        "precision": 0.3004484304932735,
+        "predicted_days": 223,
+        "recall": 0.536
+      },
+      "rule_state_counts": {
+        "ambiguous": 422,
+        "range_bound": 487,
+        "trending_down": 5,
+        "trending_up": 98,
+        "volatile": 223
+      },
+      "structural_mean_reversion_in_range": {
+        "mean_forward_5d_proxy_return_pct": 0.09231,
+        "observations": 487,
+        "win_rate_pct": 49.076
+      },
+      "trend_direction_hit_rate": {
+        "forward_20d": 0.6213592233009708,
+        "forward_5d": 0.5728155339805825,
+        "observations": 103
+      },
+      "trend_momentum_only": {
+        "mean_forward_5d_proxy_return_pct": -0.181,
+        "observations": 103,
+        "win_rate_pct": 44.66
+      },
+      "volatility_overlay_state_counts": {
+        "calm": 919,
+        "elevated": 101,
+        "extreme": 215
+      }
+    }
+  },
+  "marketwide_hmm_gmm": {
+    "gmm": {
+      "converged_fit_fraction": 1.0,
+      "fit_status_counts": {
+        "ok": 1235
+      },
+      "future_20d_vol_top_decile_cutoff": 0.2453994486752252,
+      "high_vol_mean_reversion_only": {
+        "mean_forward_5d_proxy_return_pct": 0.30766,
+        "observations": 147,
+        "win_rate_pct": 51.02
+      },
+      "mean_posterior_confidence": 0.976,
+      "note": "monthly walk-forward fit; status counts include warmup and feature-coverage failures",
+      "observations": 1235,
+      "risk_off_vs_next_20d_vol_top_decile": {
+        "actual_top_decile_days": 125,
+        "precision": 0.3469387755102041,
+        "predicted_days": 147,
+        "recall": 0.408
+      },
+      "rule_state_counts": {
+        "ambiguous": 99,
+        "range_bound": 622,
+        "trending_up": 367,
+        "volatile": 147
+      },
+      "structural_mean_reversion_in_range": {
+        "mean_forward_5d_proxy_return_pct": 0.07234,
+        "observations": 622,
+        "win_rate_pct": 49.357
+      },
+      "trend_direction_hit_rate": {
+        "forward_20d": 0.7302452316076294,
+        "forward_5d": 0.5912806539509536,
+        "observations": 367
+      },
+      "trend_momentum_only": {
+        "mean_forward_5d_proxy_return_pct": -0.06858,
+        "observations": 367,
+        "win_rate_pct": 48.774
+      },
+      "volatility_overlay_state_counts": {
+        "unknown": 1235
+      }
+    },
+    "hmm": {
+      "converged_fit_fraction": 1.0,
+      "fit_status_counts": {
+        "ok": 1235
+      },
+      "future_20d_vol_top_decile_cutoff": 0.2453994486752252,
+      "high_vol_mean_reversion_only": {
+        "mean_forward_5d_proxy_return_pct": 0.33248,
+        "observations": 177,
+        "win_rate_pct": 50.847
+      },
+      "mean_posterior_confidence": 0.9855,
+      "note": "monthly walk-forward fit; status counts include warmup and feature-coverage failures",
+      "observations": 1235,
+      "risk_off_vs_next_20d_vol_top_decile": {
+        "actual_top_decile_days": 125,
+        "precision": 0.3446327683615819,
+        "predicted_days": 177,
+        "recall": 0.488
+      },
+      "rule_state_counts": {
+        "ambiguous": 152,
+        "range_bound": 575,
+        "trending_up": 331,
+        "volatile": 177
+      },
+      "structural_mean_reversion_in_range": {
+        "mean_forward_5d_proxy_return_pct": 0.0656,
+        "observations": 575,
+        "win_rate_pct": 49.217
+      },
+      "trend_direction_hit_rate": {
+        "forward_20d": 0.7129909365558912,
+        "forward_5d": 0.5861027190332326,
+        "observations": 331
+      },
+      "trend_momentum_only": {
+        "mean_forward_5d_proxy_return_pct": -0.05361,
+        "observations": 331,
+        "win_rate_pct": 48.943
+      },
+      "volatility_overlay_state_counts": {
+        "unknown": 1235
+      }
+    }
+  },
+  "notes": [
+    "Forward 5/20-session returns overlap, so counts are not independent observations.",
+    "Mean-reversion and momentum columns are simple signal proxies without transaction costs or execution rules.",
+    "High-yield OAS history in FRED is currently limited to three years; the HYG/LQD relative-return proxy covers earlier dates."
+  ],
+  "window": {
+    "end": "2025-12-31",
+    "feature_warmup_start": "2017-03-03",
+    "start": "2021-01-01"
+  }
+}

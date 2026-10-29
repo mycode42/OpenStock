@@ -65,6 +65,14 @@ async function fixture(t) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'options'), { recursive: true });
   await fs.writeFile(path.join(root, 'options', 'config.default.json'), JSON.stringify(optionsDefaults));
+  // Shared Algo settings defaults and rules come from the algo-trader repo; the editor refuses to run without them.
+  await fs.mkdir(path.join(root, 'portfolio'), { recursive: true });
+  for (const name of ['algo-strategy-rules.json', 'algo-strategy-config.default.json']) {
+    await fs.copyFile(
+      path.join(require('../lib/paths').algoTraderRoot(), 'portfolio', name),
+      path.join(root, 'portfolio', name),
+    );
+  }
   return root;
 }
 

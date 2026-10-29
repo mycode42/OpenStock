@@ -25,6 +25,11 @@ const migrations = [
   ,require('./migrations/022_percentage_move_alerts')
   ,require('./migrations/023_alpaca_usd_profile')
   ,require('./migrations/024_alpaca_alert_outbox')
+  ,require('./migrations/025_alpaca_orders')
+  ,require('./migrations/026_alpaca_auto_orders')
+  ,require('./migrations/027_alpaca_order_budgets')
+  ,require('./migrations/028_alpaca_outbox_per_fire')
+  ,require('./migrations/029_drop_trade_republic_data')
 ];
 
 function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true } = {}) {
@@ -40,7 +45,7 @@ function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefau
   }
   if (seedDefaults && db.prepare('SELECT COUNT(*) AS count FROM stocks').get().count === 0) {
     const seed = db.transaction(() => {
-      const insertStock = db.prepare("INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur, price_source) VALUES (?, ?, ?, ?, ?, 'trade_republic')");
+      const insertStock = db.prepare("INSERT INTO stocks (symbol, name, currency, buy_threshold_eur, sell_threshold_eur, price_source) VALUES (?, ?, ?, ?, ?, 'alpaca')");
       const insertLevel = db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
       for (const stock of [['AAPL', 'Apple Inc.', 'USD', 150, 200], ['MSFT', 'Microsoft Corporation', 'USD', 250, 350], ['GOOGL', 'Alphabet Inc.', 'USD', 120, 180], ['TSLA', 'Tesla Inc.', 'USD', 200, 300], ['AMZN', 'Amazon.com Inc.', 'USD', 100, 150]]) {
         const result = insertStock.run(...stock);

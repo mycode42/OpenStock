@@ -1,13 +1,17 @@
 # OpenStock
 
+**A self-hosted stock dashboard, trading journal, and paper-trading Algo engine, built on Alpaca.**
+
+OpenStock watches your alert levels, journals your Alpaca account in USD, and runs the Algo Trader sleeves in [algo-trader/](algo-trader/). It uses SIP quotes when available and falls back to IEX when the account cannot access SIP.
 OpenStock is a self-hosted stock dashboard and trading journal built around Alpaca accounts and market data in USD. 
 
 It also features a built in algorithmic and llm powered trading system for equity and options
 
+> **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
+
 <img width="800" alt="Screenshot 2026-10-28 at 13 40 08" src="https://github.com/user-attachments/assets/51ec9bbc-aff4-44e4-ae12-9d2480047462" />
 
-
-You can try it without any broker account. Demo mode runs the full interface on simulated quotes.
+Try it without any broker account: `npm run demo` runs the full interface on simulated quotes.
 
 ## Quick start
 
@@ -15,15 +19,17 @@ Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `
 
 ```bash
 git clone https://github.com/mycode42/OpenStock.git
-cd openstock
+cd OpenStock
 npm ci
 cp .env.example .env
-# Add ALPACA_ALGO_API_KEY and ALPACA_ALGO_API_SECRET to .env
+# Add ALPACA_MANUAL_API_KEY and ALPACA_MANUAL_API_SECRET for the dashboard (paper keys by default),
+# and ALPACA_EQUITY_API_KEY and ALPACA_EQUITY_API_SECRET for Algo Trader
 npm start
 ```
 
 Then open http://127.0.0.1:3000. The `.env` file is ignored by Git; never commit live credentials. To use another port, set `PORT=3001` before `npm start`.
 
+### Algo Trader (optional)
 For a no-account demo, run `npm run demo` instead. It uses a separate database and ignores broker credentials.
 
 ### Demo mode
@@ -117,97 +123,45 @@ The Dashboard polls `/api/live-prices` while visible. That endpoint is display-o
 To copy an existing watchlist and its alert levels into the Alpaca USD watchlist, configure Alpaca credentials first, then run this once:
 
 ```bash
-node scripts/migrate-alpaca-profile.js
+cd algo-trader
+export ALGO_REPORT_TELEGRAM_TO=<chat id>
+scripts/setup.sh
 ```
 
-The script verifies symbols with Alpaca and converts legacy EUR price levels using the current EUR/USD rate. It refuses to overwrite an already-populated Alpaca watchlist.
+This installs the Python dependencies, the scheduled automations, and the Algo systemd user units. Nothing needs root. Start the services with `systemctl --user enable --now equity options`. Details are in [Algo setup](algo-trader/docs/setup.md) and [Scheduled automations](algo-trader/docs/automations.md).
 
-## Monitoring behavior
-
-`scripts/monitor.js` runs one cycle per invocation:
-
-1. Reads enabled tickers from the Alpaca watchlist.
-2. Fetches executable ask and bid quotes from Alpaca.
-3. Evaluates BUY against ask and SELL against bid; SELL alerts wait for an open Alpaca position.
-4. Sends Telegram alerts through the durable alert outbox and retires levels after confirmed delivery.
-5. Fetches chart history directly from Alpaca.
-
-The cycle uses bounded concurrency, a deadline, per-stock failure isolation, validated responses, explicit exit codes, and a single-run lock.
+### No account? Run the demo
 
 ```bash
-npm run monitor            # run one cycle
-npm run monitor -- --help  # print usage only
+npm run demo
 ```
 
-### Alert levels
+It uses a separate database and ignores broker credentials. See [Demo mode](docs/demo-mode.md).
 
-- Each alert level is independently one-shot. It retires only after Telegram confirms delivery.
-- Rearm a retired level explicitly through the alert-level API or the UI.
-- `trigger_state` and the stock-level threshold columns are legacy compatibility data. `alert_levels` and open journal trades are authoritative.
+## What's inside
 
-### Journal positions
+| Area | What it does | Read more |
+|------|--------------|-----------|
+| Dashboard | Alpaca USD quotes, alert levels, price-history charts | [Features](docs/features.md) |
+| Monitoring | One-shot cycle checks BUY and SELL levels; alerts fire once per episode via Telegram | [Monitoring](docs/monitoring.md) |
+| Trading journal | Alpaca balances, positions and fills; capital events kept apart from P/L | [Features](docs/features.md) |
+| Analytics | P/L, risk, equity curve, drawdown, per-stock performance | [Performance data](docs/performance-data.md) |
+| Manual limit orders | Limit orders from alert levels, behind a flag and a token; paper by default | [Features](docs/features.md#manual-limit-orders) |
+| Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/README.md) |
+| Configuration | Environment variables, price sources, watchlist migration | [Configuration](docs/configuration.md) |
+| API | Endpoints for the dashboard, journal, orders and health | [API](docs/api.md) |
+| Architecture | Layout, server construction, tests | [Architecture](docs/architecture.md) |
+| Deployment | systemd, Tailscale, Telegram credentials | [DEPLOY.md](DEPLOY.md) |
+| History | Authors and AI-assisted commits | [Project history](docs/project-history.md) |
 
-Position summaries and SELL eligibility come from the authenticated Alpaca account. Without an open position, SELL levels stay configured but do not fire.
+## Features at a glance
 
-### Chart history backfill
+- **Alerts that fire once.** Each level queues one alert in a durable outbox. The outbox retries delivery and never sends twice.
+- **A journal that never invents P/L.** Deposits and withdrawals are tracked separately from trading results.
+- **Orders you confirm.** Every order shows a preview and needs your confirmation. Orders go to paper unless you change the endpoint.
+- **Figures that admit missing data.** Metrics show `N/A` or `Insufficient data` until enough history exists.
 
-Alpaca chart ranges use Alpaca bars directly.
-
-## Performance data model
-
-- `trades` records one position lot. An open trade has no close date; a completed trade keeps entry and exit prices, fees, currency and EUR conversion rates.
-- `capital_events` never count as P/L.
-- `equity_snapshots` are captured by the monitor and by state-changing journal operations, so equity curves and drawdown do not depend on today's prices.
-- Analytics GET requests are read-only.
-- Annualized return and estimated yearly profit need at least 30 calendar days since initial capital. Volatility and Sharpe need 30 equity observations.
-
-## API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check and version |
-| `/api/demo-status` | GET | Whether demo mode is active and what setup is missing |
-| `/api/dashboard` | GET | Stock dashboard data |
-| `/api/live-prices` | GET | Display-only Alpaca quotes |
-| `/api/alpaca/journal` | GET | Read-only Alpaca account, positions, and fills |
-| `/api/alpaca/alert-levels/:id/rearm` | POST | Rearm a copied Alpaca alert level |
-| `/api/stocks/:id/history?broker=alpaca` | GET | Alpaca chart history |
-
-Mutating requests must come from the same origin as the page.
-
-## Architecture
-
-```
-server.js                 HTTP app setup (loopback only) and demo-mode detection
-server/routes/            Route handlers
-server/algo-trader/       Algo Trader data readers, settings, and payload builders
-server/demo-data.js       Simulated data for demo mode
-lib/                      Quote service, monitor, analytics, history backfill, broker clients
-database/                 SQLite access; migrations/ is append-only once applied
-scripts/                  monitor, history backfill, equity snapshot and rebuild tools
-www/                      Browser UI as native ES modules; www/app.js is the bootstrap
-test/                     node:test suites, one per module
-```
-
-Server construction is separate from listening: `createApp()` in `server.js` builds the app, so route tests run against temporary SQLite files and mocked providers. Database startup applies ordered, transactional migrations from `database/migrations/` and records them in `schema_migrations`.
-
-## Development
-
-```bash
-npm test          # full test suite
-npm run check     # syntax check and PWA asset consistency
-npm run audit:prod
-```
-
-Tests use isolated temporary databases and mocked provider calls. They never open the live database.
-
-## Project history
-
-The commit history contains entries under several author names: `mycode42`, `Andreas Gerster`, `Andreas`, and `Stocky`. `Stocky` is the author identity of an OpenClaw AI agent used to develop this project, so those commits are AI-authored. Five commits on `main` carry a `Co-Authored-By: Claude Haiku 5.5` trailer, marking AI-assisted work; two of them are from the v2.0.1 release. List them with `git log --grep "Co-Authored-By"`.
-
-## Deployment
-
-The single-host setup with systemd, Tailscale and the OpenClaw Telegram credentials is documented in [DEPLOY.md](DEPLOY.md).
+Screenshots of every screen are in [Features](docs/features.md).
 
 ## License
 
