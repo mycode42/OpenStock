@@ -42,7 +42,7 @@ function withEnv(t, env) {
 }
 
 const post = (base, url, headers, body) => fetch(base + url, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', origin: base, ...headers }, body: JSON.stringify(body),
 });
 
 test('preview returns the plan, and submit needs explicit confirmation', async t => {
@@ -73,7 +73,7 @@ test('real-order switch needs the order token, a boolean, and a BUY budget', asy
     withEnv(t, { ALPACA_MANUAL_BASE_URL: undefined });
     const { base, levelId } = await fixture(t);
     const put = (headers, body) => fetch(`${base}/api/alpaca/alert-levels/${levelId}/order`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+        method: 'PUT', headers: { 'Content-Type': 'application/json', origin: base, ...headers }, body: JSON.stringify(body),
     });
     const auth = {};
     assert.equal((await put(auth, { auto_order: 'yes' })).status, 400);
@@ -101,7 +101,7 @@ test('live orders need ALPACA_ALLOW_LIVE and the order token; paper needs neithe
     assert.equal((await preview({ 'X-OpenStock-Order-Token': 'nope' })).status, 401);
     assert.equal((await preview(auth)).status, 200, 'live with the opt-in and the token previews');
     const enable = await fetch(`${base}/api/alpaca/alert-levels/${levelId}/order`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auto_order: true, budget_usd: 250 }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json', origin: base }, body: JSON.stringify({ auto_order: true, budget_usd: 250 }),
     });
     assert.equal(enable.status, 401, 'switching real orders on for live needs the token');
 

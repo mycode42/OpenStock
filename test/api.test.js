@@ -25,7 +25,8 @@ async function fixture({ now } = {}) {
     app.locals.alpacaClient = new AlpacaClient({ env: { ALPACA_MANUAL_API_KEY: 'test-key', ALPACA_MANUAL_API_SECRET: 'test-secret' }, fetchImpl });
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     const base = `http://127.0.0.1:${server.address().port}`;
-    const request = (url, options = {}) => fetch(base + url, options);
+    // Same-site by default, as a browser sends it; a test that sets its own origin overrides this.
+    const request = (url, options = {}) => fetch(base + url, { ...options, headers: { origin: base, ...(options.headers || {}) } });
     return { app, db, dir, server, request };
 }
 
@@ -34,6 +35,17 @@ function addAlpacaStock(fixture, stock) {
         VALUES (?, ?, ?, 1)`).run(stock.symbol, stock.name, stock.id);
     return Number(result.lastInsertRowid);
 }
+
+test('mutations without an Origin header are refused, as are reads with one from another site', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const base = `http://127.0.0.1:${f.server.address().port}`;
+    const noOrigin = await fetch(`${base}/api/stocks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'NOORIGIN', name: 'No origin' }) });
+    assert.equal(noOrigin.status, 403);
+    assert.equal((await noOrigin.json()).error, 'Same-origin mutation required');
+    const read = await fetch(`${base}/api/stocks`, { headers: { origin: 'https://other.example.test' } });
+    assert.equal(read.status, 200);
+});
 
 test('mutation origin check accepts the public HTTPS origin forwarded by the reverse proxy', async t => {
     const f = await fixture();

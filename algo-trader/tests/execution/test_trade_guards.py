@@ -124,9 +124,9 @@ def test_off_hours_order_is_sent_to_the_broker_without_a_session_gate(monkeypatc
     monkeypatch.setattr(execution_runner.requests, "post", fake_post)
 
     result = execution_runner._submit_broker_order({
-        "symbol": "AAPL", "side": "sell", "qty": "1", "type": "market",
+        "symbol": "AAPL", "side": "sell", "qty": "1", "type": "limit", "limit_price": "100",
         "time_in_force": "day", "client_order_id": "off-hours-id",
-    }, "market")
+    }, "limit")
 
     assert len(posted) == 1
     assert not result["success"]
@@ -224,15 +224,15 @@ def test_duplicate_client_order_id_reconciles_without_another_order(monkeypatch)
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {
         "id": "broker-1", "status": "filled", "symbol": "AAPL",
-        "side": "buy", "qty": "1", "type": "market", "order_class": "simple",
+        "side": "buy", "qty": "1", "type": "limit", "limit_price": "100", "order_class": "simple",
         "client_order_id": "stable-id", "time_in_force": "day",
         "filled_qty": "1", "filled_avg_price": "100",
     })
 
     result = execution_runner._submit_broker_order({
-        "symbol": "AAPL", "side": "buy", "qty": "1", "type": "market",
+        "symbol": "AAPL", "side": "buy", "qty": "1", "type": "limit", "limit_price": "100",
         "time_in_force": "day", "client_order_id": "stable-id",
-    }, "market")
+    }, "limit")
 
     assert result["success"]
     assert result["idempotent_replay"]
@@ -245,14 +245,14 @@ def test_replayed_order_rejects_different_time_in_force(monkeypatch):
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {
         "id": "broker-1", "status": "filled", "symbol": "AAPL", "side": "buy",
-        "qty": "1", "type": "market", "order_class": "simple",
+        "qty": "1", "type": "limit", "limit_price": "100", "order_class": "simple",
         "client_order_id": "stable-id", "time_in_force": "gtc",
     })
 
     result = execution_runner._submit_broker_order({
-        "symbol": "AAPL", "side": "buy", "qty": "1", "type": "market",
+        "symbol": "AAPL", "side": "buy", "qty": "1", "type": "limit", "limit_price": "100",
         "time_in_force": "day", "client_order_id": "stable-id",
-    }, "market")
+    }, "limit")
 
     assert not result["success"]
     assert result["order_id"] == "broker-1"
@@ -265,13 +265,13 @@ def test_client_order_id_mismatch_preserves_broker_id_for_reconciliation(monkeyp
     monkeypatch.setattr(execution_runner.requests, "post", lambda *args, **kwargs: Response({"message": "duplicate"}, 422))
     monkeypatch.setattr(execution_runner, "_lookup_client_order", lambda headers, client_order_id: {
         "id": "broker-2", "status": "pending_new", "symbol": "MSFT",
-        "side": "buy", "qty": "1", "type": "market", "order_class": "simple",
+        "side": "buy", "qty": "1", "type": "limit", "limit_price": "100", "order_class": "simple",
     })
 
     result = execution_runner._submit_broker_order({
-        "symbol": "AAPL", "side": "buy", "qty": "1", "type": "market",
+        "symbol": "AAPL", "side": "buy", "qty": "1", "type": "limit", "limit_price": "100",
         "time_in_force": "day", "client_order_id": "stable-id",
-    }, "market")
+    }, "limit")
 
     assert not result["success"]
     assert result["order_id"] == "broker-2"

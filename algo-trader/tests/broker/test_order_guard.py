@@ -19,9 +19,11 @@ def test_notional_orders_are_capped_too():
         check_order({"symbol": "AAPL", "type": "market", "notional": "100001"})
 
 
-def test_orders_without_a_price_or_notional_are_not_valued_here():
-    # The Algo builder sends only limit orders; this check only sizes what carries a price or a notional.
-    check_order({"symbol": "AAPL", "qty": "1", "type": "market"})
+def test_order_without_a_price_or_notional_is_refused_because_it_cannot_be_valued():
+    with pytest.raises(ValueError, match="cannot be valued"):
+        check_order({"symbol": "AAPL", "qty": "100000", "type": "market"})
+    with pytest.raises(ValueError, match="cannot be valued"):
+        check_order({"symbol": "AAPL", "qty": "1"})
 
 
 def test_options_value_includes_the_contract_multiplier():

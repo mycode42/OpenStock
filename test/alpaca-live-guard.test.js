@@ -21,7 +21,8 @@ function makeDb(t) {
 }
 
 function seedLevel(db, { side = 'BUY', price = 100 } = {}) {
-    const watchlistId = Number(db.prepare(`INSERT INTO alpaca_watchlist (symbol, name, source_stock_id, copied_fx_rate)
+    const existing = db.prepare("SELECT id FROM alpaca_watchlist WHERE symbol='AAPL'").get();
+    const watchlistId = existing ? existing.id : Number(db.prepare(`INSERT INTO alpaca_watchlist (symbol, name, source_stock_id, copied_fx_rate)
         VALUES ('AAPL', 'Apple', ?, 1)`).run(Math.floor(Math.random() * 1e9)).lastInsertRowid);
     return Number(db.prepare(`INSERT INTO alpaca_alert_levels (watchlist_id, source_alert_level_id, side, price_usd)
         VALUES (?, ?, ?, ?)`).run(watchlistId, Math.floor(Math.random() * 1e9), side, price).lastInsertRowid);
@@ -77,4 +78,39 @@ test('settings report the live state and the cap', () => {
     assert.equal(settings.live_allowed, true);
     assert.equal(settings.max_order_usd, 100000);
     assert.equal(settings.mode, 'live');
+});
+
+function acceptingClient() {
+    const submitted = [];
+    return {
+        submitted,
+        async getPositions() { return []; },
+        async submitOrder(body) { submitted.push(body); return { id: `broker-${submitted.length}`, status: 'new' }; },
+    };
+}
+
+test('live orders stop at $300,000 per UTC day; paper orders are not counted', async t => {
+    const db = makeDb(t);
+    const client = acceptingClient();
+    const live = { ...LIVE, ALPACA_ALLOW_LIVE: '1' };
+    for (let i = 0; i < 3; i += 1) {
+        await orders.placeLevelOrder({ db, client, levelId: seedLevel(db), env: live, amountUsd: 100000 });
+    }
+    await assert.rejects(
+        orders.placeLevelOrder({ db, client, levelId: seedLevel(db), env: live, amountUsd: 100000 }),
+        error => error.status === 400 && /daily limit/.test(error.message),
+    );
+    for (let i = 0; i < 4; i += 1) {
+        await orders.placeLevelOrder({ db, client, levelId: seedLevel(db), env: {}, amountUsd: 100000 });
+    }
+    assert.equal(client.submitted.length, 7);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM alpaca_orders WHERE mode='live'").get().n, 3);
+});
+
+test('a budget above the per-order cap is refused when it is saved', t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db);
+    const { setOrderSettings } = require('../lib/alpaca-alert-levels');
+    assert.throws(() => setOrderSettings(db, levelId, { auto_order: true, budget_usd: 5000000 }), /per-order limit/);
+    assert.equal(setOrderSettings(db, levelId, { auto_order: true, budget_usd: 100000 }).order_budget_usd, 100000);
 });

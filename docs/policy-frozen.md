@@ -12,6 +12,7 @@ Enforcement: `algo-trader/tests/policy/test_gate_freeze.py` extracts every rejec
 - **Real-order changes are confirmed in the UI.** Switching real orders on asks for a USD budget (BUY) or a confirmation (SELL). The web app has no order preview.
 - **Live trading is an explicit opt-in.** Any non-paper endpoint needs `ALPACA_ALLOW_LIVE=1`. Live manual orders and turning real orders on also need `OPENSTOCK_ORDER_TOKEN`.
 - **Per-order cap.** No single order may exceed $100,000 of notional value, on paper or live.
+- **Live daily cap.** Live orders may total at most $300,000 of notional value per UTC day. Paper orders are not counted.
 - **No cap on monitored names.** OpenStock imposes no count limit on monitored stocks.
 - **No session or timing gates.** Orders are not refused for being outside regular hours. The broker decides what it accepts.
 - **Shorts are not gated on borrow.** Hard-to-borrow shorts are sized to `portfolio.hard_to_borrow_short_risk_multiplier` (default 0.5). Easy-to-borrow is a preference, not a requirement.
@@ -35,6 +36,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 ## Approved changes
 
 - **2026-10-29, live opt-in and per-order cap.** Added two rejection messages to `frozen_gates.json`: the live opt-in refusal (`Live trading is off: set ALPACA_ALLOW_LIVE=1 ...`) and the per-order cap (`Order value exceeds the $100,000 per-order limit`). Approved by the repository owner. The cap is also enforced in Python by `algo-trader/broker/order_guard.py`, which raises the same limit with the dollar value. That message is outside the extractor's scope, so `tests/broker/test_order_guard.py` checks it directly.
+
+- **2026-10-29, live daily cap.** Added the live daily limit rejection (`Live daily limit reached: no more than $300,000 of live orders per UTC day`) to `frozen_gates.json`. Approved by the repository owner, who asked for a daily cap of $300,000 in live mode. The check and the order insert run in one transaction. Orders are recorded with their account mode, so paper orders are not counted.
 
 ## Changing a gate
 

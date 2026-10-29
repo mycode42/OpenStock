@@ -12,7 +12,8 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Added
 
-- **Per-order cap.** No single order may exceed $100,000 of notional value, on paper and live.
+- **Per-order cap.** No single order may exceed $100,000 of notional value, on paper and live. A budget above the cap is refused when it is saved.
+- **Live daily cap.** Live orders may total at most $300,000 of notional value per UTC day. Paper orders are not counted.
 - The Research Lab shows demo strategies in demo mode instead of an error.
 - `Dockerfile` and `.dockerignore`. Secrets, databases and the Algo Trader tree are kept out of the image.
 - A Python CI job in the root `verify.yml` workflow. Issue templates moved to the repository root.
@@ -26,6 +27,12 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 - The Algo Trader's Poetry is resolved from `PATH`, and the research prompt uses the `{ROOT}` placeholder.
 - The Alpaca base-URL aliases are named for the endpoint they point at (`ALGO_TRADING_BASE`, `OPTIONS_TRADING_BASE`).
 - Pull-to-refresh and the Configure page follow the active theme. Configure buttons share one size.
+- The demo blanks every broker URL, the live switch and the order token, so it can never show live mode or trade.
+
+### Security
+
+- **Origin enforcement.** Every write under `/api` must come from this site. A request with no Origin header is refused with 403, and so is one from another site. Paper orders and Research Lab writes are covered.
+- **Python order guard.** An order that cannot be valued (no limit price and no notional) is refused, rather than passed through.
 
 ### Documentation
 

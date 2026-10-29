@@ -72,9 +72,9 @@ function createApp({
         });
         const forwardedHost = req.get('x-forwarded-host')?.split(',')[0].trim();
         const requestHost = forwardedHost || req.get('host');
+        // Every write must come from this site. A missing Origin header is refused, not waved through.
         if (
             ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) &&
-            req.get('origin') &&
             req.get('origin') !== `${req.protocol}://${requestHost}`
         ) {
             return res.status(403).json({ error: 'Same-origin mutation required' });

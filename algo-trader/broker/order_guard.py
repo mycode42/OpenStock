@@ -19,7 +19,7 @@ def check_order(payload: dict, *, multiplier: float = 1.0) -> None:
     """Raise ValueError if the order's notional value exceeds the per-order cap.
 
     The value is quantity x limit price x ``multiplier`` (100 for options contracts), or the
-    notional when the order is sized in dollars. An order with neither has no value to check.
+    notional when the order is sized in dollars. An order with neither cannot be valued and is refused.
     ``multiplier`` converts a per-share price into notional value.
     """
     value = None
@@ -31,5 +31,7 @@ def check_order(payload: dict, *, multiplier: float = 1.0) -> None:
         value = quantity * price * multiplier
     elif payload.get("notional") not in (None, ""):
         value = abs(_number(payload["notional"], "notional"))
-    if value is not None and value > MAX_ORDER_USD:
+    if value is None:
+        raise ValueError("order cannot be valued: it needs a limit price or a notional amount")
+    if value > MAX_ORDER_USD:
         raise ValueError(f"order value ${value:,.2f} exceeds the ${MAX_ORDER_USD:,.0f} per-order limit")

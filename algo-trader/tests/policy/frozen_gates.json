@@ -31,6 +31,7 @@
     "Extended-hours orders require a buy/sell/cover limit order with a positive limit price",
     "HTTP {response.status_code}: {response.text[:200]}",
     "Limit price must be positive and finite",
+    "Live daily limit reached: no more than $300,000 of live orders per UTC day",
     "Live trading is off: set ALPACA_ALLOW_LIVE=1 to place orders on the live account",
     "Market orders are disabled; use a limit order",
     "Market orders cannot include a limit price",
