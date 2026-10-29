@@ -24,10 +24,7 @@ async function af(path, options={}, onError) { return apiRequest(path, options, 
 apiRequest('/demo-status').then(status => {
     if (!status?.demo_mode) return;
     const banner = document.getElementById('demo-mode-banner');
-    const message = document.getElementById('demo-mode-message');
-    if (!banner || !message) return;
-    const setup = Array.isArray(status.setup) ? status.setup : [];
-    message.textContent = `Sample prices, positions and activity are simulated. ${setup.length ? `Complete setup to connect live data: ${setup.join('; ')}.` : 'Complete Alpaca and Algo Trader setup to connect live data.'}`;
+    if (!banner) return;
     banner.hidden = false;
 });
 const charts = createCharts({ request:af, historyCache:state.historyCache });

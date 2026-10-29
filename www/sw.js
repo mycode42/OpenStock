@@ -1,10 +1,10 @@
-const CACHE_NAME = 'openstock-v2.0.4-alpaca-only-kpi-colors-1';
+const CACHE_NAME = 'openstock-v2.0.4-alpaca-only-kpi-colors-1-demo-banner-1';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
   './styles.css?v=2.0.4&pull-refresh=1&algo-account-switch=1&strategy-pnl=1&appearance=1&optimizer-table=1&quote-theme=1&algo-universe=1&universe-cards=1&demo-mode=1&chart-range-theme=2&alpaca-usd-profile=1&alpaca-price-yellow=2&universe-chart-black=1&kpi-colors=2',
   './themes.css?v=2.0.4&appearance=9',
-  './app.js?v=2.0.4&pull-refresh=1&strategy-scorecard=2&appearance=2&optimizer-table=1&chart-range=1&coordinator-regime=1&trade-pagination=2&title-cleanup=1&algo-universe=1&universe-cards=1&research-page=1&demo-mode=1&alpaca-usd-profile=1',
+  './app.js?v=2.0.4&pull-refresh=1&strategy-scorecard=2&appearance=2&optimizer-table=1&chart-range=1&coordinator-regime=1&trade-pagination=2&title-cleanup=1&algo-universe=1&universe-cards=1&research-page=1&demo-mode=1&alpaca-usd-profile=1&demo-banner=1',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',
