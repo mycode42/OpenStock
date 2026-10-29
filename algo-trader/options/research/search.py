@@ -192,6 +192,12 @@ def evaluate_candidates(
             tuple(sorted(set(regimes))) == baseline.allowed_regimes
             for regimes in regime_sets
         ], dtype=np.uint8)
+        # A pinned champion has no grid position, so the compiled scorer cannot
+        # place it; its distance comes from the same parameter comparison as the
+        # Python fallback below.
+        for index, item in enumerate(full_pool):
+            if not item.is_baseline and not item.grid_indices:
+                baseline_distances[index] = _distance(item, baseline, grid, regime_sets, names=names)
         _search_cy.prepare_surrogate_arrays(
             full_pool, coordinates, active, baseline_distances,
             candidate_ids, baseline_parameter_matches, baseline_regime_matches,

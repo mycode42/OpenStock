@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { initDatabase } = require('../database/init');
 const OpenStockDB = require('../database/db');
+const { AlpacaClient } = require('../lib/brokers/alpaca');
 const { createApp, berlinTradingDayStart, berlinTradingDayEnd } = require('../server');
 const APP_VERSION = require('../package.json').version;
 
@@ -20,6 +21,8 @@ async function fixture({ now } = {}) {
         throw new Error('unexpected external fetch');
     };
     const app = createApp({ db, fetchImpl, now });
+    // Pin credentials so the suite does not depend on a local .env.
+    app.locals.alpacaClient = new AlpacaClient({ env: { ALPACA_MANUAL_API_KEY: 'test-key', ALPACA_MANUAL_API_SECRET: 'test-secret' }, fetchImpl });
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     const base = `http://127.0.0.1:${server.address().port}`;
     const request = (url, options = {}) => fetch(base + url, options);
