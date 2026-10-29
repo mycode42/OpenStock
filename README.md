@@ -12,7 +12,7 @@ Try it without any broker account: `npm run demo` runs the full interface on sim
 
 ## Quick start
 
-Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module. The Algo Trader also needs Python 3.11 or 3.12 and Poetry 2.x; see [Algo Trader](#algo-trader).
+Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module. The Algo Trader also needs Python 3.12 and Poetry 2.x; see [Algo Trader](#algo-trader).
 
 ```bash
 git clone https://github.com/mycode42/OpenStock.git
@@ -37,7 +37,7 @@ The Algo Trader is an optional research and paper-trading subtree in [algo-trade
 
 Setup:
 
-1. Install Python 3.11 or 3.12 and Poetry 2.x. Python 3.13 is not supported.
+1. Install Python 3.12 and Poetry 2.x. Python 3.11 and 3.13 are not supported.
 2. Add `ALPACA_EQUITY_API_KEY`, `ALPACA_EQUITY_API_SECRET` and `ALPACA_EQUITY_ACCOUNT_ID` to the root `.env`. For the options sleeve, add the `ALPACA_OPTIONS_*` set. Keep the Alpaca URLs on paper.
 3. Leave `ALGO_TRADER_ROOT` at `./algo-trader`, or point it at another checkout.
 4. Run the one-time installer from the subtree, with the Telegram chat that receives reports:

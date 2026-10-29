@@ -4,7 +4,7 @@ Part of the [Algo Trader README](../README.md).
 
 ## Requirements
 
-Python 3.11 or 3.12, Poetry, and a C compiler toolchain to build the optional Cython performance extensions (for example, `build-essential` on Debian/Ubuntu). Python 3.13 is not supported yet.
+Python 3.12, Poetry, and a C compiler toolchain to build the optional Cython performance extensions (for example, `build-essential` on Debian/Ubuntu). Python 3.13 is not supported yet.
 
 ## One command
 
