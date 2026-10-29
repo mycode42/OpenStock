@@ -1714,10 +1714,10 @@ html[data-theme="crt"] .algo-config-toggle {
   color: #b42332 !important;
 }
 
-/* KPI stripe colors are category cues; keep the original palette in every theme. */
+/* KPI stripe colors follow the requested category palette in every theme. */
 html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(1),
 html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child(1) {
-  border-top-color: rgba(200, 255, 0, .45);
+  border-top-color: rgba(234, 184, 90, .45);
 }
 
 html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(2),
@@ -1736,5 +1736,5 @@ html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child
 }
 
 html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(5) {
-  border-top-color: rgba(234, 184, 90, .45);
+  border-top-color: rgba(200, 255, 0, .45);
 }
