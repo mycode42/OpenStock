@@ -2,10 +2,7 @@
 
 **A self-hosted stock dashboard, trading journal, and paper-trading Algo engine, built on Alpaca.**
 
-OpenStock watches your alert levels, journals your Alpaca account in USD, and runs the Algo Trader sleeves in [algo-trader/](algo-trader/). It uses SIP quotes when available and falls back to IEX when the account cannot access SIP.
-OpenStock is a self-hosted stock dashboard and trading journal built around Alpaca accounts and market data in USD. 
-
-It also features a built in algorithmic and llm powered trading system for equity and options
+**It also features a built in algorithmic trading system for equity and options**
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
