@@ -10,6 +10,7 @@ from runtime.http import get_session
 
 from market.data import regular_feed
 from portfolio.config import get_algo_execution_settings
+from broker.order_guard import check_order
 from market.quotes import parse_price_timestamp, parse_quote
 
 
@@ -157,6 +158,7 @@ def submit_flatten_order(headers: dict, position: dict) -> dict:
         "time_in_force": "day",
         "client_order_id": client_order_id,
     }
+    check_order(order)
     try:
         response = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
     except requests.RequestException as exc:

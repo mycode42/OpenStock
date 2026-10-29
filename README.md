@@ -114,7 +114,8 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 |----------|---------|-------------|
 | `ALPACA_MANUAL_API_KEY` | empty | Alpaca API key for the dashboard account. |
 | `ALPACA_MANUAL_API_SECRET` | empty | Its secret. Keep it in the ignored `.env` file. |
-| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account. Paper unless you set the live URL. |
+| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account. Any URL other than paper is live trading and needs `ALPACA_ALLOW_LIVE=1` and `OPENSTOCK_ORDER_TOKEN`. |
+| `ALPACA_ALLOW_LIVE` | empty | Set to `1` to allow live trading. Every order is capped at $100,000 of notional value, paper or live. |
 | `ORDER_NOTIONAL_USD` | `250` | Default USD budget for a BUY placed from the dashboard. |
 | `ALPACA_EQUITY_*`, `ALPACA_OPTIONS_*` | empty | Keys, secrets and account IDs for the Algo equity and options sleeves. See [Algo Trader](#algo-trader). |
 | `ALPACA_DATA_FEED` | `sip` | Preferred Alpaca stock-data feed. OpenStock falls back between SIP and IEX when feed access is denied. |

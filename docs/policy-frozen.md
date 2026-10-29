@@ -9,7 +9,9 @@ Enforcement: `algo-trader/tests/policy/test_gate_freeze.py` extracts every rejec
 - **Limit orders only, with separate bands.** Exits use `execution.marketable_limit_band_bps` (25) and protective stops use `execution.protective_limit_band_bps` (50).
 - **Orders are limit orders only.** Entries, exits, protective closes, and flattens are limit orders. A market order is refused before any broker call. Marketable limits are priced `execution.marketable_limit_band_bps` (default 25) through the live bid or ask.
 - **Paper is the default.** The Algo sleeves and OpenStock's manual account default to the paper URL. Setting `ALPACA_*_BASE_URL` overrides it.
-- **Manual orders are confirmed in the UI.** The preview with account, side, quantity, and budget is the check. There is no order switch and no order token.
+- **Manual orders are confirmed in the UI.** The preview with account, side, quantity, and budget is the check on paper.
+- **Live trading is an explicit opt-in.** Any non-paper endpoint needs `ALPACA_ALLOW_LIVE=1`. Live manual orders and turning real orders on also need `OPENSTOCK_ORDER_TOKEN`.
+- **Per-order cap.** No single order may exceed $100,000 of notional value, on paper or live.
 - **No cap on monitored names.** OpenStock imposes no count limit on monitored stocks.
 - **No session or timing gates.** Orders are not refused for being outside regular hours. The broker decides what it accepts.
 - **Shorts are not gated on borrow.** Hard-to-borrow shorts are sized to `portfolio.hard_to_borrow_short_risk_multiplier` (default 0.5). Easy-to-borrow is a preference, not a requirement.
@@ -29,6 +31,10 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 7. **Order protocol.** Entries need a stop and a take-profit. Stop and target levels must match the trade direction. Protective and exit orders may not carry broker-side brackets.
 8. **Options risk.** Per-sleeve vega and gamma budgets (`risk.sleeve_limits`; a position the journal cannot attribute counts in every sleeve). Undefined-loss structures are refused. Covered structures need the shares. Per-trade premium risk, combined defined-loss, margin, buying power, delta, vega, gamma (losses only), theta, assignment shares, and stress loss each have one limit. The configured values are in `options/config.default.json`.
 9. **Order-level checks.** Alert level must be active and untriggered. A BUY needs a budget. A SELL needs an open position. One live order per alert level, enforced by a database index.
+
+## Approved changes
+
+- **2026-10-29, live opt-in and per-order cap.** Added two rejection messages to `frozen_gates.json`: the live opt-in refusal (`Live trading is off: set ALPACA_ALLOW_LIVE=1 ...`) and the per-order cap (`Order value exceeds the $100,000 per-order limit`). Approved by the repository owner. The cap is also enforced in Python by `algo-trader/broker/order_guard.py`, which raises the same limit with the dollar value. That message is outside the extractor's scope, so `tests/broker/test_order_guard.py` checks it directly.
 
 ## Changing a gate
 

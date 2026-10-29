@@ -13,6 +13,7 @@ from market.quotes import parse_quote
 
 load_dotenv()
 from broker.endpoints import OPTIONS_TRADING_BASE
+from broker.order_guard import check_order
 DATA_BASE = "https://data.alpaca.markets"
 
 
@@ -198,6 +199,7 @@ class OptionsPaperClient:
     def submit_order(self, payload: dict) -> dict:
         """Submit only to paper; lookup idempotency key after ambiguous transport errors."""
         body = dict(payload)
+        check_order(body, multiplier=100.0)
         body.setdefault("client_order_id", f"options-{uuid.uuid4().hex[:24]}")
         try:
             response = self.session.post(

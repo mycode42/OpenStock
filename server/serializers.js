@@ -109,7 +109,7 @@ function serializeAlertLevel(level) {
     if (!level) return level;
     return {
         ...level,
-        price_eur: Number(level.price_eur),
+        price_usd: Number(level.price_eur),
         triggered_at: toISODateTime(level.triggered_at),
         retired_at: toISODateTime(level.retired_at),
         created_at: toISODateTime(level.created_at),

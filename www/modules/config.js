@@ -1,5 +1,17 @@
 import { escapeHtml } from './escape.js';
 
+const ORDER_TOKEN_KEY = 'openstock-order-token';
+
+// Asks once per session for OPENSTOCK_ORDER_TOKEN. Returns '' when cancelled.
+function orderToken() {
+    let token = sessionStorage.getItem(ORDER_TOKEN_KEY);
+    if (!token) {
+        token = (window.prompt('OPENSTOCK_ORDER_TOKEN from .env') || '').trim();
+        if (token) sessionStorage.setItem(ORDER_TOKEN_KEY, token);
+    }
+    return token;
+}
+
 function usd(value) {
     if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '—';
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(Number(value));
@@ -226,13 +238,21 @@ export function createConfig({ request: af, reload, notify }) {
     }
 
     async function setOrderSettings(levelId, autoOrder, budgetUsd) {
+        // The order token confirms a change on a live account only. Paper needs none.
+        const live = orders.mode === 'live';
+        const token = live && autoOrder ? orderToken() : '';
+        if (live && autoOrder && !token) return null;
         const body = { auto_order: autoOrder, ...(budgetUsd === undefined ? {} : { budget_usd: budgetUsd }) };
+        const headers = { 'Content-Type': 'application/json', ...(token ? { 'X-OpenStock-Order-Token': token } : {}) };
         const result = await af(`/alpaca/alert-levels/${encodeURIComponent(levelId)}/order`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers,
             body: JSON.stringify(body),
         });
-        if (!result) return null;
+        if (!result) {
+            if (live) sessionStorage.removeItem(ORDER_TOKEN_KEY);
+            return null;
+        }
         return result;
     }
 

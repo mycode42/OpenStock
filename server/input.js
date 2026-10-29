@@ -9,7 +9,8 @@ function alertLevelInput(body, existing = null) {
     if (!['BUY', 'SELL'].includes(side)) throw new Error('Side must be BUY or SELL');
     return {
         side,
-        price_eur: numberField(body.price_eur ?? existing?.price_eur, 'Alert price', { minimum: Number.EPSILON }),
+        // The API speaks USD; the stored column keeps its legacy name.
+        price_eur: numberField(body.price_usd ?? existing?.price_eur, 'Alert price', { minimum: Number.EPSILON }),
     };
 }
 
