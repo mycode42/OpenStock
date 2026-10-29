@@ -160,6 +160,9 @@
     ],
     "RTX": [
       {"source_symbol": "UTX", "through": "2020-04-02"}
+    ],
+    "BRK.B": [
+      {"source_symbol": "BRKB", "through": "2099-12-31"}
     ]
   },
   "history_notes": {
