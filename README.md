@@ -156,7 +156,7 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 | Monitoring | One-shot cycle checks BUY and SELL levels; alerts fire once per episode via Telegram | [Monitoring](docs/monitoring.md) |
 | Trading journal | Alpaca balances, positions and fills; capital events kept apart from P/L | [Features](docs/features.md) |
 | Analytics | P/L, risk, equity curve, drawdown, per-stock performance | [Performance data](docs/performance-data.md) |
-| Manual limit orders | Limit orders from alert levels, confirmed in a preview; paper by default | [Features](docs/features.md) |
+| Manual limit orders | Limit orders from alert levels; paper by default | [Features](docs/features.md) |
 | Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/README.md) |
 | Configuration | Environment variables, price sources, watchlist migration | [Configuration](docs/configuration.md) |
 | API | Endpoints for the dashboard, journal, orders and health | [API](docs/api.md) |
@@ -168,7 +168,6 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 
 - **Alerts that fire once.** Each level queues one alert in a durable outbox. The outbox retries delivery and never sends twice.
 - **A journal that never invents P/L.** Deposits and withdrawals are tracked separately from trading results.
-- **Orders you confirm.** Every order shows a preview and needs your confirmation. Orders go to paper unless you change the endpoint.
 - **Figures that admit missing data.** Metrics show `N/A` or `Insufficient data` until enough history exists.
 
 Screenshots of every screen are in [Features](docs/features.md).

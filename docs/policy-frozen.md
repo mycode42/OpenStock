@@ -9,7 +9,7 @@ Enforcement: `algo-trader/tests/policy/test_gate_freeze.py` extracts every rejec
 - **Limit orders only, with separate bands.** Exits use `execution.marketable_limit_band_bps` (25) and protective stops use `execution.protective_limit_band_bps` (50).
 - **Orders are limit orders only.** Entries, exits, protective closes, and flattens are limit orders. A market order is refused before any broker call. Marketable limits are priced `execution.marketable_limit_band_bps` (default 25) through the live bid or ask.
 - **Paper is the default.** The Algo sleeves and OpenStock's manual account default to the paper URL. Setting `ALPACA_*_BASE_URL` overrides it.
-- **Manual orders are confirmed in the UI.** The preview with account, side, quantity, and budget is the check on paper.
+- **Real-order changes are confirmed in the UI.** Switching real orders on asks for a USD budget (BUY) or a confirmation (SELL). The web app has no order preview.
 - **Live trading is an explicit opt-in.** Any non-paper endpoint needs `ALPACA_ALLOW_LIVE=1`. Live manual orders and turning real orders on also need `OPENSTOCK_ORDER_TOKEN`.
 - **Per-order cap.** No single order may exceed $100,000 of notional value, on paper or live.
 - **No cap on monitored names.** OpenStock imposes no count limit on monitored stocks.
