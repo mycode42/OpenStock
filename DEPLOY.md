@@ -58,7 +58,7 @@ cd /opt/OpenStock
 npm install
 
 cp .env.example .env
-# Set ALPACA_ALGO_API_KEY and ALPACA_ALGO_API_SECRET for the live USD profile.
+# Set ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET for the live USD profile.
 # Keep .env out of source control. No Alpaca account ID is needed by OpenStock.
 
 # Initialize the database (automatic on first run)

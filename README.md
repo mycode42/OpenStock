@@ -18,7 +18,7 @@ git clone https://github.com/mycode42/OpenStock.git
 cd openstock
 npm ci
 cp .env.example .env
-# Add ALPACA_ALGO_API_KEY and ALPACA_ALGO_API_SECRET to .env
+# Add ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET to .env
 npm start
 ```
 
@@ -91,8 +91,8 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALPACA_ALGO_API_KEY` | empty | Alpaca Trading API key for the USD account. |
-| `ALPACA_ALGO_API_SECRET` | empty | Alpaca Trading API secret. Keep it in the ignored `.env` file. |
+| `ALPACA_LIVE_API_KEY` | empty | Alpaca Trading API key for the USD account. |
+| `ALPACA_LIVE_API_SECRET` | empty | Alpaca Trading API secret. Keep it in the ignored `.env` file. |
 | `ALPACA_DATA_FEED` | `sip` | Preferred Alpaca stock-data feed. OpenStock falls back between SIP and IEX when feed access is denied. |
 | `TELEGRAM_BOT_TOKEN` | empty | Bot token from @BotFather for alert delivery. |
 | `TELEGRAM_CHAT_ID` | empty | Chat that receives alerts. |
@@ -102,7 +102,7 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 | `MONITOR_CYCLE_DEADLINE_MS` | `45000` | Stop starting new stock work after this cycle budget. |
 | `LIVE_PRICE_REFRESH_MS` | `1000` | Display-only Dashboard refresh cadence. Minimum and default 1000 ms. |
 | `HISTORY_BACKFILL_DELAY_MS` | `1500` | Pause between chart-history backfill requests. |
-| `ALGO_TRADER_ROOT` | `../algo-trader` | Data directory of the optional Algo Trader installation. |
+| `ALGO_TRADER_ROOT` | `./algo-trader` (set to `/opt/algo-trader` until cutover) | Data directory of the optional Algo Trader installation. |
 
 ### Price sources
 
