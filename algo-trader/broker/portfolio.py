@@ -7,7 +7,7 @@ from runtime.http import get_session
 from broker.accounts import get_account_for_mode
 
 
-ALPACA_BASE_URL = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import ALGO_TRADING_BASE as ALPACA_BASE_URL
 
 
 def _get_headers(mode: str = "algo") -> dict:

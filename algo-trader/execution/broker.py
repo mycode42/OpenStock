@@ -12,7 +12,7 @@ from market.data import regular_feed
 from market.quotes import parse_price_timestamp, parse_quote
 
 
-API_BASE = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import ALGO_TRADING_BASE as API_BASE
 DATA_BASE = "https://data.alpaca.markets/v2"
 
 

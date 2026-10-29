@@ -15,7 +15,7 @@ from portfolio.config import is_cash_proxy
 from market.quotes import QuoteParseError, parse_quote
 
 DATA_BASE = "https://data.alpaca.markets/v2"
-TRADE_BASE = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import ALGO_TRADING_BASE as TRADE_BASE
 
 
 def _request(endpoint: str, *, mode: str, base: str = DATA_BASE, params: dict | None = None):

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import requests
 
+from broker.endpoints import ALGO_TRADING_BASE
+
 
 @dataclass
 class AlpacaAccount:
@@ -14,7 +16,7 @@ class AlpacaAccount:
     account_id: str
     api_key: str
     api_secret: str
-    base_url: str = "https://paper-api.alpaca.markets/v2"
+    base_url: str = ALGO_TRADING_BASE
 
     @property
     def headers(self) -> dict:

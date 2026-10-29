@@ -31,7 +31,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("perf_v2")
 
-API_BASE = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import ALGO_TRADING_BASE as API_BASE
 
 from runtime.paths import DATA_DIR
 

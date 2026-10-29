@@ -12,7 +12,7 @@ from market.quotes import parse_quote
 
 
 load_dotenv()
-PAPER_BASE = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import OPTIONS_TRADING_BASE as PAPER_BASE
 DATA_BASE = "https://data.alpaca.markets"
 
 

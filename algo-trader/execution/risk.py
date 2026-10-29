@@ -47,7 +47,7 @@ log = logging.getLogger("execution.risk")
 
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 
-API_BASE = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import ALGO_TRADING_BASE as API_BASE
 MARKET_TZ = ZoneInfo("America/New_York")
 
 # Per-mode policy maps stay cached after their first build.

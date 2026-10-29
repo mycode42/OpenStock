@@ -13,7 +13,7 @@ from broker.accounts import get_account_for_mode
 
 
 MARKET_TZ = ZoneInfo("America/New_York")
-API_BASE = "https://paper-api.alpaca.markets/v2"
+from broker.endpoints import ALGO_TRADING_BASE as API_BASE
 
 
 @dataclass(frozen=True)
