@@ -1,0 +1,239 @@
+{
+  "macro_status": {
+    "status": "offline_cache"
+  },
+  "symbols": [
+    "AAPL",
+    "NVDA",
+    "AMD",
+    "MSFT",
+    "TSM",
+    "JPM",
+    "PLTR",
+    "GLD"
+  ],
+  "variants": {
+    "legacy": {
+      "closed_trade_count": 32,
+      "daily_sharpe_annualized": -0.9114,
+      "entry_count": 32,
+      "max_drawdown_pct": 0.9732,
+      "net_return_pct": -0.8867,
+      "profit_factor": 0.3828,
+      "regime_diagnostics": {
+        "closed_trades_by_entry_regime": {
+          "range_bound": {
+            "net_pnl": 80.74,
+            "trade_count": 8
+          },
+          "trending_down": {
+            "net_pnl": -226.14,
+            "trade_count": 10
+          },
+          "trending_up": {
+            "net_pnl": -741.31,
+            "trade_count": 14
+          }
+        },
+        "config": {
+          "engine": "legacy",
+          "feature_set": "legacy",
+          "include_models": false,
+          "min_model_confidence": 0.5,
+          "model_training_window": 756,
+          "strategy_policy": "legacy"
+        },
+        "daily_observations": 1255,
+        "model_diagnostics": {
+          "gmm": {
+            "converged_fit_fraction": null,
+            "mean_posterior_confidence": null,
+            "status_counts": {
+              "unknown": 0
+            },
+            "successful_fits": 0
+          },
+          "hmm": {
+            "converged_fit_fraction": null,
+            "mean_posterior_confidence": null,
+            "status_counts": {
+              "unknown": 0
+            },
+            "successful_fits": 0
+          }
+        },
+        "regime_day_counts": {
+          "range_bound": 284,
+          "trending_down": 268,
+          "trending_up": 683,
+          "volatile": 20
+        },
+        "regime_transitions": 203,
+        "transitions_per_100_sessions": 16.188,
+        "volatility_state_day_counts": {
+          "unknown": 1255
+        }
+      },
+      "transaction_costs": {
+        "borrow_availability_observations": {
+          "unknown": 36
+        },
+        "commission_paid": 18.79,
+        "commission_per_share_each_side": 0.005,
+        "short_borrow_annual_pct": 0.03,
+        "short_borrow_paid": 0.0,
+        "slippage_bps_each_side": 5.0,
+        "spread_bps_round_trip_reference": 3.0,
+        "spread_cost_applied_each_side_bps": 1.5,
+        "unknown_borrow_adverse_fill_penalty_bps": 25.0
+      },
+      "win_rate_pct": 25.0
+    },
+    "marketwide_high_vol_mr": {
+      "closed_trade_count": 14,
+      "daily_sharpe_annualized": -0.5549,
+      "entry_count": 14,
+      "max_drawdown_pct": 0.3948,
+      "net_return_pct": -0.2847,
+      "profit_factor": 0.3515,
+      "regime_diagnostics": {
+        "closed_trades_by_entry_regime": {
+          "volatile": {
+            "net_pnl": -284.74,
+            "trade_count": 14
+          }
+        },
+        "config": {
+          "engine": "rule",
+          "feature_set": "marketwide",
+          "include_models": false,
+          "min_model_confidence": 0.5,
+          "model_training_window": 756,
+          "strategy_policy": "high_vol_mean_reversion"
+        },
+        "daily_observations": 1255,
+        "model_diagnostics": {
+          "gmm": {
+            "converged_fit_fraction": null,
+            "mean_posterior_confidence": null,
+            "status_counts": {
+              "unknown": 0
+            },
+            "successful_fits": 0
+          },
+          "hmm": {
+            "converged_fit_fraction": null,
+            "mean_posterior_confidence": null,
+            "status_counts": {
+              "unknown": 0
+            },
+            "successful_fits": 0
+          }
+        },
+        "regime_day_counts": {
+          "ambiguous": 360,
+          "range_bound": 463,
+          "trending_down": 5,
+          "trending_up": 98,
+          "volatile": 329
+        },
+        "regime_transitions": 90,
+        "transitions_per_100_sessions": 7.177,
+        "volatility_state_day_counts": {
+          "calm": 865,
+          "elevated": 74,
+          "extreme": 316
+        }
+      },
+      "transaction_costs": {
+        "borrow_availability_observations": {
+          "unknown": 12
+        },
+        "commission_paid": 4.69,
+        "commission_per_share_each_side": 0.005,
+        "short_borrow_annual_pct": 0.03,
+        "short_borrow_paid": 0.0,
+        "slippage_bps_each_side": 5.0,
+        "spread_bps_round_trip_reference": 3.0,
+        "spread_cost_applied_each_side_bps": 1.5,
+        "unknown_borrow_adverse_fill_penalty_bps": 25.0
+      },
+      "win_rate_pct": 14.29
+    },
+    "marketwide_structural": {
+      "closed_trade_count": 7,
+      "daily_sharpe_annualized": 0.0201,
+      "entry_count": 7,
+      "max_drawdown_pct": 0.2597,
+      "net_return_pct": 0.0088,
+      "profit_factor": 1.0415,
+      "regime_diagnostics": {
+        "closed_trades_by_entry_regime": {
+          "range_bound": {
+            "net_pnl": 8.84,
+            "trade_count": 7
+          }
+        },
+        "config": {
+          "engine": "rule",
+          "feature_set": "marketwide",
+          "include_models": false,
+          "min_model_confidence": 0.5,
+          "model_training_window": 756,
+          "strategy_policy": "structural"
+        },
+        "daily_observations": 1255,
+        "model_diagnostics": {
+          "gmm": {
+            "converged_fit_fraction": null,
+            "mean_posterior_confidence": null,
+            "status_counts": {
+              "unknown": 0
+            },
+            "successful_fits": 0
+          },
+          "hmm": {
+            "converged_fit_fraction": null,
+            "mean_posterior_confidence": null,
+            "status_counts": {
+              "unknown": 0
+            },
+            "successful_fits": 0
+          }
+        },
+        "regime_day_counts": {
+          "ambiguous": 360,
+          "range_bound": 463,
+          "trending_down": 5,
+          "trending_up": 98,
+          "volatile": 329
+        },
+        "regime_transitions": 90,
+        "transitions_per_100_sessions": 7.177,
+        "volatility_state_day_counts": {
+          "calm": 865,
+          "elevated": 74,
+          "extreme": 316
+        }
+      },
+      "transaction_costs": {
+        "borrow_availability_observations": {
+          "unknown": 8
+        },
+        "commission_paid": 8.03,
+        "commission_per_share_each_side": 0.005,
+        "short_borrow_annual_pct": 0.03,
+        "short_borrow_paid": 0.0,
+        "slippage_bps_each_side": 5.0,
+        "spread_bps_round_trip_reference": 3.0,
+        "spread_cost_applied_each_side_bps": 1.5,
+        "unknown_borrow_adverse_fill_penalty_bps": 25.0
+      },
+      "win_rate_pct": 42.86
+    }
+  },
+  "window": {
+    "end": "2025-12-31",
+    "start": "2021-01-01"
+  }
+}

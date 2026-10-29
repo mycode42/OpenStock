@@ -1,0 +1,144 @@
+{
+  "underlying": "SPY",
+  "data_mode": "auto",
+  "data_path": "data/options/research/options_history.sqlite3",
+  "output_dir": "data/options/research/runs",
+  "automation": {
+    "enabled": true,
+    "strategies": ["vrp", "long_volatility"],
+    "excluded_strategies": {},
+    "eligibility": {
+      "cache_enabled": true,
+      "apply_to_research": false,
+      "rules_path": "options/research/eligibility.default.json"
+    }
+  },
+  "model_surface": {
+    "strike_steps": 15,
+    "strike_step_pct": 0.025,
+    "synthetic_spread_pct": 0.04
+  },
+  "starting_equity": 100000,
+  "random_seed": 20261020,
+  "dividends": {},
+  "assignment": {"extrinsic_threshold": 0.02},
+  "market_data": {
+    "maximum_snapshot_age_sessions": 1,
+    "maximum_quote_age_seconds": 172800,
+    "maximum_leg_spread_pct": 0.25,
+    "minimum_open_interest": 100,
+    "require_open_interest": true,
+    "missing_chain_policy": "skip",
+    "missing_oi_policy": "skip",
+    "minimum_contracts_per_chain": 20
+  },
+  "execution": {
+    "spread_fraction_per_leg": 0.50,
+    "slippage_per_contract_usd": 5.0,
+    "max_slippage_per_contract_usd": 25.0,
+    "commission_per_contract_usd": 0.65,
+    "exercise_fee_per_contract_usd": 0.15,
+    "stock_commission_per_share_usd": 0.005,
+    "base_fill_probability": 0.80,
+    "multi_leg_fill_probability": 0.80,
+    "risk_free_rate": 0.04,
+    "dividend_snapshot_path": "options/research/dividend_yields_2026-10-27.json",
+    "dividend_yield": 0.015,
+    "dividend_yields": {"GLD": 0.0},
+    "max_risk_per_trade_pct": 0.07,
+    "max_total_defined_risk_pct": 0.10,
+    "maximum_contracts_per_trade": 1,
+    "pin_risk_threshold_dollars": 0.02,
+    "pin_risk_assignment_probability": 0.10
+  },
+  "greek_limits": {
+    "max_abs_delta_notional_pct_equity": 0.75,
+    "max_abs_gamma_pnl_1pct_pct_equity": 0.005,
+    "max_abs_vega_per_vol_point_pct_equity": 0.01,
+    "max_abs_theta_per_day_pct_equity": 0.001,
+    "max_assignment_shares": 300
+  },
+  "walk_forward": {
+    "rolling_train_sessions": 252,
+    "oos_sessions": 63,
+    "step_sessions": 63,
+    "minimum_oos_periods": 4,
+    "minimum_oos_trades": 8,
+    "embargo_sessions": 5,
+    "high_volatility_labels": ["volatile", "high_vol", "high_volatility", "elevated", "crisis", "risk_off"]
+  },
+  "short_history_exploration": {
+    "enabled": true,
+    "minimum_sessions": 60
+  },
+  "champion": {
+    "enabled": true
+  },
+  "search": {
+    "mode": "surrogate",
+    "maximum_candidates": 20,
+    "plateau_neighbours": 4,
+    "minimum_profitable_neighbour_fraction": 0.50,
+    "surrogate_exploration": 0.15,
+    "minimum_stable_selection_fraction": 0.50,
+    "minimum_parameter_stability_score": 0.50,
+    "regime_sets": [
+      ["range_bound", "trending_up", "trending_down"],
+      ["range_bound"],
+      ["trending_up"],
+      ["trending_down"],
+      ["volatile"]
+    ],
+    "regime_sets_by_strategy": {
+      "long_volatility": [["volatile"]]
+    },
+    "grids": {
+      "vrp": {
+        "min_iv_minus_rv": [0.03, 0.05, 0.07],
+        "short_delta_min": [0.10, 0.12],
+        "wing_delta_max": [0.05, 0.07]
+      },
+      "llm_driven": {
+        "min_llm_confidence": [0.60, 0.75],
+        "target_dte": [14, 21, 28]
+      },
+      "directional_overlay": {
+        "long_delta": [0.40, 0.50],
+        "short_delta": [0.20, 0.30],
+        "min_signal_confidence": [0.60, 0.75]
+      },
+      "long_volatility": {
+        "min_dte": [7, 14],
+        "max_dte": [30, 45],
+        "iv_percentile_ceiling": [65, 75, 80],
+        "otm_delta": [0.20, 0.25, 0.30],
+        "profit_target_pct": [0.30, 0.40, 0.50],
+        "stop_loss_pct": [0.35, 0.50, 0.65],
+        "max_premium_per_trade_usd": [500, 1000, 1500],
+        "max_risk_per_trade_pct": [0.01,
+          0.02],
+        "underlyings": [["SPY"], ["SPX"]],
+        "max_spread_pct": [0.10, 0.15, 0.20],
+        "min_open_interest": [100, 500],
+        "close_dte": [2, 3, 5],
+        "max_holding_days": [7, 14, 21],
+        "structure": ["strangle", "straddle"]
+      }
+    }
+  },
+  "robustness": {
+    "slippage_multipliers": [1.0, 1.5, 2.0],
+    "spread_width_multipliers": [1.0, 1.5, 2.0],
+    "monte_carlo_paths": 500,
+    "gamma_vega_episode_share_threshold": 0.60,
+    "minimum_stress_slippage_multiplier": 1.5,
+    "minimum_stress_spread_width_multiplier": 1.5,
+    "run_assignment_sensitivity": true
+  },
+  "strategy_defaults": {
+    "vrp": {"min_dte": 25, "max_dte": 45, "realized_lookback_sessions": 20, "short_delta_max": 0.20},
+    "llm_driven": {"min_dte": 3, "max_dte": 35, "target_dte": 21},
+    "directional_overlay": {"min_dte": 25, "max_dte": 60, "target_dte": 40, "short_delta": 0.25},
+    "long_volatility": {"min_dte": 7, "max_dte": 45, "target_dte": 30, "iv_percentile_lookback_sessions": 252}
+  }
+}

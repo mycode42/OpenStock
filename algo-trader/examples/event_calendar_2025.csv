@@ -1,0 +1,5 @@
+event_id,event_type,ticker,scheduled_at,known_at,reaction_start_at,reaction_end_at,source
+sec-aapl-earnings-2025-07-31,earnings,AAPL,2025-07-31T16:30:25-04:00,2025-07-31T16:30:25-04:00,2025-08-01T09:30:00-04:00,2025-08-01T11:00:00-04:00,sec-edgar-8k-item2.02
+bls-nfp-2025-09-05,nfp,SPY,2025-09-05T08:30:00-04:00,2025-09-05T08:30:00-04:00,2025-09-05T09:30:00-04:00,2025-09-05T11:00:00-04:00,bls-release-calendar
+bls-cpi-2025-09-11,cpi,SPY,2025-09-11T08:30:00-04:00,2025-09-11T08:30:00-04:00,2025-09-11T09:30:00-04:00,2025-09-11T11:00:00-04:00,bls-release-calendar
+fomc-2025-09-17,fomc,SPY,2025-09-17T14:00:00-04:00,2025-09-17T14:00:00-04:00,2025-09-17T14:00:00-04:00,2025-09-17T15:30:00-04:00,federal-reserve-fomc-calendar

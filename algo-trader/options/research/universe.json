@@ -1,0 +1,180 @@
+{
+  "name": "options_research_history",
+  "scope": "equity_candidate_pool_and_options_history",
+  "notes": [
+    "This 117-symbol pool is the equity candidate universe for the live Algo selector and the options history collection universe.",
+    "The live Algo universe is the selector's eligible subset of this pool, recomputed each session.",
+    "XLRE was selected from the user's XLRE or VNQ alternative."
+  ],
+  "categories": {
+    "existing_algo_portfolio": [
+      "NVDA",
+      "AVGO",
+      "TSM",
+      "MSFT",
+      "AAPL",
+      "GOOGL",
+      "META",
+      "AMZN",
+      "AMD",
+      "JPM",
+      "V",
+      "UNH",
+      "JNJ",
+      "PG",
+      "KO",
+      "SPY",
+      "QQQ",
+      "GLD",
+      "TLT",
+      "PLTR",
+      "CRM",
+      "PANW",
+      "TSLA",
+      "SPCX"
+    ],
+    "sector_rotation_and_hedge_etfs": [
+      "XLE",
+      "XLF",
+      "XLI",
+      "XLV",
+      "XLY",
+      "XLP",
+      "XLU",
+      "XLRE",
+      "SMH",
+      "IWM",
+      "USO",
+      "SLV",
+      "EWZ",
+      "EEM",
+      "HYG"
+    ],
+    "energy": [
+      "XOM",
+      "CVX",
+      "COP",
+      "EOG",
+      "SLB",
+      "HAL",
+      "OXY",
+      "MPC",
+      "PSX",
+      "DVN"
+    ],
+    "ai_power_and_infrastructure": [
+      "CEG",
+      "VST",
+      "VRT",
+      "GEV",
+      "NEE",
+      "CCJ",
+      "ETN",
+      "PWR",
+      "ETR",
+      "DUK"
+    ],
+    "quality_financials_and_payments": [
+      "BAC",
+      "GS",
+      "MS",
+      "BRK.B",
+      "AXP",
+      "SCHW",
+      "MA",
+      "BLK"
+    ],
+    "consumer_staples_and_discretionary": [
+      "WMT",
+      "COST",
+      "HD",
+      "LOW",
+      "MCD",
+      "SBUX",
+      "NKE",
+      "TGT",
+      "ROST",
+      "TJX"
+    ],
+    "healthcare_expansion": [
+      "LLY",
+      "MRK",
+      "ABBV",
+      "AMGN",
+      "ISRG",
+      "REGN",
+      "GILD",
+      "MRNA"
+    ],
+    "industrials_and_defense": [
+      "CAT",
+      "DE",
+      "HON",
+      "RTX",
+      "LMT",
+      "BA",
+      "UNP",
+      "GE",
+      "PH",
+      "ITW"
+    ],
+    "semis_tech_adjacent_and_high_volatility": [
+      "MU",
+      "ORCL",
+      "INTC",
+      "ASML",
+      "AMAT",
+      "LRCX",
+      "QCOM",
+      "NFLX",
+      "CRWD",
+      "MSTR",
+      "COIN",
+      "SOXL"
+    ],
+    "international_commodities_and_other": [
+      "BABA",
+      "MELI",
+      "NU",
+      "FXI",
+      "GDX",
+      "DBC",
+      "URA",
+      "PPLT",
+      "EWJ",
+      "INDA"
+    ]
+  },
+  "history_start_dates": {
+    "CEG": "2022-02-02",
+    "PLTR": "2020-10-01",
+    "COIN": "2021-04-01",
+    "NU": "2022-01-01",
+    "VRT": "2020-02-10",
+    "GEV": "2024-04-02",
+    "SPCX": "2026-06-16"
+  },
+  "history_ticker_aliases": {
+    "META": [
+      {"source_symbol": "FB", "through": "2022-06-08"}
+    ],
+    "RTX": [
+      {"source_symbol": "UTX", "through": "2020-04-02"}
+    ],
+    "BRK.B": [
+      {"source_symbol": "BRKB", "through": "2099-12-31"}
+    ]
+  },
+  "history_notes": {
+    "CEG": "Standalone CEG began regular-way trading on 2022-02-02 after its Exelon spin-off; do not use EXC as a historical alias.",
+    "PLTR": "Public trading began on 2020-09-30; options-history collection is configured from October 2020.",
+    "COIN": "Public trading began on 2021-04-14; collection starts with the April 2021 month.",
+    "NU": "IPO was on 2021-12-09; collection starts in January 2022.",
+    "VRT": "Vertiv began NYSE trading on 2020-02-10; its prior GSAH security was a SPAC, not Vertiv equity.",
+    "GEV": "GE Vernova began regular-way trading on 2024-04-02 after its GE spin-off; do not use GE as a historical alias.",
+    "META": "Facebook changed its ticker from FB to META on 2022-06-09.",
+    "RTX": "The continuing UTX common stock began trading as RTX on 2020-04-03; RTN was the merger partner, not the ticker predecessor.",
+    "MSTR": "The legal name changed from MicroStrategy to Strategy in 2025; the common-stock ticker remains MSTR.",
+    "SPCX": "This is SpaceX, not the unrelated fund that previously used SPCX; SpaceX began trading on 2026-06-12 and options-history collection starts 2026-06-16."
+  }
+}
