@@ -37,4 +37,4 @@ Migration 014_trade_republic_execution_and_quotes adds nullable authoritative qu
 
 ## Verification
 
-Run `NODE_PATH=/opt/openstock/node_modules node --test` before deployment. The suite includes migration tests, browser module/escaping tests, execution reconciliation/idempotency, minor-unit transaction normalization, pending reconciliation, account-key masking, and read-only sanitization. Tests use isolated databases and mocks; no production database, cache, lock, service, or broker write endpoint is used.
+Run `NODE_PATH=/opt/OpenStock/node_modules node --test` before deployment. The suite includes migration tests, browser module/escaping tests, execution reconciliation/idempotency, minor-unit transaction normalization, pending reconciliation, account-key masking, and read-only sanitization. Tests use isolated databases and mocks; no production database, cache, lock, service, or broker write endpoint is used.

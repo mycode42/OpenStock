@@ -14,7 +14,7 @@ You can try it without any broker account. Demo mode runs the full interface on 
 Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module.
 
 ```bash
-git clone https://github.com/mycode42/openstock.git
+git clone https://github.com/mycode42/OpenStock.git
 cd openstock
 npm ci
 cp .env.example .env
