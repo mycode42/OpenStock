@@ -47,7 +47,26 @@ test('mutations without an Origin header are refused, as are reads with one from
     assert.equal(read.status, 200);
 });
 
+test('without a configured proxy, a forwarded host cannot make a foreign origin pass', async t => {
+    const saved = process.env.OPENSTOCK_TRUST_PROXY;
+    delete process.env.OPENSTOCK_TRUST_PROXY;
+    t.after(() => { if (saved !== undefined) process.env.OPENSTOCK_TRUST_PROXY = saved; });
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const base = `http://127.0.0.1:${f.server.address().port}`;
+    const spoofed = await fetch(`${base}/api/stocks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://attacker.example.test', 'x-forwarded-host': 'attacker.example.test', 'x-forwarded-proto': 'https' },
+        body: JSON.stringify({ symbol: 'SPOOF', name: 'Spoof' }),
+    });
+    assert.equal(spoofed.status, 403);
+    assert.equal((await spoofed.json()).error, 'Same-origin mutation required');
+});
+
 test('mutation origin check accepts the public HTTPS origin forwarded by the reverse proxy', async t => {
+    const saved = process.env.OPENSTOCK_TRUST_PROXY;
+    process.env.OPENSTOCK_TRUST_PROXY = '1';
+    t.after(() => { if (saved === undefined) delete process.env.OPENSTOCK_TRUST_PROXY; else process.env.OPENSTOCK_TRUST_PROXY = saved; });
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const headers = {

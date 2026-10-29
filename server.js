@@ -33,11 +33,10 @@ function createApp({
 } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const app = express();
-    // OpenStock is published behind the OpenClaw reverse proxy.  Express sees
-    // the final hop as HTTP unless it trusts that proxy, while browsers send
-    // their HTTPS Origin header.  Trusting one proxy hop lets req.protocol use
-    // X-Forwarded-Proto for the same-origin mutation check below.
-    app.set('trust proxy', 1);
+    // Behind a reverse proxy, the proxy sets X-Forwarded-Proto and X-Forwarded-Host. Those headers are
+    // honoured only when OPENSTOCK_TRUST_PROXY=1 says a proxy is in front. Otherwise any client can set them.
+    const trustProxy = process.env.OPENSTOCK_TRUST_PROXY === '1';
+    app.set('trust proxy', trustProxy ? 1 : false);
     app.locals.db = db;
     app.locals.fetchImpl = fetchImpl;
     app.locals.alpacaClient = new AlpacaClient({ fetchImpl, timeoutMs: Number(process.env.ALPACA_TIMEOUT_MS || 10000) });
@@ -70,7 +69,7 @@ function createApp({
             Expires: '0',
             'X-OpenStock-Version': APP_VERSION,
         });
-        const forwardedHost = req.get('x-forwarded-host')?.split(',')[0].trim();
+        const forwardedHost = trustProxy ? req.get('x-forwarded-host')?.split(',')[0].trim() : undefined;
         const requestHost = forwardedHost || req.get('host');
         // Every write must come from this site. A missing Origin header is refused, not waved through.
         if (
