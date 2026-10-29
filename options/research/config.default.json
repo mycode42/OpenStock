@@ -6,10 +6,7 @@
   "automation": {
     "enabled": true,
     "strategies": ["vrp", "long_volatility"],
-    "excluded_strategies": {
-      "llm_driven": "Historical chain archives do not contain point-in-time event_recommendations.",
-      "directional_overlay": "Historical chain archives do not contain point-in-time equity_signals."
-    },
+    "excluded_strategies": {},
     "eligibility": {
       "cache_enabled": true,
       "apply_to_research": false,
