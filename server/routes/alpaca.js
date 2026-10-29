@@ -37,9 +37,13 @@ module.exports = function registerAlpacaRoutes({ app }) {
         if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid Alpaca alert level' });
         const dryRun = req.body?.preview === true;
         if (!dryRun && req.body?.confirm !== true) return res.status(400).json({ error: 'Confirm the order before it is placed' });
+        const amountUsd = req.body?.amount_usd === undefined ? undefined : Number(req.body.amount_usd);
+        if (amountUsd !== undefined && !(Number.isFinite(amountUsd) && amountUsd > 0)) {
+            return res.status(400).json({ error: 'amount_usd must be a positive number' });
+        }
         try {
             const result = await orders.placeLevelOrder({
-                db: req.app.locals.db, client: req.app.locals.alpacaClient, levelId: id, dryRun,
+                db: req.app.locals.db, client: req.app.locals.alpacaClient, levelId: id, dryRun, amountUsd,
             });
             res.status(dryRun ? 200 : 201).json(result);
         } catch (error) {

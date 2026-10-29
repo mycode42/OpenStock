@@ -16,7 +16,18 @@ function alpacaOrderControls(level, symbol) {
     if (order) {
         return `<div class="order-status">${escapeHtml(order.side)} ${escapeHtml(order.qty)} @ ${formatMoney(order.limit_price_usd, 'USD')} · ${escapeHtml(order.status)} <button type="button" class="btn btn-sm" data-alpaca-cancel-order="${escapeHtml(order.id)}">Cancel</button></div>`;
     }
-    return `<button type="button" class="btn btn-sm" data-alpaca-order="${escapeHtml(level.id)}" data-symbol="${escapeHtml(symbol)}">Place limit</button>`;
+    return `<button type="button" class="btn btn-sm" data-alpaca-order="${escapeHtml(level.id)}" data-symbol="${escapeHtml(symbol)}" data-side="${escapeHtml(level.side)}">Place limit</button>`;
+}
+
+// Asks for the BUY amount in USD. Returns null when cancelled or invalid.
+async function askAmount(af) {
+    const config = await af('/alpaca/orders/config');
+    const suggested = config?.orders?.notional_usd ?? 250;
+    const entered = window.prompt('Amount in USD for this buy limit (whole shares, rounded down)', String(suggested));
+    if (entered === null) return null;
+    const amount = Number(entered);
+    if (!Number.isFinite(amount) || amount <= 0) { window.alert('Enter a positive amount in USD.'); return null; }
+    return amount;
 }
 
 function orderToken() {
@@ -185,12 +196,14 @@ function renderDashboard() {
         button.disabled = true;
         const path = `/alpaca/alert-levels/${encodeURIComponent(button.dataset.alpacaOrder)}/orders`;
         const headers = { 'Content-Type': 'application/json', 'X-OpenStock-Order-Token': token };
-        const preview = await af(path, { method: 'POST', headers, body: JSON.stringify({ preview: true }) });
+        const body = { ...(button.dataset.side === 'BUY' ? { amount_usd: await askAmount(af) } : {}) };
+        if (body.amount_usd === null) { button.disabled = false; return; }
+        const preview = await af(path, { method: 'POST', headers, body: JSON.stringify({ ...body, preview: true }) });
         if (!preview) { sessionStorage.removeItem(ORDER_TOKEN_KEY); button.disabled = false; return; }
         const plan = preview.plan;
         const approved = window.confirm(`${plan.mode.toUpperCase()} account: ${plan.side} ${plan.qty} ${plan.symbol} limit ${formatMoney(plan.limit_price_usd, 'USD')}, day order, about ${formatMoney(plan.notional_usd, 'USD')}. Place it?`);
         if (!approved) { button.disabled = false; return; }
-        const result = await af(path, { method: 'POST', headers, body: JSON.stringify({ confirm: true }) });
+        const result = await af(path, { method: 'POST', headers, body: JSON.stringify({ ...body, confirm: true }) });
         if (!result) { sessionStorage.removeItem(ORDER_TOKEN_KEY); button.disabled = false; return; }
         await reloadCurrentPage?.();
     }));

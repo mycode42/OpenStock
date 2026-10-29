@@ -36,7 +36,7 @@ async function fixture(t) {
 }
 
 function withEnv(t, env) {
-    const saved = { ORDERS_ENABLED: process.env.ORDERS_ENABLED, OPENSTOCK_ORDER_TOKEN: process.env.OPENSTOCK_ORDER_TOKEN, ALPACA_LIVE_BASE_URL: process.env.ALPACA_LIVE_BASE_URL };
+    const saved = { ORDERS_ENABLED: process.env.ORDERS_ENABLED, OPENSTOCK_ORDER_TOKEN: process.env.OPENSTOCK_ORDER_TOKEN, ALPACA_MANUAL_BASE_URL: process.env.ALPACA_MANUAL_BASE_URL };
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
@@ -46,7 +46,7 @@ const post = (base, url, headers, body) => fetch(base + url, {
 });
 
 test('order routes refuse everything while ORDERS_ENABLED is off', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'false', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_LIVE_BASE_URL: undefined });
+    withEnv(t, { ORDERS_ENABLED: 'false', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_MANUAL_BASE_URL: undefined });
     const { base, levelId, client } = await fixture(t);
     const response = await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, { 'X-OpenStock-Order-Token': TOKEN }, { confirm: true });
     assert.equal(response.status, 403);
@@ -62,7 +62,7 @@ test('wrong or missing token is rejected', async t => {
 });
 
 test('preview returns the plan, and submit needs explicit confirmation', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_LIVE_BASE_URL: undefined });
+    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_MANUAL_BASE_URL: undefined });
     const { base, levelId, client } = await fixture(t);
     const headers = { 'X-OpenStock-Order-Token': TOKEN };
     const preview = await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, headers, { preview: true });
@@ -78,7 +78,7 @@ test('preview returns the plan, and submit needs explicit confirmation', async t
 });
 
 test('config endpoint reports paper mode and never returns the token', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_LIVE_BASE_URL: undefined });
+    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_MANUAL_BASE_URL: undefined });
     const { base } = await fixture(t);
     const text = await (await fetch(`${base}/api/alpaca/orders/config`)).text();
     const body = JSON.parse(text);

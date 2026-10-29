@@ -83,10 +83,23 @@ test('nothing is placed while ORDERS_ENABLED is not true', async t => {
     await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient(), levelId, env: { OPENSTOCK_ORDER_TOKEN: 'x' } }), err => err.status === 403);
 });
 
-test('buy limit that would cross the ask is refused', async t => {
+test('a marketable buy limit is allowed and never fills above its price', async t => {
     const db = makeDb(t);
     const levelId = seedLevel(db, { side: 'BUY', price: 101 });
-    await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient({ ask: 101 }), levelId, env: ENABLED }), err => err.status === 409);
+    const client = fakeClient({ ask: 100 });
+    const result = await orders.placeLevelOrder({ db, client, levelId, env: ENABLED });
+    assert.equal(result.order.status, 'NEW');
+    assert.equal(client.calls.submitted[0].limit_price, '101.00');
+});
+
+test('amount sizes the buy in whole shares, with no per-order or daily cap', async t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db, { side: 'BUY', price: 100 });
+    const client = fakeClient();
+    const { plan } = await orders.placeLevelOrder({ db, client, levelId, env: ENABLED, dryRun: true, amountUsd: 100000 });
+    assert.equal(plan.qty, 1000);
+    assert.equal(plan.notional_usd, 100000);
+    await assert.rejects(orders.placeLevelOrder({ db, client, levelId, env: ENABLED, dryRun: true, amountUsd: 50 }), err => err.status === 400);
 });
 
 test('sell limit exits the full position and refuses without one', async t => {
@@ -106,15 +119,6 @@ test('one live order per level, and triggered levels take no orders', async t =>
     await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient(), levelId, env: ENABLED }), err => err.status === 409);
     const triggeredId = seedLevel(db, { side: 'BUY', price: 100, triggered: 1, retired: 1 });
     await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient(), levelId: triggeredId, env: ENABLED }), err => err.status === 409);
-});
-
-test('daily buy limit is enforced across orders', async t => {
-    const db = makeDb(t);
-    const env = { ...ENABLED, ORDER_DAILY_BUY_LIMIT_USD: '300' };
-    const first = seedLevel(db, { side: 'BUY', price: 100 });
-    const second = seedLevel(db, { side: 'BUY', price: 100 });
-    await orders.placeLevelOrder({ db, client: fakeClient(), levelId: first, env });
-    await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient(), levelId: second, env }), err => err.status === 409);
 });
 
 test('a rejected submit is recorded as REJECTED and frees the level', async t => {
@@ -150,6 +154,6 @@ test('cancel sends DELETE for a confirmed order and marks it pending cancel', as
 
 test('trading is paper unless the live URL is set explicitly', () => {
     assert.equal(orders.tradingMode({}), 'paper');
-    assert.equal(orders.tradingMode({ ALPACA_LIVE_BASE_URL: 'https://paper-api.alpaca.markets/v2' }), 'paper');
-    assert.equal(orders.tradingMode({ ALPACA_LIVE_BASE_URL: 'https://api.alpaca.markets' }), 'live');
+    assert.equal(orders.tradingMode({ ALPACA_MANUAL_BASE_URL: 'https://paper-api.alpaca.markets/v2' }), 'paper');
+    assert.equal(orders.tradingMode({ ALPACA_MANUAL_BASE_URL: 'https://api.alpaca.markets' }), 'live');
 });
