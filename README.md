@@ -1,8 +1,8 @@
 # OpenStock
 
-OpenStock is a self-hosted stock dashboard and trading journal built around Alpaca accounts and market data in USD. It uses SIP quotes when available and falls back to IEX when the account cannot access SIP.
+OpenStock is a self-hosted stock dashboard and trading journal built around Alpaca accounts and market data in USD. 
 
-It is also the frontend for the algo-trader repository: https://github.com/mycode42/algo-trader.git
+It also features a built in algorithmic and llm powered trading system for equity and options
 
 <img width="800" alt="Screenshot 2026-10-28 at 13 40 08" src="https://github.com/user-attachments/assets/51ec9bbc-aff4-44e4-ae12-9d2480047462" />
 
@@ -106,9 +106,9 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 
 ### Price sources
 
-Alpaca provides the quote and chart-history data. OpenStock requests the configured SIP or IEX feed and labels the feed returned by Alpaca.
+Alpaca provides the quote and chart-history data. 
 
-BUY alerts compare against the executable ask; SELL alerts compare against the executable bid.
+OpenStock requests SIP quotes when available and falls back to the free IEX version when the account cannot access SIP.
 
 Prices, amounts, fees and performance values are displayed rounded to two decimals. Journal fields keep the precision you enter, up to six decimals; calculations and stored values use full precision.
 
