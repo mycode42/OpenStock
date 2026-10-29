@@ -1,11 +1,23 @@
 import { escapeHtml } from '../escape.js';
 import { numberOrNull, money, dateTime, timeOnly, dateOnly } from './format.js';
+import { sessionWindow, sessionFraction, sessionTicks, formatSessionTime } from '../session-window.js';
 
 export const RANGES = ['1D', '1W', '1M', '3M', 'ALL'];
+
+// 1D shows the session of the latest snapshot, so it has data before today's first snapshot arrives.
+function latestSnapshotTime(history) {
+    const points = Array.isArray(history) ? history.filter(item => numberOrNull(item.equity) !== null) : [];
+    const last = points[points.length - 1];
+    return last ? new Date(last.timestamp || last.date) : new Date();
+}
 
 function rangeHistory(history, range) {
     const points = Array.isArray(history) ? history.filter(item => numberOrNull(item.equity) !== null) : [];
     if (range === 'ALL' || points.length <= 1) return points;
+    if (range === '1D') {
+        const session = sessionWindow(latestSnapshotTime(history));
+        return points.filter(item => { const time = new Date(item.timestamp || item.date).getTime(); return time >= session.start.getTime() && time <= session.end.getTime(); });
+    }
     const lookback = range === '1D' ? 1 : range === '1W' ? 7 : range === '1M' ? 31 : 92;
     const latestDate = new Date(points[points.length - 1].timestamp || points[points.length - 1].date);
     if (Number.isNaN(latestDate.getTime())) return points;
@@ -29,20 +41,27 @@ export function renderChart(history, range, charts) {
     const padding = Math.max((high - low) * 0.16, Math.max(Math.abs(high), 1) * 0.0005);
     const min = low - padding;
     const max = high + padding;
+    const session = range === '1D' ? sessionWindow(latestSnapshotTime(history)) : null;
+    const xFor = (point, index) => left + (right - left) * (session ? sessionFraction(point.timestamp, session) : index / (values.length - 1));
     const coords = values.map((value, index) => ({
-        x: left + (right - left) * (index / (values.length - 1)),
+        x: xFor(points[index], index),
         y: bottom - ((value - min) / (max - min || 1)) * (bottom - top),
         value,
     }));
     const line = coords.map((point, index) => `${index ? 'L' : 'M'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
-    const area = `${line} L ${right} ${bottom} L ${left} ${bottom} Z`;
+    // The fill sits under the line only, so a partial session does not paint empty space.
+    const area = `${line} L ${coords[coords.length - 1].x} ${bottom} L ${coords[0].x} ${bottom} Z`;
     const grid = [0, 1, 2, 3].map(index => {
         const y = top + (bottom - top) * (index / 3);
         const value = max - (max - min) * (index / 3);
         return `<line class="algo-chart-grid" x1="${left}" y1="${y}" x2="${right}" y2="${y}"/><text class="algo-chart-y-label" x="${left - 12}" y="${y + 4}" text-anchor="end">${escapeHtml(money(value, 'USD', 0))}</text>`;
     }).join('');
     const labelIndexes = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
-    const labels = labelIndexes.map(index => {
+    const sessionLabels = session ? sessionTicks(session).map(({ fraction, time }) => {
+        const anchor = fraction === 0 ? 'start' : fraction === 1 ? 'end' : 'middle';
+        return `<text class="algo-chart-x-label" x="${(left + (right - left) * fraction).toFixed(1)}" y="252" text-anchor="${anchor}">${escapeHtml(formatSessionTime(time.toISOString()))}</text>`;
+    }).join('') : '';
+    const labels = session ? sessionLabels : labelIndexes.map(index => {
         const anchor = index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle';
         const value = points[index].timestamp || points[index].date;
         const label = range === '1D' && points[index].timestamp ? timeOnly(value) : dateOnly(points[index].date || points[index].timestamp);

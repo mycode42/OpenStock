@@ -21,11 +21,11 @@ class AlgoAccountMismatchError(RuntimeError):
 
 class AlgoAlpaca:
     def __init__(self, session: requests.Session | None = None) -> None:
-        self.key = os.environ.get("ALPACA_ALGO_API_KEY", "")
-        self.secret = os.environ.get("ALPACA_ALGO_API_SECRET", "")
-        self.account_id = os.environ.get("ALPACA_ALGO_ACCOUNT_ID", "")
+        self.key = os.environ.get("ALPACA_EQUITY_API_KEY", "")
+        self.secret = os.environ.get("ALPACA_EQUITY_API_SECRET", "")
+        self.account_id = os.environ.get("ALPACA_EQUITY_ACCOUNT_ID", "")
         if not (self.key and self.secret and self.account_id):
-            raise RuntimeError("Algo requires ALPACA_ALGO_API_KEY, ALPACA_ALGO_API_SECRET, and ALPACA_ALGO_ACCOUNT_ID")
+            raise RuntimeError("Algo requires ALPACA_EQUITY_API_KEY, ALPACA_EQUITY_API_SECRET, and ALPACA_EQUITY_ACCOUNT_ID")
         self.session = session or requests.Session()
         self.headers = {
             "APCA-API-KEY-ID": self.key,

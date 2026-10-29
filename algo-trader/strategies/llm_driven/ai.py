@@ -47,6 +47,7 @@ class LLMSignalBook:
     def __init__(self, path: str | Path = DEFAULT_AI_SIGNAL_FILE, *, now: datetime | None = None) -> None:
         self.path = Path(path)
         self.status = "missing"
+        self.owned_tickers: frozenset[str] = frozenset()
         self.error: str | None = None
         self.generated_at: datetime | None = None
         self.expires_at: datetime | None = None
@@ -131,6 +132,7 @@ class LLMSignalBook:
             self.expires_at = expires
             self.run_id = run_id
             self.universe = frozenset(universe)
+            self.owned_tickers = frozenset(str(item).upper() for item in (payload.get("owned_tickers") or []))
             self.decisions = decisions
         except FileNotFoundError:
             self.status = "missing"
@@ -140,9 +142,13 @@ class LLMSignalBook:
 
     def recommendation(self, ticker: str, *, universe: set[str]) -> LLMRecommendation | None:
         symbol = ticker.upper()
-        if self.status != "ready" or symbol not in self.universe or symbol not in universe:
+        if self.status != "ready" or symbol not in self.universe:
             return None
-        return self.decisions.get(symbol)
+        decision = self.decisions.get(symbol)
+        # A held ticker outside the live universe may only be sold, never added to.
+        if symbol not in universe and (symbol not in self.owned_tickers or decision is None or decision.action != "sell"):
+            return None
+        return decision
 
     def diagnostics(self) -> dict:
         actionable = sum(

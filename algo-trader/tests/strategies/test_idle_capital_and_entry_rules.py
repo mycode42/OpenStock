@@ -68,6 +68,7 @@ def test_minimum_stop_widens_the_intraday_stop_and_shrinks_size():
     signal = {"ticker": "AAA", "action": "buy", "strategy": "intraday_mean_reversion", "reason": "x"}
     risk = {
         "risk_per_trade_pct": 0.005, "max_position_pct": 0.07, "max_strategy_position_pct": 0.07,
+        "take_profit_r_multiple": 2.0,
         "stop_loss_pct": 0.05, "stop_loss_pct_by_strategy": {"intraday_mean_reversion": 0.011},
     }
     base = _make_trade(signal, 100.0, 100_000, {}, risk)

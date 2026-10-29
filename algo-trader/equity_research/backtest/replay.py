@@ -173,7 +173,7 @@ class ReplayLoopMixin:
                         strategies=set(self.risk.get("max_positions_per_strategy_by_strategy", {})),
                         reason="portfolio_end_of_day_flatten",
                     )
-                elif not self.coordinator.config.allow_intraday_overnight:
+                else:
                     self._flatten_positions(
                         bars, timestamp, strategies=set(INTRADAY_STRATEGIES),
                         reason="coordinator_intraday_eod_flatten",
@@ -361,10 +361,8 @@ class ReplayLoopMixin:
                 "max_net_short_pct": self.coordinator.config.max_net_short_pct,
                 "max_daily_entries": self.coordinator.config.max_daily_entries,
                 "max_intraday_entries": self.coordinator.config.max_intraday_entries,
-                "swing_open_delay_minutes": self.coordinator.config.swing_open_delay_minutes,
                 "intraday_close_cutoff_minutes": self.coordinator.config.intraday_close_cutoff_minutes,
                 "allow_opposite_netting": self.coordinator.config.allow_opposite_netting,
-                "allow_intraday_overnight": self.coordinator.config.allow_intraday_overnight,
             },
             "regime_diagnostics": self._regime_report(),
             "llm_strategy_diagnostics": {
@@ -415,7 +413,6 @@ class ReplayLoopMixin:
                 "max_trades_per_day": self.risk["max_trades_per_day"],
                 "max_short_positions": self.risk.get("max_short_positions"),
                 "max_short_exposure_pct": self.risk.get("max_short_exposure_pct"),
-                "allow_short_positions": self.risk.get("allow_short_positions", False),
                 "max_sector_pct": self.risk["max_sector_pct"],
                 "min_cash_pct": self.risk["min_cash_pct"],
                 "daily_loss_limit": self.risk["daily_loss_limit"],

@@ -16,6 +16,7 @@ import json
 import time
 
 import pandas as pd
+import requests
 
 from market.cache import get_cache
 from market.models import (
@@ -819,7 +820,7 @@ def get_company_news(
     limit: int = 1000,
     api_key: str = None,
 ) -> list[CompanyNews]:
-    """Fetch company news using yfinance."""
+    """Fetch company news from Yahoo Finance's search endpoint, with yfinance fallback."""
     cache_key = f"{ticker}_{start_date or 'none'}_{end_date}_{limit}"
 
     if cached_data := _cache.get_company_news(cache_key):
@@ -830,35 +831,69 @@ def get_company_news(
         _cache.set_company_news(cache_key, disk)
         return [CompanyNews(**n) for n in disk]
 
+    news_items = []
     try:
-        yf_ticker = _get_yf_ticker(ticker)
-        news_items = yf_ticker.news or []
+        response = requests.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={"q": ticker, "newsCount": max(10, min(int(limit), 100))},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            news_items = payload.get("news") or []
+    except Exception:
+        pass
 
+    if not isinstance(news_items, list) or not news_items:
+        # Yahoo's search endpoint can be temporarily unavailable or return no
+        # matches. Keep the existing yfinance path as a fallback for those windows.
+        try:
+            news_items = _get_yf_ticker(ticker).news or []
+        except Exception as e:
+            print(f"[api_free] get_company_news error for {ticker}: {type(e).__name__}: {e}")
+            return []
+
+    try:
         all_news = []
+
         for item in news_items:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content") if isinstance(item.get("content"), dict) else {}
             pub_date = ""
             if "providerPublishTime" in item:
-                pub_date = datetime.datetime.fromtimestamp(
-                    item["providerPublishTime"]
-                ).strftime("%Y-%m-%dT%H:%M:%SZ")
-            elif "content" in item and "pubDate" in item.get("content", {}):
-                pub_date = item["content"]["pubDate"]
+                try:
+                    pub_date = datetime.datetime.fromtimestamp(
+                        float(item["providerPublishTime"]), datetime.timezone.utc,
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                except (TypeError, ValueError, OverflowError, OSError):
+                    pub_date = ""
+            elif content.get("pubDate"):
+                pub_date = content.get("pubDate") or ""
 
             # Handle yfinance news format variations
-            title = item.get("title", "")
-            if not title and "content" in item:
-                title = item["content"].get("title", "")
+            title = item.get("title") or ""
+            if not title:
+                title = content.get("title") or ""
 
-            source = item.get("publisher", "")
-            if not source and "content" in item:
-                source = item["content"].get("provider", {}).get("displayName", "")
+            source = item.get("publisher") or ""
+            if not source:
+                provider = content.get("provider")
+                source = provider.get("displayName") or "" if isinstance(provider, dict) else ""
 
-            link = item.get("link", "")
-            if not link and "content" in item:
-                link = item["content"].get("canonicalUrl", {}).get("url", "")
+            link = item.get("link") or ""
+            if not link:
+                canonical_url = content.get("canonicalUrl")
+                link = canonical_url.get("url") or "" if isinstance(canonical_url, dict) else ""
 
             if not title:
                 continue
+            title = str(title)
+            source = str(source)
+            link = str(link)
+            pub_date = str(pub_date)
 
             # Date filtering
             date_str = pub_date.split("T")[0] if pub_date else ""
@@ -887,7 +922,7 @@ def get_company_news(
 
         return [CompanyNews(**n) for n in all_news]
     except Exception as e:
-        print(f"[api_free] get_company_news error for {ticker}: {e}")
+        print(f"[api_free] get_company_news error for {ticker}: {type(e).__name__}: {e}")
         return []
 
 

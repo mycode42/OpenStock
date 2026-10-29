@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from portfolio.config import CASH_RESERVE as CASH_RESERVE_DEFAULTS
+from portfolio.config import get_cash_reserve_settings
 
 
 def plan_entry_cash(
@@ -38,7 +38,7 @@ def plan_cash_reserve(
     proxy_qty: int, config: dict | None = None, entries_pending: bool = False,
 ) -> dict:
     """Return {"action": "buy" | "sell" | "hold", "qty": int, "reason": str}."""
-    settings = {**CASH_RESERVE_DEFAULTS, **(config or {})}
+    settings = {**get_cash_reserve_settings(), **(config or {})}
     hold = {"action": "hold", "qty": 0}
     if not settings["enabled"]:
         return {**hold, "reason": "cash reserve disabled"}

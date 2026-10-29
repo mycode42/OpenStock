@@ -122,14 +122,14 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
         return output
 
     if chosen["action"] == "short":
-        suppression = _short_entry_suppression(context, ticker)
-        if suppression:
-            chosen["suppressed_reason"] = suppression
-            output.append(chosen)
-            return output
         if str(context.regime.get("regime", "unknown")) == "range_bound":
             chosen["risk_multiplier"] = float(
                 context.risk_config.get("range_regime_short_risk_multiplier", 0.75)
+            )
+        if ticker not in set(context.universe.get("easy_to_borrow_tickers") or []):
+            # Hard-to-borrow shorts are sized down rather than blocked.
+            chosen["risk_multiplier"] = float(chosen.get("risk_multiplier", 1.0)) * float(
+                context.risk_config.get("hard_to_borrow_short_risk_multiplier", 0.5)
             )
 
     chosen_strategy = STRATEGY_CATALOG.get(str(chosen.get("strategy") or ""))
@@ -160,10 +160,7 @@ def _intraday_flatten_signal(
     if context.mode != "algo" or owner is None or position_qty == 0:
         return None
     flatten_all_eod = bool(context.risk_config.get("flatten_eod", False))
-    flatten_intraday = (
-        owner in INTRADAY_STRATEGIES
-        and not context.coordinator_config.allow_intraday_overnight
-    )
+    flatten_intraday = owner in INTRADAY_STRATEGIES
     if not (flatten_all_eod or flatten_intraday):
         return None
 
@@ -459,14 +456,6 @@ def _suppress_conflicting_orders(
         chosen["suppressed_reason"] = "a conflicting Alpaca order is already open for this symbol"
         return True
     return False
-
-
-def _short_entry_suppression(context: SignalGenerationContext, ticker: str) -> str | None:
-    if context.session_name not in {None, "regular"}:
-        return "short entries are restricted to regular market hours"
-    if ticker not in set(context.universe.get("easy_to_borrow_tickers") or []):
-        return "Alpaca has not confirmed this ticker as easy to borrow"
-    return None
 
 
 __all__ = ["SignalGenerationContext", "generate_strategy_signals"]

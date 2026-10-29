@@ -12,7 +12,7 @@ import math
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
-from portfolio.config import STRATEGY_CONFIG
+from portfolio.config import get_algo_execution_settings
 
 
 PROTECTION_CONFIG = {
@@ -197,7 +197,7 @@ def heartbeat_alarm(
     """Return an alarm dict when open positions exist and the daemon is stale."""
     if open_position_count <= 0:
         return None
-    interval = int(scan_interval_seconds or STRATEGY_CONFIG["portfolio_scan_seconds"])
+    interval = int(scan_interval_seconds or get_algo_execution_settings()["portfolio_scan_seconds"])
     limit = int(stale_scans or PROTECTION_CONFIG["heartbeat_stale_scans"]) * interval
     if not heartbeat or not heartbeat.get("scanned_at"):
         return {"kind": "daemon_heartbeat_missing", "open_positions": open_position_count, "age_seconds": None, "limit_seconds": limit}

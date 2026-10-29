@@ -24,7 +24,7 @@ def test_llm_driven_section_replaces_event_driven_key(tmp_path):
     config = load_options_config(tmp_path / "missing.json")
 
     assert "event_driven" not in config
-    assert config["llm_driven"]["min_llm_confidence"] == 0.80
+    assert config["llm_driven"]["min_llm_confidence"] == 0.70
     assert config["llm_driven"]["enabled"] is True
 
 

@@ -6,10 +6,10 @@ import subprocess
 
 
 def service_is_active(unit: str) -> bool | None:
-    """Return service state, or ``None`` when systemd cannot answer."""
+    """Return state of a user-scope unit, or ``None`` when systemd cannot answer."""
     try:
         return subprocess.run(
-            ["systemctl", "is-active", "--quiet", unit],
+            ["systemctl", "--user", "is-active", "--quiet", unit],
             check=False,
             timeout=5,
         ).returncode == 0

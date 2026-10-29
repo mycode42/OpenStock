@@ -46,6 +46,15 @@ class OptionsJournal:
             finally:
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
+    def records(self, name: str) -> list[dict]:
+        if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
+            raise ValueError("unsupported options journal stream")
+        path = self.directory / f"{name}.jsonl"
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as stream:
+            return [json.loads(line) for line in stream if line.strip()]
+
     def latest(self, name: str) -> dict | None:
         if name not in {"orders", "fills", "greeks", "risk_daily", "assignment_events", "decisions", "iv_history", "strategy_greeks"}:
             raise ValueError("unsupported options journal stream")

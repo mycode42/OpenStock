@@ -50,7 +50,6 @@ class LedgerMethods extends TradesMethods {
             this.db.prepare('UPDATE alert_levels SET enabled = 0, active = 0 WHERE stock_id = ?').run(id);
             return { changes: result.changes, archived: true };
         }
-        if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_instrument_mappings'").get()) this.db.prepare('DELETE FROM broker_instrument_mappings WHERE stock_id = ?').run(id);
         const result = this.db.prepare('DELETE FROM stocks WHERE id = ?').run(id);
         return { changes: result.changes, archived: false };
     }

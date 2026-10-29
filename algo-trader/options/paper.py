@@ -223,6 +223,20 @@ def _stock_position_exposures(client: OptionsPaperClient, positions: list[dict])
     return result
 
 
+def _sleeve_by_symbol(journal: OptionsJournal) -> dict[str, str]:
+    """Map each option leg symbol to the sleeve of the most recent order that opened it."""
+    mapping: dict[str, str] = {}
+    for record in journal.records("orders"):
+        sleeve = str((record.get("signal") or {}).get("strategy") or "")
+        if not sleeve:
+            continue
+        for leg in record.get("legs") or [record.get("symbol")]:
+            symbol = str(leg.get("symbol") if isinstance(leg, dict) else leg or "").upper()
+            if symbol:
+                mapping[symbol] = sleeve
+    return mapping
+
+
 def _option_position_exposures(
     client: OptionsPaperClient,
     positions: list[dict],
@@ -232,6 +246,7 @@ def _option_position_exposures(
     config: dict,
     maintenance_margin: float = 0.0,
     market_inputs: MarketInputs | None = None,
+    sleeve_by_symbol: dict[str, str] | None = None,
 ) -> tuple[list[PositionExposure], list[dict], int, list[str]]:
     option_rows = [
         row for row in positions
@@ -320,6 +335,7 @@ def _option_position_exposures(
                 )
             output.append(PositionExposure(
                 underlying=contract.underlying,
+                sleeve=(sleeve_by_symbol or {}).get(symbol, ""),
                 spot=spot,
                 delta_shares=quote.greeks.delta * scale,
                 gamma=quote.greeks.gamma * scale,
@@ -1281,15 +1297,16 @@ def run_paper_cycle(
 
     # A flat options account may be used immediately; existing unrecognized
     # holdings and pending opening orders must be priced before new entries.
+    sleeves = _sleeve_by_symbol(journal)
     options_positions, position_audit, existing_structures, data_quality = _option_position_exposures(
         client, option_positions_all, as_of=now, feed=feed, config=config,
         maintenance_margin=_safe_number(account.get("maintenance_margin")),
-        market_inputs=market_inputs,
+        market_inputs=market_inputs, sleeve_by_symbol=sleeves,
     )
     pending_options_positions, _pending_audit, _pending_structure_count, pending_data_quality = (
         _option_position_exposures(
             client, pending_position_rows, as_of=now, feed=feed, config=config,
-            maintenance_margin=0.0, market_inputs=market_inputs,
+            maintenance_margin=0.0, market_inputs=market_inputs, sleeve_by_symbol=sleeves,
         )
     )
     diagnostics["pending_open_option_orders"] = {
@@ -1602,13 +1619,7 @@ def run_paper_cycle(
         ):
             decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "long-volatility daily entry limit reached"})
             continue
-        if (
-            signal.strategy == DirectionalOverlayStrategy.strategy_id
-            and directional_entries_today >= int(directional_config.get("max_entries_per_day", 1))
-        ):
-            decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "directional-overlay daily entry limit reached"})
-            continue
-        max_daily_loss_pct = float(config["risk"].get("max_daily_loss_pct", 0.02))
+        max_daily_loss_pct = float(config["risk"]["max_daily_loss_pct"])
         if combined_daily_pnl_pct is not None and combined_daily_pnl_pct <= -max_daily_loss_pct:
             decisions.append({
                 "signal": signal.to_dict(),
@@ -1617,7 +1628,7 @@ def run_paper_cycle(
                 "combined_daily_pnl_pct": combined_daily_pnl_pct,
             })
             continue
-        if entries_today >= int(config["risk"].get("max_entries_per_day", 2)):
+        if entries_today >= int(config["risk"]["max_entries_per_day"]):
             decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "options daily entry limit reached"})
             continue
         if signal.underlying in seen_underlyings:

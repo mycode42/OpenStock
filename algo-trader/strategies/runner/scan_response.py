@@ -52,7 +52,6 @@ def build_scan_response(
             "max_daily_entries": scope.coordinator_config.max_daily_entries,
             "max_intraday_entries": scope.coordinator_config.max_intraday_entries,
             "allow_opposite_netting": scope.coordinator_config.allow_opposite_netting,
-            "allow_intraday_overnight": scope.coordinator_config.allow_intraday_overnight,
             "rejections": [
                 {
                     "ticker": item.get("ticker"),

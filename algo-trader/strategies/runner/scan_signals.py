@@ -48,19 +48,7 @@ def generate_scan_signals(
                 positions=scope.positions,
                 parameters=market.multi_factor_parameters,
                 groups_by_symbol=scope.universe.get("sector_by_symbol"),
-                tradable_symbols=(
-                    set(
-                        scope.overnight_tradable_tickers
-                        if scope.overnight_tradable_tickers is not None
-                        else scope.universe.get("overnight_tradable_tickers", [])
-                    )
-                    if scope.session_name == "overnight"
-                    and (
-                        scope.universe.get("overnight_metadata_status") == "ok"
-                        or scope.overnight_tradable_tickers is not None
-                    )
-                    else None
-                ),
+                tradable_symbols=None,
             )
         except Exception as exc:
             scope.scan_errors.append(f"multi-factor rebalance: {type(exc).__name__}: {exc}")

@@ -83,29 +83,6 @@ def submit_broker_order(
     headers = hooks.headers(mode)
     client_order_id = order.get("client_order_id")
     replayed = False
-    if mode == "algo":
-        try:
-            now = datetime.now(MARKET_TZ)
-            schedule = hooks.get_market_schedule(mode="algo")
-            regular_open = schedule is not None and schedule.market_open(now)
-            extended_session = None if regular_open else extended_session_name(
-                now, lambda on_date: hooks.get_market_schedule(on_date=on_date, mode="algo"),
-            )
-        except Exception as exc:
-            return {
-                "success": False,
-                "error": f"Algo regular-session verification unavailable: {type(exc).__name__}: {exc}",
-            }
-        if not regular_open and extended_session is None:
-            return {
-                "success": False,
-                "error": "Algo order submissions are restricted to regular market hours",
-            }
-        if not regular_open and not _is_extended_limit_payload(order):
-            return {
-                "success": False,
-                "error": "Algo extended-hours orders must be plain limit DAY or GTC orders without broker protection",
-            }
     try:
         response = requests.post(f"{API_BASE}/orders", headers=headers, json=order, timeout=10)
     except requests.RequestException as exc:
@@ -208,7 +185,7 @@ def place_order(
     action,
     qty,
     hooks: OrderHooks,
-    order_type="market",
+    order_type="limit",
     stop_price=None,
     take_profit=None,
     limit_price=None,
@@ -229,8 +206,6 @@ def place_order(
         return {"success": False, "error": f"Unsupported order type: {order_type}; protection is software-managed"}
     if trail_percent is not None:
         return {"success": False, "error": "Trailing stops are software-managed and never sent to the broker"}
-    if action == "short" and not hooks.get_mode_config(mode)["risk"].get("allow_short_positions", False):
-        return {"success": False, "error": "New short entries are disabled for this mode"}
     if action == "short" and (stop_price is None or take_profit is None):
         return {"success": False, "error": "Short entries require software stop-loss and take-profit prices"}
     if order_type == "market" and limit_price is not None:
@@ -291,13 +266,7 @@ def place_order(
             "limit_price": str(round(numeric_limit, 2)),
         }
     else:
-        order = {
-            "symbol": ticker,
-            "qty": str(int(qty)),
-            "side": side,
-            "type": "market",
-            "time_in_force": "day",
-        }
+        return {"success": False, "error": "Market orders are disabled; use a limit order"}
 
     order["position_intent"] = {
         "buy": "buy_to_open",

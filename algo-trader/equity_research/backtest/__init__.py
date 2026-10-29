@@ -12,7 +12,7 @@ from equity_research.costs import EQUITY_COMMISSION_PER_SHARE, EQUITY_SLIPPAGE_B
 from execution.risk import validate_trade
 from market.data import data_tier, regular_feed
 from market.store import DEFAULT_DB, SQLiteBarStore, fetch_alpaca_bars
-from portfolio.config import STRATEGY_CONFIG, get_mode_config
+from portfolio.config import get_mode_config
 from strategies.llm_driven import EventCalendar
 from strategies.regime import rank_strategies
 from strategies.rule_pipeline import evaluate_rule_signal

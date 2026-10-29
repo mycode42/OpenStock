@@ -9,6 +9,7 @@ import requests
 from runtime.http import get_session
 
 from market.data import regular_feed
+from portfolio.config import get_algo_execution_settings
 from market.quotes import parse_price_timestamp, parse_quote
 
 
@@ -140,12 +141,19 @@ def submit_flatten_order(headers: dict, position: dict) -> dict:
     if not quantity:
         raise ValueError(f"Cannot flatten zero-quantity {symbol} position")
     client_order_id = f"flat-{uuid.uuid4().hex}"
+    # Market closes are not sent. A marketable limit priced off the live quote is.
+    band = float(get_algo_execution_settings()["marketable_limit_band_bps"]) / 10_000.0
+    if quantity > 0:
+        limit_price = round(get_latest_quote(symbol, "bid", headers) * (1 - band), 2)
+    else:
+        limit_price = round(get_latest_quote(symbol, "ask", headers) * (1 + band), 2)
     order = {
         "symbol": symbol,
         "qty": str(abs(quantity)),
         "side": "sell" if quantity > 0 else "buy",
         "position_intent": "sell_to_close" if quantity > 0 else "buy_to_close",
-        "type": "market",
+        "type": "limit",
+        "limit_price": str(limit_price),
         "time_in_force": "day",
         "client_order_id": client_order_id,
     }

@@ -128,8 +128,6 @@ def _open_order_ids(orders_to_cancel: list[dict]) -> list[str]:
 
 
 def _cancel_orders(headers: dict, orders_to_cancel: list[dict]) -> tuple[list[str], list[str]]:
-    if _active_mode == "algo" and not _regular_market_open():
-        return [], ["Algo order cancellations are restricted to regular market hours"]
     return broker.cancel_orders(headers, orders_to_cancel)
 
 
@@ -138,12 +136,6 @@ def _position_qty(position: dict) -> Decimal:
 
 
 def _submit_flatten_order(headers: dict, position: dict) -> dict:
-    if _active_mode == "algo" and not _regular_market_open():
-        return {
-            "ticker": str(position.get("symbol") or "").upper(),
-            "status": "failed",
-            "error": "Algo order submissions are restricted to regular market hours",
-        }
     return broker.submit_flatten_order(headers, position)
 
 

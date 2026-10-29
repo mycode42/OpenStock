@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import os
 
 import pytest
 
+import portfolio.healthcheck as healthcheck
 from portfolio.healthcheck import build_report
 from portfolio.state_store import StateStoreError
 
@@ -100,6 +102,56 @@ def portfolio(now=NOW):
 
 def _codes(report):
     return {item["code"] for item in report["problems"]}
+
+
+def test_healthcheck_loads_only_broker_credentials_from_shared_env(tmp_path, monkeypatch):
+    project_root = tmp_path / "algo-trader"
+    project_root.mkdir()
+    (tmp_path / ".env").write_text(
+        "ALPACA_EQUITY_API_KEY=shared-key\n"
+        "ALPACA_EQUITY_API_SECRET=shared-secret\n"
+        "ALPACA_EQUITY_ACCOUNT_ID=shared-account\n"
+        "ALPACA_OPTIONS_API_KEY=options-key\n"
+        "ALPACA_OPTIONS_API_SECRET=options-secret\n"
+        "ALPACA_OPTIONS_ACCOUNT_ID=options-account\n"
+        "OPENCLAW_GATEWAY_TOKEN=unrelated-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(healthcheck, "ROOT", project_root)
+    monkeypatch.setenv("ALPACA_EQUITY_API_KEY", "process-key")
+    monkeypatch.delenv("ALPACA_EQUITY_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_EQUITY_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("ALPACA_OPTIONS_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_OPTIONS_API_SECRET", raising=False)
+    monkeypatch.delenv("ALPACA_OPTIONS_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("OPENCLAW_GATEWAY_TOKEN", raising=False)
+
+    healthcheck._load_healthcheck_environment()
+
+    assert os.environ["ALPACA_EQUITY_API_KEY"] == "process-key"
+    assert os.environ["ALPACA_EQUITY_API_SECRET"] == "shared-secret"
+    assert os.environ["ALPACA_EQUITY_ACCOUNT_ID"] == "shared-account"
+    assert os.environ["ALPACA_OPTIONS_API_KEY"] == "options-key"
+    assert os.environ["ALPACA_OPTIONS_API_SECRET"] == "options-secret"
+    assert os.environ["ALPACA_OPTIONS_ACCOUNT_ID"] == "options-account"
+    assert "OPENCLAW_GATEWAY_TOKEN" not in os.environ
+
+
+def test_combined_report_includes_options_problems_and_preserves_equity_fields():
+    equity = {"ok": True, "last_scan_status": "ok", "problems": [], "warnings": []}
+    options = {
+        "ok": False,
+        "problems": [{"code": "cycle_stale", "detail": "No recent options cycle"}],
+        "warnings": [],
+    }
+
+    report = healthcheck._combine_health_reports(equity, options)
+
+    assert report["ok"] is False
+    assert report["equity_ok"] is True
+    assert report["last_scan_status"] == "ok"
+    assert report["options"] == options
+    assert report["problems"] == [{"code": "options_cycle_stale", "detail": "No recent options cycle"}]
 
 def test_healthy_active_session_verifies_sqlite_broker_owner_and_software_protection():
     diagnostic = {

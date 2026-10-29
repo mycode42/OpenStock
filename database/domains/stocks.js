@@ -44,34 +44,7 @@ class StocksMethods extends DatabaseCore {
         return this.db.prepare('SELECT * FROM stocks WHERE id = ?').get(id);
     }
 
-    getStockByBrokerInstrument(instrumentId) {
-        return this.db.prepare(`SELECT s.* FROM stocks s
-            LEFT JOIN broker_instrument_mappings m ON m.stock_id=s.id AND m.broker='trade_republic'
-            WHERE s.isin=? OR m.isin=? ORDER BY s.archived, s.id LIMIT 1`).get(instrumentId, instrumentId) || null;
-    }
 
-    ensureBrokerJournalStock({ instrumentId, symbol, name, currency = 'EUR', assetType = 'stock' }) {
-        const ensure = this.db.transaction(() => {
-            const existing = this.getStockByBrokerInstrument(instrumentId);
-            if (existing) return existing;
-            const base = String(symbol || instrumentId).trim().toUpperCase().replace(/[^A-Z0-9.\-]/g, '').slice(0, 16) || 'ASSET';
-            let uniqueSymbol = base;
-            if (this.db.prepare('SELECT 1 FROM stocks WHERE symbol=?').get(uniqueSymbol)) {
-                const suffix = String(instrumentId).replace(/[^A-Z0-9]/gi, '').slice(-5).toUpperCase() || 'TR';
-                uniqueSymbol = `${base.slice(0, 14)}-${suffix}`;
-                let collision = 2;
-                while (this.db.prepare('SELECT 1 FROM stocks WHERE symbol=?').get(uniqueSymbol)) {
-                    uniqueSymbol = `${base.slice(0, 12)}-${suffix}-${collision++}`;
-                }
-            }
-            const insert = this.db.prepare(`INSERT INTO stocks
-                (symbol,isin,name,currency,buy_threshold_eur,sell_threshold_eur,enabled,archived,price_source,asset_type)
-                VALUES (?,?,?,?,0,0,0,0,'trade_republic',?)`);
-            const row = insert.run(uniqueSymbol, instrumentId, name || uniqueSymbol, currency, assetType);
-            return this.getStockById(row.lastInsertRowid);
-        });
-        return ensure.immediate();
-    }
 
     getStockBySymbol(symbol) {
         return this.db.prepare('SELECT * FROM stocks WHERE symbol = ?').get(symbol);
@@ -179,7 +152,7 @@ class StocksMethods extends DatabaseCore {
         return this.db.transaction(() => {
             const result = stmt.run(symbol, name, isin, currency, buyThreshold, sellThreshold);
             if (this.db.prepare("SELECT 1 FROM pragma_table_info('stocks') WHERE name='price_source'").get()) {
-                this.db.prepare("UPDATE stocks SET price_source='trade_republic' WHERE id=?").run(result.lastInsertRowid);
+                this.db.prepare("UPDATE stocks SET price_source='alpaca' WHERE id=?").run(result.lastInsertRowid);
             }
             const add = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
             add.run(result.lastInsertRowid, 'BUY', buyThreshold);
@@ -188,33 +161,7 @@ class StocksMethods extends DatabaseCore {
         })();
     }
 
-    addStockWithMapping({ symbol, name, isin, currency = 'EUR', buyThreshold, sellThreshold, assetType = 'stock', mapping }) {
-        return this.db.transaction(() => {
-            const result = this.db.prepare(`INSERT INTO stocks (symbol, name, isin, currency, buy_threshold_eur, sell_threshold_eur, price_source, current_price_usd, last_exchange_rate, asset_type)
-                VALUES (?, ?, ?, ?, ?, ?, 'trade_republic', NULL, NULL, ?)`).run(symbol, name, isin, currency, buyThreshold, sellThreshold, assetType);
-            const stockId = Number(result.lastInsertRowid);
-            const add = this.db.prepare('INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (?, ?, ?)');
-            add.run(stockId, 'BUY', buyThreshold); add.run(stockId, 'SELL', sellThreshold);
-            this.saveBrokerMapping({ ...mapping, stock_id: stockId });
-            return { lastInsertRowid: stockId };
-        })();
-    }
 
-    configureJournalStockWithMapping({ stockId, symbol, name, isin, currency = 'EUR', assetType = 'stock', buyThreshold, sellThreshold, mapping }) {
-        return this.db.transaction(() => {
-            const stock = this.getStockById(stockId);
-            if (!stock) throw new Error('Journal instrument is unavailable');
-            this.db.prepare(`UPDATE stocks SET symbol=?,name=?,isin=?,currency=?,asset_type=?,archived=0,enabled=1,owned=0,trigger_state='NONE',price_source='trade_republic',
-                buy_threshold_eur=?,sell_threshold_eur=?,updated_at=datetime('now') WHERE id=?`)
-                .run(symbol, name, isin, currency, assetType, buyThreshold, sellThreshold, stockId);
-            if (Number(stock.archived)) this.db.prepare('UPDATE alert_levels SET enabled=CASE WHEN retired=0 THEN 1 ELSE 0 END,active=CASE WHEN retired=0 THEN 1 ELSE 0 END WHERE stock_id=?').run(stockId);
-            this.saveBrokerMapping({ ...mapping, stock_id: stockId });
-            const addLevel = this.db.prepare('INSERT OR IGNORE INTO alert_levels (stock_id,side,price_eur) VALUES (?,?,?)');
-            addLevel.run(stockId, 'BUY', buyThreshold);
-            addLevel.run(stockId, 'SELL', sellThreshold);
-            return this.getStockById(stockId);
-        })();
-    }
 
     // Alert levels are canonical for monitoring. Legacy threshold columns are
     // retained as compatibility metadata for direct database callers only.

@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import statistics
 
-from portfolio.config import STRATEGY_CONFIG
 
 
 def _is_protective_sell_order(order: dict, position_qty: float = 1) -> bool:
@@ -107,9 +106,9 @@ def _make_trade(
         return None
     if not math.isfinite(risk_multiplier) or not 0.01 <= risk_multiplier <= 1.5:
         return None
-    risk_dollars = equity * float(mode_risk.get("risk_per_trade_pct", STRATEGY_CONFIG["risk_per_trade_pct"])) * risk_multiplier
+    risk_dollars = equity * float(mode_risk["risk_per_trade_pct"]) * risk_multiplier
     max_position_pct = min(
-        float(mode_risk.get("max_strategy_position_pct", STRATEGY_CONFIG["max_strategy_position_pct"])),
+        float(mode_risk["max_strategy_position_pct"]),
         float(mode_risk["max_position_pct"]),
     )
     ticker_limit = _ticker_max_position_pct(signal["ticker"], mode_universe)
@@ -137,9 +136,9 @@ def _make_trade(
     if signal.get("take_profit_price") is not None and not target_is_valid:
         return None
     target_price = requested_target if target_is_valid else (
-        round(price - (stop_price - price) * float(mode_risk.get("take_profit_r_multiple", STRATEGY_CONFIG["take_profit_r_multiple"])), 2)
+        round(price - (stop_price - price) * float(mode_risk["take_profit_r_multiple"]), 2)
         if action == "short" else
-        round(price + (price - stop_price) * float(mode_risk.get("take_profit_r_multiple", STRATEGY_CONFIG["take_profit_r_multiple"])), 2)
+        round(price + (price - stop_price) * float(mode_risk["take_profit_r_multiple"]), 2)
     )
     trailing_stop = mode_risk.get("trailing_stop_pct_by_strategy", {}).get(strategy)
     trailing_activation = mode_risk.get("trailing_activation_pct_by_strategy", {}).get(strategy)

@@ -4,7 +4,7 @@ import pytest
 
 from execution import risk as risk_validator
 import portfolio.config as portfolio_config
-from portfolio.config import ALGO_MODE_CONFIG, STRATEGY_CONFIG, get_algo_configuration, get_mode_config
+from portfolio.config import ALGO_MODE_CONFIG, get_algo_configuration, get_algo_execution_settings, get_mode_config
 from strategies import mean_reversion, momentum, trend_following
 from strategies.regime import rank_strategies
 from strategies.signals import Signal
@@ -70,7 +70,6 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 10
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.07
     assert ALGO_MODE_CONFIG["risk"]["max_strategy_position_pct"] == 0.07
-    assert ALGO_MODE_CONFIG["risk"]["allow_short_positions"] is True
     assert ALGO_MODE_CONFIG["risk"]["max_short_positions"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_short_exposure_pct"] == 0.20
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
@@ -85,18 +84,17 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_llm_driven"] == 5
     assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 4
     config = get_algo_configuration()
-    assert config["general"]["overnight_entries_enabled"] is True
     assert config["strategies"]["intraday_trend_following"]["enabled"] is True
     assert config["strategies"]["intraday_momentum"]["enabled"] is True
-    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["swing_trend_following"] > 0.05
-    assert ALGO_MODE_CONFIG["risk"]["stop_loss_pct_by_strategy"]["intraday_mean_reversion"] <= 0.012
-    assert STRATEGY_CONFIG["extended_hours_max_spread_pct"] == 0.02
+    assert get_mode_config("algo")["risk"]["stop_loss_pct_by_strategy"]["swing_trend_following"] > 0.05
+    assert get_mode_config("algo")["risk"]["stop_loss_pct_by_strategy"]["intraday_mean_reversion"] <= 0.012
+    assert get_algo_execution_settings()["extended_hours_max_spread_pct"] == 0.02
     with pytest.raises(ValueError, match="Only the algo account route"):
         get_mode_config("unknown")
 
 
 def test_algo_stop_sizing_uses_horizon_specific_config():
-    risk = ALGO_MODE_CONFIG["risk"]
+    risk = get_mode_config("algo")["risk"]
     intraday = _make_trade({
         "ticker": "AAPL", "action": "buy", "strategy": "intraday_mean_reversion",
         "reason": "intraday setup", "risk_multiplier": 1.0,
@@ -139,7 +137,7 @@ def test_algo_trade_sizing_respects_ticker_universe_cap():
 
 
 def test_algo_software_trails_tighten_for_both_directions():
-    risk = ALGO_MODE_CONFIG["risk"]
+    risk = get_mode_config("algo")["risk"]
     long_state = {"stop_price": 94.0}
     short_state = {"stop_price": 106.0}
 
@@ -585,3 +583,15 @@ def test_stored_profiles_with_retired_fields_still_load_with_one_warning(caplog)
     warnings = [r for r in caplog.records if "retired" in r.getMessage()]
     assert len(warnings) == 2
     assert SwingMeanReversionConfig.from_dict({"cooldown_days": 4, "lookback_days": 15}).lookback_days == 15
+
+
+def test_portfolio_level_keys_are_dropped_silently(caplog):
+    import logging
+    from strategies import retired_profile_keys
+    from strategies.mean_reversion.swing import SwingMeanReversionConfig
+
+    retired_profile_keys._WARNED.clear()
+    with caplog.at_level(logging.WARNING, logger="strategies.retired_profile_keys"):
+        config = SwingMeanReversionConfig.from_dict({"max_entries_per_day": 2, "max_positions": 7, "lookback_days": 15})
+    assert config.lookback_days == 15
+    assert not [r for r in caplog.records if "retired" in r.getMessage()]

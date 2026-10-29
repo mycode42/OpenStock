@@ -43,10 +43,9 @@ def _order_hooks(sent: list[tuple[dict, str]]) -> OrderHooks:
 @pytest.mark.parametrize(
     ("action", "kwargs"),
     [
-        ("buy", {"stop_price": 95, "take_profit": 110}),
         ("buy", {"order_type": "limit", "limit_price": 100, "stop_price": 95, "take_profit": 110}),
-        ("short", {"stop_price": 105, "take_profit": 90}),
-        ("sell", {}),
+        ("short", {"order_type": "limit", "limit_price": 100, "stop_price": 105, "take_profit": 90}),
+        ("sell", {"order_type": "limit", "limit_price": 100}),
         ("cover", {"order_type": "limit", "limit_price": 101}),
     ],
 )
@@ -57,8 +56,16 @@ def test_payload_builder_never_emits_bracket_oco_or_protective_legs(action, kwar
     assert result["success"] is True
     assert len(sent) == 1
     payload, _ = sent[0]
-    assert payload["type"] in {"market", "limit"}
+    assert payload["type"] == "limit"
     assert not (FORBIDDEN_KEYS & set(payload))
+
+
+def test_market_orders_are_refused_before_any_broker_post():
+    sent: list[tuple[dict, str]] = []
+    result = place_order("AAPL", "sell", 10, _order_hooks(sent), order_type="market")
+    assert result["success"] is False
+    assert "Market orders are disabled" in result["error"]
+    assert sent == []
 
 
 @pytest.mark.parametrize("order_type", ["bracket", "oco", "stop", "trailing_stop"])

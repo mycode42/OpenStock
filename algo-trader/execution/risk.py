@@ -36,7 +36,7 @@ from runtime.http import get_session
 
 from portfolio.config import get_mode_config, is_cash_proxy
 from execution.risk_models import RejectionReason, ValidationResult
-from execution.risk_policy import MOONSHOTS, build_universe_maps
+from execution.risk_policy import build_universe_maps
 
 logging.basicConfig(
     level=logging.INFO,
@@ -427,19 +427,11 @@ def validate_trade(
         return ValidationResult(approved=False, reason=f"Unknown action '{action}'", rule="unknown_action")
 
     if action == "short":
-        if not risk.get("allow_short_positions", False):
-            return ValidationResult(False, "Short selling is disabled for this mode.", "short_disabled")
         if portfolio_state is None:
             try:
                 portfolio_state = get_portfolio_state(mode=mode)
             except Exception as exc:
                 return ValidationResult(False, f"Could not verify shortability and portfolio state: {exc}", "portfolio_fetch_failed")
-        if portfolio_state.get("account_shorting_enabled") is False:
-            return ValidationResult(False, "Short selling is disabled on this Alpaca account.", "account_shorting_disabled")
-        if not portfolio_state.get("shortability_available", False):
-            return ValidationResult(False, "Alpaca has not confirmed borrow availability; short entry blocked.", "shortability_unavailable")
-        if ticker.upper() not in set(portfolio_state.get("easy_to_borrow_symbols") or []):
-            return ValidationResult(False, f"Alpaca has not marked {ticker.upper()} as easy to borrow; short entry blocked.", "not_easy_to_borrow")
 
     try:
         entry_price = float(entry_price)
@@ -476,12 +468,6 @@ def validate_trade(
             False, "Open buy/short exposure is unavailable; new entries are blocked.",
             "pending_exposure_unavailable",
         )
-
-    # ── Rule 2: Moonshots hard-blocked ──────────────────────────────────────
-    if ticker.upper() in MOONSHOTS:
-        msg = f"BLOCKED: {ticker} is on the moonshot blocklist (removed in V2)."
-        log.warning(msg)
-        return ValidationResult(approved=False, reason=msg, rule="moonshot_blocked")
 
     # ── Rule 3: Daily loss circuit breaker ─────────────────────────────────
     daily_pnl = portfolio_state["daily_pnl_pct"]
@@ -643,25 +629,25 @@ def validate_trade(
 
     # ── Rule 11: Tactical bucket cap ────────────────────────────────────────
     if tactical_tickers and risk["max_tactical_pct"] < 1.0:
-        if ticker.upper() in tactical_tickers or ticker.upper() in MOONSHOTS:
+        if ticker.upper() in tactical_tickers:
             max_tactical_positions = risk.get("max_tactical_positions")
             if max_tactical_positions is not None:
                 tactical_symbols = {
                     symbol.upper()
                     for symbol, position in portfolio_state["positions"].items()
-                    if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
+                    if (symbol.upper() in tactical_tickers)
                     and abs(float(position.get("qty", 0) or 0)) > 0
                 }
                 tactical_symbols.update(
                     symbol.upper()
                     for symbol, value in (portfolio_state.get("pending_buy_value_by_ticker") or {}).items()
-                    if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
+                    if (symbol.upper() in tactical_tickers)
                     and float(value or 0) > 0
                 )
                 tactical_symbols.update(
                     symbol.upper()
                     for symbol, value in (portfolio_state.get("pending_short_value_by_ticker") or {}).items()
-                    if (symbol.upper() in tactical_tickers or symbol.upper() in MOONSHOTS)
+                    if (symbol.upper() in tactical_tickers)
                     and float(value or 0) > 0
                 )
                 if ticker.upper() not in tactical_symbols and len(tactical_symbols) >= max_tactical_positions:
@@ -674,18 +660,18 @@ def validate_trade(
 
             tactical_positions = [
                 v for k, v in portfolio_state["positions"].items()
-                if k in tactical_tickers or k in MOONSHOTS
+                if k in tactical_tickers
             ]
             total_tactical = sum(abs(float(p.get("market_value", 0) or 0)) for p in tactical_positions)
             total_tactical += sum(
                 value for symbol, value in
                 (portfolio_state.get("pending_buy_value_by_ticker") or {}).items()
-                if symbol in tactical_tickers or symbol in MOONSHOTS
+                if symbol in tactical_tickers
             )
             total_tactical += sum(
                 value for symbol, value in
                 (portfolio_state.get("pending_short_value_by_ticker") or {}).items()
-                if symbol in tactical_tickers or symbol in MOONSHOTS
+                if symbol in tactical_tickers
             )
             new_total = total_tactical + trade_value
             tactical_pct = new_total / equity if equity else 0
@@ -761,7 +747,6 @@ def print_status(portfolio_state: dict, mode: str = "algo") -> None:
 
 
 __all__ = [
-    "MOONSHOTS",
     "RejectionReason",
     "ValidationResult",
     "capture_account_inception_baseline",

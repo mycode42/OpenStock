@@ -75,18 +75,19 @@ def test_extended_hours_exit_rejects_market_order_without_broker_submission(monk
     assert "Extended-hours orders require a buy/sell/cover limit order" in result["error"]
 
 
-def test_off_hours_batch_is_blocked_before_exit_checks_or_submission():
+def test_off_hours_exit_is_not_refused_by_a_session_gate():
+    placed = []
     hooks = BatchHooks(
         risk_validator_available=True,
-        rm_validate_trade=lambda **kwargs: None,
+        rm_validate_trade=lambda **kwargs: SimpleNamespace(approved=True, reason="ok", rule=None),
         rm_stage_approved_trade=lambda *args, **kwargs: None,
         get_latest_ask=lambda *args, **kwargs: 100,
         get_latest_bid=lambda *args, **kwargs: 100,
         get_latest_price=lambda *args, **kwargs: 100,
         validate_position_reduction=lambda *args, **kwargs: (True, ""),
-        open_exit_orders_for_symbol=lambda *args, **kwargs: pytest.fail("off-hours exit guard reached"),
+        open_exit_orders_for_symbol=lambda *args, **kwargs: [],
         get_positions=lambda *args, **kwargs: {},
-        place_order=lambda *args, **kwargs: pytest.fail("off-hours order reached"),
+        place_order=lambda *args, **kwargs: placed.append(kwargs) or {"success": True, "status": "submitted"},
         market_tz=ET,
         log=logging.getLogger("test"),
         get_market_schedule=lambda on_date=None, mode="algo": SimpleNamespace(market_open=lambda now: False) if on_date is None else None,
@@ -102,31 +103,34 @@ def test_off_hours_batch_is_blocked_before_exit_checks_or_submission():
         hooks=hooks,
     )
 
-    assert submitted == 0
-    assert would_execute == 0
-    assert results[0]["rule"] == "regular_hours_only"
-    assert results[0]["safe_to_retry"] is True
+    assert len(placed) == 1
+    assert submitted == 1
+    assert "regular_hours_only" not in str(results)
 
 
-def test_off_hours_order_submission_fails_closed_before_post(monkeypatch):
+def test_off_hours_order_is_sent_to_the_broker_without_a_session_gate(monkeypatch):
     monkeypatch.setattr(execution_runner, "_verify_algo_execution_lease", lambda: None)
     monkeypatch.setattr(execution_runner, "_headers", lambda *_: {})
     monkeypatch.setattr(
         execution_runner, "get_market_schedule",
         lambda on_date=None, mode="algo": SimpleNamespace(market_open=lambda now: False) if on_date is None else None,
     )
-    monkeypatch.setattr(
-        execution_runner.requests, "post",
-        lambda *args, **kwargs: pytest.fail("off-hours broker POST reached"),
-    )
+    posted = []
+
+    def fake_post(*args, **kwargs):
+        posted.append(kwargs)
+        raise execution_runner.requests.RequestException("simulated transport failure")
+
+    monkeypatch.setattr(execution_runner.requests, "post", fake_post)
 
     result = execution_runner._submit_broker_order({
         "symbol": "AAPL", "side": "sell", "qty": "1", "type": "market",
         "time_in_force": "day", "client_order_id": "off-hours-id",
     }, "market")
 
+    assert len(posted) == 1
     assert not result["success"]
-    assert "restricted to regular market hours" in result["error"]
+    assert "regular market hours" not in result["error"]
 
 def test_flatten_cancels_pending_orders_then_confirms_zero_exposure(monkeypatch):
     events = []
@@ -379,9 +383,9 @@ def test_non_proxy_ticker_flagged_cash_reserve_is_still_risk_validated():
 def test_cash_reserve_bypass_is_limited_to_proxy_buys_and_sells_within_cap(
     action, qty, positions, equity, expect_bypass,
 ):
-    from portfolio.config import CASH_RESERVE
+    from portfolio.config import get_cash_reserve_settings
 
-    proxy = CASH_RESERVE["proxy_symbol"]
+    proxy = get_cash_reserve_settings()["proxy_symbol"]
     calls = []
     hooks, _, place_calls = _exit_hooks()
     hooks = hooks.__class__(**{

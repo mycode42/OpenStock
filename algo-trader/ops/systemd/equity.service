@@ -1,0 +1,29 @@
+[Unit]
+Description=Algo equity strategy portfolio daemon
+After=network-online.target
+Wants=network-online.target
+
+# Template: scripts/install_units.py renders {ROOT}, {ENV_FILE}, and {PYTHON}
+# into ~/.config/systemd/user. Runs as the invoking user; no root needed.
+[Service]
+Type=simple
+WorkingDirectory={ROOT}
+EnvironmentFile={ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={PYTHON} -m portfolio.daemon --mode algo
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths={ROOT}/data /run/lock
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=equity
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,5 @@
 {
   "general": {
-    "overnight_entries_enabled": true,
     "regime_engine": "committee",
     "regime_feature_set": "marketwide",
     "model_diagnostics_enabled": true,
@@ -32,14 +31,11 @@
     "max_open_positions": 18,
     "max_positions_per_strategy": 7,
     "max_short_positions": 5,
-    "allow_short_positions": true,
     "daily_loss_limit_pct": 0.02,
     "weekly_loss_limit_pct": 0.05,
     "no_buy_if_down_pct": 0.02,
-    "swing_open_delay_minutes": 15,
     "intraday_close_cutoff_minutes": 15,
     "allow_opposite_netting": false,
-    "allow_intraday_overnight": false,
     "regime_throttle_enabled": true,
     "range_regime_short_risk_multiplier": 0.75,
     "regime_gross_caps": {
@@ -66,7 +62,10 @@
     },
     "max_tactical_pct": 0.1,
     "max_tactical_positions": 3,
-    "flatten_eod": false
+    "flatten_eod": false,
+    "candidate_sector_cap": 0.3,
+    "candidate_per_stock_cap": 0.07,
+    "hard_to_borrow_short_risk_multiplier": 0.5
   },
   "strategies": {
     "intraday_mean_reversion": {
@@ -232,7 +231,7 @@
     },
     "swing_llm_driven": {
       "enabled": true,
-      "minimum_confidence": 75,
+      "minimum_confidence": 70,
       "regime_weights": {
         "trending_up": 0.58,
         "trending_down": 0.58,
@@ -254,5 +253,31 @@
       "horizon": "swing",
       "bar_interval": "1Day"
     }
+  },
+  "execution": {
+    "portfolio_scan_seconds": 60,
+    "universe_retry_seconds": 300,
+    "quote_stale_seconds": 90,
+    "extended_quote_stale_seconds": 300,
+    "extended_hours_max_spread_pct": 0.02,
+    "entry_limit_band_bps": 10,
+    "intraday_stop_vol_multiple": 3.0,
+    "intraday_stop_vol_lookback_bars": 36,
+    "marketable_limit_band_bps": 25,
+    "protective_limit_band_bps": 50
+  },
+  "signal_data": {
+    "signal_bar_max_age_minutes": 20,
+    "delayed_signal_bar_max_age_minutes": 20,
+    "overnight_swing_signal_bar_max_age_minutes": 120,
+    "max_spy_daily_age_days": 5
+  },
+  "cash_reserve": {
+    "enabled": true,
+    "proxy_symbol": "SGOV",
+    "reserve_pct": 0.1,
+    "target_gross_pct": 0.9,
+    "max_proxy_pct": 0.8,
+    "min_trade_value": 500.0
   }
 }

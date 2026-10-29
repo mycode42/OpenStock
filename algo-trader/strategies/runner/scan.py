@@ -50,7 +50,6 @@ def scan(
     regular_close: datetime | None = None,
     data_feed: str | None = None,
     quote_feed: str | None = None,
-    overnight_tradable_tickers: set[str] | None = None,
 ) -> dict:
     """Run one complete scan through setup, data, signals, and execution stages."""
     _sync_scan_dependencies()
@@ -69,7 +68,6 @@ def scan(
         regular_close=regular_close,
         data_feed=data_feed,
         quote_feed=quote_feed,
-        overnight_tradable_tickers=overnight_tradable_tickers,
         runtime_settings=runtime_settings,
     )
     market = scan_market.load_market_snapshot(scope)

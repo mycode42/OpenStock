@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from execution.risk_models import ValidationResult
 from market.calendar import extended_session_name
 from market.data import feeds_for_session
-from portfolio.config import CASH_RESERVE, is_cash_proxy
+from portfolio.config import get_cash_reserve_settings, is_cash_proxy
 from portfolio.protection.software import exit_limit_price, exit_order_policy
 
 
@@ -64,7 +64,7 @@ def _cash_reserve_bypass(trade: dict, action: str, qty: int, reference_price: fl
     equity = float((rm_portfolio_state or {}).get("equity") or 0)
     return (
         math.isfinite(reference_price) and reference_price > 0 and equity > 0
-        and qty * reference_price <= float(CASH_RESERVE["max_proxy_pct"]) * equity
+        and qty * reference_price <= float(get_cash_reserve_settings()["max_proxy_pct"]) * equity
     )
 
 
@@ -129,11 +129,8 @@ def execute_trade_batch(
     seen_client_order_ids: set[str] = set()
     extended_exit_session = None
 
-    # Fail closed before the batch can submit any order outside its session.
-    # The scan layer also suppresses off-hours proposals, but this protects
-    # direct executor calls and races across the session boundary. Extended
-    # sessions admit only plain limit orders, which never carry broker
-    # protection, so they are priced as marketable limits in _extended_exit_trade.
+    # Session detection only decides how exits are priced in extended hours. It never
+    # drops an order; the broker has the final word on timing.
     if mode == "algo" and trades:
         extended_session = None
         try:
@@ -148,28 +145,11 @@ def execute_trade_batch(
                     now,
                     lambda on_date: hooks.get_market_schedule(on_date=on_date, mode="algo"),
                 )
-            session_error = None
-        except Exception as exc:
+        except Exception:
+            extended_session = None
             regular_open = False
-            session_error = f"regular-session verification failed: {type(exc).__name__}: {exc}"
-        if not regular_open and session_error is None and extended_session is not None:
-            # Entries stay limit-only. Exits are priced as limits in the loop
-            # so that a protected position can always be reduced.
-            kept = []
-            for trade in trades:
-                action = str(trade.get("action") or "").lower()
-                if _extended_limit_trade(trade) or action in {"sell", "cover"}:
-                    kept.append(trade)
-                else:
-                    results.append(_off_hours_row(trade, "Algo extended-hours orders must be limit orders", "extended_hours_limit_only"))
-            trades = kept
+        if not regular_open:
             extended_exit_session = extended_session
-            if not trades:
-                return results, submitted_count, would_execute_count
-        elif not regular_open:
-            reason = session_error or "Algo order actions are restricted to regular market hours"
-            results.extend(_off_hours_row(trade, reason, "regular_hours_only") for trade in trades)
-            return results, submitted_count, would_execute_count
 
     # The risk validator counts and validates entries against staged portfolio
     # state. Do not truncate this list: exits later in the batch must still be

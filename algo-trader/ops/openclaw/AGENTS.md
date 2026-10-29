@@ -96,7 +96,7 @@ Use the relevant skill for tool procedures. Keep local tool and environment note
 
 Record camera names, SSH hosts and users, preferred voices and speakers, and device nicknames here.
 
-- For explicitly user-authorized systemd service operations, use non-interactive sudo (`sudo -n systemctl ...`). If authentication is unavailable, stop and report the blocker; do not prompt or bypass it. <!-- project: github.com/mycode42/algo-trader -->
+- Algo services run as user units. Operate them with `systemctl --user ...` (for example `systemctl --user restart equity`); no sudo is needed. If a systemctl call is refused, stop and report the blocker; do not prompt or bypass it. <!-- project: github.com/mycode42/algo-trader -->
 
 **Voice storytelling:** when `sag` (ElevenLabs TTS) is available, use voice for stories, movie summaries, and storytime.
 

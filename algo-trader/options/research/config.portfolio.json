@@ -1,9 +1,9 @@
 {
   "automation": {
-    "workers": 8,
+    "workers": 1,
     "workers_by_strategy": {
-      "vrp": 8,
-      "long_volatility": 8
+      "vrp": 1,
+      "long_volatility": 1
     },
     "underlyings": [
       "NVDA",

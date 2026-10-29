@@ -35,6 +35,7 @@ def run_event_analysis(
     portfolio: dict,
     show_reasoning: bool = False,
     selected_analysts: list[str] | None = None,
+    ticker_data: dict | None = None,
     model_name: str = "gpt-4.1",
     model_provider: str = "OpenAI",
 ):
@@ -59,6 +60,7 @@ def run_event_analysis(
                     "start_date": start_date,
                     "end_date": end_date,
                     "analyst_signals": {},
+                    "ticker_data": ticker_data or {},
                 },
                 "metadata": {
                     "show_reasoning": show_reasoning,

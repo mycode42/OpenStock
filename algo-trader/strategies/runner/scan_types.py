@@ -23,7 +23,6 @@ class ScanScope:
     regular_close: datetime | None
     data_feed: str | None
     quote_feed: str | None
-    overnight_tradable_tickers: set[str] | None
     runtime_settings: Any
     mode_config: dict
     now: datetime

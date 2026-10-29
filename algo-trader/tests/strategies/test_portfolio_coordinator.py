@@ -135,7 +135,7 @@ def test_shared_swing_slice_allows_only_six_entries_per_day():
 def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_enabled(monkeypatch):
     monkeypatch.setattr(
         "strategies.portfolio_coordinator.get_algo_runtime_settings",
-        lambda: replace(get_algo_runtime_settings(), overnight_entries_enabled=True),
+        lambda: get_algo_runtime_settings(),
     )
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
@@ -152,14 +152,14 @@ def test_multi_factor_core_can_own_an_entry_and_boats_entries_are_enabled(monkey
     assert overnight.approved
 
 
-def test_swing_opening_delay_and_regime_throttle():
+def test_swing_entries_are_not_held_back_at_the_open_and_regime_throttle_still_applies():
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
     result = book.review(
         _proposal(), session="regular",
         timestamp=datetime(2026, 10, 9, 9, 40, tzinfo=ET), regime="trending_up",
     )
-    assert not result.approved
+    assert result.approved
     adjusted, note = throttle_signal(
         {**_proposal(strategy="swing_mean_reversion"), "risk_multiplier": 0.8},
         "trending_down", coordinator.config,

@@ -35,7 +35,8 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     assert.match(formatting, /'1w': '1-week'/);
     assert.match(source, /function smoothCoordinatePath/);
     assert.match(source, /const hasFixedDayScale/);
-    assert.match(source, /formatChartTime\(startAt\)/);
+    assert.match(source, /formatSessionTime\(sessionStart\.toISOString\(\)\)/);
+    assert.match(source, /sessionWindow\(now\)/);
     assert.match(source, /smooth: true/);
     assert.match(source, /\.sort\(\(left, right\) => parseOpenStockDate\(left\._chartTime\)\.getTime\(\) - parseOpenStockDate\(right\._chartTime\)\.getTime\(\)\)/);
     assert.doesNotMatch(source, /history-gap-line|maxGapMs|coordinateSegments|gapSegments/);
@@ -43,7 +44,7 @@ test('dashboard history charts are native EUR, smoothed, and use a fixed 1-day s
     assert.doesNotMatch(source, /point\.price_usd/);
 });
 
-test('one-day charts reserve future session time on a 07:30–22:00 wall-clock scale', async () => {
+test('one-day charts use a fixed 04:00–20:00 New York scale and fill the width as time passes', async () => {
     const sourceDir = path.join(root, 'www/modules');
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-day-chart-'));
     fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"module"}\n');
@@ -51,14 +52,18 @@ test('one-day charts reserve future session time on a 07:30–22:00 wall-clock s
     try {
         const { createCharts } = await import(pathToFileURL(path.join(tempDir, 'modules/charts.js')).href);
         const { renderHistoryChart } = createCharts({ request: async () => null, historyCache: new Map() });
+        // New York is on EDT (UTC-4) here: 10:00 EDT is 6 hours into the 16-hour window, so it sits at 6/16 of the width.
+        const now = new Date('2026-09-16T22:00:00Z');
         const html = renderHistoryChart([
-            { recorded_at: '2026-09-16T05:30:00Z', price_eur: 100 },
-            { recorded_at: '2026-09-16T12:45:00Z', price_eur: 101 }
-        ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
-        assert.match(html, /&quot;x&quot;:132/);
-        assert.match(html, /&quot;primary&quot;:&quot;16\. Sept – 07:30&quot;,&quot;secondary&quot;:&quot;&quot;,&quot;price&quot;:&quot;€100,00&quot;/);
+            { recorded_at: '2026-09-16T14:00:00Z', price_eur: 100 },
+            { recorded_at: '2026-09-16T15:00:00Z', price_eur: 101 }
+        ], '1d', { now });
+        assert.match(html, /&quot;x&quot;:99/);
+        assert.match(html, /<span style="left:0%">04:00<\/span>/);
+        assert.match(html, /<span style="left:100%">20:00<\/span>/);
+        assert.doesNotMatch(html, /09:00|01:00|22:00/);
         assert.match(html, /class="history-price" data-chart-value data-default-chart-value="€100,00 – €101,00"/);
-        assert.match(html, /<span style="left:0%">07:30<\/span><span style="left:25%">11:07<\/span><span style="left:50%">14:45<\/span><span style="left:75%">18:22<\/span><span style="left:100%">22:00<\/span>/);
+        assert.match(html, /<span style="left:25%">08:00<\/span><span style="left:50%">12:00<\/span><span style="left:75%">16:00<\/span>/);
     } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -96,7 +101,9 @@ test('dashboard history percentage follows the inspected point and resets to the
 
 test('dashboard chart popovers remain available briefly while crossing their placement gap', () => {
     const source = fs.readFileSync(path.join(root, 'www/modules/charts.js'), 'utf8');
-    assert.match(source, /setTimeout\(\(\) => panel\.classList\.remove\('is-open'\), 300\)/);
+    assert.match(source, /setTimeout\(\(\) => panel\.classList\.remove\('is-open'\), POPOVER_GRACE_MS\)/);
+    assert.match(source, /const POPOVER_GRACE_MS = 200;/);
+    assert.match(source, /bindPopoverGrace\(card, panel, usesMobileChartInteraction\)/);
     assert.match(source, /card\.addEventListener\('pointerleave', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) delayPopoverClose\(\); \}\)/);
     assert.match(source, /panel\.addEventListener\('pointerenter', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) cancelPopoverClose\(\); \}\)/);
     assert.match(source, /panel\.addEventListener\('pointerleave', \(\) => \{ if \(!usesMobileChartInteraction\(\)\) delayPopoverClose\(\); \}\)/);
@@ -139,10 +146,11 @@ test('dashboard charts provide five position-matched x-axis labels on desktop', 
     try {
         const { createCharts } = await import(pathToFileURL(path.join(tempDir, 'modules/charts.js')).href);
         const { renderHistoryChart } = createCharts({ request: async () => null, historyCache: new Map() });
+        const now = new Date('2026-09-16T22:00:00Z');
         const html = renderHistoryChart([
-            { recorded_at: '2026-09-16T05:30:00Z', price_eur: 100 },
-            { recorded_at: '2026-09-16T09:07:30Z', price_eur: 101 }
-        ], '1d', { start_at: '2026-09-16T05:30:00Z', end_at: '2026-09-16T20:00:00Z' });
+            { recorded_at: '2026-09-16T14:00:00Z', price_eur: 100 },
+            { recorded_at: '2026-09-16T17:07:30Z', price_eur: 101 }
+        ], '1d', { now });
         assert.match(html, /class="history-dates" aria-label="Chart time axis">(?:<span[^>]*>[^<]+<\/span>){5}<\/div>/);
         assert.match(html, /left:25%/);
         assert.match(html, /left:50%/);
@@ -202,7 +210,7 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(journal, /primary: daily \? journalDayMonthLabel\(point\.at\) : journalMonthLabel\(point\.at\), secondary: '', tertiary: ''/);
     assert.match(journal, /const capitalBase = Number\(initialCapital\)/);
     assert.match(journal, /change: capitalBase > 0 \? \(value \/ capitalBase - 1\) \* 100 : null/);
-    assert.match(journal, /renderJournalChart\(analytics, journalChartMode, journalPerformanceChartType, initialCapital\?\.amount_eur\)/);
+    assert.match(journal, /renderJournalChart\(analytics, journalChartMode, journalPerformanceChartType, analytics\?\.capital\?\.net_contributions_usd\)/);
     assert.match(styles, /\.journal-equity-curve \.chart-hover-text\{font-size:10px\}/);
     assert.match(journal, /function equityAxisBounds/);
     assert.match(journal, /return `\$\{number > 0 \? '\+' : number < 0 \? '-' : ''\}\$\{journalMoney\(Math\.abs\(number\)\)\}`/);
@@ -212,7 +220,7 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(journal, /function renderDailyPerformance/);
     assert.match(journal, /function renderMonthlyPerformance/);
     assert.match(journal, /<th>Return<\/th>/);
-    assert.match(journal, /Number\(row\.pnl_eur\) \/ capitalBase \* 100/);
+    assert.match(journal, /Number\(row\.pnl_usd\) \/ capitalBase \* 100/);
     assert.match(journal, /Showing up to 15 entries per page/);
     assert.match(journal, /function journalChartControls/);
     assert.match(journal, /data-journal-chart-mode/);
@@ -260,7 +268,7 @@ test('journal chart modes use concise labels with no explanatory subtitle', () =
     assert.doesNotMatch(journal, /<div class="journal-small">Estimated yearly profit/);
     assert.match(styles, /\.journal-chart-controls \.history-range\{min-width:0;min-height:0;padding:\.33rem \.38rem;font-size:\.65rem\}/);
     assert.match(journal, /function journalAxisMoney/);
-    assert.match(journal, /€\$\{Math\.round\(amount \/ 1000\)\}k/);
+    assert.match(journal, /\$\{sign\}\$\$\{Math\.round\(Math\.abs\(amount\) \/ 1000\)\}k/);
     assert.match(journal, /left = 40, right = 12/);
     assert.match(styles, /\.journal-equity-y-labels span\{position:absolute;right:95\.5%;/);
     assert.match(styles, /\.journal-equity-curve\{height:140px\}/);

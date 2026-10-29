@@ -2,7 +2,7 @@
 
 const { rawDatabase } = require('../alpaca-profile');
 
-module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, queueStockHistory, resolveVerifiedInstrument, resolveCryptoCandidates, resolveVerifiedCryptoInstrument, brokerError, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
+module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
     try {
@@ -46,65 +46,42 @@ app.get('/api/stocks/:id/history', (req, res) => {
         return res.json(history);
     }
 
-    if (req.query.broker === 'alpaca') {
-        (async () => {
-            const stock = rawDatabase(req.app.locals.db).prepare(`SELECT id, symbol FROM alpaca_watchlist
-                WHERE id=? AND enabled=1 AND archived=0`).get(req.params.id);
-            if (!stock) return res.status(404).json({ error: 'Alpaca watchlist stock not found' });
-            const durations = { '1d': 5, '1w': 7, '1mo': 31, '30d': 30, '1y': 366, '5y': 1827 };
-            const timeframes = { '1d': '5Min', '1w': '30Min', '1mo': '1Day', '30d': '1Day', '1y': '1Day', '5y': '1Week' };
-            const end = now();
-            const start = new Date(end.getTime() - durations[range] * 86400000);
-            const result = await req.app.locals.alpacaClient.getBars(stock.symbol, {
-                timeframe: timeframes[range], start, end, limit: range === '5y' ? 500 : 5000
-            });
-            const maximum = { '1d': 72, '1w': 84, '1mo': 90, '30d': 90, '1y': 120, '5y': 120 }[range];
-            let bars = (result.bars || []).map(bar => ({
-                recorded_at: bar.t,
-                price_usd: Number(bar.c),
-                volume: Number(bar.v || 0)
-            })).filter(point => Number.isFinite(point.price_usd) && point.price_usd > 0)
-                .sort((left, right) => Date.parse(left.recorded_at) - Date.parse(right.recorded_at));
-            if (range === '1d' && bars.length) {
-                const nyDate = value => {
-                    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
-                    const date = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
-                    return `${date.year}-${date.month}-${date.day}`;
-                };
-                const latestSession = nyDate(bars[bars.length - 1].recorded_at);
-                bars = bars.filter(point => nyDate(point.recorded_at) === latestSession);
-            }
-            const points = evenlySample(bars, maximum);
-            return res.json({
-                stock_id: stock.id, symbol: stock.symbol, range, currency: 'USD', source: `alpaca_${result.feed}_bars`,
-                bucket_seconds: null, max_gap_seconds: null, start_at: null, end_at: null, points
-            });
-        })().catch(error => {
-            console.warn(`Alpaca price history unavailable: ${error.message}`);
-            res.status(error.status || 503).json({ error: 'Alpaca price history is unavailable' });
+    (async () => {
+        const stock = rawDatabase(req.app.locals.db).prepare(`SELECT id, symbol FROM alpaca_watchlist
+            WHERE id=? AND enabled=1 AND archived=0`).get(req.params.id);
+        if (!stock) return res.status(404).json({ error: 'Alpaca watchlist stock not found' });
+        const durations = { '1d': 5, '1w': 7, '1mo': 31, '30d': 30, '1y': 366, '5y': 1827 };
+        const timeframes = { '1d': '5Min', '1w': '30Min', '1mo': '1Day', '30d': '1Day', '1y': '1Day', '5y': '1Week' };
+        const end = now();
+        const start = new Date(end.getTime() - durations[range] * 86400000);
+        const result = await req.app.locals.alpacaClient.getBars(stock.symbol, {
+            timeframe: timeframes[range], start, end, limit: range === '5y' ? 500 : 5000
         });
-        return;
-    }
-
-    try {
-        const stock = req.app.locals.db.getStockById(req.params.id);
-        if (!stock) return res.status(404).json({ error: 'Stock not found' });
-        const mapping = req.app.locals.db.getBrokerMapping(stock.id);
-        const nativeTradeRepublicEur = Boolean(mapping?.verified_at && mapping.currency === 'EUR');
-        const tradeRepublicSources = ['trade_republic_history', 'trade_republic_order_price', 'trade_republic_sdk_order_price', 'manual_refresh_trade_republic_order_price'];
-        const tradingDayStart = range === '1d' ? berlinTradingDayStart(now()) : null;
-        const tradingDayEnd = range === '1d' ? berlinTradingDayEnd(now()) : null;
-        const eligiblePoints = req.app.locals.db.getPriceHistory(stock.id, window.since, window.queryBucketSeconds || window.bucketSeconds, {
-            sources: tradeRepublicSources,
-            eurOnly: true
-        }).map(point => ({ ...point, recorded_at: toISODateTime(point.recorded_at), quote_time: toISODateTime(point.quote_time) }))
-            .filter(point => !tradingDayStart || (Date.parse(point.recorded_at) >= tradingDayStart.getTime() && Date.parse(point.recorded_at) <= tradingDayEnd.getTime()));
-        const points = evenlySample(eligiblePoints, window.maxPoints);
-        res.json({ stock_id: stock.id, symbol: stock.symbol, isin: stock.isin || null, range, currency: 'EUR', native_eur: nativeTradeRepublicEur, source: 'trade_republic', bucket_seconds: window.bucketSeconds, max_gap_seconds: window.maxLiveGapSeconds, start_at: tradingDayStart?.toISOString() || null, end_at: tradingDayEnd?.toISOString() || null, points });
-    } catch (e) {
-        console.error('Error fetching price history:', e.message);
-        res.status(500).json({ error: 'Failed to fetch price history' });
-    }
+        const maximum = { '1d': 72, '1w': 84, '1mo': 90, '30d': 90, '1y': 120, '5y': 120 }[range];
+        let bars = (result.bars || []).map(bar => ({
+            recorded_at: bar.t,
+            price_usd: Number(bar.c),
+            volume: Number(bar.v || 0)
+        })).filter(point => Number.isFinite(point.price_usd) && point.price_usd > 0)
+            .sort((left, right) => Date.parse(left.recorded_at) - Date.parse(right.recorded_at));
+        if (range === '1d' && bars.length) {
+            const nyDate = value => {
+                const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
+                const date = Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+                return `${date.year}-${date.month}-${date.day}`;
+            };
+            const latestSession = nyDate(bars[bars.length - 1].recorded_at);
+            bars = bars.filter(point => nyDate(point.recorded_at) === latestSession);
+        }
+        const points = evenlySample(bars, maximum);
+        return res.json({
+            stock_id: stock.id, symbol: stock.symbol, range, currency: 'USD', source: `alpaca_${result.feed}_bars`,
+            bucket_seconds: null, max_gap_seconds: null, start_at: null, end_at: null, points
+        });
+    })().catch(error => {
+        console.warn(`Alpaca price history unavailable: ${error.message}`);
+        res.status(error.status || 503).json({ error: 'Alpaca price history is unavailable' });
+    });
 });
 
 app.get('/api/stocks/:id', (req, res) => {
@@ -173,72 +150,30 @@ app.delete('/api/alert-levels/:id', (req, res) => {
     res.json({ deleted_id: existing.id });
 });
 
-app.post('/api/instruments/resolve', async (req, res) => {
-    try {
-        if (String(req.body?.asset_type || 'stock').toLowerCase() === 'crypto') {
-            const candidates = await resolveCryptoCandidates(req.app.locals.sdkClient, req.body?.query);
-            return res.json({ asset_type: 'crypto', candidates });
-        }
-        const result = await resolveVerifiedInstrument(req.app.locals.brokerClient, req.body?.isin);
-        res.json({ verified: true, ...result });
-    } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message, verified: false }); brokerError(res, e); }
-});
-
 app.post('/api/stocks', async (req, res) => {
     try {
-        const assetType = String(req.body?.asset_type || 'stock').toLowerCase();
-        if (assetType === 'crypto') {
-            const instrumentId = String(req.body?.instrument_id || '').trim().toUpperCase();
-            const exchange = String(req.body?.exchange || '').trim().toUpperCase();
-            const requestedSymbol = String(req.body?.symbol || '').trim().toUpperCase();
-            const buyThreshold = Number(req.body?.buy_threshold_eur), sellThreshold = Number(req.body?.sell_threshold_eur);
-            if (!/^[A-Z0-9.\-]{1,12}$/.test(requestedSymbol)) return res.status(400).json({ error: 'A valid crypto symbol is required' });
-            if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
-            const { instrument, home, asset, destination } = await resolveVerifiedCryptoInstrument(req.app.locals.sdkClient, { instrumentId, exchange });
-            const symbol = String(instrument.ticker || '').trim().toUpperCase();
-            if (!/^[A-Z0-9.\-]{1,12}$/.test(symbol)) return res.status(422).json({ error: 'Trade Republic did not return a usable crypto ticker' });
-            const db = req.app.locals.db;
-            const existing = db.getStockByBrokerInstrument(instrumentId);
-            const existingMapping = existing && db.getBrokerMapping(existing.id);
-            if (existingMapping?.verified_at) return res.status(409).json({ error: existing.archived ? 'Crypto instrument is already configured; restore it explicitly' : 'Crypto instrument is already configured', stock_id: existing.id });
-            if ((!existing || !Number(existing.enabled)) && db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active monitored names allowed' });
-            if (!existing && db.getStockBySymbol(symbol)) return res.status(409).json({ error: 'Derived symbol already exists' });
-            const mapping = { broker: 'trade_republic', ticker: symbol, isin: instrumentId, exchange: home.exchange, currency: 'EUR', broker_metadata_json: JSON.stringify({ instrument, asset, destination, asset_type: 'crypto' }), source: 'sdk_crypto_verified', verified_at: new Date().toISOString() };
-            let stock;
-            if (existing) {
-                stock = db.configureJournalStockWithMapping({ stockId: existing.id, symbol, name: instrument.name, isin: instrumentId, currency: 'EUR', assetType: 'crypto', buyThreshold, sellThreshold, mapping });
-            } else {
-                const result = db.addStockWithMapping({ symbol, name: instrument.name, isin: instrumentId, currency: 'EUR', buyThreshold, sellThreshold, assetType: 'crypto', mapping });
-                stock = db.getStockById(result.lastInsertRowid);
-            }
-            return res.status(existing ? 200 : 201).json({ message: 'Crypto instrument added from verified Trade Republic data', stock: serializeConfiguredStock(stock), mapping: db.getBrokerMapping(stock.id) });
-        }
-        if (assetType !== 'stock') return res.status(400).json({ error: 'Instrument type must be stock or crypto' });
-        const isin = String(req.body?.isin || '').trim().toUpperCase();
+        const symbol = String(req.body?.symbol || '').trim().toUpperCase();
+        const name = String(req.body?.name || '').trim();
         const buyThreshold = Number(req.body?.buy_threshold_eur), sellThreshold = Number(req.body?.sell_threshold_eur);
-        if (!/^[A-Z0-9]{12}$/.test(isin)) return res.status(400).json({ error: 'A valid 12-character ISIN is required' });
+        if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol)) return res.status(400).json({ error: 'A valid US equity symbol is required' });
         if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
-        const { instrument, home } = await resolveVerifiedInstrument(req.app.locals.brokerClient, isin);
-        const exchange = home.exchange, currency = home.currency;
         const db = req.app.locals.db;
-        const existing = db.getStockByBrokerInstrument(isin);
-        const existingMapping = existing && db.getBrokerMapping(existing.id);
-        if (existingMapping?.verified_at) return res.status(409).json({ error: existing.archived ? 'Stock instrument is already configured; restore it explicitly' : 'Stock instrument is already configured', stock_id: existing.id });
-        if ((!existing || !Number(existing.enabled)) && db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active monitored names allowed' });
-        const symbol = instrument.ticker;
-        const existingSymbol = !existing && db.getStockBySymbol(symbol);
-        if (existingSymbol) return res.status(409).json({ error: existingSymbol.archived ? 'Derived symbol belongs to an archived stock; restore that identity explicitly' : 'Derived symbol already exists' });
-        const mapping = { broker: 'trade_republic', ticker: symbol, isin, exchange, currency, broker_metadata_json: JSON.stringify({ instrument, home }), source: 'broker_verified', verified_at: new Date().toISOString() };
-        let stock;
-        if (existing) {
-            stock = db.configureJournalStockWithMapping({ stockId: existing.id, symbol, name: instrument.name, isin, currency, assetType: 'stock', buyThreshold, sellThreshold, mapping });
-        } else {
-            const result = db.addStockWithMapping({ symbol, name: instrument.name, isin, currency, buyThreshold, sellThreshold, mapping });
-            stock = db.getStockById(result.lastInsertRowid);
+        const existing = db.getStockBySymbol(symbol);
+        if (existing) return res.status(409).json({ error: existing.archived ? 'Symbol belongs to an archived stock; restore it explicitly' : 'Stock already exists', stock_id: existing.id });
+        const asset = await req.app.locals.alpacaClient.getAsset(symbol);
+        if (asset?.class !== 'us_equity' || asset?.tradable === false || asset?.status === 'inactive') {
+            return res.status(422).json({ error: 'Alpaca does not list this symbol as a tradable US equity' });
         }
-        queueStockHistory(req.app.locals.historyBackfill, stock);
-        res.status(existing ? 200 : 201).json({ message: 'Stock added from verified Trade Republic instrument', stock: serializeConfiguredStock(stock), mapping: db.getBrokerMapping(stock.id) });
-    } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message }); if (e.code === 'SQLITE_CONSTRAINT') return res.status(409).json({ error: 'Stock ISIN or derived symbol already exists' }); console.error('Error adding stock:', e.message); res.status(500).json({ error: 'Failed to add stock' }); }
+        const result = db.addStock(symbol, name || asset.name || symbol, 'USD', buyThreshold, sellThreshold);
+        const stock = db.getStockById(result.lastInsertRowid);
+        res.status(201).json({ message: 'Stock added from the Alpaca asset list', stock: serializeConfiguredStock(stock) });
+    } catch (e) {
+        if (e.status === 404) return res.status(422).json({ error: 'Alpaca does not list this symbol as a tradable US equity' });
+        if (e.status) return res.status(e.status).json({ error: e.message });
+        if (e.code === 'SQLITE_CONSTRAINT') return res.status(409).json({ error: 'Stock symbol already exists' });
+        console.error('Error adding stock:', e.message);
+        res.status(500).json({ error: 'Failed to add stock' });
+    }
 });
 
 app.put('/api/stocks/:id', (req, res) => {
@@ -261,12 +196,6 @@ app.put('/api/stocks/:id', (req, res) => {
             const newEnabled = enabled === 1 || enabled === '1' || enabled === true || enabled === 'true';
             if (newEnabled && Number(stock.archived)) {
                 return res.status(400).json({ error: 'Archived stocks must be restored with the restore action' });
-            }
-            if (newEnabled && !req.app.locals.db.getBrokerMapping(stock.id)?.verified_at) {
-                return res.status(409).json({ error: 'Add this instrument from Trade Republic before enabling monitoring' });
-            }
-            if (newEnabled && !Number(stock.enabled) && req.app.locals.db.getActiveStocks().length >= 25) {
-                return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
             }
             updates.enabled = newEnabled ? 1 : 0;
         }
@@ -297,8 +226,6 @@ app.post('/api/stocks/:id/restore', (req, res) => {
     try {
         const existing = req.app.locals.db.getStockById(req.params.id);
         if (!existing || !Number(existing.archived)) return res.status(404).json({ error: 'Archived stock not found' });
-        if (!req.app.locals.db.getBrokerMapping(existing.id)?.verified_at) return res.status(409).json({ error: 'Add this instrument from Trade Republic to restore monitoring and Journal access' });
-        if (req.app.locals.db.getActiveStocks().length >= 25) return res.status(400).json({ error: 'Maximum 25 active stocks allowed' });
         const name = String(req.body.name ?? existing.name ?? '').trim();
         const currency = String(req.body.currency ?? existing.currency ?? 'USD').trim().toUpperCase();
         if (req.body.buy_threshold_eur !== undefined || req.body.sell_threshold_eur !== undefined) return res.status(400).json({ error: 'Restore does not change alert levels; manage them separately after restoring.' });
@@ -306,7 +233,6 @@ app.post('/api/stocks/:id/restore', (req, res) => {
         if (!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({ error: 'Currency must be a three-letter code' });
         req.app.locals.db.restoreArchivedStock(existing.id, { name, currency });
         const stock = req.app.locals.db.getStockById(existing.id);
-        queueStockHistory(req.app.locals.historyBackfill, stock);
         res.json({ message: 'Stock restored successfully', restored: true, stock: serializeConfiguredStock(stock) });
     } catch (e) {
         console.error('Error restoring stock:', e.message);

@@ -6,8 +6,8 @@ OpenStock. Node 22, Express, better-sqlite3. Private monitor, journal, and dashb
 
 - `server.js` — HTTP app setup, loopback only. Route handlers live in `server/routes/`.
 - `www/` — dashboard, journal, config, charts, trading UI. `styles.css` for presentation. `www/modules/` for page behavior. `www/app.js` boots them.
-- `lib/quote-service.js` — shared quote path: Handelsrepublik SDK, then Trade Republic UAPI sidecar.
-- `lib/monitor.js`, `scripts/monitor.js` — poll, thresholds, Telegram, alert outbox. One-shot lock. Bounded concurrency.
+- `lib/brokers/alpaca.js` — Alpaca client: quotes (SIP, falling back to IEX), bars, account, assets, orders.
+- `lib/alpaca-monitor.js`, `scripts/monitor.js` — poll, thresholds, Telegram, alert outbox. `lib/monitor.js` holds the shared Telegram send and one-shot lock. Bounded concurrency.
 - `database/db.js` exports the composed database class; behavior lives in `database/domains/`. `database/migrations/` is append-only after application.
 - `lib/analytics.js` — performance and risk KPIs.
 - `ops/systemd/` — unit files. Do not invent a second deploy path.
@@ -39,13 +39,16 @@ Review and optimization run only when asked. Stay inside the modules named in th
 ## Invariants
 
 - EUR money uses JavaScript `Number` and SQLite `REAL`; preserve available precision and format only for display.
-- Quote fallback order is SDK, then UAPI sidecar. Monitor BUY/SELL semantics use executable ask/bid.
+- Quote source is Alpaca: SIP first, IEX when the account cannot access SIP. Monitor BUY/SELL semantics use executable ask/bid.
 - An alert fires once per episode. Outbox plus retired level. A poll must not spam Telegram.
 - `/api/live-prices` is display-only. It must not write stock state, history, alert state, or equity snapshots.
-- Orders are placed only from `lib/alpaca-orders.js`, behind `ORDERS_ENABLED=true` and the `X-OpenStock-Order-Token` check. The trading URL defaults to paper. The algo sleeves stay paper-only, and `algo-trader/broker/endpoints.py` refuses any other URL.
+- Orders are placed only from `lib/alpaca-orders.js`, behind the preview and budget confirmation in the UI. The trading URL defaults to paper. The algo sleeves default to the paper URL; `algo-trader/broker/endpoints.py` uses whatever `ALPACA_EQUITY_BASE_URL` / `ALPACA_OPTIONS_BASE_URL` set, with paper as the default.
 - One live order per alert level, enforced by a partial unique index in migration 025. Never weaken it.
 - Provider failure is data. One symbol does not kill the cycle.
-- Cap remains 25 monitored names unless the task changes it.
+- There is no cap on monitored names.
+
+- The trading gate set is frozen. Only approved changes move it: see `docs/policy-frozen.md`. `algo-trader/tests/policy/test_gate_freeze.py` fails on any unapproved gate.
+- Orders are limit orders only. A market order is refused before any broker call.
 
 ## Never
 

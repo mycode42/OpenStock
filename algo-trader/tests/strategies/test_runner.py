@@ -39,7 +39,7 @@ def _mock_common(monkeypatch, *, positions=None, orders=None):
     monkeypatch.setattr(runner, "datetime", FrozenDateTime)
     monkeypatch.setattr(
         runner, "get_algo_runtime_settings",
-        lambda: replace(get_algo_runtime_settings(), overnight_entries_enabled=True),
+        lambda: get_algo_runtime_settings(),
     )
     monkeypatch.setattr(
         runner, "_current_portfolio",
@@ -145,7 +145,6 @@ def test_overnight_scan_uses_plus_boats_bars_and_quotes(monkeypatch):
         position_owners={}, strategy_states={},
         session_name="overnight", trading_date="2026-10-08",
         extended_hours=True, data_feed="overnight", quote_feed="boats",
-        overnight_tradable_tickers={"AAPL"},
     )
 
     intraday = next(call for call in bar_calls if call["timeframe"] == "5Min")
@@ -189,7 +188,6 @@ def test_owned_stop_exit_survives_failed_historical_requests(monkeypatch):
         position_owners=owners, strategy_states=states,
         session_name="overnight", trading_date="2026-10-08",
         extended_hours=True, data_feed="boats", quote_feed="overnight",
-        overnight_tradable_tickers={"AAPL"},
     )
 
     assert result["data_status"]["historical_bars"] == "degraded"
@@ -225,7 +223,6 @@ def test_extended_hours_software_exit_is_submitted_with_active_broker_bracket(mo
         position_owners={"AAPL": "swing_trend_following"}, strategy_states=states,
         session_name="overnight", trading_date="2026-10-08",
         extended_hours=True, data_feed="boats", quote_feed="overnight",
-        overnight_tradable_tickers={"AAPL"},
     )
     assert len(result["trades"]) == 1, result["signals"]
     assert result["trades"][0]["action"] == "sell"
@@ -300,7 +297,6 @@ def test_strategy_rule_sell_is_submitted_in_regular_and_extended_sessions(
         extended_hours=extended_hours,
         data_feed="boats" if extended_hours else "sip",
         quote_feed="boats" if extended_hours else "sip",
-        overnight_tradable_tickers={"AAPL"} if extended_hours else None,
     )
 
     assert len(result["trades"]) == 1, (result["signals"], result["data_status"], result["entries_paused"])
@@ -381,13 +377,12 @@ def test_scan_reports_stale_owned_quote_age_and_feed(monkeypatch):
         strategy_states={"swing_trend_following": {"AAPL": {"phase": "open", "stop_price": 95}}},
         session_name="overnight", trading_date="2026-10-08",
         extended_hours=True, data_feed="boats", quote_feed="boats",
-        overnight_tradable_tickers=set(),
     )
 
     diagnostic, = result["data_status"]["owned_position_quote_diagnostics"]
     assert diagnostic == {
         "symbol": "AAPL", "feed": "boats", "status": "stale",
-        "quote_availability": "session_limited", "overnight_tradable": False,
+        "quote_availability": "session_limited",
         "quote_timestamp": (FROZEN_NOW.astimezone(timezone.utc) - timedelta(seconds=301)).isoformat(),
         "age_seconds": 301.0, "freshness_limit_seconds": 300,
     }
@@ -427,7 +422,6 @@ def test_overnight_swing_signal_bar_within_extended_window_does_not_pause(monkey
         mode="algo", universe_result={"tickers": ["AAPL"]},
         position_owners={}, strategy_states={}, session_name="overnight",
         trading_date="2026-10-08", extended_hours=True,
-        overnight_tradable_tickers={"AAPL"},
     )
 
     assert result["entries_paused"] is False
@@ -481,7 +475,6 @@ def test_algo_universe_is_the_selector_output_with_overnight_asset_flags(monkeyp
 
     assert result["tickers"] == ["XLE", "NVDA", "SPY"]
     assert result["source"] == "eligible_universe"
-    assert result["overnight_tradable_tickers"] == ["NVDA", "SPY"]
     assert not {"dynamic", "selection_source", "selected_count", "target_count"}.intersection(result)
 
 

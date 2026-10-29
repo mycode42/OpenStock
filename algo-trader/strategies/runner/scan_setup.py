@@ -42,7 +42,6 @@ def prepare_scan_scope(
     regular_close: datetime | None = None,
     data_feed: str | None = None,
     quote_feed: str | None = None,
-    overnight_tradable_tickers: set[str] | None = None,
     runtime_settings: Any = None,
 ) -> ScanScope:
     """Validate scan inputs and reconcile broker state before fetching data."""
@@ -86,8 +85,6 @@ def prepare_scan_scope(
     entry_pause_reasons: list[str] = []
     if not selected_symbols:
         entry_pause_reasons.append("the Algo universe is empty")
-    if session_name == "overnight" and not runtime_settings.overnight_entries_enabled:
-        entry_pause_reasons.append("overnight entries are disabled by configuration")
 
     account, positions, open_orders = current_portfolio(mode)
     pending_by_symbol: dict[str, list[dict]] = {}
@@ -141,7 +138,6 @@ def prepare_scan_scope(
         regular_close=regular_close,
         data_feed=data_feed,
         quote_feed=quote_feed,
-        overnight_tradable_tickers=overnight_tradable_tickers,
         runtime_settings=runtime_settings,
         mode_config=mode_config,
         now=now,

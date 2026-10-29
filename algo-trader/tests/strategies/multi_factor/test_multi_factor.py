@@ -7,7 +7,7 @@ from execution.risk import validate_trade
 from equity_research.backtest import multi_factor_warmup_days
 from portfolio.state_store import validate_portfolio
 from strategies.multi_factor.diagnostics import information_coefficient, turnover
-from portfolio.config import STRATEGY_CONFIG, get_mode_config
+from portfolio.config import get_mode_config
 from strategies.multi_factor import (
     FactorRanker,
     MultiFactorConfig,
@@ -273,7 +273,7 @@ def test_generated_trade_proposal_still_passes_through_risk_validator(action):
 
     assert result.approved, result.reason
     assert trade["qty"] * trade["entry_price"] <= 100_000 * min(
-        risk.get("max_strategy_position_pct", STRATEGY_CONFIG["max_strategy_position_pct"]),
+        risk["max_strategy_position_pct"],
         risk["max_position_pct"],
     )
 

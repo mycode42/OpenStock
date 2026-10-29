@@ -12,7 +12,8 @@ try {
     const trades = sql.prepare('SELECT t.*,s.symbol,s.name,s.asset_type,s.current_price_eur FROM trades t JOIN stocks s ON s.id=t.stock_id ORDER BY t.opened_at,t.id').all();
     const stocks = db.getAllStocks();
     const capitalEvents = db.getCapitalEvents();
-    const brokerExecutions = sql.prepare('SELECT * FROM broker_executions ORDER BY executed_at,id').all();
+    // Trade Republic executions were removed (migration 029); the journal trades carry the cash flows.
+    const brokerExecutions = [];
     const mergeEvents = sql.prepare('SELECT target_trade_id,source_trade_id,source_trade_json FROM trade_merge_events ORDER BY id').all();
     const priceHistory = sql.prepare('SELECT stock_id,price_eur,quote_time,recorded_at FROM price_history WHERE price_eur IS NOT NULL ORDER BY stock_id,id').all();
     const firstSnapshot = sql.prepare('SELECT MIN(snapshot_at) AS at FROM equity_snapshots').get()?.at;

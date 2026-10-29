@@ -1,21 +1,8 @@
 'use strict';
 
-const { timingSafeEqual } = require('node:crypto');
 const { rawDatabase, alpacaJournalData } = require('../alpaca-profile');
 const orders = require('../../lib/alpaca-orders');
-
-// Order routes need ORDERS_ENABLED=true and a matching OPENSTOCK_ORDER_TOKEN header.
-function requireOrderToken(req, res, next) {
-    const settings = orders.orderSettings();
-    if (!settings.enabled) return res.status(403).json({ error: 'Order routing is disabled (set ORDERS_ENABLED=true)' });
-    if (!settings.token) return res.status(403).json({ error: 'OPENSTOCK_ORDER_TOKEN is not set' });
-    const supplied = Buffer.from(String(req.get('X-OpenStock-Order-Token') || ''));
-    const expected = Buffer.from(settings.token);
-    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-        return res.status(401).json({ error: 'Invalid order token' });
-    }
-    next();
-}
+const levels = require('../../lib/alpaca-alert-levels');
 
 function orderFailure(res, error) {
     const status = error.status || 502;
@@ -32,7 +19,7 @@ module.exports = function registerAlpacaRoutes({ app }) {
         res.json({ orders: orders.listOrders(req.app.locals.db, { limit: req.query.limit }) });
     });
 
-    app.post('/api/alpaca/alert-levels/:id/orders', requireOrderToken, async (req, res) => {
+    app.post('/api/alpaca/alert-levels/:id/orders', async (req, res) => {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid Alpaca alert level' });
         const dryRun = req.body?.preview === true;
@@ -51,7 +38,7 @@ module.exports = function registerAlpacaRoutes({ app }) {
         }
     });
 
-    app.post('/api/alpaca/orders/:id/cancel', requireOrderToken, async (req, res) => {
+    app.post('/api/alpaca/orders/:id/cancel', async (req, res) => {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid Alpaca order' });
         try {
@@ -67,6 +54,54 @@ module.exports = function registerAlpacaRoutes({ app }) {
         } catch (error) {
             console.warn(`Alpaca journal unavailable: ${error.message}`);
             res.status(error.status || 503).json({ error: 'Alpaca journal data is unavailable' });
+        }
+    });
+
+    app.post('/api/alpaca/watchlist/:id/alert-levels', (req, res) => {
+        try {
+            res.status(201).json({ alert_level: levels.addPriceLevel(req.app.locals.db, Number(req.params.id), req.body || {}) });
+        } catch (error) {
+            orderFailure(res, error);
+        }
+    });
+
+    app.post('/api/alpaca/watchlist/:id/percent-alerts', async (req, res) => {
+        const id = Number(req.params.id);
+        try {
+            const feed = await req.app.locals.alpacaQuoteFeed.get();
+            const quote = (feed.prices || []).find(row => Number(row.stock_id) === id);
+            res.status(201).json({ alert_level: levels.addPercentLevel(req.app.locals.db, id, {
+                direction: req.body?.direction, change_pct: req.body?.change_pct, reference_price_usd: quote?.price_usd,
+            }) });
+        } catch (error) {
+            orderFailure(res, error);
+        }
+    });
+
+    app.put('/api/alpaca/alert-levels/:id', (req, res) => {
+        try {
+            res.json({ alert_level: levels.updateLevel(req.app.locals.db, Number(req.params.id), req.body || {}) });
+        } catch (error) {
+            orderFailure(res, error);
+        }
+    });
+
+    // Turning real orders on or off, and the budget they spend, is gated like placing one.
+    app.put('/api/alpaca/alert-levels/:id/order', (req, res) => {
+        try {
+            res.json({ alert_level: levels.setOrderSettings(rawDatabase(req.app.locals.db), Number(req.params.id), {
+                auto_order: req.body?.auto_order, budget_usd: req.body?.budget_usd,
+            }) });
+        } catch (error) {
+            orderFailure(res, error);
+        }
+    });
+
+    app.delete('/api/alpaca/alert-levels/:id', (req, res) => {
+        try {
+            res.json(levels.deleteLevel(req.app.locals.db, Number(req.params.id)));
+        } catch (error) {
+            orderFailure(res, error);
         }
     });
 

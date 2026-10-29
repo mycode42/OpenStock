@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
-from portfolio.config import ALGO_MIN_CASH_PCT, CASH_RESERVE, STRATEGY_CONFIG, get_mode_config, is_cash_proxy
+from portfolio.config import get_algo_execution_settings, get_cash_reserve_settings, get_mode_config, is_cash_proxy
 from strategies.runner.cash_reserve import plan_cash_reserve, plan_entry_cash
 from portfolio.incidents import open_incident_symbols, record_incident
 from portfolio.order_ledger import BrokerOrderLedger
@@ -28,7 +28,6 @@ from market.sessions import ET, get_trading_window, next_session_start
 from runtime.paths import DATA_DIR
 from portfolio.state_store import AlgoStateStore, StateStoreError
 from portfolio.config import ALGO_SERVICE_CONFIG
-from portfolio.config import STRATEGY_CONFIG
 from execution.strategy import execute_strategy_trades
 from strategies.runner.scan import scan as scan_strategy_portfolio
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
@@ -39,7 +38,8 @@ from reporting.performance import take_snapshot, write_live_drift_feed_for_accou
 
 LOG = logging.getLogger("algo_trader.algo")
 STOP = False
-INTRADAY_SNAPSHOT_INTERVAL_SECONDS = 15 * 60
+# Equity points are recorded around the clock, so the 1D chart always has a current session.
+INTRADAY_SNAPSHOT_INTERVAL_SECONDS = 5 * 60
 CLOSE_SNAPSHOT_RETRY_SECONDS = 5 * 60
 STATE_BACKUP_DIR = DATA_DIR / "backups" / "algo_state"
 STATE_BACKUP_KEEP = 30
@@ -356,7 +356,7 @@ def _status(path: Path) -> None:
         state_error = str(exc)
     try:
         active = subprocess.run(
-            ["systemctl", "is-active", "--quiet", "algo-trader.service"],
+            ["systemctl", "--user", "is-active", "--quiet", "equity.service"],
             check=False,
             timeout=5,
         ).returncode == 0
@@ -364,7 +364,7 @@ def _status(path: Path) -> None:
         active = None
     universe = portfolio.get("universe") or {}
     print(json.dumps({
-        "service": "algo-trader.service",
+        "service": "equity.service",
         "service_active": active,
         "runtime_mode": portfolio.get("runtime_mode", "algo"),
         "market_state": market_state or "UNKNOWN",
@@ -398,9 +398,6 @@ def _scan_strategy_portfolio(
         regular_close=getattr(window, "regular_close", None),
         data_feed=window.bar_feed,
         quote_feed=window.quote_feed,
-        overnight_tradable_tickers=set(
-            (portfolio.get("universe") or {}).get("overnight_tradable_tickers", [])
-        ),
     )
     portfolio["market_regime"] = scan_result.get("market_regime", {"regime": "unknown"})
     portfolio["active_strategies"] = list(portfolio["market_regime"].get("active", []))
@@ -560,9 +557,9 @@ def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -
     so execution skips the risk gate. Reserve results never pause entries or open
     incidents, and failures leave strategies unaffected.
     """
-    if dry_run or window.name != "regular" or not CASH_RESERVE["enabled"]:
+    if dry_run or window.name != "regular" or not get_cash_reserve_settings()["enabled"]:
         return None
-    proxy = str(CASH_RESERVE["proxy_symbol"]).upper()
+    proxy = str(get_cash_reserve_settings()["proxy_symbol"]).upper()
     try:
         account = broker.account()
         positions = broker.positions()
@@ -584,12 +581,12 @@ def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -
         if bid <= 0 or ask <= 0 or ask < bid:
             return {"defer_entries": entry_notional > 0, "result": {"status": "no_quote"}}
         mid = (bid + ask) / 2
-        band = STRATEGY_CONFIG["entry_limit_band_bps"] / 10_000.0
+        band = get_algo_execution_settings()["entry_limit_band_bps"] / 10_000.0
 
         if entry_notional > 0:
             hop = plan_entry_cash(
                 equity=equity, cash=cash, entry_notional=entry_notional,
-                min_cash_pct=ALGO_MIN_CASH_PCT, proxy_price=mid, proxy_qty=proxy_qty,
+                min_cash_pct=get_mode_config("algo")["risk"]["min_cash_pct"], proxy_price=mid, proxy_qty=proxy_qty,
             )
             if hop["sell_qty"] <= 0:
                 return {"defer_entries": hop["defer_entries"], "result": {"status": "cash_sufficient" if not hop["defer_entries"] else "cannot_raise_cash"}}
@@ -597,7 +594,7 @@ def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -
         else:
             plan = plan_cash_reserve(
                 equity=equity, cash=cash, invested_value=invested, proxy_price=mid,
-                proxy_qty=proxy_qty, config=CASH_RESERVE,
+                proxy_qty=proxy_qty, config=get_cash_reserve_settings(),
             )
             if plan["action"] == "hold":
                 return {"defer_entries": False, "result": {"status": "hold", "reason": plan["reason"]}}
@@ -672,6 +669,12 @@ def run_loop(
                 if window is None:
                     last_window_name = None
                     store.save("CLOSED", portfolio)
+                    if last_intraday_snapshot_attempt is None or time.monotonic() - last_intraday_snapshot_attempt >= INTRADAY_SNAPSHOT_INTERVAL_SECONDS:
+                        last_intraday_snapshot_attempt = time.monotonic()
+                        try:
+                            _capture_equity_snapshot("intraday", now, broker.account(), broker)
+                        except Exception:
+                            LOG.exception("[ALGO] off-hours equity snapshot failed; loop continues")
                     if not STOP and (max_cycles is None or cycle < max_cycles):
                         _sleep_before_next_session(now, calendar)
                     continue
@@ -681,7 +684,7 @@ def run_loop(
                     last_window_name = window.name
 
                 snapshot_monotonic = time.monotonic()
-                intraday_snapshot_due = window.name == "regular" and (
+                intraday_snapshot_due = (
                     last_intraday_snapshot_attempt is None
                     or snapshot_monotonic - last_intraday_snapshot_attempt >= INTRADAY_SNAPSHOT_INTERVAL_SECONDS
                 )
@@ -708,7 +711,7 @@ def run_loop(
                         "Persisted Algo strategy state belongs to a different paper account"
                     )
                 portfolio["account_id"] = broker_account_id
-                retry_seconds = max(15, int(STRATEGY_CONFIG.get("universe_retry_seconds", 300)))
+                retry_seconds = max(15, int(get_algo_execution_settings().get("universe_retry_seconds", 300)))
                 if (
                     last_reconciliation_monotonic is None
                     or time.monotonic() - last_reconciliation_monotonic >= retry_seconds
@@ -757,11 +760,11 @@ def run_loop(
                     except Exception as exc:
                         portfolio["universe"] = {
                             "tickers": [], "selection_date": session_day,
-                            "error": str(exc), "overnight_tradable_tickers": [],
+                            "error": str(exc),
                         }
                         LOG.exception("[ALGO] Universe refresh failed; new entries paused")
 
-                scan_interval = int(STRATEGY_CONFIG["portfolio_scan_seconds"])
+                scan_interval = int(get_algo_execution_settings()["portfolio_scan_seconds"])
                 if last_scan_monotonic is None or time.monotonic() - last_scan_monotonic >= scan_interval:
                     prior_regime = (portfolio.get("market_regime") or {}).get("regime")
                     market_state = window.name.upper()
@@ -858,7 +861,7 @@ def run_loop(
 def _sleep_before_next_session(now: datetime, calendar: list[dict]) -> None:
     wake_at = next_session_start(now, calendar)
     seconds = max(1, (wake_at - now).total_seconds()) if wake_at else 3600
-    time.sleep(min(3600, seconds))
+    time.sleep(min(3600, seconds, INTRADAY_SNAPSHOT_INTERVAL_SECONDS))
 
 
 def _request_stop() -> None:

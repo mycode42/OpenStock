@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from broker.accounts import get_account_for_mode
-from portfolio.config import ALGO_CANDIDATE_UNIVERSE, ALGO_FACTOR_SECTOR_BY_SYMBOL, get_mode_config
+from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_candidate_universe, get_mode_config
 
 
 ET = ZoneInfo("America/New_York")
@@ -58,14 +58,6 @@ def _fetch_active_assets(mode: str) -> dict[str, dict]:
     }
 
 
-def _overnight_tradable(asset: dict | None) -> bool:
-    if not asset:
-        return False
-    attributes = asset.get("attributes") or []
-    listed = "overnight_tradable" in attributes if isinstance(attributes, list) else False
-    return bool(asset.get("overnight_tradable") or listed) and not bool(asset.get("overnight_halted"))
-
-
 def current_selector_rules_sha256() -> str:
     """Hash of the selector rules in force now; a change forces a universe reload."""
     from options.research.universe_selection import _rules_hash, load_rules
@@ -85,7 +77,7 @@ def selected_universe(now: datetime | None = None) -> dict:
     static_categories = configured_universe("algo")["categories"]
     pool_categories = {
         ticker: category
-        for category, bucket in ALGO_CANDIDATE_UNIVERSE.items()
+        for category, bucket in get_candidate_universe().items()
         for ticker in bucket["tickers"]
     }
     tickers: list[str] = []
@@ -121,7 +113,6 @@ def load_algo_universe() -> dict:
     result.update({
         "selection_date": datetime.now(ET).date().isoformat(),
         "timestamp": datetime.now(ET).isoformat(),
-        "overnight_tradable_tickers": [],
         "overnight_metadata_status": "unavailable",
         "easy_to_borrow_tickers": [],
         "shortability_metadata_status": "unavailable",
@@ -132,9 +123,6 @@ def load_algo_universe() -> dict:
         result["overnight_metadata_error"] = f"{type(exc).__name__}: {exc}"
         return result
 
-    result["overnight_tradable_tickers"] = sorted(
-        ticker for ticker in result["tickers"] if _overnight_tradable(assets.get(ticker))
-    )
     result["overnight_metadata_status"] = "ok"
     result["easy_to_borrow_tickers"] = sorted(
         ticker for ticker in result["tickers"]

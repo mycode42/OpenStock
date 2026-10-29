@@ -69,6 +69,7 @@ def market_regime_agent(state: AgentState, agent_id: str = "market_regime_agent"
         "spy_vwap": (spy_data.get("intraday") or {}).get("vwap"),
         "spy_rsi_14": (spy_data.get("intraday") or {}).get("rsi_14"),
         "spy_price_vs_vwap_pct": (spy_data.get("intraday") or {}).get("price_vs_vwap_pct"),
+        "spy_momentum_30m_pct": (spy_data.get("intraday") or {}).get("momentum_30m_pct"),
         "spy_todays_high": (spy_data.get("intraday") or {}).get("high"),
         "spy_todays_low": (spy_data.get("intraday") or {}).get("low"),
         "spy_volume_ratio": (spy_data.get("intraday") or {}).get("volume_ratio"),
@@ -76,6 +77,7 @@ def market_regime_agent(state: AgentState, agent_id: str = "market_regime_agent"
         "spy_recent_bars_last_30m": spy_recent_bars,
         "qqq_change_1d_pct": (qqq_data.get("prices") or {}).get("change_1d"),
         "qqq_price_vs_vwap_pct": (qqq_data.get("intraday") or {}).get("price_vs_vwap_pct"),
+        "qqq_momentum_30m_pct": (qqq_data.get("intraday") or {}).get("momentum_30m_pct"),
         "qqq_rsi_14": (qqq_data.get("intraday") or {}).get("rsi_14"),
     }
 

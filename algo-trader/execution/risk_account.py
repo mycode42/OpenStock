@@ -328,7 +328,6 @@ def get_portfolio_state(
     """
     mode = mode or "algo"
     risk = get_mode_config(mode)["risk"]
-    allow_short_positions = bool(risk.get("allow_short_positions", False))
     ticker_sector, _, _, _ = get_universe_maps(mode)
 
     # A risk snapshot must belong to the configured, active paper account.
@@ -428,8 +427,7 @@ def get_portfolio_state(
         pending_buy_value_by_ticker = _pending_buy_exposure(
             open_orders, positions,
         )
-        if allow_short_positions:
-            pending_short_value_by_ticker = _pending_short_exposure(open_orders, positions)
+        pending_short_value_by_ticker = _pending_short_exposure(open_orders, positions)
         for symbol, value in pending_buy_value_by_ticker.items():
             sector = ticker_sector.get(symbol, "other")
             sector_alloc[sector] = sector_alloc.get(sector, 0.0) + value
@@ -441,12 +439,11 @@ def get_portfolio_state(
         pending_exposure_available = False
         pending_exposure_error = f"Could not value {mode} open buy/short orders"
 
-    if allow_short_positions:
-        try:
-            easy_to_borrow_symbols = fetch_easy_to_borrow_symbols(mode)
-            shortability_available = True
-        except Exception as exc:
-            log.warning("Could not verify %s shortability: %s", mode, exc)
+    try:
+        easy_to_borrow_symbols = fetch_easy_to_borrow_symbols(mode)
+        shortability_available = True
+    except Exception as exc:
+        log.warning("Could not verify %s shortability: %s", mode, exc)
 
     pending_buy_reservation = sum(pending_buy_value_by_ticker.values())
     available_cash = cash - pending_buy_reservation

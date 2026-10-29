@@ -9,7 +9,7 @@ from market.data import historical_delay_seconds, regular_feed
 from market.regime import load_fred_regime_series
 from portfolio.config import (
     ALGO_REGIME_WARMUP_CALENDAR_DAYS,
-    ALGO_SIGNAL_DATA_CONFIG,
+    get_signal_data_settings,
     get_algo_regime_config,
 )
 from strategies.regime import rank_strategies
@@ -25,7 +25,6 @@ from strategies.multi_factor import MultiFactorConfig
 from .scan_types import MarketSnapshot, ScanScope
 
 
-MAX_SPY_DAILY_AGE_DAYS = ALGO_SIGNAL_DATA_CONFIG["max_spy_daily_age_days"]
 _DAILY_BAR_CACHE_LOCK = RLock()
 _DAILY_BAR_CACHE: dict[tuple, dict[str, list[dict]]] = {}
 
@@ -135,11 +134,11 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
 
     delay_seconds = historical_delay_seconds(scope.data_feed, scope.session_name or "")
     signal_bar_max_age_seconds = (
-        ALGO_SIGNAL_DATA_CONFIG["delayed_signal_bar_max_age_minutes"] if delay_seconds
-        else ALGO_SIGNAL_DATA_CONFIG["signal_bar_max_age_minutes"]
+        get_signal_data_settings()["delayed_signal_bar_max_age_minutes"] if delay_seconds
+        else get_signal_data_settings()["signal_bar_max_age_minutes"]
     ) * 60
     overnight_swing_signal_bar_max_age_seconds = (
-        ALGO_SIGNAL_DATA_CONFIG["overnight_swing_signal_bar_max_age_minutes"] * 60
+        get_signal_data_settings()["overnight_swing_signal_bar_max_age_minutes"] * 60
         if scope.session_name == "overnight" else 0
     )
     fresh_signal_bar_symbols = {
@@ -169,7 +168,7 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
             ).days
         except (KeyError, TypeError, ValueError):
             spy_daily_age_days = None
-    if spy_daily_age_days is None or not 1 <= spy_daily_age_days <= MAX_SPY_DAILY_AGE_DAYS:
+    if spy_daily_age_days is None or not 1 <= spy_daily_age_days <= get_signal_data_settings()["max_spy_daily_age_days"]:
         scope.entry_pause_reasons.append("the latest completed SPY daily bar is stale or invalid")
         if historical_status == "ok":
             historical_status = "stale"

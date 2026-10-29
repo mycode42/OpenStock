@@ -20,14 +20,8 @@ const env = {
     OPENSTOCK_CONFIG_FILE: path.join(demoDir, 'no-config.env'),
     DATABASE_PATH: path.join(demoDir, 'openstock.db'),
     ALGO_TRADER_ROOT: path.join(demoDir, 'no-algo-trader'),
-    TRADE_REPUBLIC_API_KEY: '',
-    TR_UAPI_KEY: '',
     ALPACA_MANUAL_API_KEY: '',
     ALPACA_MANUAL_API_SECRET: '',
-    TRADE_REPUBLIC_SDK_ENABLED: 'false',
-    TRADE_REPUBLIC_SDK_SESSION_FILE: '',
-    TRADE_REPUBLIC_SDK_PHONE_NUMBER: '',
-    TRADE_REPUBLIC_SDK_PIN: '',
 };
 
 // Sample journal rows go into the demo database only; seeding is skipped once it has trades.

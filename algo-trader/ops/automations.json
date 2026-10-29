@@ -1,0 +1,163 @@
+{
+  "description": "Scheduled Algo automations. scripts/setup_automations.py installs these as OpenClaw cron jobs, or as user crontab entries when OpenClaw is unavailable. {ROOT} is replaced with the checkout path at install time.",
+  "timezone": "America/New_York",
+  "jobs": [
+    {
+      "name": "health",
+      "description": "Read-only equity and options service, account, state, and risk-cycle health check every hour.",
+      "schedule": {
+        "cron": "0 * * * *"
+      },
+      "command": {
+        "argv": [
+          "poetry",
+          "run",
+          "python",
+          "-m",
+          "portfolio.healthcheck"
+        ],
+        "timeout_seconds": 90,
+        "no_output_timeout_seconds": 90,
+        "output_max_bytes": 16384
+      },
+      "agent": "main"
+    },
+    {
+      "name": "options-opening-capture",
+      "description": "Save a separate Alpaca OPRA opening snapshot for the 117-symbol options research history universe.",
+      "schedule": {
+        "cron": "35 9 * * 1-5"
+      },
+      "command": {
+        "argv": [
+          "poetry",
+          "run",
+          "python",
+          "-m",
+          "scripts.options.alpaca_daily_capture",
+          "--phase",
+          "open",
+          "--universe",
+          "research"
+        ],
+        "timeout_seconds": 7200
+      },
+      "agent": "main"
+    },
+    {
+      "name": "options-history-capture",
+      "description": "Start the same-session Alpaca OPRA option-chain capture before the market close.",
+      "schedule": {
+        "cron": "45 15 * * 1-5"
+      },
+      "command": {
+        "argv": [
+          "poetry",
+          "run",
+          "python",
+          "-m",
+          "scripts.options.alpaca_daily_capture",
+          "--universe",
+          "research"
+        ],
+        "timeout_seconds": 7200
+      },
+      "agent": "main"
+    },
+    {
+      "name": "ThetaData historical options backfill",
+      "description": "Resume historical ThetaData EOD quote and open-interest archives across the 117-symbol research universe.",
+      "schedule": {
+        "every": "25h",
+        "cron_fallback": "0 3 * * *"
+      },
+      "command": {
+        "argv": [
+          "sh",
+          "-lc",
+          "poetry run python scripts/options/theta_historical_backfill.py"
+        ],
+        "timeout_seconds": 604800
+      },
+      "agent": "main"
+    },
+    {
+      "name": "llm-driven",
+      "description": "Hourly 04:00-20:00 ET on weekdays: refresh the swing_llm_driven snapshot, including owned-position reviews. Silent; fails loudly only.",
+      "schedule": {
+        "cron": "0 4-20 * * 1-5"
+      },
+      "agent_turn": {
+        "prompt": "ops/openclaw_prompts/llm-silent-run.md",
+        "timeout_seconds": 1200,
+        "tools": [
+          "exec",
+          "web_search",
+          "web_fetch"
+        ]
+      },
+      "delivery": "none",
+      "agent": "main"
+    },
+    {
+      "name": "llm-digest",
+      "description": "Weekdays 07:45 ET: one briefing from the latest snapshot: owned positions, keep or sell, and the market context.",
+      "schedule": {
+        "cron": "45 7 * * 1-5"
+      },
+      "agent_turn": {
+        "prompt": "ops/openclaw_prompts/llm-digest.md",
+        "timeout_seconds": 900,
+        "tools": [
+          "exec",
+          "web_search",
+          "web_fetch"
+        ]
+      },
+      "delivery": {
+        "channel": "telegram",
+        "to_env": "ALGO_REPORT_TELEGRAM_TO"
+      },
+      "agent": "main"
+    },
+    {
+      "name": "options-research",
+      "description": "Run python -m research.options for options research only; it does not change orders or equity state.",
+      "schedule": {
+        "cron": "0 17 * * *"
+      },
+      "agent_turn": {
+        "prompt": "ops/openclaw_prompts/options-research.md",
+        "timeout_seconds": 28800,
+        "tools": [
+          "*"
+        ]
+      },
+      "delivery": {
+        "channel": "telegram",
+        "to_env": "ALGO_REPORT_TELEGRAM_TO"
+      },
+      "agent": "main"
+    },
+    {
+      "name": "equity-research",
+      "description": "Run python -m research.equity for equity AutoResearch only, separate from the options job.",
+      "schedule": {
+        "cron": "0 20 * * *"
+      },
+      "agent_turn": {
+        "prompt": "ops/openclaw_prompts/equity-research.md",
+        "timeout_seconds": 43200,
+        "tools": [
+          "exec"
+        ],
+        "thinking": "medium"
+      },
+      "delivery": {
+        "channel": "telegram",
+        "to_env": "ALGO_REPORT_TELEGRAM_TO"
+      },
+      "agent": "main"
+    }
+  ]
+}

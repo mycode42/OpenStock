@@ -71,18 +71,21 @@ npm start
 
 ## Services
 
-```bash
-# Web application
-sudo systemctl enable --now openstock.service
+The services run as systemd **user** units under the service account, so none of these commands need root. The units are templates in `ops/systemd/user/`, rendered into `~/.config/systemd/user` by `scripts/install-user-units.sh`.
 
-# Monitoring timer (one cycle per minute)
-sudo systemctl enable --now openstock-monitor.timer
+```bash
+scripts/install-user-units.sh                                  # render the units (re-run after template changes)
+
+# Web application and monitoring timer (one cycle every 30 seconds)
+systemctl --user enable --now openstock.service openstock-monitor.timer
 
 # Status
-sudo systemctl status openstock.service
-sudo systemctl status openstock-monitor.timer
-sudo systemctl list-timers | grep openstock
+systemctl --user status openstock.service
+systemctl --user status openstock-monitor.timer
+systemctl --user list-timers | grep openstock
 ```
+
+Lingering keeps these running after logout and across reboots (`loginctl enable-linger <user>`).
 
 To run one monitoring cycle by hand as the service user:
 
@@ -91,13 +94,13 @@ npm run monitor            # run one cycle
 npm run monitor -- --help  # print usage only
 ```
 
-The tracked monitor drop-ins in `ops/systemd/` (`openstock-monitor-30s.conf`, `openstock-monitor-node.conf`) are the source of truth for monitor configuration changes.
+The monitor unit's settings, including its sandboxing and its 30-second timer, are the source of truth in `ops/systemd/user/`. Change them there and re-run `scripts/install-user-units.sh`.
 
 ## Logs
 
 ```bash
 # Web server
-journalctl -u openstock.service -f
+journalctl --user -u openstock.service -f
 
 # Monitor
 tail -f /opt/OpenStock/memory/monitor.log
@@ -134,7 +137,7 @@ The live database and `database/*.db.backup` files are not tracked in git. Keep 
 ```bash
 git pull origin main
 npm install
-sudo systemctl restart openstock.service
+systemctl --user restart openstock.service
 ```
 
 Restart the service only in a deploy step. Editing files does not reload a running server.
@@ -165,9 +168,9 @@ The web app listens on `127.0.0.1:3000` only. Expose it through Tailscale Serve:
 ### Monitor not running
 
 ```bash
-sudo systemctl status openstock-monitor.timer
-sudo systemctl list-timers | grep openstock
-journalctl -u openstock-monitor.service -n 50
+systemctl --user status openstock-monitor.timer
+systemctl --user list-timers | grep openstock
+journalctl --user -u openstock-monitor.service -n 50
 ```
 
 ### Database locked or corrupted
@@ -175,7 +178,7 @@ journalctl -u openstock-monitor.service -n 50
 ```bash
 sqlite3 /opt/OpenStock/database/openstock.db "PRAGMA integrity_check;"
 # If there are issues, restart the web server to release locks
-sudo systemctl restart openstock.service
+systemctl --user restart openstock.service
 ```
 
 ### Web interface not reachable
@@ -183,5 +186,5 @@ sudo systemctl restart openstock.service
 ```bash
 ss -tlnp | grep 3000
 ps aux | grep "node server.js"
-journalctl -u openstock.service -n 50 --no-pager
+journalctl --user -u openstock.service -n 50 --no-pager
 ```

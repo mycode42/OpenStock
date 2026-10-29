@@ -71,11 +71,6 @@ def load_quote_snapshot(scope: ScanScope, market: MarketSnapshot) -> QuoteSnapsh
                 and not quote_errors and status in {"missing", "stale"}
                 else status
             ),
-            "overnight_tradable": (
-                ticker in scope.overnight_tradable_tickers
-                if scope.session_name == "overnight" and scope.overnight_tradable_tickers is not None
-                else None
-            ),
             "quote_timestamp": timestamp.isoformat() if timestamp is not None else None,
             "age_seconds": round(age_seconds, 1) if age_seconds is not None else None,
             "freshness_limit_seconds": freshness_limit,

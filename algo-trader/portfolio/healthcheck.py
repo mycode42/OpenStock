@@ -1,31 +1,32 @@
-"""Read-only, deterministic health check for the continuous Algo service.
+"""Read-only, deterministic health check for equity and options services.
 
-The check uses the SQLite coordinator as its state source and verifies current
-exposure against the dedicated Algo paper account. It never submits orders or
-modifies coordinator state. OpenClaw can alert on its nonzero exit status.
+The check reads SQLite coordinator state and the options cycle journal, then
+verifies both dedicated paper accounts. It never submits orders or modifies
+coordinator state. OpenClaw can alert on its nonzero exit status.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 from broker.algo import AlgoAlpaca
 from portfolio.protection.software import heartbeat_alarm
 from market.sessions import ET, TradingWindow, get_trading_window
 from portfolio.state_store import AlgoStateStore, StateStoreError
-from portfolio.config import ALGO_SERVICE_CONFIG, ALGO_SIGNAL_DATA_CONFIG, CASH_RESERVE, STRATEGY_CONFIG, is_cash_proxy
+from portfolio.config import ALGO_SERVICE_CONFIG, get_algo_execution_settings, get_signal_data_settings, is_cash_proxy
 
 
 from runtime.paths import ROOT
 from runtime.systemd import service_is_active
 STATE_PATH = ROOT / str(ALGO_SERVICE_CONFIG["state_db"])
-SERVICE = "algo-trader.service"
+SERVICE = "equity.service"
 WARMUP_GRACE_SECONDS = {"premarket": 10 * 60, "regular": 10 * 60, "overnight": 25 * 60}
 WARMUP_PAUSE_REASONS = frozenset({
     "waiting for completed intraday historical bars",
@@ -46,11 +47,47 @@ EXTENDED_SESSION_DATA_PAUSE_REASONS = (
     | WARMUP_PAUSE_REASONS
     | frozenset({"historical bar scan is stale"})
 )
-EXPECTED_OVERNIGHT_PAUSE = "overnight entries are disabled by configuration"
 
 
 def _problem(code: str, detail: str) -> dict[str, str]:
     return {"code": code, "detail": detail[:240]}
+
+
+def _combine_health_reports(equity: dict, options: dict) -> dict:
+    """Keep equity fields at the root while merging both checks' outcomes."""
+    combined = dict(equity)
+    combined["equity_ok"] = bool(equity.get("ok"))
+    combined["options"] = options
+    combined["problems"] = list(equity.get("problems") or []) + [
+        {**item, "code": f"options_{item.get('code', 'healthcheck_failed')}"}
+        for item in options.get("problems", []) if isinstance(item, dict)
+    ]
+    combined["warnings"] = list(equity.get("warnings") or []) + [
+        {**item, "code": f"options_{item.get('code', 'warning')}"}
+        for item in options.get("warnings", []) if isinstance(item, dict)
+    ]
+    combined["ok"] = bool(equity.get("ok")) and bool(options.get("ok"))
+    return combined
+
+
+def _load_healthcheck_environment() -> None:
+    """Load local settings and only broker credentials from OpenStock's shared env file."""
+    load_dotenv(ROOT / ".env")
+    required = (
+        "ALPACA_EQUITY_API_KEY",
+        "ALPACA_EQUITY_API_SECRET",
+        "ALPACA_EQUITY_ACCOUNT_ID",
+        "ALPACA_OPTIONS_API_KEY",
+        "ALPACA_OPTIONS_API_SECRET",
+        "ALPACA_OPTIONS_ACCOUNT_ID",
+    )
+    shared_env_path = ROOT.parent / ".env"
+    if not shared_env_path.is_file():
+        return
+    shared_values = dotenv_values(shared_env_path)
+    for name in required:
+        if not os.environ.get(name) and shared_values.get(name):
+            os.environ[name] = str(shared_values[name])
 
 
 def _timestamp(value: object) -> datetime | None:
@@ -150,7 +187,7 @@ def _expected_extended_session_data(
     fresh_signal_bar_count = data_status.get("fresh_signal_bar_count")
     if historical_status in {"stale", "warming_up"}:
         spy_age = data_status.get("spy_daily_age_days")
-        max_spy_age = int(ALGO_SIGNAL_DATA_CONFIG["max_spy_daily_age_days"])
+        max_spy_age = int(get_signal_data_settings()["max_spy_daily_age_days"])
         if (
             fresh_signal_bar_count not in (None, 0)
             or not isinstance(spy_age, int)
@@ -164,12 +201,7 @@ def _expected_extended_session_data(
 
 
 def _only_expected_extended_session_data_pause(pause_reasons: list[str]) -> bool:
-    # Overnight entry suppression is expected independently of whether
-    # extended-session quotes have refreshed for existing holdings.
-    data_pause_reasons = [
-        reason for reason in pause_reasons
-        if reason != EXPECTED_OVERNIGHT_PAUSE
-    ]
+    data_pause_reasons = list(pause_reasons)
     return bool(
         data_pause_reasons
         and all(reason in EXTENDED_SESSION_DATA_PAUSE_REASONS for reason in data_pause_reasons)
@@ -331,7 +363,7 @@ def build_report(
     scan_at = _timestamp(portfolio.get("last_scan_at")) if state_available else None
     raw_scan_age = int((now - scan_at).total_seconds()) if scan_at else None
     scan_age = max(0, raw_scan_age) if raw_scan_age is not None else None
-    scan_limit = max(180, 3 * int(STRATEGY_CONFIG["portfolio_scan_seconds"]))
+    scan_limit = max(180, 3 * int(get_algo_execution_settings()["portfolio_scan_seconds"]))
     active_window = calendar_available and window is not None
     session_age = int((now_et - _session_start(window)).total_seconds()) if active_window else None
     scan_status = portfolio.get("last_scan_status") if state_available else None
@@ -359,7 +391,6 @@ def build_report(
             and scan_status == "ok"
             and window.name == "overnight"
             and pause_reasons
-            and all(reason == EXPECTED_OVERNIGHT_PAUSE for reason in pause_reasons)
         )
         expected_extended_session_data = bool(
             scanned_this_window
@@ -503,11 +534,27 @@ def build_report(
 
 
 def main() -> None:
-    load_dotenv(ROOT / ".env")
+    _load_healthcheck_environment()
+    now = datetime.now(timezone.utc)
     try:
-        report = build_report()
+        equity_report = build_report(now=now)
     except Exception as exc:
-        report = {"ok": False, "problems": [_problem("healthcheck_failed", f"Health check failed: {type(exc).__name__}: {exc}")]}
+        equity_report = {
+            "ok": False,
+            "problems": [_problem("healthcheck_failed", f"Health check failed: {type(exc).__name__}: {exc}")],
+        }
+    try:
+        from options.healthcheck import build_report as build_options_report
+
+        options_report = build_options_report(now=now)
+    except Exception as exc:
+        options_report = {
+            "checked_at": now.isoformat(),
+            "ok": False,
+            "problems": [_problem("healthcheck_failed", f"Options health check failed: {type(exc).__name__}: {exc}")],
+            "warnings": [],
+        }
+    report = _combine_health_reports(equity_report, options_report)
     print(json.dumps(report, separators=(",", ":"), sort_keys=True, default=str))
     raise SystemExit(0 if report["ok"] else 1)
 

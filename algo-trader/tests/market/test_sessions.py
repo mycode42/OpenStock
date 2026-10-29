@@ -6,7 +6,6 @@ import pytest
 from execution import runner as execution_runner
 from market.calendar import MarketSchedule, extended_session_name
 from market.sessions import get_trading_window, next_session_start
-from strategies.universe import _overnight_tradable
 
 
 ET = ZoneInfo("America/New_York")
@@ -59,13 +58,6 @@ def test_closed_service_wakes_for_next_overnight_session():
     saturday = datetime(2026, 10, 10, 12, 0, tzinfo=ET)
 
     assert next_session_start(saturday, calendar("2026-10-12")) == datetime(2026, 10, 11, 20, 0, tzinfo=ET)
-
-
-def test_overnight_assets_must_be_enabled_and_not_halted():
-    assert _overnight_tradable({"overnight_tradable": True})
-    assert _overnight_tradable({"attributes": ["overnight_tradable"]})
-    assert not _overnight_tradable({"overnight_tradable": True, "overnight_halted": True})
-    assert not _overnight_tradable({"tradable": True})
 
 
 def _regular_schedules(*trading_dates):

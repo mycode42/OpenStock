@@ -1,0 +1,13 @@
+# Template: rendered by scripts/install-user-units.sh (see openstock.service).
+[Unit]
+Description=Run OpenStock Price Monitor every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnActiveSec=5s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=openstock-monitor.service
+
+[Install]
+WantedBy=timers.target

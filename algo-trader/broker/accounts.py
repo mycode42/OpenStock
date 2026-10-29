@@ -36,13 +36,13 @@ def get_account_for_mode(mode: str | None = None) -> AlpacaAccount:
     if mode is not None and mode.lower() != "algo":
         raise ValueError("Only the algo account route is supported")
     if _ACCOUNT is None:
-        api_key = os.environ.get("ALPACA_ALGO_API_KEY", "")
-        api_secret = os.environ.get("ALPACA_ALGO_API_SECRET", "")
+        api_key = os.environ.get("ALPACA_EQUITY_API_KEY", "")
+        api_secret = os.environ.get("ALPACA_EQUITY_API_SECRET", "")
         if not api_key or not api_secret:
-            raise ValueError("Configure ALPACA_ALGO_API_KEY and ALPACA_ALGO_API_SECRET in .env")
+            raise ValueError("Configure ALPACA_EQUITY_API_KEY and ALPACA_EQUITY_API_SECRET in .env")
         _ACCOUNT = AlpacaAccount(
             name="Algo",
-            account_id=os.environ.get("ALPACA_ALGO_ACCOUNT_ID", "unknown"),
+            account_id=os.environ.get("ALPACA_EQUITY_ACCOUNT_ID", "unknown"),
             api_key=api_key,
             api_secret=api_secret,
         )

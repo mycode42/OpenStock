@@ -3,12 +3,15 @@ import { createState, sortedStocks, indexStocks } from './modules/state.js';
 import { createCharts } from './modules/charts.js?demo-mode=1&alpaca-usd-only=1';
 import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1&alpaca-usd-only=1';
 import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1';
-import { createAlgoTrader } from './modules/algo-trader.js?v=2.0.4&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
+import { createAlgoTrader } from './modules/algo-trader.js?v=3.0.0&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
 import { createSettings } from './modules/settings.js';
+import { createConfig } from './modules/config.js';
 import { createAlgoUniverse } from './modules/algo-universe.js?cards=1&demo-mode=1';
 
 const state = createState();
 let pageLoadId = 0;
+let renderedPage = null;
+let lastConfigFocusHash = null;
 let stockRevision = 0;
 const stockMutationTokens = new Map();
 function replaceStocks(next) { state.stocks = sortedStocks(next); state.stockMap = indexStocks(state.stocks); }
@@ -17,8 +20,8 @@ function removeStockFromState(id) { replaceStocks(state.stocks.filter(stock => s
 function beginStockMutation(id) { const token=(stockMutationTokens.get(id)||0)+1; stockMutationTokens.set(id, token); stockRevision += 1; return token; }
 function isCurrentStockMutation(id, token) { return stockMutationTokens.get(id) === token; }
 function showA(message, type='i', containerId='ac') { const container=document.getElementById(containerId); if(!container)return; const alert=document.createElement('div'); alert.className=`alert-box ${type}`; alert.textContent=message; container.appendChild(alert); setTimeout(()=>alert.remove(),5000); }
-function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','')||'dashboard'; return ['dashboard','algo-universe','journal','algo-trader','algo-research','settings'].includes(page)?page:'dashboard'; }
-function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','algo-universe','journal','algo-trader','algo-research','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
+function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','').split('?')[0]||'dashboard'; return ['dashboard','algo-universe','journal','config','algo-trader','algo-research','settings'].includes(page)?page:'dashboard'; }
+function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','algo-universe','journal','config','algo-trader','algo-research','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
 function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
 async function af(path, options={}, onError) { return apiRequest(path, options, (message, details)=>onError ? onError(message, details) : showA(message,'error')); }
 apiRequest('/demo-status').then(status => {
@@ -35,6 +38,7 @@ const journal = createJournal(context);
 const algoTrader = createAlgoTrader({ request:af, charts });
 const algoUniverse = createAlgoUniverse({ request:af, charts });
 const settings = createSettings();
+const config = createConfig({ request:af, reload:()=>loadPage(pageFromHash()), notify:showA });
 settings.initialize();
 function nav(hash) { const page=pageFromHash(hash); const target=page==='dashboard'?'':`#/${page}`; if(window.location.hash!==target){window.location.hash=target;return;} loadPage(page); }
 async function loadPage(page, journalPage=state.journalPage) {
@@ -43,8 +47,11 @@ async function loadPage(page, journalPage=state.journalPage) {
     if(page!=='dashboard')dashboard.stopLivePolling();
     if(page!=='algo-trader'&&page!=='algo-research')algoTrader.stopPolling();
     if(page!=='algo-universe')algoUniverse.stopPolling();
+    if(page!=='config')config.stopLivePolling();
     showPage(page);
-    document.getElementById(`page-${page}`).innerHTML='<div class="loading">Loading...</div>';
+    // A refresh keeps the current content until new data arrives, so saves and rearms do not blank the screen.
+    if(renderedPage!==page)document.getElementById(`page-${page}`).innerHTML='<div class="loading">Loading...</div>';
+    renderedPage=page;
     if(page==='settings'){
         settings.render();
         return;
@@ -55,6 +62,15 @@ async function loadPage(page, journalPage=state.journalPage) {
         if(!data){document.getElementById('page-dashboard').innerHTML='<header><h1>OpenStock</h1></header><div class="alert-box error">Dashboard market data is unavailable.</div>';return;}
         if(data&&stockRevision===startRevision)replaceStocks(data.stocks);
         dashboard.renderDashboard();
+        return;
+    }
+    if(page==='config'){
+        const [data, orders]=await Promise.all([af('/dashboard'), af('/alpaca/orders/config')]);
+        if(loadId!==pageLoadId||pageFromHash()!==page)return;
+        if(!data){document.getElementById('page-config').innerHTML='<header><h1>Configure</h1></header><div class="alert-box error">Alpaca alert levels are unavailable.</div>';return;}
+        const query=new URLSearchParams(window.location.hash.split('?')[1]||'');
+        if(query.get('stock')&&window.location.hash!==lastConfigFocusHash){ lastConfigFocusHash=window.location.hash; config.focus(query.get('stock'), query.get('level')); }
+        config.render(data.stocks, orders?.orders);
         return;
     }
     if(page==='journal'){

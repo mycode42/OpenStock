@@ -9,7 +9,7 @@ import logging
 from options.risk import load_options_delta_overlay
 from strategies.catalog import CORE_STRATEGIES
 from market.calendar import EXTENDED_SESSIONS
-from portfolio.config import STRATEGY_CONFIG
+from portfolio.config import get_algo_execution_settings
 from strategies.catalog import strategy_ids_for_group
 from strategies.portfolio_coordinator import (
     INTRADAY_STRATEGIES,
@@ -136,9 +136,6 @@ def execute_scan_candidates(
         if item.get("suppressed_reason"):
             continue
         action = str(item.get("action", "")).lower()
-        if scope.mode == "algo" and scope.session_name not in {"regular", *EXTENDED_SESSIONS}:
-            item["suppressed_reason"] = "Algo order actions are restricted to Alpaca trading sessions"
-            continue
         strategy = str(item.get("strategy", ""))
         if action in {"buy", "short"}:
             strategy_limit = scope.risk_config.get(
@@ -176,19 +173,6 @@ def execute_scan_candidates(
         if age < 0 or age > quotes.freshness_limit:
             item["suppressed_reason"] = f"latest Alpaca quote is stale ({age:.0f}s)"
             continue
-        if scope.extended_hours:
-            spread_pct = (float(quote["ask"]) - float(quote["bid"])) / price if price else 1.0
-            if item["action"] == "buy" and spread_pct > float(
-                STRATEGY_CONFIG["extended_hours_max_spread_pct"]
-            ):
-                item["suppressed_reason"] = f"extended-hours spread is too wide ({spread_pct:.1%})"
-                continue
-            if (
-                scope.session_name == "overnight"
-                and item["ticker"] not in (scope.overnight_tradable_tickers or set())
-            ):
-                item["suppressed_reason"] = "Alpaca does not mark this asset overnight_tradable"
-                continue
         execution_price = (
             float(quote["ask"] if item["action"] in {"buy", "cover"} else quote["bid"])
             if scope.extended_hours else price
@@ -237,8 +221,8 @@ def execute_scan_candidates(
         if item["strategy"] in strategy_ids_for_group("intraday_core"):
             minimum_stop_pct = intraday_volatility_stop_pct(
                 market.bars_by_symbol.get(item["ticker"]),
-                multiple=STRATEGY_CONFIG["intraday_stop_vol_multiple"],
-                lookback=int(STRATEGY_CONFIG["intraday_stop_vol_lookback_bars"]),
+                multiple=get_algo_execution_settings()["intraday_stop_vol_multiple"],
+                lookback=int(get_algo_execution_settings()["intraday_stop_vol_lookback_bars"]),
             )
         trade = _make_trade(
             sizing_signal, execution_price, scope.equity,
@@ -272,9 +256,19 @@ def execute_scan_candidates(
         elif scope.mode == "algo" and action in {"buy", "short"}:
             # Regular-session entries use a limit band so a fill never chases the signal.
             limit = entry_limit_price(action, float(trade.get("entry_price") or execution_price),
-                                      STRATEGY_CONFIG["entry_limit_band_bps"])
+                                      get_algo_execution_settings()["entry_limit_band_bps"])
             if limit is not None:
                 trade.update({"order_type": "limit", "limit_price": limit})
+        elif scope.mode == "algo" and action in {"sell", "cover"}:
+            # Exits are marketable limits: a sell at the bid less the band, a cover at the ask plus it.
+            executable = float(quote["bid"] if action == "sell" else quote["ask"])
+            if executable <= 0:
+                item["suppressed_reason"] = "no executable Alpaca quote for a limit exit"
+                continue
+            band_key = "protective_limit_band_bps" if item.get("software_protection") else "marketable_limit_band_bps"
+            band = float(get_algo_execution_settings()[band_key]) / 10_000.0
+            limit = executable * (1 - band) if action == "sell" else executable * (1 + band)
+            trade.update({"order_type": "limit", "limit_price": round(limit, 2)})
         signal_kind = "protective" if item.get("software_protection") else "rule"
         identity = (
             f"{scope.mode}:{scope.today}:{item['strategy']}:{item['ticker']}:{item['action']}:{signal_kind}:"

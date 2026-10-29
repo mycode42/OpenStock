@@ -132,7 +132,7 @@ def load_options_config(path: str | Path | None = None) -> dict:
     if len(underlyings) > 50:
         raise ValueError("directional_overlay.underlyings is limited to fifty symbols")
     for field in ("min_dte", "max_dte", "target_dte", "min_open_interest",
-                  "max_signal_age_seconds", "max_entries_per_day", "max_holding_days",
+                  "max_signal_age_seconds", "max_holding_days",
                   "close_dte"):
         value = directional[field]
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -145,7 +145,6 @@ def load_options_config(path: str | Path | None = None) -> dict:
         raise ValueError("directional_overlay DTE window or target is invalid")
     if (
         directional["max_signal_age_seconds"] < 1
-        or directional["max_entries_per_day"] < 1
         or directional["max_holding_days"] < 1
     ):
         raise ValueError("directional_overlay signal age, holding, and daily entry limits must be positive")

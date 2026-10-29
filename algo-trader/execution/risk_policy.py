@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from portfolio.config import risk_universe
 
-# Moonshots are blocked in every mode and excluded from all configured universes.
-MOONSHOTS = {"RGTI", "SOUN", "LUNR"}
-
 
 def build_universe_maps(mode: str, config_loader, cache: dict) -> tuple[dict, dict, set, dict]:
     """Build and cache ticker sector, position cap, tactical set and universe."""
@@ -26,4 +23,4 @@ def build_universe_maps(mode: str, config_loader, cache: dict) -> tuple[dict, di
     return cache[mode]
 
 
-__all__ = ["MOONSHOTS", "build_universe_maps"]
+__all__ = ["build_universe_maps"]

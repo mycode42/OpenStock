@@ -9,34 +9,11 @@ function formatMoney(value, currency = 'EUR') {
     } catch { return `${currency} ${money(value)}`; }
 }
 
-const ORDER_TOKEN_KEY = 'openstock-order-token';
-
-function alpacaOrderControls(level, symbol) {
+// Open-order status and cancel. New orders are placed from Configure, via the alert link.
+function alpacaOrderControls(level) {
     const order = level.open_order;
-    if (order) {
-        return `<div class="order-status">${escapeHtml(order.side)} ${escapeHtml(order.qty)} @ ${formatMoney(order.limit_price_usd, 'USD')} · ${escapeHtml(order.status)} <button type="button" class="btn btn-sm" data-alpaca-cancel-order="${escapeHtml(order.id)}">Cancel</button></div>`;
-    }
-    return `<button type="button" class="btn btn-sm" data-alpaca-order="${escapeHtml(level.id)}" data-symbol="${escapeHtml(symbol)}" data-side="${escapeHtml(level.side)}">Place limit</button>`;
-}
-
-// Asks for the BUY amount in USD. Returns null when cancelled or invalid.
-async function askAmount(af) {
-    const config = await af('/alpaca/orders/config');
-    const suggested = config?.orders?.notional_usd ?? 250;
-    const entered = window.prompt('Amount in USD for this buy limit (whole shares, rounded down)', String(suggested));
-    if (entered === null) return null;
-    const amount = Number(entered);
-    if (!Number.isFinite(amount) || amount <= 0) { window.alert('Enter a positive amount in USD.'); return null; }
-    return amount;
-}
-
-function orderToken() {
-    let token = sessionStorage.getItem(ORDER_TOKEN_KEY);
-    if (!token) {
-        token = (window.prompt('OPENSTOCK_ORDER_TOKEN from .env') || '').trim();
-        if (token) sessionStorage.setItem(ORDER_TOKEN_KEY, token);
-    }
-    return token;
+    if (!order) return '';
+    return `<div class="order-status">${escapeHtml(order.side)} ${escapeHtml(order.qty)} @ ${formatMoney(order.limit_price_usd, 'USD')} · ${escapeHtml(order.status)} <button type="button" class="btn btn-sm" data-alpaca-cancel-order="${escapeHtml(order.id)}">Cancel</button></div>`;
 }
 
 function priceChangePercent(currentPrice, buyInPrice) {
@@ -178,7 +155,7 @@ function renderDashboard() {
             <div class="quote-sides" aria-label="Live bid and ask prices"><span>Bid <strong data-live-bid>${formatMoney(bid, stockCurrency)}</strong></span><span>Ask <strong data-live-ask>${formatMoney(ask, stockCurrency)}</strong></span></div>
             ${heldValue}
             ${sellAlertNote}
-            <div class="level-summary"><strong>Active alerts</strong><div>${active.length ? active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertText(level))}</span>${alpacaOrderControls(level, stock.symbol)}`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(alertText(level))} · ${level.retired ? 'retired' : 'triggered'}</span><button type="button" class="btn btn-sm btn-success" data-alpaca-rearm="${escapeHtml(level.id)}">Rearm</button>`).join('') : 'None'}</div></div>
+            <div class="level-summary"><strong>Active alerts</strong><div>${active.length ? active.map(level => `<a class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'} alert-link" href="#/config?stock=${escapeHtml(stock.id)}&level=${escapeHtml(level.id)}" title="Open this alert in Configure">${escapeHtml(alertText(level))}</a>${alpacaOrderControls(level)}`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<span class="threshold disabled">${escapeHtml(alertText(level))} · ${level.retired ? 'retired' : 'triggered'}</span><button type="button" class="btn btn-sm btn-success" data-alpaca-rearm="${escapeHtml(level.id)}">Rearm</button>`).join('') : 'None'}</div></div>
             <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div>${stock.market_data?.source === 'demo' ? '<div class="position-summary">Sample alerts · read only in demo mode</div>' : '<div class="position-summary">Alpaca alert levels</div>'}<div class="history-popover" role="status" aria-live="polite"></div>
         </div>`;
     }).join('');
@@ -190,29 +167,10 @@ function renderDashboard() {
         if (!result) { button.disabled = false; return; }
         await reloadCurrentPage?.();
     }));
-    container.querySelectorAll('[data-alpaca-order]').forEach(button => button.addEventListener('click', async () => {
-        const token = orderToken();
-        if (!token) return;
-        button.disabled = true;
-        const path = `/alpaca/alert-levels/${encodeURIComponent(button.dataset.alpacaOrder)}/orders`;
-        const headers = { 'Content-Type': 'application/json', 'X-OpenStock-Order-Token': token };
-        const body = { ...(button.dataset.side === 'BUY' ? { amount_usd: await askAmount(af) } : {}) };
-        if (body.amount_usd === null) { button.disabled = false; return; }
-        const preview = await af(path, { method: 'POST', headers, body: JSON.stringify({ ...body, preview: true }) });
-        if (!preview) { sessionStorage.removeItem(ORDER_TOKEN_KEY); button.disabled = false; return; }
-        const plan = preview.plan;
-        const approved = window.confirm(`${plan.mode.toUpperCase()} account: ${plan.side} ${plan.qty} ${plan.symbol} limit ${formatMoney(plan.limit_price_usd, 'USD')}, day order, about ${formatMoney(plan.notional_usd, 'USD')}. Place it?`);
-        if (!approved) { button.disabled = false; return; }
-        const result = await af(path, { method: 'POST', headers, body: JSON.stringify({ ...body, confirm: true }) });
-        if (!result) { sessionStorage.removeItem(ORDER_TOKEN_KEY); button.disabled = false; return; }
-        await reloadCurrentPage?.();
-    }));
     container.querySelectorAll('[data-alpaca-cancel-order]').forEach(button => button.addEventListener('click', async () => {
-        const token = orderToken();
-        if (!token) return;
         button.disabled = true;
-        const result = await af(`/alpaca/orders/${encodeURIComponent(button.dataset.alpacaCancelOrder)}/cancel`, { method: 'POST', headers: { 'X-OpenStock-Order-Token': token } });
-        if (!result) { sessionStorage.removeItem(ORDER_TOKEN_KEY); button.disabled = false; return; }
+        const result = await af(`/alpaca/orders/${encodeURIComponent(button.dataset.alpacaCancelOrder)}/cancel`, { method: 'POST' });
+        if (!result) { button.disabled = false; return; }
         await reloadCurrentPage?.();
     }));
     attachChartHovers(container);

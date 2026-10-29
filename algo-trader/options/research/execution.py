@@ -10,6 +10,11 @@ from options.data import ChainQuote
 from options.models import OptionStructure
 
 
+def is_two_sided(quote: ChainQuote) -> bool:
+    """A quote can be filled against only with a positive bid and an ask at or above it."""
+    return quote.bid > 0 and quote.ask >= quote.bid
+
+
 @dataclass(frozen=True)
 class LiquidityDecision:
     eligible: bool

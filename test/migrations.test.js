@@ -17,8 +17,7 @@ test('fresh initialization is versioned and idempotent', t => {
     assert.deepEqual(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all().map(row => row.version), migrations.map(migration => migration.version));
     assert.equal(db.prepare('PRAGMA table_info(stocks)').all().some(row => row.name === 'archived'), true);
     assert.equal(db.prepare('PRAGMA table_info(stocks)').all().some(row => row.name === 'asset_type'), true);
-    assert.deepEqual(db.prepare('PRAGMA table_info(broker_sync_state)').all().map(row => row.name), ['sync_key', 'updated_at', 'changed_at']);
-    assert.deepEqual(db.prepare('PRAGMA table_info(broker_health_state)').all().map(row => row.name), ['broker', 'status', 'checked_at', 'changed_at', 'last_notified_at', 'last_error', 'last_notified_status', 'failure_streak', 'success_streak']);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name LIKE 'broker_%'").get().count, 0);
     db.close();
 });
 
@@ -33,12 +32,12 @@ test('migration 017 upgrades an already-applied broker health table', t => {
     db.close();
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
     const upgraded = new Database(file);
-    assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'last_notified_status'), true);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=17').get()['1'], 1);
-    assert.equal(upgraded.prepare('PRAGMA table_info(broker_health_state)').all().some(row => row.name === 'failure_streak'), true);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=20').get()['1'], 1);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=21').get()['1'], 1);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=22').get()['1'], 1);
+    // Migration 029 later drops the Trade Republic health table the upgrade chain touched.
+    assert.equal(upgraded.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='broker_health_state'").get(), undefined);
     upgraded.close();
 });
 
@@ -48,7 +47,7 @@ test('fresh seeded initialization creates one BUY and SELL level per stock', t =
     initDatabase({ dbPath: file, seedDefaults: true, silent: true });
     const db = new Database(file);
     assert.equal(db.prepare('SELECT COUNT(*) count FROM stocks').get().count, 5);
-    assert.equal(db.prepare("SELECT COUNT(*) count FROM stocks WHERE price_source='trade_republic'").get().count, 5);
+    assert.equal(db.prepare("SELECT COUNT(*) count FROM stocks WHERE price_source='alpaca'").get().count, 5);
     assert.equal(db.prepare('SELECT COUNT(*) count FROM alert_levels').get().count, 10);
     assert.deepEqual(db.prepare('PRAGMA table_info(alert_levels)').all().filter(column => ['trigger_mode', 'change_pct', 'reference_price_eur'].includes(column.name)).map(column => column.name), ['trigger_mode', 'change_pct', 'reference_price_eur']);
     assert.equal(db.prepare(`SELECT COUNT(*) count FROM stocks s

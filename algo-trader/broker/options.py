@@ -31,7 +31,7 @@ class OptionsPaperClient:
             raise RuntimeError(
                 "Set ALPACA_OPTIONS_API_KEY, ALPACA_OPTIONS_API_SECRET, and ALPACA_OPTIONS_ACCOUNT_ID"
             )
-        algo_id = os.getenv("ALPACA_ALGO_ACCOUNT_ID", "").strip()
+        algo_id = os.getenv("ALPACA_EQUITY_ACCOUNT_ID", "").strip()
         if algo_id and self.account_id == algo_id:
             raise OptionsAccountMismatchError("OPTIONS account ID must be distinct from the Algo account ID")
         self.session = session or requests.Session()

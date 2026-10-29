@@ -8,7 +8,7 @@ const { initDatabase } = require('../database/init');
 const orders = require('../lib/alpaca-orders');
 const { AlpacaError } = require('../lib/brokers/alpaca');
 
-const ENABLED = { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: 'test-token' };
+const ENABLED = { };
 
 function makeDb(t) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-orders-'));
@@ -62,7 +62,7 @@ test('buy level sizes whole shares from the notional and places a day limit', as
     assert.equal(result.order.broker_order_id, 'broker-1');
     assert.deepEqual(client.calls.submitted[0], {
         symbol: 'AAPL', qty: '2', side: 'buy', type: 'limit', time_in_force: 'day',
-        limit_price: '100.00', client_order_id: result.order.client_order_id, extended_hours: false,
+        limit_price: '100.00', client_order_id: result.order.client_order_id, extended_hours: true,
     });
 });
 
@@ -75,12 +75,6 @@ test('dry run returns the plan and submits nothing', async t => {
     assert.equal(plan.mode, 'paper');
     assert.equal(client.calls.submitted.length, 0);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alpaca_orders').get().n, 0);
-});
-
-test('nothing is placed while ORDERS_ENABLED is not true', async t => {
-    const db = makeDb(t);
-    const levelId = seedLevel(db);
-    await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient(), levelId, env: { OPENSTOCK_ORDER_TOKEN: 'x' } }), err => err.status === 403);
 });
 
 test('a marketable buy limit is allowed and never fills above its price', async t => {
@@ -156,4 +150,24 @@ test('trading is paper unless the live URL is set explicitly', () => {
     assert.equal(orders.tradingMode({}), 'paper');
     assert.equal(orders.tradingMode({ ALPACA_MANUAL_BASE_URL: 'https://paper-api.alpaca.markets/v2' }), 'paper');
     assert.equal(orders.tradingMode({ ALPACA_MANUAL_BASE_URL: 'https://api.alpaca.markets' }), 'live');
+});
+
+test('automatic orders need the level opt-in', async t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db, { side: 'BUY', price: 100, triggered: 1, retired: 1, enabled: 0 });
+    const client = fakeClient();
+    const notOptedIn = await orders.placeTriggeredOrder({ db, client, levelId, env: ENABLED });
+    assert.match(notOptedIn.skipped, /not set to place real orders/);
+    assert.equal(client.calls.submitted.length, 0);
+});
+
+test('an opted-in level places its order after it has retired itself', async t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db, { side: 'BUY', price: 100, triggered: 1, retired: 1, enabled: 0 });
+    db.prepare('UPDATE alpaca_alert_levels SET auto_order=1, order_budget_usd=250 WHERE id=?').run(levelId);
+    const client = fakeClient();
+    const result = await orders.placeTriggeredOrder({ db, client, levelId, env: ENABLED });
+    assert.equal(result.order.status, 'NEW');
+    assert.equal(result.order.qty, 2);
+    assert.equal(client.calls.submitted.length, 1);
 });

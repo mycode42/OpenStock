@@ -12,6 +12,7 @@ from statistics import mean, median, pstdev
 
 from options.assignment import simulate_early_assignment
 from options.data import ChainQuote, OptionChain
+from options.research.execution import is_two_sided
 from options.market_inputs import research_market_inputs
 from options.models import GreeksSnapshot, OptionLeg, OptionSignal
 from options.research.dataset import OptionsResearchDataset, ResearchObservation
@@ -244,7 +245,7 @@ def simulate_options_strategy(
     if initial_equity <= 0 or not math.isfinite(initial_equity):
         raise ValueError("starting_equity must be positive and finite")
     max_contracts = int(execution_values.get("maximum_contracts_per_trade", 1))
-    risk_per_trade = float(execution_values.get("max_risk_per_trade_pct", 0.005))
+    risk_per_trade = float(execution_values["max_risk_per_trade_pct"])
     if strategy_name == "long_volatility":
         risk_per_trade = min(
             risk_per_trade,
@@ -472,7 +473,7 @@ def simulate_options_strategy(
             if state.signed_contracts == 0:
                 continue
             quote = state.last_quote
-            if quote is None:
+            if quote is None or not is_two_sided(quote):
                 continue
             exit_price = execution.exit_fill(quote, state.signed_contracts)
             current_value += state.signed_contracts * exit_price * state.contract.multiplier
@@ -513,7 +514,10 @@ def simulate_options_strategy(
                 quote_age = (observation.as_of - quote.observed_at).total_seconds()
                 if quote_age < 0 or quote_age > maximum_quote_age:
                     quote = None
-            quote = quote or state.last_quote
+            if quote is not None and not is_two_sided(quote):
+                quote = None
+            if quote is None and state.last_quote is not None and is_two_sided(state.last_quote):
+                quote = state.last_quote
             if quote is not None:
                 quote_age = (observation.as_of - quote.observed_at).total_seconds()
                 if quote_age < 0 or quote_age > maximum_quote_age:
@@ -710,6 +714,9 @@ def simulate_options_strategy(
                         if contracts < 1:
                             quality["greek_limit_rejections"] += int(greek_rejected)
                             quality["signals_unfilled"] += 1
+                        if not all(is_two_sided(chain_by_symbol[leg.contract.symbol]) for leg in signal.structure.legs):
+                            contracts = 0
+                            quality["signals_unquoted"] = quality.get("signals_unquoted", 0) + 1
                         entry_costs = structure_entry_cost(signal.structure, chain_by_symbol, execution, contracts) if contracts > 0 else 0.0
                         regime_weight = float(signal.data_quality.get("regime_risk_multiplier", 1.0))
                         budget = initial_equity * risk_per_trade * regime_weight
@@ -797,7 +804,7 @@ def simulate_options_strategy(
             + sum(
                 state.signed_contracts * execution.exit_fill(state.last_quote, state.signed_contracts) * state.contract.multiplier
                 for state in trade.legs.values()
-                if state.signed_contracts and state.last_quote is not None
+                if state.signed_contracts and state.last_quote is not None and is_two_sided(state.last_quote)
             )
             for trade in active
         )

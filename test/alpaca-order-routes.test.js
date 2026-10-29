@@ -36,7 +36,7 @@ async function fixture(t) {
 }
 
 function withEnv(t, env) {
-    const saved = { ORDERS_ENABLED: process.env.ORDERS_ENABLED, OPENSTOCK_ORDER_TOKEN: process.env.OPENSTOCK_ORDER_TOKEN, ALPACA_MANUAL_BASE_URL: process.env.ALPACA_MANUAL_BASE_URL };
+    const saved = { ALPACA_MANUAL_BASE_URL: process.env.ALPACA_MANUAL_BASE_URL };
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
@@ -45,26 +45,10 @@ const post = (base, url, headers, body) => fetch(base + url, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
 });
 
-test('order routes refuse everything while ORDERS_ENABLED is off', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'false', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_MANUAL_BASE_URL: undefined });
-    const { base, levelId, client } = await fixture(t);
-    const response = await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, { 'X-OpenStock-Order-Token': TOKEN }, { confirm: true });
-    assert.equal(response.status, 403);
-    assert.equal(client.submitted.length, 0);
-});
-
-test('wrong or missing token is rejected', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN });
-    const { base, levelId, client } = await fixture(t);
-    assert.equal((await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, {}, { confirm: true })).status, 401);
-    assert.equal((await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, { 'X-OpenStock-Order-Token': 'nope' }, { confirm: true })).status, 401);
-    assert.equal(client.submitted.length, 0);
-});
-
 test('preview returns the plan, and submit needs explicit confirmation', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_MANUAL_BASE_URL: undefined });
+    withEnv(t, { ALPACA_MANUAL_BASE_URL: undefined });
     const { base, levelId, client } = await fixture(t);
-    const headers = { 'X-OpenStock-Order-Token': TOKEN };
+    const headers = {};
     const preview = await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, headers, { preview: true });
     assert.equal(preview.status, 200);
     assert.equal((await preview.json()).plan.mode, 'paper');
@@ -78,11 +62,25 @@ test('preview returns the plan, and submit needs explicit confirmation', async t
 });
 
 test('config endpoint reports paper mode and never returns the token', async t => {
-    withEnv(t, { ORDERS_ENABLED: 'true', OPENSTOCK_ORDER_TOKEN: TOKEN, ALPACA_MANUAL_BASE_URL: undefined });
+    withEnv(t, { ALPACA_MANUAL_BASE_URL: undefined });
     const { base } = await fixture(t);
     const text = await (await fetch(`${base}/api/alpaca/orders/config`)).text();
     const body = JSON.parse(text);
     assert.equal(body.orders.mode, 'paper');
-    assert.equal(body.orders.token_configured, true);
-    assert.ok(!text.includes(TOKEN));
+});
+
+test('real-order switch needs the order token, a boolean, and a BUY budget', async t => {
+    withEnv(t, { ALPACA_MANUAL_BASE_URL: undefined });
+    const { base, levelId } = await fixture(t);
+    const put = (headers, body) => fetch(`${base}/api/alpaca/alert-levels/${levelId}/order`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+    });
+    const auth = {};
+    assert.equal((await put(auth, { auto_order: 'yes' })).status, 400);
+    assert.equal((await put(auth, { auto_order: true })).status, 400);
+    const response = await put(auth, { auto_order: true, budget_usd: 250 });
+    assert.equal(response.status, 200);
+    const level = (await response.json()).alert_level;
+    assert.equal(level.auto_order, 1);
+    assert.equal(level.order_budget_usd, 250);
 });

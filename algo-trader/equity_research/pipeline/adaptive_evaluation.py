@@ -11,6 +11,8 @@ from equity_research.backtest import AlgoPortfolioBacktest, strategy_warmup_days
 from strategies.catalog import STRATEGY_CATALOG
 from equity_research.backtest.config import REGIME_WARMUP_DAYS
 from market.store import SQLiteBarStore
+from market import bar_cache
+from runtime.paths import DATA_DIR
 from ..artifacts.candidate_archive import logic_version, model_family
 from ..artifacts.replay_logging import quiet_coordinator_rejections
 from ..settings import (
@@ -41,10 +43,18 @@ def _load_window_data(
     warmup = max(strategy_warmup_days(strategy), REGIME_CONTEXT_WARMUP_DAYS)
     warm_start = (start - timedelta(days=warmup)).isoformat()
     context_symbols = list(dict.fromkeys([*symbols, "QQQ", "GLD", "TLT", "HYG", "LQD"]))
-    bars = store.bars(
-        context_symbols, feed=FEED, timeframe="5Min", start=warm_start,
-        end=end.isoformat(), adjustment=adjustment,
-    )
+    if bar_cache.enabled():
+        # Shared arrays: every fold worker maps the same file instead of holding its own dicts.
+        cache_dir = bar_cache.build(
+            db, cache_root=DATA_DIR / "research" / "bar-cache", feed=FEED, timeframe="5Min",
+            adjustment=adjustment, symbols=context_symbols,
+        )
+        bars = bar_cache.window_bars(cache_dir, context_symbols, warm_start, end.isoformat())
+    else:
+        bars = store.bars(
+            context_symbols, feed=FEED, timeframe="5Min", start=warm_start,
+            end=end.isoformat(), adjustment=adjustment,
+        )
     spy = store.bars(
         ["SPY"], feed=FEED, timeframe="1Day",
         start=(start - timedelta(days=REGIME_WARMUP_DAYS)).isoformat(),

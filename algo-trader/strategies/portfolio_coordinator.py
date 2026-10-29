@@ -30,10 +30,8 @@ class PortfolioCoordinatorConfig:
     max_daily_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_daily_entries"]
     max_intraday_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_intraday_entries"]
     max_swing_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_swing_entries"]
-    swing_open_delay_minutes: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["swing_open_delay_minutes"]
     intraday_close_cutoff_minutes: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["intraday_close_cutoff_minutes"]
     allow_opposite_netting: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_opposite_netting"]
-    allow_intraday_overnight: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_intraday_overnight"]
     regime_throttle_enabled: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_throttle_enabled"]
     regime_gross_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_gross_caps"]))
     sector_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["sector_caps"]))
@@ -68,12 +66,11 @@ class PortfolioCoordinatorConfig:
         ):
             raise ValueError("coordinator entry limits are invalid")
         if (
-            isinstance(self.swing_open_delay_minutes, bool) or not isinstance(self.swing_open_delay_minutes, int)
-            or isinstance(self.intraday_close_cutoff_minutes, bool) or not isinstance(self.intraday_close_cutoff_minutes, int)
-            or self.swing_open_delay_minutes < 0 or self.intraday_close_cutoff_minutes < 0
+            isinstance(self.intraday_close_cutoff_minutes, bool) or not isinstance(self.intraday_close_cutoff_minutes, int)
+            or self.intraday_close_cutoff_minutes < 0
         ):
-            raise ValueError("coordinator session cutoffs must be non-negative")
-        if not isinstance(self.allow_opposite_netting, bool) or not isinstance(self.allow_intraday_overnight, bool):
+            raise ValueError("coordinator flatten cutoff must be a non-negative integer")
+        if not isinstance(self.allow_opposite_netting, bool):
             raise ValueError("coordinator switches must be booleans")
         if not isinstance(self.regime_throttle_enabled, bool):
             raise ValueError("regime_throttle_enabled must be boolean")
@@ -277,34 +274,7 @@ class CoordinatorBook:
         if not math.isfinite(price) or price <= 0:
             return self._reject(proposal, "invalid reference price")
 
-        local = timestamp.astimezone(ET) if timestamp.tzinfo else timestamp.replace(tzinfo=ET)
-        session_name = session or "regular"
-        if (
-            session_name == "overnight"
-            and not get_algo_runtime_settings().overnight_entries_enabled
-            and not allow_extended_hours
-        ):
-            return self._reject(proposal, "overnight entries are disabled by configuration")
         is_intraday = strategy in self.config.intraday_strategy_ids
-        if (
-            is_intraday and session_name != "regular"
-            and not self.config.allow_intraday_overnight and not allow_extended_hours
-        ):
-            return self._reject(proposal, "intraday strategies are regular-session only")
-        if is_intraday:
-            close_at = session_close or local.replace(hour=16, minute=0, second=0, microsecond=0)
-            if close_at.tzinfo is None:
-                close_at = close_at.replace(tzinfo=ET)
-            close_at = close_at.astimezone(ET)
-            if local >= close_at - timedelta(minutes=self.config.intraday_close_cutoff_minutes):
-                return self._reject(proposal, "intraday entry cutoff reached; position must have time to flatten")
-        if strategy in self.config.swing_strategy_ids and session_name == "regular":
-            open_at = session_open or local.replace(hour=9, minute=30, second=0, microsecond=0)
-            if open_at.tzinfo is None:
-                open_at = open_at.replace(tzinfo=ET)
-            open_at = open_at.astimezone(ET)
-            if (local - open_at).total_seconds() < self.config.swing_open_delay_minutes * 60:
-                return self._reject(proposal, "swing entries are blocked during the first 15 minutes")
 
         entry_notional = qty * price
         direction = 1 if action == "buy" else -1

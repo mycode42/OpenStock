@@ -2,8 +2,8 @@
 
 `swing_llm_driven` is an active, long-horizon Algo strategy. On weekdays, its
 scheduled briefing runs the shared analyst graph three times per day and
-publishes short-lived Buy, Sell, or Watch recommendations for the fixed Algo
-universe. The strategy name and identity remain `swing_llm_driven`; its live
+publishes short-lived Buy, Sell, or Watch recommendations for the currently
+selected live Algo universe. The strategy name and identity remain `swing_llm_driven`; its live
 signals enter the same sizing, portfolio coordination, lifecycle, and paper
 execution path as the other Algo strategies.
 
@@ -48,7 +48,7 @@ when an AI snapshot is missing or expired.
 Each calendar row must contain `event_id,event_type,ticker,scheduled_at,known_at,
 reaction_start_at,reaction_end_at,source`. Every timestamp must contain an
 explicit UTC offset. Earnings rows name the company ticker. Macro rows target
-`SPY`, which is included in the fixed Algo universe for macro trades.
+`SPY`, which remains in the eligible universe as the broad-market reference.
 
 `known_at` is the first time this exact event record was available. The loader
 does not expose a record to a replay before `known_at`. For historical tests,
@@ -61,20 +61,21 @@ The reaction window is explicit because an after-close earnings report should
 map to the next actual trading session, including holidays. The daily calendar
 refresh uses Alpaca's exchange calendar for that mapping. The standalone
 `LLMStrategyConfig` remains off by default. Macro events use SPY from the
-fixed Algo universe. Other strategies stay limited to that same configured
-universe.
+eligible universe. Live recommendations follow the scanner's current
+selection from the 117-name candidate pool.
 
 ## Live scheduled analysis
 
-The `algo-event-briefing` OpenClaw job runs at 10:00, 13:00, and 15:00 ET on
+The `llm-driven` OpenClaw job runs at 10:00, 13:00, and 15:00 ET on
 weekdays. It first runs:
 
 ```bash
 poetry run python -m strategies.llm_driven.ai_runner
 ```
 
-The runner reads the Algo paper account and the configured Algo ticker
-universe, then calls `run_event_analysis()` from
+The runner reads the Algo paper account and the same selected eligible ticker
+universe used by the Algo scanner, then loads current SPY/QQQ quotes and
+intraday bars from Alpaca before calling `run_event_analysis()` from
 `strategies/llm_driven/analysis/workflow.py`. Its analysts cover market
 regime, news sentiment, social sentiment, technicals, fundamentals, and growth.
 It writes `data/algo/llm_driven/signals.json` atomically. The OpenClaw job adds sourced
