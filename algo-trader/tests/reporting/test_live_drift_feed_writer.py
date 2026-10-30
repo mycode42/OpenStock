@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 
 import pytest
 
-from reporting import performance
+from reporting import performance, snapshot_store
 
 
 def _snapshot(day: str, equity: float) -> dict:
@@ -16,14 +17,14 @@ def _snapshot(day: str, equity: float) -> dict:
 
 @pytest.fixture
 def snapshot_dir(tmp_path, monkeypatch):
-    root = tmp_path / "snapshots"
-    root.mkdir()
-    for index, day in enumerate(["2026-10-26", "2026-10-27"]):
-        (root / f"{day}.json").write_text(json.dumps(_snapshot(day, 100_000.0 + index)))
-    monkeypatch.setattr(performance, "_snapshot_dir", lambda mode: root)
+    database = tmp_path / "algo_state.sqlite3"
+    monkeypatch.setattr(snapshot_store, "database_path", lambda: database)
+    with closing(snapshot_store.connect()) as connection:
+        for index, day in enumerate(["2026-10-26", "2026-10-27"]):
+            snapshot_store.store_close(connection, _snapshot(day, 100_000.0 + index), trading_mode="algo", account_id="acct-1")
     monkeypatch.setattr(performance, "load_trade_journal", lambda mode, account_id=None: [])
     monkeypatch.setattr(performance, "reconcile_trade_orders", lambda trades, mode: (trades, {}))
-    return root
+    return database
 
 
 def test_writes_feed_atomically_to_given_path(tmp_path, snapshot_dir, monkeypatch):

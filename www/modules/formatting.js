@@ -50,11 +50,12 @@ export function formatLocalDateTime(value) {
     });
 }
 
+// Stock charts are in New York time (ET), the exchange clock the 04:00–20:00 session window is defined in.
 export function formatChartDate(value) {
     const date = parseOpenStockDate(value);
     if (!date) return '—';
     return date.toLocaleDateString('en-GB', {
-        timeZone: 'Europe/Berlin', month: 'short', day: 'numeric'
+        timeZone: 'America/New_York', month: 'short', day: 'numeric'
     });
 }
 
@@ -62,7 +63,7 @@ export function formatChartTime(value) {
     const date = parseOpenStockDate(value);
     if (!date) return '—';
     return date.toLocaleTimeString('en-GB', {
-        timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
     });
 }
 
@@ -70,12 +71,12 @@ export function formatChartHoverTime(value) {
     const date = parseOpenStockDate(value);
     if (!date) return '—';
     const dateLabel = date.toLocaleDateString('en-GB', {
-        timeZone: 'Europe/Berlin', day: 'numeric', month: 'short'
+        timeZone: 'America/New_York', day: 'numeric', month: 'short'
     }).replace(/^(\d+)\s+/, '$1. ');
     const timeLabel = date.toLocaleTimeString('en-GB', {
-        timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false
+        timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
     });
-    return `${dateLabel} – ${timeLabel}`;
+    return `${dateLabel} – ${timeLabel} ET`;
 }
 
 export function chartRangeLabel(range) {

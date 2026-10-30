@@ -4,7 +4,7 @@ from reporting.fills import get_account_fill_report
 
 from bisect import bisect_left
 from collections import defaultdict
-import fcntl
+from contextlib import closing
 import json
 import logging
 import math
@@ -20,7 +20,7 @@ import requests
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 from market.calendar import get_market_schedule
 from equity_research.validation.drift_monitor import LIVE_FEED_SCHEMA
-from reporting import journal_store
+from reporting import journal_store, snapshot_store
 from reporting.journal import dedupe_journal_entries
 from runtime.atomic import atomic_write_json
 
@@ -80,13 +80,6 @@ def get_portfolio(mode: str = "algo") -> dict:
     }
 
 
-def _snapshot_dir(mode: str) -> Path:
-    """Return the Algo snapshot directory."""
-    if mode != "algo":
-        raise ValueError("Only the algo account route is supported")
-    return DATA_DIR / "snapshots"
-
-
 def load_snapshots(days: int | None = None, mode: str = "algo", account_id: str | None = None) -> list[dict]:
     """Load snapshots for one broker account and mode when its ID is given."""
     snapshots, _ = load_snapshots_with_skips(days=days, mode=mode, account_id=account_id)
@@ -96,38 +89,18 @@ def load_snapshots(days: int | None = None, mode: str = "algo", account_id: str 
 def load_snapshots_with_skips(
     days: int | None = None, mode: str = "algo", account_id: str | None = None,
 ) -> tuple[list[dict], int]:
-    """Load snapshots and count the files skipped because they were unreadable."""
-    snapshot_dir = _snapshot_dir(mode)
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
-    files = sorted(snapshot_dir.glob("*.json"))
-    snapshots = []
-    skipped = 0
-    for f in files:
-        try:
-            with open(f) as fp:
-                snapshot = json.load(fp)
-        except (OSError, ValueError) as exc:
-            # json.JSONDecodeError and UnicodeDecodeError are both ValueError.
-            skipped += 1
-            log.warning("Skipping unreadable snapshot %s: %s", f.name, exc)
-            continue
-        if not isinstance(snapshot, dict):
-            skipped += 1
-            log.warning("Skipping snapshot %s: not a JSON object", f.name)
-            continue
-        if account_id is None or (
-            snapshot.get("account_id") == account_id
-            and snapshot.get("trading_mode") == mode
-        ):
-            snapshots.append(snapshot)
+    """Load the daily close snapshots for one mode and, when given, one account.
 
-    if skipped:
-        log.warning("Skipped %d of %d snapshot file(s) in %s", skipped, len(files), snapshot_dir)
+    Returns (snapshots, skipped). Stored rows are always readable, so skipped is 0.
+    """
+    if mode != "algo":
+        raise ValueError("Only the algo account route is supported")
+    with closing(snapshot_store.connect()) as connection:
+        snapshots = snapshot_store.load(mode, account_id, kind="close", connection=connection)
     if days:
         cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         snapshots = [s for s in snapshots if s.get("date", "") >= cutoff]
-
-    return snapshots, skipped
+    return snapshots, 0
 
 
 def load_trade_journal(mode: str = "algo", account_id: str | None = None) -> list[dict]:
@@ -467,23 +440,14 @@ def take_snapshot(
     """Record an Algo equity point or the daily close and benchmark data."""
     if snapshot_kind not in (None, "intraday", "close"):
         raise ValueError(f"Unsupported snapshot kind: {snapshot_kind}")
-    snapshot_root = _snapshot_dir(mode)
-    snapshot_root.mkdir(parents=True, exist_ok=True)
+    if mode != "algo":
+        raise ValueError("Only the algo account route is supported")
     now = now or datetime.now(MARKET_TZ)
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Snapshot time must be timezone-aware")
     now = now.astimezone(MARKET_TZ)
     today = now.strftime("%Y-%m-%d")
     effective_kind = snapshot_kind or "intraday"
-    if snapshot_kind == "intraday":
-        snapshot_dir = snapshot_root / "intraday"
-        snap_file = snapshot_dir / f"{today}.jsonl"
-    else:
-        # Keep the legacy one-off default and the daily close in the root
-        # directory. Risk baselines and the daily performance report read here.
-        snapshot_dir = snapshot_root
-        snap_file = snapshot_root / f"{today}.json"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     if snapshot_kind == "close":
         schedule = get_market_schedule(on_date=now.date(), mode=mode)
@@ -499,15 +463,13 @@ def take_snapshot(
             log.error(f"Failed to fetch portfolio: {e}")
             return None
     portfolio = portfolio_data
-    if snapshot_kind != "intraday" and snap_file.exists() and not force:
-        with open(snap_file) as f:
-            existing = json.load(f)
-        if (
-            existing.get("account_id") == portfolio["account_id"]
-            and existing.get("trading_mode") == mode
-            and existing.get("snapshot_kind") == effective_kind
-        ):
-            log.info("Snapshot for %s already exists for this account and kind", snap_file.name)
+    if snapshot_kind != "intraday" and not force:
+        with closing(snapshot_store.connect()) as connection:
+            existing = snapshot_store.recorded_close(
+                connection, trading_mode=mode, account_id=portfolio["account_id"], market_day=today,
+            )
+        if existing is not None and existing.get("snapshot_kind") == effective_kind:
+            log.info("Snapshot for %s already exists for this account and kind", today)
             return existing
 
     spy_price = None
@@ -559,17 +521,11 @@ def take_snapshot(
         "qqq_daily_pct": round(qqq_daily * 100, 4) if qqq_daily is not None else None,
     }
 
-    if snapshot_kind == "intraday":
-        line = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), allow_nan=False)
-        with snap_file.open("a", encoding="utf-8") as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-            try:
-                stream.write(line + "\n")
-                stream.flush()
-            finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-    else:
-        atomic_write_json(snap_file, snapshot, indent=2, sort_keys=True)
+    with closing(snapshot_store.connect()) as connection:
+        if effective_kind == "intraday":
+            snapshot_store.insert(connection, snapshot, trading_mode=mode, account_id=portfolio["account_id"])
+        else:
+            snapshot_store.store_close(connection, snapshot, trading_mode=mode, account_id=portfolio["account_id"])
 
     spy_label = f"${spy_price:.2f}" if spy_price is not None else "N/A"
     qqq_label = f"${qqq_price:.2f}" if qqq_price is not None else "N/A"

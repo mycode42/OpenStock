@@ -61,34 +61,31 @@ function calculateMetrics(history) {
     };
 }
 
-async function readSnapshotHistory(dataDir, accountId) {
-    const root = path.join(dataDir, 'snapshots');
-    const directories = [root, path.join(root, 'intraday')];
-    const files = [];
-    for (const directory of directories) {
-        let names;
-        try { names = await fs.readdir(directory); }
-        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-        for (const name of names) {
-            const isIntraday = directory !== root;
-            const matches = isIntraday
-                ? /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)
-                : /^\d{4}-\d{2}-\d{2}.*\.json$/.test(name);
-            if (matches) files.push({ path: path.join(directory, name), isIntraday });
-        }
+async function readSnapshotHistory(dataDir, accountId, { tradingMode = 'algo' } = {}) {
+    // Snapshots are rows in the algo state database, one per point; the server reads them read-only.
+    const databasePath = path.join(dataDir, 'algo_state.sqlite3');
+    let db;
+    try { db = new Database(databasePath, { readonly: true, fileMustExist: true }); }
+    catch (error) { if (error.code === 'SQLITE_CANTOPEN') return []; throw error; }
+    try {
+        const sql = accountId
+            ? 'SELECT payload_json FROM account_snapshots WHERE trading_mode = ? AND account_id = ? ORDER BY taken_at'
+            : 'SELECT payload_json FROM account_snapshots WHERE trading_mode = ? ORDER BY taken_at';
+        const rows = db.prepare(sql).all(...(accountId ? [tradingMode, accountId] : [tradingMode]));
+        return rows.map(({ payload_json }) => {
+            try { return JSON.parse(payload_json); }
+            catch { return null; }
+        })
+            .filter(Boolean)
+            .map(snapshotView)
+            .filter(item => item.date && item.equity !== null)
+            .sort((a, b) => (a.timestamp || a.date).localeCompare(b.timestamp || b.date));
+    } catch (error) {
+        if (/no such table/.test(error.message)) return [];
+        throw error;
+    } finally {
+        db.close();
     }
-    files.sort((left, right) => path.basename(left.path).localeCompare(path.basename(right.path)));
-    const snapshotGroups = await Promise.all(files.slice(-740).map(async file => {
-        try {
-            return file.isIntraday ? await readJsonLines(file.path, 50) : [await readJson(file.path)];
-        }
-        catch { return []; }
-    }));
-    const snapshots = snapshotGroups.flat();
-    const matching = snapshots.filter(item => item && item.trading_mode === 'algo' && (!accountId || item.account_id === accountId));
-    return matching.map(snapshotView)
-        .filter(item => item.date && item.equity !== null)
-        .sort((a, b) => (a.timestamp || a.date).localeCompare(b.timestamp || b.date));
 }
 
 function summarizeResearch(report, fallbackDate = null) {

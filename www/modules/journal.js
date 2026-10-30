@@ -114,7 +114,7 @@ function equityAxisBounds(minimum, maximum, ticks = 5) {
 function journalDayMonthLabel(value) {
     const date = parseOpenStockDate(value);
     if (!date) return '';
-    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/Berlin' }).replace(/^(\d+)\s+/, '$1. ');
+    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }).replace(/^(\d+)\s+/, '$1. ');
 }
 
 function journalMonthLabel(value) {

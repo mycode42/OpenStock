@@ -165,11 +165,10 @@ export function createConfig({ request: af, reload, notify }) {
         </article>`;
     }
 
-    // The message line sits outside the part that re-renders, so a success message survives the reload that follows it.
     function ensureShell(container) {
         let body = container.querySelector('.config-body');
         if (!body) {
-            container.innerHTML = '<div id="config-messages" class="config-messages" aria-live="polite"></div><div class="config-body"></div>';
+            container.innerHTML = '<div class="config-body"></div>';
             body = container.querySelector('.config-body');
         }
         return body;

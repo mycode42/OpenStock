@@ -35,6 +35,7 @@ import requests
 from runtime.http import get_session
 
 from portfolio.config import get_mode_config, is_cash_proxy
+from reporting import snapshot_store
 from execution.risk_models import RejectionReason, ValidationResult
 from execution.risk_policy import build_universe_maps
 
@@ -201,15 +202,6 @@ def stage_approved_trade(
     return state
 
 
-def _snapshot_dir(mode: str) -> Path:
-    """Return the Algo snapshot directory used by performance reporting."""
-    from runtime.paths import DATA_DIR
-
-    if mode != "algo":
-        raise ValueError("Only the algo account route is supported")
-    return DATA_DIR / "snapshots"
-
-
 def _risk_baseline_dir(mode: str) -> Path:
     from runtime.paths import DATA_DIR
 
@@ -326,17 +318,12 @@ def _find_weekly_equity_baseline(
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             continue
     baselines: list[tuple[date, float]] = []
-    for snapshot_file in _snapshot_dir(mode).glob("*.json"):
+    for snapshot in snapshot_store.load(mode, account_id, kind="close"):
         try:
-            with open(snapshot_file) as handle:
-                snapshot = json.load(handle)
             snapshot_date = datetime.strptime(str(snapshot["date"]), "%Y-%m-%d").date()
             baseline_equity = float(snapshot["equity"])
             if (
                 previous_week_start <= snapshot_date < week_start
-                and snapshot.get("trading_mode") == mode
-                and snapshot.get("account_id") == account_id
-                and snapshot.get("snapshot_kind") == "close"
                 and math.isfinite(baseline_equity)
                 and baseline_equity > 0
             ):

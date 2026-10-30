@@ -2,13 +2,14 @@
 
 import json
 import sys
+from contextlib import closing
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from reporting import journal_store
+from reporting import journal_store, snapshot_store
 
 from broker import accounts
 from reporting import journal as trade_journal
@@ -102,8 +103,7 @@ def test_replayed_client_id_enriches_order_without_double_counting(monkeypatch, 
 
 def test_account_reset_keeps_old_journal_and_snapshots_out_of_current_report(monkeypatch, tmp_path):
     monkeypatch.setattr(journal_store, "DEFAULT_DATABASE", tmp_path / "algo_state.sqlite3")
-    monkeypatch.setattr(tracker, "_snapshot_dir", lambda mode: tmp_path / "snapshots")
-    (tmp_path / "snapshots").mkdir()
+    monkeypatch.setattr(snapshot_store, "database_path", lambda: tmp_path / "algo_state.sqlite3")
     for account_id, equity in (("old-id", 99_000), ("new-id", 1_000_000)):
         payload = {
             "trading_mode": "algo", "account_id": account_id, "mode": "live",
@@ -114,10 +114,10 @@ def test_account_reset_keeps_old_journal_and_snapshots_out_of_current_report(mon
             }],
         }
         assert trade_journal.append_trades(payload) == 1
-        (tmp_path / "snapshots" / f"{account_id}.json").write_text(json.dumps({
-            "date": "2026-10-08", "trading_mode": "algo", "account_id": account_id,
-            "snapshot_kind": "close", "equity": equity,
-        }))
+        with closing(snapshot_store.connect()) as connection:
+            snapshot_store.store_close(connection, {
+                "date": "2026-10-08", "timestamp": "2026-10-08T16:00:00-04:00", "snapshot_kind": "close", "equity": equity,
+            }, trading_mode="algo", account_id=account_id)
 
     assert len(trade_journal.dedupe_journal_entries(trade_journal.read_journal())) == 2
     current_trades = tracker.load_trade_journal(mode="algo", account_id="new-id")
@@ -137,7 +137,7 @@ def test_close_snapshot_requires_broker_close_and_skips_holidays(monkeypatch, tm
             return frozen.astimezone(tz) if tz else frozen
 
     monkeypatch.setattr(tracker, "datetime", FrozenDateTime)
-    monkeypatch.setattr(tracker, "_snapshot_dir", lambda mode: tmp_path)
+    monkeypatch.setattr(snapshot_store, "database_path", lambda: tmp_path / "algo_state.sqlite3")
     monkeypatch.setattr(tracker, "get_portfolio", lambda mode: {
         "account_name": "Algo", "account_id": "paper-algo", "equity": 100000, "cash": 50000,
         "invested": 50000, "position_count": 1, "daily_pnl": 0,
@@ -152,7 +152,9 @@ def test_close_snapshot_requires_broker_close_and_skips_holidays(monkeypatch, tm
     saved = tracker.take_snapshot(mode="algo", snapshot_kind="close", force=True)
     assert saved["snapshot_kind"] == "close"
     assert saved["account_id"] == "paper-algo"
-    assert json.loads((tmp_path / "2026-10-08.json").read_text())["snapshot_kind"] == "close"
+    with closing(snapshot_store.connect()) as connection:
+        stored = snapshot_store.load("algo", "paper-algo", kind="close", connection=connection)
+    assert [row["date"] for row in stored] == ["2026-10-08"]
 
     monkeypatch.setattr(tracker, "get_market_schedule", lambda **kwargs: None)
     skipped = tracker.take_snapshot(mode="algo", snapshot_kind="close", force=True)

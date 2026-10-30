@@ -1,6 +1,6 @@
 import { escapeHtml } from '../escape.js';
 import { money, signedMoney, signedPercent, dateTime, timeOnly, dateOnly, classForReturn, statusClass, activityIcon } from './format.js';
-import { RANGES, renderChart, sparklinePath } from './equity-chart.js';
+import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js';
 import { renderStrategyPerformance } from './strategies.js';
 
 const ACTIVITY_PAGE_SIZE = 10;
@@ -84,7 +84,7 @@ export function renderAccountPage({ mode, snapshot, settings, range, activityPag
                 <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Recorded paper-account equity · USD</p></div><div class="algo-chart-summary"><strong data-chart-value data-default-chart-value="${money(metrics.equity)}">${money(metrics.equity)}</strong><span class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)} since first snapshot</span></div></div>
                 <div class="algo-range-controls" role="group" aria-label="Chart time range">${RANGES.map(value => `<button type="button" class="algo-range-btn ${range === value ? 'active' : ''}" data-range="${value}" aria-pressed="${range === value}">${value}</button>`).join('')}</div>
                 <div class="algo-chart-wrap">${renderChart(history, range, charts)}</div>
-                <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Source: ${demoMode ? 'simulated sample series' : isOptions ? 'Options paper risk journal' : 'Algo intraday and close snapshots'}</span></div>
+                <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Times: ${escapeHtml(localTimeZone())}</span></div>
             </article>
 
             <article class="card algo-panel algo-strategy-panel">

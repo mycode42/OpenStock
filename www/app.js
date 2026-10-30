@@ -3,7 +3,7 @@ import { createState, sortedStocks, indexStocks } from './modules/state.js';
 import { createCharts } from './modules/charts.js?demo-mode=1&alpaca-usd-only=1';
 import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1&alpaca-usd-only=1';
 import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1';
-import { createAlgoTrader } from './modules/algo-trader.js?v=3.1.0&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
+import { createAlgoTrader } from './modules/algo-trader.js?v=3.1.2&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
 import { createSettings } from './modules/settings.js';
 import { createConfig } from './modules/config.js';
 import { createAlgoUniverse } from './modules/algo-universe.js?cards=1&demo-mode=1';
@@ -19,7 +19,8 @@ function upsertStock(stock) { replaceStocks([...state.stocks.filter(item => item
 function removeStockFromState(id) { replaceStocks(state.stocks.filter(stock => stock.id !== id)); }
 function beginStockMutation(id) { const token=(stockMutationTokens.get(id)||0)+1; stockMutationTokens.set(id, token); stockRevision += 1; return token; }
 function isCurrentStockMutation(id, token) { return stockMutationTokens.get(id) === token; }
-function showA(message, type='i', containerId='ac') { const container=document.getElementById(containerId); if(!container)return; const alert=document.createElement('div'); alert.className=`alert-box ${type}`; alert.textContent=message; container.appendChild(alert); setTimeout(()=>alert.remove(),5000); }
+// Toasts live in a fixed layer, so popping in and out never moves the page.
+function showA(message, type='i') { const layer=document.getElementById('toast-layer'); if(!layer)return; const alert=document.createElement('div'); alert.className=`alert-box toast ${type}`; alert.textContent=message; layer.appendChild(alert); setTimeout(()=>alert.remove(),5000); }
 function pageFromHash(hash=window.location.hash) { const page=hash.replace('#/','').split('?')[0]||'dashboard'; return ['dashboard','algo-universe','journal','config','algo-trader','algo-research','settings'].includes(page)?page:'dashboard'; }
 function showPage(page) { document.querySelectorAll('nav a').forEach(link=>link.classList.toggle('active',link.dataset.page===page)); ['dashboard','algo-universe','journal','config','algo-trader','algo-research','settings'].forEach(name=>document.getElementById(`page-${name}`).classList.toggle('hidden',name!==page)); }
 function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
@@ -38,8 +39,7 @@ const journal = createJournal(context);
 const algoTrader = createAlgoTrader({ request:af, charts });
 const algoUniverse = createAlgoUniverse({ request:af, charts });
 const settings = createSettings();
-// Configure messages go to their own line, which survives the page's own re-render.
-const configMessage = (message, type='i') => showA(message, type, 'config-messages');
+const configMessage = (message, type='i') => showA(message, type);
 const config = createConfig({
     request: (path, options) => af(path, options, message => configMessage(message, 'error')),
     reload: () => loadPage(pageFromHash()),

@@ -2,6 +2,26 @@
 
 All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [algo-trader/CHANGELOG.md](algo-trader/CHANGELOG.md).
 
+## 3.1.2 - 2026-10-30
+
+### Added
+
+- The options paper account records intraday equity snapshots every five minutes, around the clock, and a close after each regular session. The Algo account and the options account now have the same snapshot series.
+- Account snapshots are stored in the `account_snapshots` table of `algo_state.sqlite3`. `algo-trader/scripts/migrate_snapshot_files.py` moved the earlier JSON and JSONL files into it. It checked every record first and then removed the files.
+- Algo equity and options history: the 1D view is the latest 24 hours, with the most recent snapshot on the right edge. The week and longer views use the 04:00–20:00 New York session. Charts show the viewer's time zone and an even two-hour axis.
+- Dashboard alert cards link retired and triggered alerts to Configure, where they are rearmed.
+- The README starts with a demo quickstart, then covers local setup, the Algo Trader and Docker or Podman.
+
+### Changed
+
+- Stock chart times are shown in New York time (ET).
+- Configure and other notifications appear in a fixed layer, so they no longer move the page.
+
+### Fixed
+
+- The Algo equity history read only the last 50 intraday rows per day, which cut most of each session. Full sessions now load.
+- Options history uses its own snapshots once they exist. The risk journal fills only the days before the first snapshot.
+
 ## 3.1.0 - 2026-10-29
 
 ### Breaking

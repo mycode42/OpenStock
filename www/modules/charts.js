@@ -22,7 +22,7 @@ function smoothCoordinatePath(points) {
 }
 
 function isMarketClosedWeekend(date) {
-    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', weekday: 'short' }).format(date);
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(date);
     return weekday === 'Sat' || weekday === 'Sun';
 }
 
@@ -207,7 +207,7 @@ function renderHistoryChart(points, range, { now = new Date(), priceField = 'pri
     const axisTicks = isWeek
         ? weekStarts.map((start, index) => ({ fraction: (index + .5) / weekStarts.length, label: formatChartDate(new Date(start).toISOString()) }))
         : hasFixedDayScale
-        ? sessionTicks(session).map(({ fraction, time }) => ({ fraction, label: formatSessionTime(time.toISOString()) }))
+        ? sessionTicks(session).map(({ fraction, time }) => ({ fraction, label: `${formatSessionTime(time.toISOString())}${fraction === 1 ? ' ET' : ''}` }))
         : [0, 0.25, 0.5, 0.75, 1].map(fraction => {
             if (fraction === 0) return { fraction, label: axisStart };
             if (fraction === 1) return { fraction, label: axisEnd };

@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
-const { calculateMetrics } = require('./equity');
+const { calculateMetrics, readSnapshotHistory } = require('./equity');
 const { finite, isoTimestamp, readCoordinatorState, readJson, readJsonLines, safeObject } = require('./io');
 const { attachEuroAmounts, optionsStrategyPerformance, readUsdEurRate } = require('./performance');
 const { loadOptionsSettings } = require('./settings');
@@ -227,6 +227,13 @@ async function buildOptionsPayload(root) {
         if (point.date && point.equity !== null) history.push(point);
         lastRowOfDay = row;
     }
+    // Intraday and close snapshots are the account history, as for the Algo account. The risk journal fills only
+    // the days before the first snapshot.
+    const optionsAccountId = String(process.env.ALPACA_OPTIONS_ACCOUNT_ID || '').trim();
+    const snapshotHistory = optionsAccountId ? await readSnapshotHistory(dataDir, optionsAccountId, { tradingMode: 'options' }) : [];
+    const firstSnapshotAt = snapshotHistory[0]?.timestamp || null;
+    const journalHistory = firstSnapshotAt ? history.filter(point => point.timestamp && point.timestamp < firstSnapshotAt) : history;
+    const accountHistory = [...journalHistory, ...snapshotHistory];
     const latestRisk = riskRows[riskRows.length - 1] || {};
     const universe = [...new Set(decisions.slice(-50).map(row => safeObject(row.signal).underlying).filter(Boolean))];
     const disabled = !settings.enabled;
@@ -266,7 +273,7 @@ async function buildOptionsPayload(root) {
             active_strategies_label: 'Strategies available in this regime',
             universe_count: universe.length,
         },
-        performance: { history, metrics: calculateMetrics(history) },
+        performance: { history: accountHistory, metrics: calculateMetrics(accountHistory) },
         strategy_performance: attachEuroAmounts(strategyPerformance, fx),
         activity: optionsActivityView(decisions, orders, fills, assignments, research),
         research,

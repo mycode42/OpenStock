@@ -1,11 +1,12 @@
 import json
 import logging
+from contextlib import closing
 from decimal import Decimal
 
 import pytest
 
 from equity_research.validation import drift_monitor
-from reporting import performance
+from reporting import performance, snapshot_store
 from reporting.fills import calculate_realized_pnl
 
 
@@ -89,22 +90,19 @@ def test_live_feed_round_trips_into_drift_monitor(tmp_path):
     assert drift_monitor.load_live_drift_feed(feed) == report["strategies"]
 
 
-def test_unreadable_snapshot_files_are_skipped_and_counted(tmp_path, monkeypatch, caplog):
-    monkeypatch.setattr(performance, "DATA_DIR", tmp_path)
-    snapshot_dir = tmp_path / "snapshots"
-    snapshot_dir.mkdir()
-    (snapshot_dir / "2026-10-19.json").write_text(json.dumps(_snapshot("2026-10-19", 100_000.0)))
-    (snapshot_dir / "2026-10-20.json").write_text(json.dumps(_snapshot("2026-10-20", 101_000.0)))
-    (snapshot_dir / "2026-10-21.json").write_text("{not json")
-    (snapshot_dir / "2026-10-22.json").write_text(json.dumps([1, 2, 3]))
-    (snapshot_dir / "2026-10-23.json").write_bytes(b"\xff\xfe\x00")
+def test_stored_close_snapshots_load_in_date_order_for_one_account(tmp_path, monkeypatch):
+    database = tmp_path / "algo_state.sqlite3"
+    monkeypatch.setattr(snapshot_store, "database_path", lambda: database)
+    with closing(snapshot_store.connect()) as connection:
+        for day, equity, account in [("2026-10-20", 101000.0, "acct-1"), ("2026-10-19", 100000.0, "acct-1"), ("2026-10-19", 5.0, "acct-2")]:
+            snapshot_store.store_close(connection, _snapshot(day, equity, account), trading_mode="algo", account_id=account)
+        intraday = {**_snapshot("2026-10-21", 102000.0), "snapshot_kind": "intraday", "timestamp": "2026-10-21T10:00:00-04:00"}
+        snapshot_store.insert(connection, intraday, trading_mode="algo", account_id="acct-1")
 
-    with caplog.at_level(logging.WARNING, logger="perf_v2"):
-        snapshots, skipped = performance.load_snapshots_with_skips(mode="algo", account_id="acct-1")
+    snapshots, skipped = performance.load_snapshots_with_skips(mode="algo", account_id="acct-1")
 
     assert [row["date"] for row in snapshots] == ["2026-10-19", "2026-10-20"]
-    assert skipped == 3
-    assert "Skipped 3 of 5 snapshot file(s)" in caplog.text
+    assert skipped == 0
     assert performance.load_snapshots(mode="algo", account_id="acct-1") == snapshots
 
 

@@ -20,6 +20,7 @@ from broker.algo import AlgoAlpaca
 from broker.options import OptionsPaperClient
 from market.sessions import ET, get_trading_window
 from options.paper import run_paper_cycle
+from options.snapshots import OptionsSnapshotSchedule
 from runtime.paths import DATA_DIR
 
 
@@ -103,6 +104,7 @@ def run_loop(
         calendar_day = None
         calendar_loaded_at = 0.0
         next_cycle_at = 0.0
+        snapshots = OptionsSnapshotSchedule(client)
 
         try:
             while not STOP.is_set():
@@ -128,6 +130,12 @@ def run_loop(
                         continue
 
                 window = get_trading_window(now, calendar)
+                try:
+                    captured = snapshots.tick(now, window)
+                    if captured:
+                        LOG.info("Options %s equity snapshot saved", captured)
+                except Exception:
+                    LOG.exception("Options equity snapshot failed; the trading loop continues")
                 if window is None or window.name != "regular":
                     STOP.wait(SESSION_POLL_SECONDS)
                     continue

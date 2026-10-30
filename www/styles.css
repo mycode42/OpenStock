@@ -76,6 +76,11 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 .alert-box.info{background:rgba(200,255,0,.1);border-left:3px solid rgba(200,255,0,.88)}
 .alert-box.error{background:rgba(239,68,68,.1);border-left:3px solid #ef4444}
 .alert-box.success{background:rgba(34,197,94,.1);border-left:3px solid #22c55e}
+.toast-layer{position:fixed;right:1rem;bottom:1rem;z-index:1000;display:grid;gap:.5rem;width:min(24rem,calc(100vw - 2rem));pointer-events:none}
+.toast-layer .alert-box{margin:0;background-color:#0a0a0a;background-image:linear-gradient(var(--toast-tint),var(--toast-tint));box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.toast-layer .alert-box.info{--toast-tint:rgba(200,255,0,.1)}
+.toast-layer .alert-box.error{--toast-tint:rgba(239,68,68,.1)}
+.toast-layer .alert-box.success{--toast-tint:rgba(34,197,94,.1)}
 .section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
 .section-title{font-size:1.25rem;color:#ffffff}
 .hidden{display:none}
@@ -672,9 +677,7 @@ a.alert-link{text-decoration:none;color:inherit}
   #page-config .config-zone-actions { grid-template-columns: 1fr 1fr; }
 }
 
-/* Configure: messages line, and stock rows with fixed columns so the status and actions line up */
-#page-config .config-messages { display: grid; gap: 0.4rem; margin-bottom: 0.6rem; }
-#page-config .config-messages:empty { display: none; }
+/* Configure: stock rows with fixed columns so the status and actions line up */
 #page-config .config-stock-main {
   display: grid;
   grid-template-columns: 210px minmax(0, 1fr) 300px 170px;

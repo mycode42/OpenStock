@@ -60,7 +60,7 @@ test('one-day charts use a fixed 04:00–20:00 New York scale and fill the width
         ], '1d', { now });
         assert.match(html, /&quot;x&quot;:99/);
         assert.match(html, /<span style="left:0%">04:00<\/span>/);
-        assert.match(html, /<span style="left:100%">20:00<\/span>/);
+        assert.match(html, /<span style="left:100%">20:00 ET<\/span>/);
         assert.doesNotMatch(html, /09:00|01:00|22:00/);
         assert.match(html, /class="history-price" data-chart-value data-default-chart-value="€100,00 – €101,00"/);
         assert.match(html, /<span style="left:25%">08:00<\/span><span style="left:50%">12:00<\/span><span style="left:75%">16:00<\/span>/);
@@ -69,7 +69,7 @@ test('one-day charts use a fixed 04:00–20:00 New York scale and fill the width
     }
 });
 
-test('empty 1d charts show Market closed on Berlin weekends', async () => {
+test('empty 1d charts show Market closed on New York weekends', async () => {
     const sourceDir = path.join(root, 'www/modules');
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-weekend-chart-'));
     fs.writeFileSync(path.join(tempDir, 'package.json'), '{"type":"module"}\n');

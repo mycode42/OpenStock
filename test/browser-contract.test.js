@@ -82,7 +82,8 @@ test('dashboard exposes Alpaca alert rearming and Journal trade rows remain read
     const journal = fs.readFileSync(path.join(root, 'modules', 'journal.js'), 'utf8');
     const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-    assert.match(dashboard, /data-alpaca-rearm/);
+    assert.doesNotMatch(dashboard, /data-alpaca-rearm|Rearm<\/button>/);
+    assert.match(dashboard, /class="threshold disabled alert-link" href="#\/config\?stock=\$\{escapeHtml\(stock\.id\)\}&level=\$\{escapeHtml\(level\.id\)\}"/);
     assert.match(app, /af\('\/alpaca\/journal'\)/);
     assert.doesNotMatch(app, /broker-profile/);
     assert.doesNotMatch(dashboard, /data-stock-action="configureAlerts"/);
@@ -131,6 +132,31 @@ test('Journal displays instrument and quantity with trades without exposing trad
     assert.match(journal, /journalTradeOpenedDate\(trade\.opened_at\)/);
     assert.match(journal, /journalTradePrice\(trade\.entry_price_usd, trade\.currency, trade\.asset_type\)/);
     assert.match(journal, /journalTradePrice\(trade\.exit_price_usd, trade\.currency, trade\.asset_type\)/);
+});
+
+test('notifications use a fixed toast layer so they never move the page', () => {
+    const root = path.join(__dirname, '..', 'www');
+    const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+    const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+    const config = fs.readFileSync(path.join(root, 'modules', 'config.js'), 'utf8');
+    const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
+    assert.match(index, /<div id="toast-layer" class="toast-layer"/);
+    assert.match(app, /document\.getElementById\('toast-layer'\)/);
+    assert.doesNotMatch(app, /config-messages|containerId/);
+    assert.doesNotMatch(config, /config-messages/);
+    assert.match(styles, /\.toast-layer\{position:fixed;/);
+});
+
+test('equity and options charts share the 04:00–20:00 ET cut, time-based x and local-time labels', () => {
+    const chart = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'algo-trader', 'equity-chart.js'), 'utf8');
+    const journal = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'journal.js'), 'utf8');
+    assert.match(chart, /const RANGE_SPAN_MS = \{ '1W': 7 \* DAY_MS/);
+    assert.match(chart, /function fraction\(time, start, span\)/);
+    assert.match(chart, /marketDay = new Intl\.DateTimeFormat\('en-CA', \{ timeZone: 'America\/New_York'/);
+    assert.match(chart, /const session = sessionWindow\(new Date\(time\)\);/);
+    assert.match(chart, /lineSegments/);
+    assert.doesNotMatch(chart, /timeZone: '(?!America\/New_York)/);
+    assert.doesNotMatch(journal.match(/function journalDayMonthLabel[^}]*}/)[0], /Europe\/Berlin/);
 });
 
 test('standalone PWA supports pull-to-refresh and refreshes its cached entry assets', () => {
