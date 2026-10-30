@@ -38,7 +38,7 @@ The historical options backfill needs an active ThetaData subscription for the w
 1. Subscribe to a ThetaData plan that includes historical options EOD data. Check the plan's current price and terms with ThetaData before you subscribe; this repository does not record them.
 2. Copy the API key into the root `.env` as `THETA_DATA_API_KEY`. Do not commit it.
 3. Install the optional client into the project venv: `POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --with ai,ml,research,theta` (Python 3.12 or newer).
-4. Start the pipeline once by hand to confirm access: `.venv/bin/python -m scripts.options.theta_pipeline`. It runs the last 20 sessions for every symbol first, then the full EOD archive, then the opening archive. The 03:00 cron job resumes it daily, and a stopped run loses nothing.
+4. Start the pipeline once by hand to confirm access: `.venv/bin/python -m scripts.options.theta_pipeline`. It runs the last 20 sessions for every symbol first, then the full EOD archive, then the opening archive. The cron job runs it every four hours and restarts it if it stopped, and a stopped run loses nothing.
 5. Watch progress in `data/options/research/theta/<SYMBOL>/`. A symbol is finished when its manifest shows `archive_complete: true`, for the full date range (2020-01-01 onward, per symbol listing dates).
 6. When both archives are complete for every symbol, the pipeline sends a Telegram message and shows a notice on the Algo research page. Then cancel the ThetaData subscription and remove `THETA_DATA_API_KEY` from `.env`. The pipeline never calls ThetaData again. Current sessions come from the daily Alpaca capture, which records all 117 symbols.
 
