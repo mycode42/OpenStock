@@ -590,8 +590,9 @@ a.alert-link{text-decoration:none;color:inherit}
 .lab-ok { color: var(--positive, #2e7d32); }
 .lab-bad { color: var(--negative, #c62828); }
 .lab-tabs { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
-.lab-tab { border: 1px solid currentColor; background: transparent; padding: 6px 12px; border-radius: 999px; cursor: pointer; }
-.lab-tab.active { font-weight: 600; }
+.lab-tab { border: 1px solid var(--os-border); background: transparent; color: var(--os-muted); padding: 6px 12px; border-radius: 999px; cursor: pointer; }
+.lab-tab:hover { color: var(--os-text); border-color: var(--os-muted); }
+.lab-tab.active { font-weight: 600; color: var(--os-text); border-color: var(--os-accent); background: var(--os-soft-accent); }
 .lab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .lab-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.9em; }
 .lab-table th, .lab-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.25); vertical-align: top; }
@@ -631,6 +632,17 @@ a.alert-link{text-decoration:none;color:inherit}
 .sys-table th, .sys-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #1a1a1a; }
 .sys-table th:nth-child(n+2), .sys-table td:nth-child(n+2) { text-align: right; }
 @media (max-width: 720px) { .sys-gauge { margin-left: 0; } .sys-grid { grid-template-columns: 1fr; } .sys-panel { position: fixed; left: 4vw; right: 4vw; top: 6rem; width: auto; } }
+/* The host load gauge follows the theme; status colours get darker in light modes so they stay readable. */
+.sys-toggle{background:var(--os-raised);border-color:var(--os-border);color:var(--os-text)}
+.sys-toggle:hover{border-color:var(--os-muted)}
+.sys-label,.sys-section,.sys-muted{color:var(--os-muted)}
+.sys-bar{background:var(--os-border)}
+.sys-panel{background:var(--os-surface);border-color:var(--os-border);color:var(--os-text);box-shadow:0 12px 30px rgba(0,0,0,.12)}
+.sys-table th,.sys-table td{border-bottom-color:var(--os-border)}
+.sys-research{color:var(--os-text)}
+html[data-theme-mode="light"] .sys-ok{color:#3f6212}
+html[data-theme-mode="light"] .sys-warn{color:#a16207}
+html[data-theme-mode="light"] .sys-high{color:#b91c1c}
 
 .lab-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; }
 .lab-head > .algo-section-heading { flex: 1 1 auto; min-width: 0; }
