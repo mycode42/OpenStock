@@ -1,4 +1,4 @@
-const CACHE_NAME = 'openstock-v3.1.0-alpaca-only-kpi-colors-1-demo-banner-1-configure-2-session-window-2-popover-grace-1-session-0900-banner-algo-root-removed-1-research-lab-2-system-gauge-2-configure-zones-1-configure-messages-1';
+const CACHE_NAME = 'openstock-v3.1.0-alpaca-only-kpi-colors-1-demo-banner-1-configure-2-session-window-2-popover-grace-1-session-0900-banner-algo-root-removed-1-research-lab-2-system-gauge-2-configure-zones-1-configure-messages-1-config-controls-2';
 const REQUIRED_ASSETS = [
   './',
   './index.html',

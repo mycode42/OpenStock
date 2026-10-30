@@ -14,7 +14,7 @@ function orderToken() {
 
 function usd(value) {
     if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return '—';
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(Number(value));
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value));
 }
 
 function formatQuantity(value) {
@@ -83,8 +83,10 @@ export function createConfig({ request: af, reload, notify }) {
             + `<div class="config-zone config-zone-actions">${actions}</div>`;
     }
 
-    // Always two action slots, so Save and Delete keep their columns even when a row shows one button.
+    // Two action columns, so Save and Delete keep their columns.
+    // A single button stands alone and spans the zone; a pair keeps its two columns.
     function actionZone(...buttons) {
+        if (buttons.length === 1) return buttons[0];
         const slots = [...buttons];
         while (slots.length < 2) slots.push('<span class="config-action-slot" aria-hidden="true"></span>');
         return slots.join('');
@@ -103,7 +105,7 @@ export function createConfig({ request: af, reload, notify }) {
         const id = escapeHtml(level.id);
         return `<form class="config-alert-row" data-alert-id="${id}">${rowZones(
             `<select data-alert-side aria-label="${escapeHtml(stock.symbol)} alert side"><option value="BUY" ${level.side === 'BUY' ? 'selected' : ''}>BUY</option><option value="SELL" ${level.side === 'SELL' ? 'selected' : ''}>SELL</option></select>`
-                + `<div class="config-price-input"><span>$</span><input type="number" min=".000001" step=".000001" data-alert-price value="${escapeHtml(level.price_usd)}" aria-label="${escapeHtml(stock.symbol)} alert price"></div>${openOrderNote(level)}`,
+                + `<div class="config-price-input"><span>$</span><input type="number" min="0.01" step="0.01" data-alert-price value="${Number(level.price_usd).toFixed(2)}" aria-label="${escapeHtml(stock.symbol)} alert price"></div>${openOrderNote(level)}`,
             stateZone(level), orderZone(level), actionZone(saveButton, deleteButton))}</form>`;
     }
 
@@ -131,10 +133,10 @@ export function createConfig({ request: af, reload, notify }) {
         const retired = levels.filter(level => level.retired);
         const addPrice = `<form class="config-alert-row config-alert-add" data-stock-id="${escapeHtml(stock.id)}">${rowZones(
             `<select data-alert-side aria-label="New alert side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>`
-                + `<div class="config-price-input"><span>$</span><input type="number" min=".000001" step=".000001" data-alert-price required placeholder="New price" aria-label="New alert price"></div>`,
+                + `<div class="config-price-input"><span>$</span><input type="number" min="0.01" step="0.01" data-alert-price required placeholder="New price" aria-label="New alert price"></div>`,
             '', '', actionZone('<button type="submit" class="btn config-action config-add btn-primary">Add price alert</button>'))}</form>`;
         const addPercent = `<form class="config-alert-row config-percent-add" data-stock-id="${escapeHtml(stock.id)}">${rowZones(
-            `<label for="percent-direction-${escapeHtml(stock.id)}">Move</label><select id="percent-direction-${escapeHtml(stock.id)}" data-alert-direction aria-label="Percentage alert direction"><option value="DROP">Drop by</option><option value="GAIN">Gain by</option></select>`
+            `<select id="percent-direction-${escapeHtml(stock.id)}" data-alert-direction aria-label="Percentage alert direction"><option value="DROP">Drop by</option><option value="GAIN">Gain by</option></select>`
                 + `<div class="config-percent-input"><input type="number" min=".01" max="99.99" step=".01" data-alert-percent required placeholder="%" aria-label="Percentage move"><span>%</span></div>`,
             '', '', actionZone('<button type="submit" class="btn config-action config-add btn-primary">Add percentage alert</button>'))}</form>`;
         return `<div class="config-alert-editor" data-level-stock="${escapeHtml(stock.id)}">
@@ -248,7 +250,7 @@ export function createConfig({ request: af, reload, notify }) {
     }
 
     async function addPriceLevel(form) {
-        const price = Number(form.querySelector('[data-alert-price]').value);
+        const price = Math.round(Number(form.querySelector('[data-alert-price]').value) * 100) / 100;
         if (!(price > 0)) return notify?.('Alert price must be positive', 'error');
         await mutate(`/alpaca/watchlist/${encodeURIComponent(form.dataset.stockId)}/alert-levels`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -274,7 +276,7 @@ export function createConfig({ request: af, reload, notify }) {
             if (!(changePct > 0)) return notify?.('Percentage move must be positive', 'error');
             body.change_pct = changePct;
         } else {
-            const price = Number(form.querySelector('[data-alert-price]').value);
+            const price = Math.round(Number(form.querySelector('[data-alert-price]').value) * 100) / 100;
             if (!(price > 0)) return notify?.('Alert price must be positive', 'error');
             body.side = form.querySelector('[data-alert-side]').value;
             body.price_usd = price;

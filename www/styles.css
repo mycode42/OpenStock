@@ -696,3 +696,18 @@ a.alert-link{text-decoration:none;color:inherit}
   #page-config .config-stock-main { grid-template-columns: 1fr; }
 }
 
+/* Configure controls: one height and one width per kind, so the add row and the alert rows line up */
+#page-config { --ctl-h: 2.5rem; --select-w: 120px; --amount-w: 170px; }
+#page-config .config-zone-fields select { flex: 0 0 var(--select-w); width: var(--select-w); height: var(--ctl-h); box-sizing: border-box; }
+#page-config .config-zone-fields .config-price-input,
+#page-config .config-zone-fields .config-percent-input { flex: 0 0 var(--amount-w); width: var(--amount-w); height: var(--ctl-h); box-sizing: border-box; display: flex; align-items: center; }
+#page-config .config-price-input input,
+#page-config .config-percent-input input { height: 100%; width: 100%; min-width: 0; box-sizing: border-box; }
+#page-config .config-percent-row .config-zone-fields { grid-template-columns: minmax(0, 1fr) var(--amount-w); }
+#page-config .config-percent-add .config-zone-fields select { flex: 0 0 var(--select-w); width: var(--select-w); }
+#page-config .config-action,
+#page-config .btn.config-action { height: var(--ctl-h); }
+#page-config .config-action-slot { height: var(--ctl-h); }
+/* Unit suffixes sit on the input, not on a dark chip */
+#page-config .config-price-input span,
+#page-config .config-percent-input span { background: transparent; }
