@@ -59,16 +59,39 @@ export function createConfig({ request: af, reload, notify }) {
             : '<span class="config-position">No open Alpaca position</span>';
     }
 
-    // Real-order switch. BUY shows its budget; SELL says it exits the whole position.
-    function realOrderControl(level) {
-        const id = escapeHtml(level.id);
-        if (level.side === 'SELL') {
-            return `<label class="config-switch config-real-order"><input type="checkbox" data-real-order="${id}" ${level.auto_order ? 'checked' : ''}><span>${level.auto_order ? 'Real order · sells whole position' : 'Real order when it fires'}</span></label>`;
-        }
-        const budget = level.auto_order && level.order_budget_usd
-            ? `<span class="config-budget">${escapeHtml(usd(level.order_budget_usd))} budget</span><button type="button" class="btn btn-sm btn-secondary" data-budget="${id}">Edit budget</button>` : '';
-        return `<label class="config-switch config-real-order"><input type="checkbox" data-real-order="${id}" ${level.auto_order ? 'checked' : ''}><span>Real order when it fires</span></label>${budget}`;
+    // Each alert row has four fixed zones (fields, state, real order, actions), so every row and every button lines up.
+    function stateZone(level) {
+        return `<label class="config-switch"><input type="checkbox" data-alert-enabled ${level.enabled ? 'checked' : ''}><span>${level.enabled ? 'Active' : 'Paused'}</span></label>`;
     }
+
+    // Real order: a checkbox, one detail line, and the budget button. Empty slots keep the zone's shape when a value is absent.
+    function orderZone(level) {
+        const id = escapeHtml(level.id);
+        const on = Boolean(level.auto_order);
+        const detail = !on ? '' : level.side === 'SELL' ? 'sells whole position' : `${escapeHtml(usd(level.order_budget_usd))} budget`;
+        const budget = on && level.side === 'BUY'
+            ? `<button type="button" class="btn config-action btn-secondary" data-budget="${id}">Edit budget</button>`
+            : '<span class="config-action-slot" aria-hidden="true"></span>';
+        return `<label class="config-real-order"><input type="checkbox" data-real-order="${id}" ${on ? 'checked' : ''}><span>Real order</span></label>`
+            + `<span class="config-order-detail">${detail}</span>${budget}`;
+    }
+
+    function rowZones(fields, state, order, actions) {
+        return `<div class="config-zone config-zone-fields">${fields}</div>`
+            + `<div class="config-zone config-zone-state">${state}</div>`
+            + `<div class="config-zone config-zone-order">${order}</div>`
+            + `<div class="config-zone config-zone-actions">${actions}</div>`;
+    }
+
+    // Always two action slots, so Save and Delete keep their columns even when a row shows one button.
+    function actionZone(...buttons) {
+        const slots = [...buttons];
+        while (slots.length < 2) slots.push('<span class="config-action-slot" aria-hidden="true"></span>');
+        return slots.join('');
+    }
+
+    const saveButton = '<button type="submit" class="btn config-action btn-secondary" data-alert-action="save">Save</button>';
+    const deleteButton = '<button type="button" class="btn config-action btn-danger" data-alert-action="delete">Delete</button>';
 
     function openOrderNote(level) {
         const order = level.open_order;
@@ -76,20 +99,53 @@ export function createConfig({ request: af, reload, notify }) {
         return `<small class="config-order-note">Order ${escapeHtml(order.status)} · ${escapeHtml(order.side)} ${escapeHtml(order.qty)} @ ${escapeHtml(usd(order.limit_price_usd))}</small>`;
     }
 
+    function priceRow(stock, level) {
+        const id = escapeHtml(level.id);
+        return `<form class="config-alert-row" data-alert-id="${id}">${rowZones(
+            `<select data-alert-side aria-label="${escapeHtml(stock.symbol)} alert side"><option value="BUY" ${level.side === 'BUY' ? 'selected' : ''}>BUY</option><option value="SELL" ${level.side === 'SELL' ? 'selected' : ''}>SELL</option></select>`
+                + `<div class="config-price-input"><span>$</span><input type="number" min=".000001" step=".000001" data-alert-price value="${escapeHtml(level.price_usd)}" aria-label="${escapeHtml(stock.symbol)} alert price"></div>${openOrderNote(level)}`,
+            stateZone(level), orderZone(level), actionZone(saveButton, deleteButton))}</form>`;
+    }
+
+    function percentRow(stock, level) {
+        const id = escapeHtml(level.id);
+        return `<form class="config-alert-row config-percent-row" data-alert-id="${id}">${rowZones(
+            `<div class="config-alert-description"><span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}</span><small>From ${escapeHtml(usd(level.reference_price_usd))} · target ${escapeHtml(usd(level.price_usd))}</small></div>`
+                + `<div class="config-percent-input"><input type="number" min=".01" max="${level.side === 'BUY' ? '99.99' : '9999.99'}" step=".01" data-alert-percent value="${escapeHtml(level.change_pct)}" aria-label="${escapeHtml(stock.symbol)} percentage move"><span>%</span></div>${openOrderNote(level)}`,
+            stateZone(level), orderZone(level), actionZone(saveButton, deleteButton))}</form>`;
+    }
+
+    function retiredRow(level) {
+        const id = escapeHtml(level.id);
+        const target = level.trigger_mode === 'PERCENT' ? ` · target ${escapeHtml(usd(level.price_usd))}` : '';
+        return `<div class="config-retired-row config-alert-row" data-alert-id="${id}">${rowZones(
+            `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${target}</span>`,
+            '<span class="config-level-state">Triggered</span>',
+            `<span class="config-order-detail">${level.auto_order ? 'Real order on' : 'Notification only'}</span>`,
+            actionZone('<button type="button" class="btn config-action btn-success" data-alert-action="rearm">Rearm</button>', deleteButton))}</div>`;
+    }
+
     function alertEditor(stock) {
         const levels = stock.alert_levels || [];
         const editable = levels.filter(level => !level.retired);
         const retired = levels.filter(level => level.retired);
+        const addPrice = `<form class="config-alert-row config-alert-add" data-stock-id="${escapeHtml(stock.id)}">${rowZones(
+            `<select data-alert-side aria-label="New alert side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select>`
+                + `<div class="config-price-input"><span>$</span><input type="number" min=".000001" step=".000001" data-alert-price required placeholder="New price" aria-label="New alert price"></div>`,
+            '', '', actionZone('<button type="submit" class="btn config-action config-add btn-primary">Add price alert</button>'))}</form>`;
+        const addPercent = `<form class="config-alert-row config-percent-add" data-stock-id="${escapeHtml(stock.id)}">${rowZones(
+            `<label for="percent-direction-${escapeHtml(stock.id)}">Move</label><select id="percent-direction-${escapeHtml(stock.id)}" data-alert-direction aria-label="Percentage alert direction"><option value="DROP">Drop by</option><option value="GAIN">Gain by</option></select>`
+                + `<div class="config-percent-input"><input type="number" min=".01" max="99.99" step=".01" data-alert-percent required placeholder="%" aria-label="Percentage move"><span>%</span></div>`,
+            '', '', actionZone('<button type="submit" class="btn config-action config-add btn-primary">Add percentage alert</button>'))}</form>`;
         return `<div class="config-alert-editor" data-level-stock="${escapeHtml(stock.id)}">
             <div class="config-alert-heading"><div><strong>Price and percentage alerts</strong><p>Each alert sends one Telegram notification and retires. Turn on "Real order" to also place a day limit order when it fires.</p></div>${positionSummary(stock)}</div>
             <div class="config-alert-list">
-                ${editable.map(level => level.trigger_mode === 'PERCENT'
-                    ? `<form class="config-alert-row config-percent-row" data-alert-id="${escapeHtml(level.id)}"><div class="config-alert-description"><span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}</span><small>From ${escapeHtml(usd(level.reference_price_usd))} · target ${escapeHtml(usd(level.price_usd))}</small>${openOrderNote(level)}</div><div class="config-percent-input"><input type="number" min=".01" max="${level.side === 'BUY' ? '99.99' : '9999.99'}" step=".01" data-alert-percent value="${escapeHtml(level.change_pct)}" aria-label="${escapeHtml(stock.symbol)} percentage move"><span>%</span></div><label class="config-switch"><input type="checkbox" data-alert-enabled ${level.enabled ? 'checked' : ''}><span>${level.enabled ? 'Active' : 'Paused'}</span></label>${realOrderControl(level)}<button type="submit" class="btn btn-sm btn-secondary" data-alert-action="save">Save</button><button type="button" class="btn btn-sm btn-danger" data-alert-action="delete">Delete</button></form>`
-                    : `<form class="config-alert-row" data-alert-id="${escapeHtml(level.id)}"><select data-alert-side aria-label="${escapeHtml(stock.symbol)} alert side"><option value="BUY" ${level.side === 'BUY' ? 'selected' : ''}>BUY</option><option value="SELL" ${level.side === 'SELL' ? 'selected' : ''}>SELL</option></select><div class="config-price-input"><span>$</span><input type="number" min=".000001" step=".000001" data-alert-price value="${escapeHtml(level.price_usd)}" aria-label="${escapeHtml(stock.symbol)} alert price"></div><label class="config-switch"><input type="checkbox" data-alert-enabled ${level.enabled ? 'checked' : ''}><span>${level.enabled ? 'Active' : 'Paused'}</span></label>${realOrderControl(level)}${openOrderNote(level)}<button type="submit" class="btn btn-sm btn-secondary" data-alert-action="save">Save</button><button type="button" class="btn btn-sm btn-danger" data-alert-action="delete">Delete</button></form>`).join('') || '<p class="journal-empty">No active or paused alerts.</p>'}
-                ${retired.length ? `<div class="config-retired"><div class="config-retired-title">Triggered · ready to rearm</div>${retired.map(level => `<div class="config-retired-row" data-alert-id="${escapeHtml(level.id)}"><span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${level.trigger_mode === 'PERCENT' ? ` · target ${escapeHtml(usd(level.price_usd))}` : ''}</span><span>${level.auto_order ? 'Real order on' : 'Notification only'}</span><button type="button" class="btn btn-sm btn-success" data-alert-action="rearm">Rearm</button><button type="button" class="btn btn-sm btn-danger" data-alert-action="delete">Delete</button></div>`).join('')}</div>` : ''}
+                ${editable.map(level => (level.trigger_mode === 'PERCENT' ? percentRow(stock, level) : priceRow(stock, level))).join('') || '<p class="journal-empty">No active or paused alerts.</p>'}
+                ${retired.length ? `<div class="config-retired"><div class="config-retired-title">Triggered · ready to rearm</div>${retired.map(retiredRow).join('')}</div>` : ''}
             </div>
-            <form class="config-alert-add" data-stock-id="${escapeHtml(stock.id)}"><select data-alert-side aria-label="New alert side"><option value="BUY">BUY</option><option value="SELL">SELL</option></select><div class="config-price-input"><span>$</span><input type="number" min=".000001" step=".000001" data-alert-price required placeholder="New price" aria-label="New alert price"></div><button type="submit" class="btn btn-sm btn-primary">Add price alert</button></form>
-            <form class="config-percent-add" data-stock-id="${escapeHtml(stock.id)}"><label for="percent-direction-${escapeHtml(stock.id)}">Move</label><select id="percent-direction-${escapeHtml(stock.id)}" data-alert-direction aria-label="Percentage alert direction"><option value="DROP">Drop by</option><option value="GAIN">Gain by</option></select><div class="config-percent-input"><input type="number" min=".01" max="99.99" step=".01" data-alert-percent required placeholder="%" aria-label="Percentage move"><span>%</span></div><button type="submit" class="btn btn-sm btn-primary">Add percentage alert</button><small class="config-percent-help">Measured from the current Alpaca quote, then retires after one notification.</small></form>
+            ${addPrice}
+            ${addPercent}
+            <small class="config-percent-help">Percentage alerts are measured from the current Alpaca quote, then retire after one notification.</small>
         </div>`;
     }
 
@@ -102,7 +158,7 @@ export function createConfig({ request: af, reload, notify }) {
                 <div class="config-stock-identity"><strong>${escapeHtml(stock.symbol)}</strong><span>${escapeHtml(stock.name || '—')}</span><small data-live-price>${escapeHtml(usd(stock.current_price_usd))}</small></div>
                 <div class="config-level-summary">${levelSummary(stock)}${retiredCount ? `<span class="config-retired-count">${retiredCount} triggered</span>` : ''}</div>
                 <div class="config-stock-status">${positionSummary(stock)}<span class="badge ${stock.enabled ? 'enabled' : 'disabled'}">${stock.enabled ? 'Monitoring' : 'Paused'}</span></div>
-                <div class="config-stock-actions"><button type="button" class="btn btn-sm ${expanded ? 'btn-primary' : 'btn-secondary'}" data-stock-action="levels" data-stock-id="${escapeHtml(stock.id)}" aria-expanded="${expanded}">${expanded ? 'Hide alerts' : 'Manage alerts'}</button></div>
+                <div class="config-stock-actions"><button type="button" class="btn config-action ${expanded ? 'btn-primary' : 'btn-secondary'}" data-stock-action="levels" data-stock-id="${escapeHtml(stock.id)}" aria-expanded="${expanded}">${expanded ? 'Hide alerts' : 'Manage alerts'}</button></div>
             </div>${expanded ? alertEditor(stock) : ''}
         </article>`;
     }
