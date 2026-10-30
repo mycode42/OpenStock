@@ -4,6 +4,7 @@ import json
 import pytest
 import requests
 
+from market.quotes import QuoteParseError
 from options import market_inputs as mi
 from options.data import market_pair, parse_snapshot_quote
 from options.models import OptionContract
@@ -196,3 +197,33 @@ def test_partial_or_implausible_vendor_greeks_fall_back_to_model():
     assert partial.greeks.source == "crr_iv_surface"
     assert implausible.greeks.source == "crr_iv_surface"
     assert 0 < partial.greeks.delta < 1
+
+
+def _quote_raw(quote: dict) -> dict:
+    return {"latestQuote": quote, "impliedVolatility": 0.25, "greeks": {}}
+
+
+def test_an_ask_without_a_bid_is_priced_at_the_ask_with_a_zero_bid():
+    as_of = datetime(2027, 1, 1, 14, 0, tzinfo=timezone.utc)
+    quote = parse_snapshot_quote(
+        _vendor_contract(), _quote_raw({"bp": 0, "ap": 0.77, "t": "2027-01-01T14:00:00Z"}),
+        spot=100.0, as_of=as_of, feed="indicative", rate=0.04, dividend_yield=0.0,
+    )
+
+    assert quote is not None
+    assert quote.bid == 0.0
+    assert quote.ask == pytest.approx(0.77)
+    assert quote.greeks.implied_volatility > 0
+
+
+def test_quotes_missing_both_sides_or_crossed_are_still_rejected():
+    as_of = datetime(2027, 1, 1, 14, 0, tzinfo=timezone.utc)
+    for bad in (
+        {"bp": 0, "ap": 0, "t": "2027-01-01T14:00:00Z"},
+        {"bp": 1.2, "ap": 1.0, "t": "2027-01-01T14:00:00Z"},
+    ):
+        with pytest.raises(QuoteParseError):
+            parse_snapshot_quote(
+                _vendor_contract(), _quote_raw(bad),
+                spot=100.0, as_of=as_of, feed="indicative", rate=0.04, dividend_yield=0.0,
+            )

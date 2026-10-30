@@ -230,6 +230,22 @@ def _date_from_text(value: object) -> date:
     return date.fromisoformat(str(value))
 
 
+def parse_option_quote(quote: object) -> dict:
+    """A two-sided option quote, or one with an ask and no bid.
+
+    Illiquid contracts often have no bid. Nobody is buying, so the bid is zero and the ask is the only real price.
+    Any other incomplete or crossed quote is still rejected.
+    """
+    try:
+        return parse_quote(quote)
+    except QuoteParseError:
+        parsed = parse_quote(quote, side="ask")
+        if parsed["bid"] is not None:
+            raise
+        parsed["bid"] = 0.0
+        return parsed
+
+
 def parse_snapshot_quote(
     contract: OptionContract,
     raw: dict,
@@ -251,7 +267,7 @@ def parse_snapshot_quote(
         }
     else:
         quote = raw.get("latestQuote") or raw.get("latest_quote") or raw.get("quote") or {}
-    parsed = parse_quote(quote)
+    parsed = parse_option_quote(quote)
     age = (as_of.astimezone(timezone.utc) - parsed["timestamp"]).total_seconds()
     if age < 0 or age > max_quote_age_seconds or parsed["price"] <= 0:
         return None
