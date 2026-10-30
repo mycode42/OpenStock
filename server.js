@@ -23,6 +23,7 @@ const { detectDemoSetup, hasAlpacaCredentials } = require('./server/demo-setup')
 const { AlpacaClient } = require('./lib/brokers/alpaca');
 const { createAlpacaQuoteFeed } = require('./server/alpaca-quote-feed');
 const { createDemoBroker } = require('./server/demo-broker');
+const { rawDatabase } = require('./server/alpaca-profile');
 const { syncOpenOrders } = require('./lib/alpaca-orders');
 
 function createApp({
@@ -63,7 +64,10 @@ function createApp({
     app.locals.demoData = demoData;
     // Demo mode runs the real Alpaca code paths against a simulated paper account. It never opens a broker connection.
     if (app.locals.demoMode) {
-        app.locals.alpacaClient = createDemoBroker({ now, ordersEnabled: process.env.OPENSTOCK_DEMO_DATABASE === '1' });
+        // Orders the demo database already tracks are rebuilt in the broker, so a restart keeps positions and open orders.
+        const storedOrders = rawDatabase(db).prepare(`SELECT broker_order_id, client_order_id, symbol, side, qty, limit_price_usd, status,
+            filled_avg_price_usd, submitted_at, updated_at FROM alpaca_orders WHERE broker_order_id IS NOT NULL`).all();
+        app.locals.alpacaClient = createDemoBroker({ now, ordersEnabled: process.env.OPENSTOCK_DEMO_DATABASE === '1', storedOrders });
         // The monitor normally moves orders on from cancel and fill. The demo has no monitor, so its orders are synced here.
         const timer = setInterval(() => syncOpenOrders({ db, client: app.locals.alpacaClient, now }).catch(() => {}), 5000);
         timer.unref();
@@ -112,7 +116,6 @@ function createApp({
         normaliseTrade,
         numberField,
         toDatabaseDate,
-        dashboardData,
         captureEquitySnapshot,
         toISODateTime,
     });

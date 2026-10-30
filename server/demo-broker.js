@@ -2,16 +2,18 @@
 
 // A simulated Alpaca paper account for demo mode. It has the same methods as lib/brokers/alpaca.js and returns
 // the same shapes, so the watchlist, quotes, journal and order code run unchanged. It never opens a network connection.
+// Cash and positions are replayed from one fill ledger, so the account, the equity history and the Journal agree.
+// Orders the demo database still tracks are rebuilt on start, so positions and open orders survive a restart.
 const { randomUUID } = require('node:crypto');
 const { AlpacaError } = require('../lib/brokers/alpaca');
-const { DEPOSIT_USD, WATCHLIST } = require('./demo-seed');
+const { CLOSED_TRADES, DEPOSIT_USD, WATCHLIST, basePrice, phaseOf, priceAt } = require('./demo-seed');
 
 const DAY_MS = 86_400_000;
-const BASE_PRICE = new Map(WATCHLIST.map(stock => [stock.symbol, stock.base]));
-
-function phaseOf(symbol) {
-    return [...symbol].reduce((sum, character) => (sum * 31 + character.charCodeAt(0)) % 997, 17) / 997 * Math.PI * 2;
-}
+const HISTORY_DAYS = 120;
+const HISTORY_POINTS = 120;
+const WATCHLIST_SYMBOLS = new Set(WATCHLIST.map(stock => stock.symbol));
+// Local order statuses that a restarted demo broker can rebuild, mapped to the broker status they had.
+const RESTORED_STATUS = { NEW: 'accepted', PARTIALLY_FILLED: 'accepted', FILLED: 'filled', CANCELED: 'canceled', PENDING_CANCEL: 'canceled' };
 
 // Stock bars exist only for weekdays from 04:00 to 20:00 New York time, the extended session Alpaca reports.
 const sessionClock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23', weekday: 'short' });
@@ -24,49 +26,71 @@ function round(value, digits = 4) {
     return Number(value.toFixed(digits));
 }
 
-function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}) {
-    const holdings = new Map();
-    const fills = [];
+// The database writes times as UTC text without a zone.
+function parseStoredTime(value) {
+    const time = Date.parse(`${String(value).replace(' ', 'T')}Z`);
+    return Number.isFinite(time) ? time : null;
+}
+
+function watchedPriceAt(symbol, time) {
+    return WATCHLIST_SYMBOLS.has(symbol) ? priceAt(symbol, time) : null;
+}
+
+// storedOrders are rows of alpaca_orders from the demo database. Rows without a broker id were never acknowledged, so they are skipped.
+function createDemoBroker({ now = () => new Date(), ordersEnabled = false, storedOrders = [] } = {}) {
+    const fundedAt = now().getTime() - HISTORY_DAYS * DAY_MS;
+    const deposits = [{ id: 'demo-deposit', activity_type: 'CSD', net_amount: String(DEPOSIT_USD), date: new Date(fundedAt).toISOString().slice(0, 10) }];
+    const ledger = [];
     const orders = new Map();
-    const deposits = [{ id: randomUUID(), activity_type: 'CSD', net_amount: String(DEPOSIT_USD), date: new Date(now().getTime() - 120 * DAY_MS).toISOString().slice(0, 10) }];
-    let cash = DEPOSIT_USD;
 
-    for (const stock of WATCHLIST) {
-        if (!stock.held) continue;
-        holdings.set(stock.symbol, { qty: stock.held, avgPrice: stock.buyIn });
-        cash -= stock.held * stock.buyIn;
-        fills.push({
-            id: randomUUID(), activity_type: 'FILL', order_id: randomUUID(), symbol: stock.symbol, side: 'buy',
-            qty: String(stock.held), price: String(stock.buyIn), transaction_time: new Date(now().getTime() - 60 * DAY_MS).toISOString(),
-        });
+    function addFill({ id, orderId, symbol, side, qty, price, time }) {
+        ledger.push({ id, order_id: orderId, symbol, side, qty, price, time });
+        ledger.sort((left, right) => left.time - right.time || left.id.localeCompare(right.id));
     }
 
-    function priceAt(symbol, time) {
-        const base = BASE_PRICE.get(symbol);
-        if (!base) return null;
-        return base * (1 + Math.sin(time / 45_000 + phaseOf(symbol)) * 0.0007);
+    // Cash and holdings as they stood at a moment, replayed from the ledger.
+    function stateAt(time) {
+        let cash = time >= fundedAt ? DEPOSIT_USD : 0;
+        const holdings = new Map();
+        for (const fill of ledger) {
+            if (fill.time > time) break;
+            const holding = holdings.get(fill.symbol) || { qty: 0, cost: 0 };
+            const value = fill.qty * fill.price;
+            if (fill.side === 'buy') {
+                holding.qty += fill.qty;
+                holding.cost += value;
+                cash -= value;
+            } else {
+                holding.cost -= (holding.cost / holding.qty) * fill.qty;
+                holding.qty -= fill.qty;
+                cash += value;
+            }
+            if (holding.qty > 1e-9) holdings.set(fill.symbol, holding);
+            else holdings.delete(fill.symbol);
+        }
+        return { cash, holdings };
     }
 
-    function quoteFor(symbol) {
-        const price = priceAt(symbol, now().getTime());
-        if (price === null) return null;
-        const spread = price * 0.0004;
-        return { bp: round(price - spread / 2), ap: round(price + spread / 2), t: now().toISOString() };
-    }
-
-    function marketValueOf(symbol) {
-        const holding = holdings.get(symbol);
-        const price = priceAt(symbol, now().getTime());
-        return holding && price !== null ? holding.qty * price : 0;
-    }
-
-    function equity() {
+    function equityAt(time) {
+        const { cash, holdings } = stateAt(time);
         let total = cash;
-        for (const symbol of holdings.keys()) total += marketValueOf(symbol);
+        for (const [symbol, holding] of holdings) total += holding.qty * priceAt(symbol, time);
         return total;
     }
 
-    const openingEquity = equity();
+    // Sample history: a stock that was held in full at the time, bought and sold at fixed fractions of its base price.
+    const seededAt = days => now().getTime() - days * DAY_MS;
+    for (const stock of WATCHLIST) {
+        if (!stock.held) continue;
+        addFill({ id: `demo-buy-${stock.symbol}`, orderId: `demo-order-${stock.symbol}`, symbol: stock.symbol, side: 'buy', qty: stock.held, price: stock.buyIn, time: seededAt(60) });
+    }
+    CLOSED_TRADES.forEach((trade, index) => {
+        const base = basePrice(trade.symbol);
+        const entry = round(base * trade.entry_vs_base, 2);
+        const exit = round(base * trade.exit_vs_base, 2);
+        addFill({ id: `demo-closed-${index}-buy`, orderId: `demo-order-closed-${index}-buy`, symbol: trade.symbol, side: 'buy', qty: trade.qty, price: entry, time: seededAt(trade.bought_days_ago) });
+        addFill({ id: `demo-closed-${index}-sell`, orderId: `demo-order-closed-${index}-sell`, symbol: trade.symbol, side: 'sell', qty: trade.qty, price: exit, time: seededAt(trade.sold_days_ago) });
+    });
 
     function publicOrder(order) {
         return {
@@ -77,27 +101,12 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
         };
     }
 
-    function applyFill(order, price) {
-        const holding = holdings.get(order.symbol) || { qty: 0, avgPrice: 0 };
-        if (order.side === 'buy') {
-            const qty = holding.qty + order.qty;
-            holding.avgPrice = (holding.qty * holding.avgPrice + order.qty * price) / qty;
-            holding.qty = qty;
-            cash -= order.qty * price;
-        } else {
-            holding.qty -= order.qty;
-            cash += order.qty * price;
-        }
-        if (holding.qty > 0) holdings.set(order.symbol, holding);
-        else holdings.delete(order.symbol);
+    function fillOrder(order, price, time) {
         order.status = 'filled';
         order.filled_qty = order.qty;
         order.filled_avg_price = price;
-        order.filled_at = now().toISOString();
-        fills.push({
-            id: randomUUID(), activity_type: 'FILL', order_id: order.id, symbol: order.symbol, side: order.side,
-            qty: String(order.qty), price: String(price), transaction_time: order.filled_at,
-        });
+        order.filled_at = new Date(time).toISOString();
+        addFill({ id: `fill-${order.id}`, orderId: order.id, symbol: order.symbol, side: order.side, qty: order.qty, price, time });
     }
 
     // Like Alpaca, a new order is acknowledged first and fills on a later status check. A limit fills once the market reaches its price.
@@ -106,7 +115,7 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
         const quote = quoteFor(order.symbol);
         if (!quote) return order;
         const marketable = order.side === 'buy' ? order.limit_price >= quote.ap : order.limit_price <= quote.bp;
-        if (marketable) applyFill(order, order.limit_price);
+        if (marketable) fillOrder(order, order.limit_price, now().getTime());
         return order;
     }
 
@@ -116,32 +125,63 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
         return settle(order);
     }
 
+    function quoteFor(symbol) {
+        const price = watchedPriceAt(symbol, now().getTime());
+        if (price === null) return null;
+        const spread = price * 0.0004;
+        return { bp: round(price - spread / 2), ap: round(price + spread / 2), t: now().toISOString() };
+    }
+
     function requireOrders() {
         if (!ordersEnabled) {
             throw new AlpacaError('Demo orders are simulated only in the demo database. Start with npm run demo to try them.', 409);
         }
     }
 
+    for (const row of storedOrders) {
+        const status = RESTORED_STATUS[row.status];
+        if (!status || !row.broker_order_id) continue;
+        const order = {
+            id: row.broker_order_id, client_order_id: row.client_order_id, symbol: row.symbol, side: String(row.side).toLowerCase(),
+            qty: Number(row.qty), type: 'limit', limit_price: Number(row.limit_price_usd), status: 'accepted',
+            filled_qty: 0, filled_avg_price: null, filled_at: null, submitted_at: row.submitted_at,
+        };
+        orders.set(order.id, order);
+        if (status === 'filled') fillOrder(order, Number(row.filled_avg_price_usd ?? order.limit_price), parseStoredTime(row.updated_at) ?? now().getTime());
+        else if (status === 'canceled') order.status = 'canceled';
+    }
+
+    function fillRows() {
+        return ledger.map(fill => ({
+            id: fill.id, activity_type: 'FILL', order_id: fill.order_id, symbol: fill.symbol, side: fill.side,
+            qty: String(fill.qty), price: String(fill.price), transaction_time: new Date(fill.time).toISOString(),
+        }));
+    }
+
     return {
         simulated: true,
 
         async getAccount() {
-            const total = equity();
+            const time = now().getTime();
+            const { cash } = stateAt(time);
+            const total = equityAt(time);
             return {
                 id: 'demo-paper', account_number: 'DEMO-PAPER', status: 'ACTIVE', currency: 'USD', trading_blocked: false,
-                cash: round(cash, 2), equity: round(total, 2), last_equity: round(openingEquity, 2), portfolio_value: round(total, 2),
+                cash: round(cash, 2), equity: round(total, 2), last_equity: round(equityAt(time - DAY_MS), 2), portfolio_value: round(total, 2),
                 buying_power: round(cash, 2), daytrade_count: 0,
             };
         },
 
         async getPositions() {
-            return [...holdings.entries()].map(([symbol, holding]) => {
-                const price = priceAt(symbol, now().getTime());
+            const time = now().getTime();
+            return [...stateAt(time).holdings.entries()].map(([symbol, holding]) => {
+                const price = priceAt(symbol, time);
+                const avgPrice = holding.cost / holding.qty;
                 const marketValue = holding.qty * price;
-                const costBasis = holding.qty * holding.avgPrice;
+                const costBasis = holding.qty * avgPrice;
                 return {
                     symbol, qty: String(holding.qty), side: 'long', asset_class: 'us_equity',
-                    avg_entry_price: String(round(holding.avgPrice, 4)), current_price: String(round(price, 4)),
+                    avg_entry_price: String(round(avgPrice, 4)), current_price: String(round(price, 4)),
                     market_value: String(round(marketValue, 2)), cost_basis: String(round(costBasis, 2)),
                     unrealized_pl: String(round(marketValue - costBasis, 2)), unrealized_plpc: String(round((marketValue - costBasis) / costBasis, 6)),
                 };
@@ -149,26 +189,25 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
         },
 
         async getFillActivities() {
-            return [...fills].reverse();
+            return fillRows().reverse();
         },
 
         async getActivities(types) {
             const wanted = String(types).split(',').map(value => value.trim());
-            return [...fills, ...deposits].filter(row => wanted.includes(row.activity_type));
+            return [...fillRows(), ...deposits].filter(row => wanted.includes(row.activity_type));
         },
 
+        // Equity from the same ledger as the account, so the last point is the account equity and the curve starts at the deposit.
         async getPortfolioHistory() {
             const end = now().getTime();
-            const endEquity = equity();
-            const points = 120;
             const timestamp = [];
             const values = [];
-            for (let index = 0; index < points; index += 1) {
-                const remaining = (points - 1 - index) / (points - 1);
-                timestamp.push(Math.floor((end - remaining * (points - 1) * DAY_MS) / 1000));
-                values.push(round(endEquity * (1 - 0.03 * remaining) + Math.sin(index * 0.7) * 120 * remaining, 2));
+            for (let index = 0; index < HISTORY_POINTS; index += 1) {
+                const time = fundedAt + (end - fundedAt) * index / (HISTORY_POINTS - 1);
+                timestamp.push(Math.floor(time / 1000));
+                values.push(round(equityAt(time), 2));
             }
-            values[values.length - 1] = round(endEquity, 2);
+            values[values.length - 1] = round(equityAt(end), 2);
             return { timestamp, equity: values, base_value: DEPOSIT_USD, timeframe: '1D' };
         },
 
@@ -189,7 +228,7 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
             const bars = [];
             for (let time = from; time <= to; time += step) {
                 if (!inTradingSession(time)) continue;
-                const price = priceAt(upper, time);
+                const price = watchedPriceAt(upper, time);
                 if (price === null) return { feed: 'simulated', bars: [] };
                 const wave = Math.sin(time / 3_600_000 + phaseOf(upper)) * 0.01;
                 const close = round(price * (1 + wave), 4);
@@ -200,7 +239,8 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
         },
 
         async getAsset(symbol) {
-            return { symbol: String(symbol).toUpperCase(), tradable: BASE_PRICE.has(String(symbol).toUpperCase()), status: 'active', exchange: 'NASDAQ', asset_class: 'us_equity' };
+            const upper = String(symbol).toUpperCase();
+            return { symbol: upper, tradable: WATCHLIST_SYMBOLS.has(upper), status: 'active', exchange: 'NASDAQ', asset_class: 'us_equity' };
         },
 
         async submitOrder(body) {
@@ -213,7 +253,7 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false } = {}
             const qty = Number(body.qty);
             const limit = Number(body.limit_price);
             if (!(qty > 0) || !(limit > 0)) throw new AlpacaError('qty and limit_price must be positive', 422);
-            if (side === 'sell' && (holdings.get(symbol)?.qty || 0) < qty) throw new AlpacaError('insufficient qty available for order', 403);
+            if (side === 'sell' && (stateAt(now().getTime()).holdings.get(symbol)?.qty || 0) < qty) throw new AlpacaError('insufficient qty available for order', 403);
             const order = {
                 id: randomUUID(), client_order_id: body.client_order_id, symbol, side, qty, type: 'limit', limit_price: limit,
                 status: 'accepted', filled_qty: 0, filled_avg_price: null, filled_at: null, submitted_at: now().toISOString(),

@@ -2,11 +2,25 @@
 
 All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [algo-trader/CHANGELOG.md](algo-trader/CHANGELOG.md).
 
+## Unreleased
+
+### Changed
+
+- Demo: the simulated broker's positions, cash, and open orders survive a restart. Orders the demo database tracks are rebuilt on start, so cancelling after a restart works.
+- Demo: one simulated price per stock. The Dashboard, Algo Universe, and quotes read the same price.
+- Demo: the Journal's return, equity curve, YTD P/L, and win rate agree. The demo has sample closed trades, so the win rate and YTD P/L are not empty. The Algo 1D equity chart is a seeded random walk, not a sine wave.
+- Demo: the banner is readable in light mode.
+- Demo: the demo database no longer seeds the legacy EUR stock rows, so `/api/stocks` shows only the demo watchlist.
+
+### Removed
+
+- `/api/analytics/dashboard`. It reported legacy EUR trade data, and the web app did not use it. The Journal reads `/api/alpaca/journal`.
+
 ## 3.1.3 - 2026-10-30
 
 ### Added
 
-- Demo mode runs the real Alpaca code paths against a simulated paper account. The demo has a USD watchlist with alert levels and held positions. Orders can be previewed, placed, cancelled and filled, and they are accepted only in the demo database. Nothing is sent to a broker.
+- Demo mode runs the real Alpaca code paths against a simulated paper account. The demo has a USD watchlist with alert levels and held positions. Orders can be placed, cancelled and filled, and they are accepted only in the demo database. The dry-run preview (`preview: true`) is available through the API only, not in the web app. Nothing is sent to a broker.
 - The Research Lab shows in demo mode, read-only. Starting a run is refused there.
 - The README uses new screenshots from the demo, and `docs/features.md` mirrors its features and screenshots.
 

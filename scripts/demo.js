@@ -38,8 +38,8 @@ const env = {
     OPENSTOCK_DEMO_DATABASE: '1',
 };
 
-// Sample journal rows go into the demo database only; seeding is skipped once it has trades.
-initDatabase({ dbPath: env.DATABASE_PATH, silent: true });
+// Legacy EUR seed stocks are skipped: the demo watchlist is the only stock data it shows.
+initDatabase({ dbPath: env.DATABASE_PATH, silent: true, seedDefaults: false });
 const demoDb = new OpenStockDB(env.DATABASE_PATH);
 seedDemoWatchlist(demoDb.db);
 demoDb.db.close();

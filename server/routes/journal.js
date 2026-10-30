@@ -1,6 +1,6 @@
 'use strict';
 
-module.exports = function registerJournalRoutes({ app, serializeTrade, normaliseTrade, numberField, toDatabaseDate, dashboardData, captureEquitySnapshot, toISODateTime }) {
+module.exports = function registerJournalRoutes({ app, serializeTrade, normaliseTrade, numberField, toDatabaseDate, captureEquitySnapshot, toISODateTime }) {
 // ===== API: Trades, capital events and performance =====
 app.get('/api/trades', (req, res) => {
     try {
@@ -95,12 +95,4 @@ app.post('/api/capital-events', (req, res) => {
     }
 });
 
-app.get('/api/analytics/dashboard', (req, res) => {
-    try {
-        res.json(dashboardData(req.app.locals.db));
-    } catch (e) {
-        console.error('Error calculating dashboard:', e.message);
-        res.status(500).json({ error: 'Failed to calculate dashboard' });
-    }
-});
 };

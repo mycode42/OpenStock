@@ -1,14 +1,17 @@
 'use strict';
 
+const { basePrice, priceAt } = require('./demo-seed');
+
+// Prices come from the demo market in demo-seed, the same source the simulated broker quotes from.
 const UNIVERSE = Object.freeze([
-    { symbol: 'AAPL', base: 269.18, category: 'large_cap', sector: 'technology' },
-    { symbol: 'AMZN', base: 226.42, category: 'large_cap', sector: 'consumer_discretionary' },
-    { symbol: 'AMD', base: 163.57, category: 'large_cap', sector: 'semiconductors' },
-    { symbol: 'COST', base: 987.31, category: 'quality', sector: 'consumer_staples' },
-    { symbol: 'GOOGL', base: 198.28, category: 'large_cap', sector: 'communication_services' },
-    { symbol: 'META', base: 713.9, category: 'large_cap', sector: 'communication_services' },
-    { symbol: 'MSFT', base: 521.7, category: 'large_cap', sector: 'technology' },
-    { symbol: 'NVDA', base: 183.22, category: 'momentum', sector: 'semiconductors' },
+    { symbol: 'AAPL', category: 'large_cap', sector: 'technology' },
+    { symbol: 'AMZN', category: 'large_cap', sector: 'consumer_discretionary' },
+    { symbol: 'AMD', category: 'large_cap', sector: 'semiconductors' },
+    { symbol: 'COST', category: 'quality', sector: 'consumer_staples' },
+    { symbol: 'GOOGL', category: 'large_cap', sector: 'communication_services' },
+    { symbol: 'META', category: 'large_cap', sector: 'communication_services' },
+    { symbol: 'MSFT', category: 'large_cap', sector: 'technology' },
+    { symbol: 'NVDA', category: 'momentum', sector: 'semiconductors' },
 ]);
 
 const HISTORY_RANGES = Object.freeze({
@@ -28,9 +31,15 @@ function date(value) {
     return Number.isNaN(result.getTime()) ? new Date() : result;
 }
 
-function demoPrice(base, symbol, now) {
-    const phase = seed(symbol);
-    return base * (1 + Math.sin(now.getTime() / 45_000 + phase) * 0.0007);
+// Seeded random walk: each key always draws the same path, and the path has no fixed cycle.
+function randomWalk(key, count, step) {
+    let state = seed(key) + 1;
+    let value = 0;
+    return Array.from({ length: count }, () => {
+        state = (state * 16807) % 2147483647;
+        value = value * 0.98 + (state / 2147483647 - 0.5) * step;
+        return value;
+    });
 }
 
 function series(base, symbol, range, now, valueField = 'price_eur') {
@@ -65,7 +74,7 @@ function universePayload(nowValue = new Date()) {
         quotes_observed_at: timestamp,
         quote_error: null,
         symbols: UNIVERSE.map(item => {
-            const midpoint = demoPrice(item.base, item.symbol, now);
+            const midpoint = priceAt(item.symbol, now.getTime());
             const spread = midpoint * 0.0006;
             return {
                 symbol: item.symbol,
@@ -86,13 +95,14 @@ function universeHistory(symbol, range, nowValue = new Date()) {
     const item = UNIVERSE.find(row => row.symbol === String(symbol).toUpperCase());
     if (!item || !HISTORY_RANGES[range]) return null;
     const now = date(nowValue);
-    const points = series(demoPrice(item.base, item.symbol, now), item.symbol, range, now, 'price')
+    const points = series(basePrice(item.symbol), item.symbol, range, now, 'price')
         .map(({ price, recorded_at }) => ({ price, recorded_at }));
     return { demo_mode: true, points, start_at: points[0].recorded_at, end_at: points[points.length - 1].recorded_at, observed_at: now.toISOString(), stale: false };
 }
 
 // Demo account history in the same shape as the recorded snapshots: one close per day, plus
 // 5-minute points around the clock for the last 36 hours. The last point is the headline value.
+// The path is a seeded random walk on a rising trend, so it does not repeat a fixed cycle.
 function equityHistory(account, now) {
     const start = account === 'options' ? 38_000 : 100_000;
     const end = now.getTime();
@@ -106,12 +116,16 @@ function equityHistory(account, now) {
     };
     // Closes stop before the intraday window, so the two series never overlap, as in the recorded history.
     const days = 118;
-    const trend = progress => start * (1 + progress * 0.071 + Math.sin(progress * Math.PI * 12) * 0.012 + Math.sin(progress * Math.PI * 31) * 0.004);
-    const closes = Array.from({ length: days }, (_, index) => row(end - (days + 2 - index) * 86_400_000, 'close', trend(index / (days - 1))));
+    const trend = progress => start * (1 + progress * 0.071);
+    const dailyWalk = randomWalk(`${account}:close`, days, 0.006);
+    const closes = Array.from({ length: days }, (_, index) => row(end - (days + 2 - index) * 86_400_000, 'close', trend(index / (days - 1)) * (1 + dailyWalk[index])));
     const latest = trend(1);
-    const intraday = Array.from({ length: 36 * 12 }, (_, index) => {
+    const intradayWalk = randomWalk(`${account}:intraday`, 36 * 12, 0.0025);
+    // The walk is shifted so the last 5-minute point is the headline value.
+    const anchor = intradayWalk[intradayWalk.length - 1];
+    const intraday = intradayWalk.map((offset, index) => {
         const time = end - (36 * 12 - 1 - index) * 5 * 60_000;
-        return row(time, 'intraday', latest * (1 + Math.sin((time - end) / (4 * 3_600_000)) * 0.0015));
+        return row(time, 'intraday', latest * (1 + offset - anchor));
     });
     return [...closes, ...intraday];
 }

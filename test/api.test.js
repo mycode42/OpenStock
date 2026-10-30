@@ -84,11 +84,11 @@ test('mutation origin check accepts the public HTTPS origin forwarded by the rev
     assert.equal((await rejected.json()).error, 'Same-origin mutation required');
 });
 
-test('analytics reads do not create equity snapshots', async t => {
+test('display reads do not create equity snapshots', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const before = f.db.db.prepare('SELECT COUNT(*) AS count FROM equity_snapshots').get().count;
-    const response = await f.request('/api/analytics/dashboard');
+    const response = await f.request('/api/trades');
     assert.equal(response.status, 200);
     const after = f.db.db.prepare('SELECT COUNT(*) AS count FROM equity_snapshots').get().count;
     assert.equal(after, before);
@@ -186,7 +186,6 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     const secondTrade = (await response.json()).trade;
     assert.equal(secondTrade.entry_fee_eur, 1);
     assert.equal(secondTrade.trade_number, 2);
-    assert.equal((await f.request('/api/analytics/dashboard')).status, 200);
 
     addAlpacaStock(f, good);
     f.app.locals.alpacaClient = { getAsset: async symbol => ({ symbol, name: symbol, class: 'us_equity', tradable: true, status: 'active' }), getLatestQuotes: async () => ({ feed: 'iex', quotes: { GOOD: { bp: 89.99, ap: 90.01, t: '2026-01-01T12:00:00.000Z' } } }) };
