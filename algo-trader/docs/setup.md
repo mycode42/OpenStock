@@ -9,12 +9,10 @@ Python 3.12, Poetry, and a C compiler toolchain to build the optional Cython per
 ## One command
 
 ```sh
-export ALGO_REPORT_TELEGRAM_TO=<chat id>   # report destination for the agent-turn automations
-scripts/setup.sh                           # poetry install, then installs the scheduled automations
-scripts/setup.sh --dry-run                 # preview the automation changes first
+scripts/setup.sh                           # poetry install and the user systemd units
 ```
 
-`scripts/setup.sh` installs the Python dependencies, renders the two systemd user units into `~/.config/systemd/user` (no root), and installs the scheduled automations. It does not start the services and does not create `.env`. Start them with `systemctl --user enable --now equity options`; see [Operations](operations.md). The automation installer is described in [Scheduled automations](automations.md).
+`scripts/setup.sh` installs the Python dependencies, renders the two systemd user units into `~/.config/systemd/user` (no root), It does not touch the scheduled automations, which are managed with `openclaw automations` (see [automations](automations.md)). It does not start the services and does not create `.env`. Start them with `systemctl --user enable --now equity options`; see [Operations](operations.md). The automation installer is described in [Scheduled automations](automations.md).
 
 ## Environment
 

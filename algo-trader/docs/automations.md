@@ -2,7 +2,7 @@
 
 Part of the [Algo Trader README](../README.md).
 
-The definitions live in [`ops/automations.json`](../ops/automations.json). Market times are `America/New_York`.
+The job definitions are recorded in [`ops/automations.json`](../ops/automations.json) as a reference. The live jobs are managed in OpenClaw. Market times are `America/New_York`.
 
 | Job | Schedule | Runs | Kind |
 | --- | --- | --- | --- |
@@ -10,10 +10,10 @@ The definitions live in [`ops/automations.json`](../ops/automations.json). Marke
 | `options-opening-capture` | 09:35 weekdays | Alpaca OPRA opening snapshot for the research universe | command |
 | `options-history-capture` | 15:45 weekdays | Same-session Alpaca OPRA option-chain capture before the close | command |
 | `ThetaData historical options backfill` | Every 25 hours (cron fallback: 03:00 daily) | Resume historical ThetaData EOD archives for the research universe | command |
-| `llm-driven` | Hourly 04:00–20:00 ET, weekdays | Silent run: refresh the `swing_llm_driven` snapshot, including owned-position reviews; prompt in `ops/openclaw_prompts/llm-silent-run.md`. No delivery. | agent turn |
-| `llm-digest` | 07:45 ET, weekdays | One briefing from the latest snapshot: owned positions, keep or sell, market context; prompt in `ops/openclaw_prompts/llm-digest.md`; delivered to Telegram | agent turn |
-| `options-research` | 17:00 daily | `python -m research.options`; prompt in `ops/openclaw_prompts/options-research.md`; delivered to Telegram | agent turn |
-| `equity-research` | 20:00 daily | `python -m research.equity`; prompt in `ops/openclaw_prompts/equity-research.md`; delivered to Telegram | agent turn |
+| `llm-driven` | Hourly 04:00–20:00 ET, weekdays | Silent run: refresh the `swing_llm_driven` snapshot, including owned-position reviews; prompt in `ops/prompts/llm-silent-run.md`. No delivery. | agent turn |
+| `llm-digest` | 07:45 ET, weekdays | One briefing from the latest snapshot: owned positions, keep or sell, market context; prompt in `ops/prompts/llm-digest.md`; delivered to Telegram | agent turn |
+| `options-research` | 17:00 daily | `python -m research.options`; prompt in `ops/prompts/options-research.md`; delivered to Telegram | agent turn |
+| `equity-research` | 20:00 daily | `python -m research.equity`; prompt in `ops/prompts/equity-research.md`; delivered to Telegram | agent turn |
 
 ## LLM signal snapshot
 
@@ -25,17 +25,26 @@ cd <algo-trader checkout> && poetry run python -m strategies.llm_driven.snapshot
 
 The output has `now_utc`, `status`, `fresh`, `expires_at`, and the full payload under `snapshot`. `fresh` is the only freshness check the prompts use. The briefing prompts run this command from `{ROOT}`, so the rendered prompt has an absolute path and does not depend on the working directory of the OpenClaw job.
 
+## Cron (standalone, no OpenClaw)
+
+Every job runs from the local crontab with the project venv at `.venv`, which holds the research dependencies. The LLM calls use the provider in `.env` (`LLM_PROVIDER`, `LLM_MODEL`, and the matching API key). A local model works the same way: `LLM_PROVIDER=Ollama` with a pulled `LLM_MODEL`, or `OPENAI_API_BASE` pointing at a local OpenAI-compatible server.
+
+Create the venv once from `algo-trader/` with `POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --with ai,ml,research`. `scripts/llm_report.py` runs a prompt file from `ops/prompts/` through the configured model, adds the data it names, and posts the reply to Telegram with `--telegram`. It uses `TELEGRAM_BOT_TOKEN` and `ALGO_REPORT_TELEGRAM_TO` (or `TELEGRAM_CHAT_ID`) from `.env`. It has no web access, so reports say when a source was not checked. `--dry-run` prints the assembled message without calling a model.
+
+The crontab is written to `algo-trader/ops/crontab`, which has the full set of lines. Install it with `crontab ops/crontab` (this replaces your user crontab), and check it with `crontab -l`. Each line writes to `data/algo/cron.log`.
+
 ## Install or update
 
-`scripts/setup.sh` runs this for you, so every job is set up in one step. To run only the installer:
+Manage the jobs directly with the OpenClaw CLI. There is no installer script:
 
 ```sh
-ALGO_REPORT_TELEGRAM_TO=<chat id> python scripts/setup_automations.py --dry-run
-ALGO_REPORT_TELEGRAM_TO=<chat id> python scripts/setup_automations.py
+openclaw automations list
+openclaw automations get <job-id>
+openclaw automations edit <job-id> --cron '0 4-20 * * 1-5' --tz America/New_York
+openclaw automations disable <job-id>
+openclaw automations runs <job-id>
 ```
 
-With the OpenClaw CLI on `PATH`, the script creates or edits the jobs by name (`--backend openclaw`). Otherwise it writes a marked block to your user crontab (`--backend cron`), which runs the command jobs only.
-
-Agent turns need OpenClaw to run the prompt and deliver the report, so the cron backend skips them. The theta backfill's 25-hour interval cannot be expressed in cron, so it runs daily at 03:00 there. The report destination is read from `ALGO_REPORT_TELEGRAM_TO` and is not stored in the repository.
+Prompts are stored in the job. When a prompt file under `ops/prompts/` changes, copy the new text into the job with `openclaw automations edit <job-id> --message ...`. The prompt files use `{ROOT}`; substitute the checkout path when you do.
 
 The OpenClaw Gateway is the source of truth for job schedules and prompts; `openclaw cron list --all` and `openclaw cron get <job-id>` show the live declarations. The job notes are in [ops/openclaw-crons.md](../ops/openclaw-crons.md).

@@ -1,0 +1,29 @@
+# OpenStock Algo jobs. Install with: crontab ops/crontab
+# Each job runs the project venv directly (no OpenClaw, no poetry run). Replace ALGO if the checkout moves.
+CRON_TZ=America/New_York
+ALGO=/opt/OpenStock/algo-trader
+PY=/opt/OpenStock/algo-trader/.venv/bin/python
+MAILTO=""
+# Cron has no user session bus, so systemctl --user (used by the health check) needs these. 1000 is the openclaw uid.
+XDG_RUNTIME_DIR=/run/user/1000
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+
+# Health check, every hour
+0 * * * *      cd $ALGO && $PY -m portfolio.healthcheck >> data/algo/cron.log 2>&1
+
+# Options capture (Alpaca OPRA)
+35 9 * * 1-5   cd $ALGO && $PY -m scripts.options.alpaca_daily_capture --phase open --universe research >> data/algo/cron.log 2>&1
+45 15 * * 1-5  cd $ALGO && $PY -m scripts.options.alpaca_daily_capture --universe research >> data/algo/cron.log 2>&1
+
+# ThetaData historical backfill: daily at 03:00 (cron cannot express the 25-hour interval)
+0 3 * * *      cd $ALGO && $PY scripts/options/theta_historical_backfill.py >> data/algo/cron.log 2>&1
+
+# LLM-driven silent run: refresh the signal snapshot, hourly 04:00-20:00 ET on weekdays
+0 4-20 * * 1-5 cd $ALGO && $PY -m strategies.llm_driven.ai_runner --ttl-minutes 90 >> data/algo/cron.log 2>&1
+
+# Morning digest from the latest snapshot
+45 7 * * 1-5   cd $ALGO && $PY scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --telegram >> data/algo/cron.log 2>&1
+
+# Research reports: run the research cycle, then report on its output
+0 17 * * *     cd $ALGO && $PY -m research.options && $PY scripts/llm_report.py --prompt ops/prompts/options-research.md --context data/options/research/automation/latest.md --telegram >> data/algo/cron.log 2>&1
+0 20 * * *     cd $ALGO && $PY -m research.equity && $PY scripts/llm_report.py --prompt ops/prompts/equity-research.md --context data/research/algo-auto/latest.json --telegram >> data/algo/cron.log 2>&1

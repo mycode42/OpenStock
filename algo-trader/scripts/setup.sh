@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# One-command Algo setup: Python dependencies, then the scheduled automations.
-# Extra arguments go to scripts/setup_automations.py, e.g. --dry-run or --backend cron.
-# Renders the user systemd units (no root) but does not start them or create .env.
+# One-command Algo setup: Python dependencies and the user systemd units.
+# Renders the units (no root) but does not start them or create .env. Automations are managed with `openclaw automations`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -15,11 +14,6 @@ if ! poetry run python -c "import lightgbm, numpy, sklearn, pandas" 2>/dev/null;
     exit 1
 fi
 
-if [ -z "${ALGO_REPORT_TELEGRAM_TO:-}" ]; then
-    echo "note: ALGO_REPORT_TELEGRAM_TO is unset; the agent-turn jobs will not install with the OpenClaw backend" >&2
-fi
-
 poetry run python scripts/install_units.py
-poetry run python scripts/setup_automations.py "$@"
 
 echo "Setup finished. Start the services with: systemctl --user enable --now equity options"

@@ -55,8 +55,7 @@ Requirements: Python 3.12 and Poetry 2.x (Python 3.11 and 3.13 are not supported
 
    ```bash
    cd algo-trader
-   export ALGO_REPORT_TELEGRAM_TO=<chat id>
-   scripts/setup.sh            # or: scripts/setup.sh --dry-run to preview first
+   scripts/setup.sh
    ```
 
    This installs the Python dependencies, renders the systemd user units into `~/.config/systemd/user` (no root), and installs the scheduled automations. It does not start the services.

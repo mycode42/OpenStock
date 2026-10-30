@@ -83,6 +83,7 @@ def test_run_analysis_uses_current_live_universe_and_passes_market_context(monke
 
     monkeypatch.setattr(ai_runner, "run_event_analysis", run_graph)
     monkeypatch.setenv("LLM_MODEL", "test-model")
+    monkeypatch.setenv("LLM_PROVIDER", "OpenAI")
 
     output = tmp_path / "signals.sqlite3"
     report = ai_runner.run_analysis(output_path=output)

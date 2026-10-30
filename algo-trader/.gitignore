@@ -48,7 +48,7 @@ Thumbs.db
 
 # Txt files
 *.txt
-!ops/openclaw_prompts/*.txt
+!ops/prompts/*.txt
 
 # PDF files
 *.pdf
@@ -75,3 +75,6 @@ app/backend/alembic/versions/__pycache__/.cache/
 data/
 ops/openclaw/DREAMS.md
 ops/openclaw/memory/
+
+# Project venv created by POETRY_VIRTUALENVS_IN_PROJECT / poetry.toml; never commit it.
+.venv/

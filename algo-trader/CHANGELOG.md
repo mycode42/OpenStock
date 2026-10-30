@@ -4,6 +4,11 @@
 
 ### Changed
 
+- Algo runs standalone. All scheduled jobs run from the local crontab (`ops/crontab`) with the project venv at `algo-trader/.venv`. The OpenClaw automations for these jobs were disabled. LLM reports run through `scripts/llm_report.py`. The equity daemon's unit is rendered to the venv.
+- Algo LLM calls no longer depend on OpenClaw. The silent run reads `LLM_PROVIDER` and `LLM_MODEL` from `.env` and fails if they are unset; it no longer falls back to the OpenClaw model config.
+- New `scripts/llm_report.py` runs a prompt file through the configured provider (hosted or local Ollama or OpenAI-compatible) and can post the reply to Telegram. It is the cron replacement for the agent-turn briefing and research jobs. A stale snapshot produces a notice without a model call.
+- `docs/automations.md` has a crontab example for running every job without OpenClaw.
+
 - LLM-driven signal snapshots are stored in SQLite (`data/algo/llm_driven/signals.sqlite3`, table `llm_signal_snapshot`, last 200 runs kept) instead of `data/algo/llm_driven/signals.json`. `python -m strategies.llm_driven.snapshot_cli` prints the newest snapshot with its freshness. The briefing and silent-run prompts use it, so they no longer depend on the working directory. The JSON file is no longer written or read.
 - Algo extended-hours trading is re-enabled for plain limit DAY or GTC orders during premarket, after-hours, and overnight sessions. Extended-hours entries and exits never carry a broker bracket or OCO; software stops protect them, and broker protection is attached at the next regular open.
 - Overnight Algo entries are enabled by default (`overnight_entries_enabled`).

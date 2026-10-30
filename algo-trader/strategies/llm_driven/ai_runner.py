@@ -16,7 +16,10 @@ import time
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from dotenv import load_dotenv
+
 from market.data import regular_feed
+from runtime.paths import ROOT
 from strategies.runner.data import fetch_bars, fetch_latest_quotes
 from strategies.llm_driven.ai import DEFAULT_AI_SIGNAL_DB, publish_llm_signal_snapshot
 from strategies.universe import load_algo_universe
@@ -366,24 +369,6 @@ class _AnalysisDiagnostics:
         self.emit("run_finished", status=status, **fields)
 
 
-def _resolve_openclaw_model(fallback: str = "qwen3.5:397b-cloud") -> str:
-    """Resolve the configured OpenClaw model for this scheduled analysis."""
-    config_path = Path.home() / ".openclaw" / "openclaw.json"
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-        agents = config.get("agents", {})
-        for agent in agents.get("list", []):
-            if agent.get("id") == "drox":
-                model = agent["model"]["primary"]
-                return model.split("/", 1)[-1] if "/" in model else model
-        model = agents.get("defaults", {}).get("model", {}).get("primary", "")
-        if model:
-            return model.split("/", 1)[-1] if "/" in model else model
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return fallback
-
-
 def _json_fallback(value: object):
     if hasattr(value, "item"):
         return value.item()
@@ -488,8 +473,11 @@ def run_analysis(
         # Its suggested share quantities are intentionally discarded downstream.
         end_date = datetime.now(timezone.utc).date()
         start_date = end_date - timedelta(days=90)
-        model_name = os.getenv("LLM_MODEL") or _resolve_openclaw_model()
-        model_provider = os.getenv("LLM_PROVIDER", "Ollama")
+        # The model comes only from .env, so the analysis runs the same from cron, systemd or OpenClaw.
+        model_name = os.getenv("LLM_MODEL", "").strip()
+        model_provider = os.getenv("LLM_PROVIDER", "").strip()
+        if not model_name or not model_provider:
+            raise RuntimeError("LLM_PROVIDER and LLM_MODEL must be set in .env, e.g. OpenAI and gpt-6-luna, or Ollama and qwen3.5:9b")
         diagnostics.phase("load_market_context")
         try:
             ticker_data, market_data_diagnostics = _fetch_market_regime_context()
@@ -598,6 +586,8 @@ def _handle_sigterm(signum, _frame) -> None:
     raise SystemExit(128 + signum)
 
 def main() -> int:
+    # Cron has no systemd EnvironmentFile, so read the OpenStock .env here. Variables already set win.
+    load_dotenv(ROOT.parent / ".env", override=False)
     parser = argparse.ArgumentParser(description="Create scheduled AI recommendations for Algo llm_driven")
     parser.add_argument("--output", type=Path, default=DEFAULT_AI_SIGNAL_DB, help="signal snapshot database")
     parser.add_argument("--ttl-minutes", type=int, default=DEFAULT_TTL_MINUTES)

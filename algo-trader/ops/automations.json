@@ -1,5 +1,5 @@
 {
-  "description": "Scheduled Algo automations. scripts/setup_automations.py installs these as OpenClaw cron jobs, or as user crontab entries when OpenClaw is unavailable. {ROOT} is replaced with the checkout path at install time.",
+  "description": "Reference record of the Algo automations. The live jobs are managed in OpenClaw with `openclaw automations`; this file is not installed automatically. {ROOT} in prompts stands for the checkout path.",
   "timezone": "America/New_York",
   "jobs": [
     {
@@ -88,7 +88,7 @@
         "cron": "0 4-20 * * 1-5"
       },
       "agent_turn": {
-        "prompt": "ops/openclaw_prompts/llm-silent-run.md",
+        "prompt": "ops/prompts/llm-silent-run.md",
         "timeout_seconds": 1200,
         "tools": [
           "exec",
@@ -106,7 +106,7 @@
         "cron": "45 7 * * 1-5"
       },
       "agent_turn": {
-        "prompt": "ops/openclaw_prompts/llm-digest.md",
+        "prompt": "ops/prompts/llm-digest.md",
         "timeout_seconds": 900,
         "tools": [
           "exec",
@@ -127,7 +127,7 @@
         "cron": "0 17 * * *"
       },
       "agent_turn": {
-        "prompt": "ops/openclaw_prompts/options-research.md",
+        "prompt": "ops/prompts/options-research.md",
         "timeout_seconds": 28800,
         "tools": [
           "*"
@@ -146,7 +146,7 @@
         "cron": "0 20 * * *"
       },
       "agent_turn": {
-        "prompt": "ops/openclaw_prompts/equity-research.md",
+        "prompt": "ops/prompts/equity-research.md",
         "timeout_seconds": 43200,
         "tools": [
           "exec"
