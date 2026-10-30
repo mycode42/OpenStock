@@ -1105,7 +1105,8 @@ def main(argv: list[str] | None = None) -> int:
             "status": "error", "run_date_et": today,
             "optimization_only": args.optimization_only,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "run_id": f"error-{datetime.now(ET).strftime('%Y%m%dT%H%M%S')}",
+            # Keyed by the invocation, so a failure is traceable to the run that wrote it.
+            "run_id": f"error-{invocation_id}",
             "research_only": True, "live_configuration_changed": False,
             "trade_or_order_actions": 0,
             "error": f"{type(exc).__name__}: {exc}",

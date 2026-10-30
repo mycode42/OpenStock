@@ -8,6 +8,13 @@ cd "$(dirname "$0")/.."
 
 poetry install --with ai,ml,research
 
+# The research cycles import these at run time; fail here, not in the middle of a night's run.
+if ! poetry run python -c "import lightgbm, numpy, sklearn, pandas" 2>/dev/null; then
+    echo "error: the Poetry environment is missing research dependencies (lightgbm, numpy, scikit-learn, pandas)." >&2
+    echo "       check 'poetry env info -p' and rerun this script." >&2
+    exit 1
+fi
+
 if [ -z "${ALGO_REPORT_TELEGRAM_TO:-}" ]; then
     echo "note: ALGO_REPORT_TELEGRAM_TO is unset; the agent-turn jobs will not install with the OpenClaw backend" >&2
 fi
