@@ -38,7 +38,13 @@ const journal = createJournal(context);
 const algoTrader = createAlgoTrader({ request:af, charts });
 const algoUniverse = createAlgoUniverse({ request:af, charts });
 const settings = createSettings();
-const config = createConfig({ request:af, reload:()=>loadPage(pageFromHash()), notify:showA });
+// Configure messages go to their own line, which survives the page's own re-render.
+const configMessage = (message, type='i') => showA(message, type, 'config-messages');
+const config = createConfig({
+    request: (path, options) => af(path, options, message => configMessage(message, 'error')),
+    reload: () => loadPage(pageFromHash()),
+    notify: configMessage,
+});
 settings.initialize();
 function nav(hash) { const page=pageFromHash(hash); const target=page==='dashboard'?'':`#/${page}`; if(window.location.hash!==target){window.location.hash=target;return;} loadPage(page); }
 async function loadPage(page, journalPage=state.journalPage) {

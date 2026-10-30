@@ -671,3 +671,28 @@ a.alert-link{text-decoration:none;color:inherit}
   #page-config .config-retired-row { grid-template-columns: 1fr; }
   #page-config .config-zone-actions { grid-template-columns: 1fr 1fr; }
 }
+
+/* Configure: messages line, and stock rows with fixed columns so the status and actions line up */
+#page-config .config-messages { display: grid; gap: 0.4rem; margin-bottom: 0.6rem; }
+#page-config .config-messages:empty { display: none; }
+#page-config .config-stock-main {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr) 300px 170px;
+  align-items: center;
+  gap: 0.9rem;
+}
+#page-config .config-stock-identity { min-width: 0; }
+#page-config .config-stock-identity strong, #page-config .config-stock-identity span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#page-config .config-level-summary { min-width: 0; }
+#page-config .config-stock-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+}
+#page-config .config-position { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#page-config .config-stock-status .badge { justify-self: end; }
+@media (max-width: 900px) {
+  #page-config .config-stock-main { grid-template-columns: 1fr; }
+}
+

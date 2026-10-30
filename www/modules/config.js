@@ -163,15 +163,26 @@ export function createConfig({ request: af, reload, notify }) {
         </article>`;
     }
 
+    // The message line sits outside the part that re-renders, so a success message survives the reload that follows it.
+    function ensureShell(container) {
+        let body = container.querySelector('.config-body');
+        if (!body) {
+            container.innerHTML = '<div id="config-messages" class="config-messages" aria-live="polite"></div><div class="config-body"></div>';
+            body = container.querySelector('.config-body');
+        }
+        return body;
+    }
+
     function render(nextStocks = stocks, nextOrders = orders) {
         stocks = nextStocks;
         orders = { ...orders, ...(nextOrders || {}) };
         const container = document.getElementById('page-config');
         if (!container.dataset.bound) bind(container);
+        const body = ensureShell(container);
         const activeCount = stocks.filter(stock => stock.enabled).length;
         const heldCount = stocks.filter(stock => Number(stock.position?.quantity) > 0).length;
         const realCount = stocks.reduce((total, stock) => total + (stock.alert_levels || []).filter(level => level.auto_order).length, 0);
-        container.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, real-order switches and one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${escapeHtml(orders.mode)}</strong></span></div></div>
+        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, real-order switches and one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${escapeHtml(orders.mode)}</strong></span></div></div>
             <div class="config-search"><input id="config-stock-filter" type="search" placeholder="Filter symbols" aria-label="Filter symbols" value="${escapeHtml(stockFilter)}"></div></header>
             <div class="config-stock-list">${stocks.length ? stocks.map(stockCard).join('') : '<p class="journal-empty">No Alpaca watchlist symbols yet.</p>'}<div class="config-filter-empty empty-state" hidden>No symbols match this filter.</div></div>`;
         if (pendingLevelId) {
