@@ -1,6 +1,7 @@
 'use strict';
 
 const { basePrice, priceAt } = require('./demo-seed');
+const { universeHistory: universeReplay } = require('./demo-replay');
 
 // Prices come from the demo market in demo-seed, the same source the simulated broker quotes from.
 const UNIVERSE = Object.freeze([
@@ -95,7 +96,9 @@ function universeHistory(symbol, range, nowValue = new Date()) {
     const item = UNIVERSE.find(row => row.symbol === String(symbol).toUpperCase());
     if (!item || !HISTORY_RANGES[range]) return null;
     const now = date(nowValue);
-    const points = series(basePrice(item.symbol), item.symbol, range, now, 'price')
+    // Real history from the demo replay, the same chart the dashboard shows for this name.
+    const replayed = universeReplay(item.symbol, range, now.getTime());
+    const points = replayed || series(basePrice(item.symbol), item.symbol, range, now, 'price')
         .map(({ price, recorded_at }) => ({ price, recorded_at }));
     return { demo_mode: true, points, start_at: points[0].recorded_at, end_at: points[points.length - 1].recorded_at, observed_at: now.toISOString(), stale: false };
 }

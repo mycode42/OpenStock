@@ -54,6 +54,42 @@ def _session_bars(connection: sqlite3.Connection, symbol: str, day: datetime) ->
     return [(index, values) for index, (_, values) in sorted(by_index.items())]
 
 
+DEMO_DAILY_OUTPUT = ROOT.parent / "server" / "demo-daily.json"
+# The watchlist and Algo Universe names the demo shows.
+DEMO_SYMBOLS = ("AAPL", "NVDA", "AMD", "MSFT", "TSLA", "AMZN", "COST", "GOOGL", "META")
+DAILY_SESSIONS = 400
+
+
+def export_daily() -> int:
+    """Real daily bars for the demo names: [date, open, high, low, close] in basis points from the latest close."""
+    connection = sqlite3.connect(f"file:{MARKET_DB}?mode=ro", uri=True)
+    symbols = {}
+    for symbol in DEMO_SYMBOLS:
+        rows = connection.execute(
+            """SELECT substr(timestamp, 1, 10), open, high, low, close FROM market_bar
+               WHERE feed='sip' AND timeframe='1Day' AND adjustment='split' AND symbol=?
+               ORDER BY timestamp DESC LIMIT ?""",
+            (symbol, DAILY_SESSIONS),
+        ).fetchall()
+        if len(rows) < 60:
+            print(f"{symbol}: only {len(rows)} daily bars", file=sys.stderr)
+            continue
+        rows.reverse()
+        last_close = rows[-1][4]
+        symbols[symbol] = [
+            [day] + [round((value / last_close - 1) * 10000) for value in (open_, high, low, close)]
+            for day, open_, high, low, close in rows
+        ]
+    connection.close()
+    DEMO_DAILY_OUTPUT.write_text(json.dumps({
+        "source": "algo_market.sqlite3, 1Day sip split-adjusted",
+        "fields": ["date", "open", "high", "low", "close"],
+        "symbols": symbols,
+    }, separators=(",", ":")) + "\n", encoding="utf-8")
+    print(f"wrote daily bars for {len(symbols)} symbols to {DEMO_DAILY_OUTPUT}")
+    return 0
+
+
 def main() -> int:
     rng = random.Random(SEED)
     connection = sqlite3.connect(f"file:{MARKET_DB}?mode=ro", uri=True)
@@ -99,4 +135,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "--daily" in sys.argv:
+        raise SystemExit(export_daily())
     raise SystemExit(main())

@@ -141,3 +141,13 @@ test('demo intraday bars replay a real session: stable for the day and closing o
     const mid = (quotes.AAPL.bp + quotes.AAPL.ap) / 2;
     assert.ok(Math.abs(closes.at(-1) - mid) / mid < 0.002, `last close ${closes.at(-1)} should be near the quote ${mid}`);
 });
+
+test('the Algo Universe and the dashboard show the same real history for a name', async () => {
+    const demoData = require('../server/demo-data');
+    const broker = createDemoBroker({ now: () => NOW, ordersEnabled: false });
+    const bars = await broker.getBars('AAPL', { timeframe: '5Min', start: new Date('2026-10-30T08:00:00Z'), end: NOW, limit: 500 });
+    const universe = demoData.universeHistory('AAPL', '1d', NOW);
+    const closes = new Set(bars.bars.map(bar => bar.c));
+    assert.ok(universe.points.length > 20);
+    assert.ok(universe.points.every(point => closes.has(point.price)), 'universe closes should match the dashboard closes');
+});
