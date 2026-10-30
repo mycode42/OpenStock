@@ -20,8 +20,20 @@ const env = {
     OPENSTOCK_CONFIG_FILE: path.join(demoDir, 'no-config.env'),
     DATABASE_PATH: path.join(demoDir, 'openstock.db'),
     ALGO_TRADER_ROOT: path.join(demoDir, 'no-algo-trader'),
+    // Demo can never trade: blank every broker URL, live switch and order token as well as the keys.
+    ALPACA_MANUAL_BASE_URL: '',
     ALPACA_MANUAL_API_KEY: '',
     ALPACA_MANUAL_API_SECRET: '',
+    ALPACA_EQUITY_BASE_URL: '',
+    ALPACA_OPTIONS_BASE_URL: '',
+    ALPACA_ALLOW_LIVE: '',
+    OPENSTOCK_ORDER_TOKEN: '',
+    ALPACA_EQUITY_API_KEY: '',
+    ALPACA_EQUITY_API_SECRET: '',
+    ALPACA_EQUITY_ACCOUNT_ID: '',
+    ALPACA_OPTIONS_API_KEY: '',
+    ALPACA_OPTIONS_API_SECRET: '',
+    ALPACA_OPTIONS_ACCOUNT_ID: '',
 };
 
 // Sample journal rows go into the demo database only; seeding is skipped once it has trades.

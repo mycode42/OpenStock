@@ -2,7 +2,7 @@
 
 Systematic equity and options trading research with paper execution on Alpaca.
 
-> **Paper trading only.** Broker routes are pinned to Alpaca Paper.
+> **Paper trading by default.** Each broker base URL defaults to Alpaca Paper. Pointing one at another endpoint is an explicit override through its environment variable.
 
 This is the Algo Trader subtree of [OpenStock](../README.md). It runs as its own service and is read by the OpenStock dashboard.
 

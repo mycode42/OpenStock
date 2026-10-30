@@ -298,4 +298,18 @@ function algoPayload(accountType = 'equity', nowValue = new Date()) {
     };
 }
 
-module.exports = { dashboardStocks, livePrices, stockHistory, universePayload, universeHistory, algoPayload };
+// Research lab overview with no Algo Trader data behind it: the same strategy list and limits, nothing to tune or run.
+function labOverview(account = 'options') {
+    const { EQUITY_STRATEGIES, LIMITS, LabError, OPTIONS_STRATEGIES } = require('./algo-trader/research-lab');
+    if (account !== 'options' && account !== 'equity') throw new LabError('account must be options or equity');
+    const ids = account === 'equity' ? EQUITY_STRATEGIES : OPTIONS_STRATEGIES;
+    return {
+        account,
+        limits: { maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart, concurrentJobs: 1 },
+        active_job: null,
+        start_available: false,
+        strategies: ids.map(id => ({ id, account, parameters: {}, tunable: [], profiles: [], history: [] })),
+    };
+}
+
+module.exports = { dashboardStocks, labOverview, livePrices, stockHistory, universePayload, universeHistory, algoPayload };

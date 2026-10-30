@@ -14,7 +14,7 @@ remain under the Algo coordinator; options orders use the dedicated
 | `options/data.py` | Provider protocol plus Alpaca, historical chain snapshot, and model IV-surface implementations |
 | `options/risk.py` | Cross-account delta, gamma, vega, theta, defined-loss, buying-power, assignment, and stress checks |
 | `options/assignment.py` | Basic American early-exercise/assignment heuristic for replay |
-| `broker/options.py` | Options-only Alpaca adapter; all order URLs are pinned to paper trading |
+| `broker/options.py` | Options-only Alpaca adapter; order URLs default to paper; a live URL needs `ALPACA_ALLOW_LIVE=1`; each order is capped at $100,000 |
 | `options/paper.py` | Independent paper scan, order intent, reconciliation, and per-account journal |
 | `options/daemon.py` | Market-hours scans using the same account lock and paper risk path |
 | `strategies/options/vrp.py` | Rule-based SPY IV-versus-realized-volatility iron condor |

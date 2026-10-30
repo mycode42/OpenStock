@@ -1,5 +1,6 @@
 'use strict';
 
+const { timingSafeEqual } = require('node:crypto');
 const { rawDatabase, alpacaJournalData } = require('../alpaca-profile');
 const orders = require('../../lib/alpaca-orders');
 const levels = require('../../lib/alpaca-alert-levels');
@@ -8,6 +9,20 @@ function orderFailure(res, error) {
     const status = error.status || 502;
     if (status >= 500) console.warn(`Alpaca order failed: ${error.message}`);
     return res.status(status).json({ error: status >= 500 ? 'Alpaca order request failed' : error.message });
+}
+
+// Live accounts only: the order token must match OPENSTOCK_ORDER_TOKEN. Paper accounts pass through.
+function requireLiveToken(req, res, next) {
+    const settings = orders.orderSettings();
+    if (!settings.live) return next();
+    if (!settings.liveAllowed) return res.status(403).json({ error: 'Live trading is off: set ALPACA_ALLOW_LIVE=1 to place orders on the live account' });
+    if (!settings.token) return res.status(403).json({ error: 'Live orders need OPENSTOCK_ORDER_TOKEN in .env' });
+    const supplied = Buffer.from(String(req.get('X-OpenStock-Order-Token') || ''));
+    const expected = Buffer.from(settings.token);
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        return res.status(401).json({ error: 'Invalid order token' });
+    }
+    return next();
 }
 
 module.exports = function registerAlpacaRoutes({ app }) {
@@ -19,7 +34,7 @@ module.exports = function registerAlpacaRoutes({ app }) {
         res.json({ orders: orders.listOrders(req.app.locals.db, { limit: req.query.limit }) });
     });
 
-    app.post('/api/alpaca/alert-levels/:id/orders', async (req, res) => {
+    app.post('/api/alpaca/alert-levels/:id/orders', requireLiveToken, async (req, res) => {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Invalid Alpaca alert level' });
         const dryRun = req.body?.preview === true;
@@ -86,8 +101,8 @@ module.exports = function registerAlpacaRoutes({ app }) {
         }
     });
 
-    // Turning real orders on or off, and the budget they spend, is gated like placing one.
-    app.put('/api/alpaca/alert-levels/:id/order', (req, res) => {
+    // Switching real orders on for a live account needs the order token. Paper needs no token, and switching off needs none.
+    app.put('/api/alpaca/alert-levels/:id/order', (req, res, next) => (req.body?.auto_order === true ? requireLiveToken(req, res, next) : next()), (req, res) => {
         try {
             res.json({ alert_level: levels.setOrderSettings(rawDatabase(req.app.locals.db), Number(req.params.id), {
                 auto_order: req.body?.auto_order, budget_usd: req.body?.budget_usd,

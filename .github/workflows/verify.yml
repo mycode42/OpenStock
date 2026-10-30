@@ -27,12 +27,8 @@ jobs:
       - run: npm run audit:prod
 
   python:
-    name: Algo Trader (Python ${{ matrix.python-version }})
+    name: Algo Trader (Python 3.12)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
     defaults:
       run:
         working-directory: algo-trader
@@ -40,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
       - name: Install Poetry
         run: python -m pip install "poetry==2.5.1"
       - name: Validate project and lock

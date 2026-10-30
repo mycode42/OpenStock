@@ -30,6 +30,7 @@ const migrations = [
   ,require('./migrations/027_alpaca_order_budgets')
   ,require('./migrations/028_alpaca_outbox_per_fire')
   ,require('./migrations/029_drop_trade_republic_data')
+  ,require('./migrations/030_alpaca_order_mode')
 ];
 
 function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true } = {}) {

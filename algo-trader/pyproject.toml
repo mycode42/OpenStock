@@ -5,7 +5,7 @@ description = "Coordinated paper trading and research for equity and options str
 authors = [{ name = "Algo Trader maintainers" }]
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.12,<3.13"
 dynamic = ["dependencies"]
 
 [tool.poetry]

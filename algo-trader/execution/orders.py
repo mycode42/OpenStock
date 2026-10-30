@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from broker.order_guard import check_order
 from execution.broker import API_BASE
 from market.calendar import extended_session_name
 
@@ -77,6 +78,10 @@ def submit_broker_order(
     hooks: OrderHooks,
 ) -> dict:
     """Submit once and use the client ID to resolve duplicate or ambiguous POSTs."""
+    try:
+        check_order(order)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
     mode = mode or hooks.mode
     if mode == "algo":
         hooks.verify_algo_execution_lease()

@@ -42,7 +42,7 @@ function withEnv(t, env) {
 }
 
 const post = (base, url, headers, body) => fetch(base + url, {
-    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'Content-Type': 'application/json', origin: base, ...headers }, body: JSON.stringify(body),
 });
 
 test('preview returns the plan, and submit needs explicit confirmation', async t => {
@@ -73,7 +73,7 @@ test('real-order switch needs the order token, a boolean, and a BUY budget', asy
     withEnv(t, { ALPACA_MANUAL_BASE_URL: undefined });
     const { base, levelId } = await fixture(t);
     const put = (headers, body) => fetch(`${base}/api/alpaca/alert-levels/${levelId}/order`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+        method: 'PUT', headers: { 'Content-Type': 'application/json', origin: base, ...headers }, body: JSON.stringify(body),
     });
     const auth = {};
     assert.equal((await put(auth, { auto_order: 'yes' })).status, 400);
@@ -83,4 +83,29 @@ test('real-order switch needs the order token, a boolean, and a BUY budget', asy
     const level = (await response.json()).alert_level;
     assert.equal(level.auto_order, 1);
     assert.equal(level.order_budget_usd, 250);
+});
+
+test('live orders need ALPACA_ALLOW_LIVE and the order token; paper needs neither', async t => {
+    const keys = ['ALPACA_MANUAL_BASE_URL', 'ALPACA_ALLOW_LIVE', 'OPENSTOCK_ORDER_TOKEN'];
+    const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    t.after(() => { for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; } });
+    process.env.OPENSTOCK_ORDER_TOKEN = TOKEN;
+    const { base, levelId } = await fixture(t);
+    const auth = { 'X-OpenStock-Order-Token': TOKEN };
+    const preview = headers => post(base, `/api/alpaca/alert-levels/${levelId}/orders`, headers, { preview: true });
+
+    process.env.ALPACA_MANUAL_BASE_URL = 'https://api.alpaca.markets/v2';
+    assert.equal((await preview(auth)).status, 403, 'live without the opt-in is refused');
+    process.env.ALPACA_ALLOW_LIVE = '1';
+    assert.equal((await preview({})).status, 401, 'live without the token is refused');
+    assert.equal((await preview({ 'X-OpenStock-Order-Token': 'nope' })).status, 401);
+    assert.equal((await preview(auth)).status, 200, 'live with the opt-in and the token previews');
+    const enable = await fetch(`${base}/api/alpaca/alert-levels/${levelId}/order`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', origin: base }, body: JSON.stringify({ auto_order: true, budget_usd: 250 }),
+    });
+    assert.equal(enable.status, 401, 'switching real orders on for live needs the token');
+
+    delete process.env.ALPACA_MANUAL_BASE_URL;
+    delete process.env.ALPACA_ALLOW_LIVE;
+    assert.equal((await preview({})).status, 200, 'paper needs no token');
 });

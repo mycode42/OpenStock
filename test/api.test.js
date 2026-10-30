@@ -25,7 +25,8 @@ async function fixture({ now } = {}) {
     app.locals.alpacaClient = new AlpacaClient({ env: { ALPACA_MANUAL_API_KEY: 'test-key', ALPACA_MANUAL_API_SECRET: 'test-secret' }, fetchImpl });
     const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
     const base = `http://127.0.0.1:${server.address().port}`;
-    const request = (url, options = {}) => fetch(base + url, options);
+    // Same-site by default, as a browser sends it; a test that sets its own origin overrides this.
+    const request = (url, options = {}) => fetch(base + url, { ...options, headers: { origin: base, ...(options.headers || {}) } });
     return { app, db, dir, server, request };
 }
 
@@ -35,7 +36,37 @@ function addAlpacaStock(fixture, stock) {
     return Number(result.lastInsertRowid);
 }
 
+test('mutations without an Origin header are refused, as are reads with one from another site', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const base = `http://127.0.0.1:${f.server.address().port}`;
+    const noOrigin = await fetch(`${base}/api/stocks`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'NOORIGIN', name: 'No origin' }) });
+    assert.equal(noOrigin.status, 403);
+    assert.equal((await noOrigin.json()).error, 'Same-origin mutation required');
+    const read = await fetch(`${base}/api/stocks`, { headers: { origin: 'https://other.example.test' } });
+    assert.equal(read.status, 200);
+});
+
+test('without a configured proxy, a forwarded host cannot make a foreign origin pass', async t => {
+    const saved = process.env.OPENSTOCK_TRUST_PROXY;
+    delete process.env.OPENSTOCK_TRUST_PROXY;
+    t.after(() => { if (saved !== undefined) process.env.OPENSTOCK_TRUST_PROXY = saved; });
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const base = `http://127.0.0.1:${f.server.address().port}`;
+    const spoofed = await fetch(`${base}/api/stocks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://attacker.example.test', 'x-forwarded-host': 'attacker.example.test', 'x-forwarded-proto': 'https' },
+        body: JSON.stringify({ symbol: 'SPOOF', name: 'Spoof' }),
+    });
+    assert.equal(spoofed.status, 403);
+    assert.equal((await spoofed.json()).error, 'Same-origin mutation required');
+});
+
 test('mutation origin check accepts the public HTTPS origin forwarded by the reverse proxy', async t => {
+    const saved = process.env.OPENSTOCK_TRUST_PROXY;
+    process.env.OPENSTOCK_TRUST_PROXY = '1';
+    t.after(() => { if (saved === undefined) delete process.env.OPENSTOCK_TRUST_PROXY; else process.env.OPENSTOCK_TRUST_PROXY = saved; });
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     const headers = {
@@ -45,10 +76,10 @@ test('mutation origin check accepts the public HTTPS origin forwarded by the rev
         'x-forwarded-proto': 'https',
         'x-forwarded-host': 'openstock.example.test'
     };
-    const accepted = await f.request('/api/stocks', { method: 'POST', headers, body: JSON.stringify({ symbol: 'PROXY', name: 'Proxy', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const accepted = await f.request('/api/stocks', { method: 'POST', headers, body: JSON.stringify({ symbol: 'PROXY', name: 'Proxy', buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
     assert.equal(accepted.status, 201);
 
-    const rejected = await f.request('/api/stocks', { method: 'POST', headers: { ...headers, origin: 'https://other.example.test' }, body: JSON.stringify({ symbol: 'CROSS', name: 'Cross', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const rejected = await f.request('/api/stocks', { method: 'POST', headers: { ...headers, origin: 'https://other.example.test' }, body: JSON.stringify({ symbol: 'CROSS', name: 'Cross', buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
     assert.equal(rejected.status, 403);
     assert.equal((await rejected.json()).error, 'Same-origin mutation required');
 });
@@ -92,13 +123,13 @@ test('percentage alert API captures the latest saved EUR quote as its reference'
     const result = await response.json();
     assert.equal(response.status, 201, JSON.stringify(result));
     const { alert_level: level } = result;
-    assert.deepEqual([level.trigger_mode, level.side, level.reference_price_eur, level.price_eur], ['PERCENT', 'BUY', 100, 95]);
+    assert.deepEqual([level.trigger_mode, level.side, level.reference_price_usd, level.price_usd], ['PERCENT', 'BUY', 100, 95]);
 });
 
 test('live prices use Alpaca quotes in memory only and coalesce concurrent requests', async t => {
     const f = await fixture({ now: () => new Date('2026-09-17T12:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'LIVE', name: 'Live', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'LIVE', name: 'Live', buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
     const stock = (await created.json()).stock;
     const alpacaStockId = addAlpacaStock(f, stock);
     let calls = 0;
@@ -115,7 +146,7 @@ test('live prices use Alpaca quotes in memory only and coalesce concurrent reque
 test('live prices label the Alpaca feed returned by the provider', async t => {
     const f = await fixture({ now: () => new Date('2026-10-02T11:00:00Z') });
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'SDK', name: 'SDK', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const created = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'SDK', name: 'SDK', buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
     const stock = (await created.json()).stock;
     const alpacaStockId = addAlpacaStock(f, stock);
     let calls = 0;
@@ -136,7 +167,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
     assert.equal(response.headers.get('x-openstock-version'), APP_VERSION);
     assert.equal((await response.json()).version, APP_VERSION);
 
-    response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_eur: 80, sell_threshold_eur: 120 }) });
+    response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'GOOD', name: 'Good <Stock>', buy_threshold_usd: 80, sell_threshold_usd: 120 }) });
     assert.equal(response.status, 201);
     const good = (await response.json()).stock;
     // Chart history is Alpaca bars for watchlist symbols; see the alpaca watchlist tests.
@@ -159,7 +190,7 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
 
     addAlpacaStock(f, good);
     f.app.locals.alpacaClient = { getAsset: async symbol => ({ symbol, name: symbol, class: 'us_equity', tradable: true, status: 'active' }), getLatestQuotes: async () => ({ feed: 'iex', quotes: { GOOD: { bp: 89.99, ap: 90.01, t: '2026-01-01T12:00:00.000Z' } } }) };
-    const bad = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'BAD', name: 'Bad', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    const bad = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'BAD', name: 'Bad', buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
     assert.equal(bad.status, 201);
     response = await f.request('/api/refresh-prices', { method: 'POST' });
     const refreshed = await response.json();
@@ -178,17 +209,17 @@ test('API factory covers lifecycle, history, journal, analytics, refresh isolati
 
     for (let index = 0; index < 23; index += 1) {
         const symbol = `ST${String.fromCharCode(65 + index)}`;
-        response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol, name: symbol, buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+        response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol, name: symbol, buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
         assert.equal(response.status, 201);
     }
-    response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'OVER', name: 'Over', buy_threshold_eur: 1, sell_threshold_eur: 2 }) });
+    response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'OVER', name: 'Over', buy_threshold_usd: 1, sell_threshold_usd: 2 }) });
     assert.equal(response.status, 201);
 });
 
 test('new purchases merge into an existing open position and return the authoritative aggregate', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'MERGE', name: 'Merge', buy_threshold_eur: 10, sell_threshold_eur: 20 })).json()).stock;
+    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'MERGE', name: 'Merge', buy_threshold_usd: 10, sell_threshold_usd: 20 })).json()).stock;
     let response = await bodyRequest(f, '/api/trades', { trade_id: 'M-1', stock_id: stock.id, opened_at: '2026-09-14T10:00:00Z', quantity: 2, currency: 'EUR', entry_price: 10, entry_fx_rate: 1, entry_fee_eur: 1 });
     assert.equal(response.status, 201);
     assert.equal((await response.json()).merged, false);
@@ -212,24 +243,24 @@ async function bodyRequest(f, url, body, method = 'POST') {
 test('alert-level API supports authoritative CRUD, validation, disable, rearm, and threshold rejection', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const created = (await (await bodyRequest(f, '/api/stocks', { symbol: 'LEVEL', name: 'Levels', buy_threshold_eur: 10, sell_threshold_eur: 20 })).json()).stock;
+    const created = (await (await bodyRequest(f, '/api/stocks', { symbol: 'LEVEL', name: 'Levels', buy_threshold_usd: 10, sell_threshold_usd: 20 })).json()).stock;
     assert.equal(Object.hasOwn(created, 'owned'), false);
     let response = await f.request(`/api/stocks/${created.id}/alert-levels`);
     assert.equal((await response.json()).length, 2);
-    response = await bodyRequest(f, `/api/stocks/${created.id}/alert-levels`, { side: 'BUY', price_eur: 8 });
+    response = await bodyRequest(f, `/api/stocks/${created.id}/alert-levels`, { side: 'BUY', price_usd: 8 });
     assert.equal(response.status, 201);
     const level = (await response.json()).alert_level;
-    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { side: 'SELL', price_eur: 25, enabled: false }, 'PUT');
+    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { side: 'SELL', price_usd: 25, enabled: false }, 'PUT');
     assert.equal(response.status, 200);
     assert.equal((await response.json()).alert_level.active, 0);
     response = await bodyRequest(f, `/api/alert-levels/${level.id}/rearm`, {});
     assert.equal((await response.json()).alert_level.enabled, 1);
-    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { price_eur: 0 }, 'PUT');
+    response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { price_usd: 0 }, 'PUT');
     assert.equal(response.status, 400);
     response = await bodyRequest(f, `/api/alert-levels/${level.id}`, { enabled: 'not-a-boolean' }, 'PUT');
     assert.equal(response.status, 400);
     assert.match((await response.json()).error, /must be boolean/);
-    response = await bodyRequest(f, `/api/stocks/${created.id}`, { buy_threshold_eur: 7 }, 'PUT');
+    response = await bodyRequest(f, `/api/stocks/${created.id}`, { buy_threshold_usd: 7 }, 'PUT');
     assert.equal(response.status, 400);
     assert.match((await response.json()).error, /manage alert levels/);
     response = await bodyRequest(f, `/api/stocks/${created.id}`, { owned: true }, 'PUT');
@@ -245,7 +276,7 @@ test('stock routes validate, update authoritatively, hard-delete, and archive jo
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     assert.equal((await f.request('/api/stocks/999')).status, 404);
-    let response = await bodyRequest(f, '/api/stocks', { symbol: 'HOST', name: '<img src=x onerror=alert(1)>', buy_threshold_eur: 1, sell_threshold_eur: 2 });
+    let response = await bodyRequest(f, '/api/stocks', { symbol: 'HOST', name: '<img src=x onerror=alert(1)>', buy_threshold_usd: 1, sell_threshold_usd: 2 });
     const created = (await response.json()).stock;
     response = await bodyRequest(f, `/api/stocks/${created.id}`, { name: 'Updated', enabled: 0 }, 'PUT');
     assert.equal(response.status, 200);
@@ -255,7 +286,7 @@ test('stock routes validate, update authoritatively, hard-delete, and archive jo
     assert.equal((await response.json()).archived, false);
     assert.equal((await f.request(`/api/stocks/${created.id}`)).status, 404);
 
-    response = await bodyRequest(f, '/api/stocks', { symbol: 'ARCH', name: 'Archive me', buy_threshold_eur: 1, sell_threshold_eur: 2 });
+    response = await bodyRequest(f, '/api/stocks', { symbol: 'ARCH', name: 'Archive me', buy_threshold_usd: 1, sell_threshold_usd: 2 });
     const archived = (await response.json()).stock;
     await bodyRequest(f, '/api/trades', { stock_id: archived.id, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 1, entry_fx_rate: 1, entry_fee_eur: 0 });
     response = await f.request(`/api/stocks/${archived.id}`, { method: 'DELETE' });
@@ -268,7 +299,7 @@ test('stock routes validate, update authoritatively, hard-delete, and archive jo
 test('history range and capital duplicate validation are explicit errors; monitored names are uncapped', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    let response = await bodyRequest(f, '/api/stocks', { symbol: 'RANGE', name: 'Range', buy_threshold_eur: 1, sell_threshold_eur: 2 });
+    let response = await bodyRequest(f, '/api/stocks', { symbol: 'RANGE', name: 'Range', buy_threshold_usd: 1, sell_threshold_usd: 2 });
     const stock = (await response.json()).stock;
     assert.equal((await f.request(`/api/stocks/${stock.id}/history?range=bad`)).status, 400);
     await bodyRequest(f, '/api/capital-events', { event_type: 'INITIAL', amount_eur: 100, occurred_at: '2026-01-01T00:00:00Z' });
@@ -282,7 +313,7 @@ test('history range and capital duplicate validation are explicit errors; monito
     assert.equal(archived, true);
     for (let i = 0; i < 25; i += 1) {
         const symbol = `C${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + i)}`;
-        await bodyRequest(f, '/api/stocks', { symbol, name: `Cap ${i}`, buy_threshold_eur: 1, sell_threshold_eur: 2 });
+        await bodyRequest(f, '/api/stocks', { symbol, name: `Cap ${i}`, buy_threshold_usd: 1, sell_threshold_usd: 2 });
     }
     const full = (await (await f.request('/api/stocks/archived')).json());
     assert.equal(full.some(item => item.id === stock.id), true);
@@ -293,7 +324,7 @@ test('history range and capital duplicate validation are explicit errors; monito
 test('paginated trade endpoint returns twenty entries with stable totals', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'PAGE', name: 'Pagination', buy_threshold_eur: 1, sell_threshold_eur: 2 })).json()).stock;
+    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'PAGE', name: 'Pagination', buy_threshold_usd: 1, sell_threshold_usd: 2 })).json()).stock;
     const insert = f.db.db.prepare(`INSERT INTO trades (
         trade_id, stock_id, opened_at, closed_at, quantity, currency,
         entry_price, entry_fx_rate, entry_price_eur, entry_fee_eur,
@@ -322,7 +353,7 @@ test('paginated trade endpoint returns twenty entries with stable totals', async
 test('trade GET and PUT return authoritative records and reject invalid stock references', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'TRADE', name: 'Trade', buy_threshold_eur: 1, sell_threshold_eur: 2 })).json()).stock;
+    const stock = (await (await bodyRequest(f, '/api/stocks', { symbol: 'TRADE', name: 'Trade', buy_threshold_usd: 1, sell_threshold_usd: 2 })).json()).stock;
     let response = await bodyRequest(f, '/api/trades', { stock_id: 9999, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 1, entry_fx_rate: 1 });
     assert.equal(response.status, 400);
     response = await bodyRequest(f, '/api/trades', { trade_id: 'PUT-1', stock_id: stock.id, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 1, entry_fx_rate: 1 });
@@ -336,7 +367,7 @@ test('trade GET and PUT return authoritative records and reject invalid stock re
 test('journal records a partial sale while preserving the remaining open position and proportional entry fees', async t => {
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
-    const created = await bodyRequest(f, '/api/stocks', { symbol: 'PART', name: 'Partial', buy_threshold_eur: 10, sell_threshold_eur: 20 });
+    const created = await bodyRequest(f, '/api/stocks', { symbol: 'PART', name: 'Partial', buy_threshold_usd: 10, sell_threshold_usd: 20 });
     const stock = (await created.json()).stock;
     const opened = await bodyRequest(f, '/api/trades', {
         trade_id: 'PART-OPEN', stock_id: stock.id, opened_at: '2026-09-20T10:00:00Z', quantity: 10,

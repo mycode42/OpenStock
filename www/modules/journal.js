@@ -355,7 +355,7 @@ function renderJournal() {
       <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution)}</div>
       <div class="card journal-performance-card"></div>
       <div class="card"><div class="section-title">Capital Events</div><p class="subtitle">Deposits and withdrawals reported by Alpaca. Capital events change cash/equity, never trading P/L.</p>${capitalEvents().length ? `<div class="journal-events">${capitalEvents().map(event => `<span><strong>${escapeHtml(event.event_type)}</strong> ${journalMoney(event.amount_usd)} · ${formatLocalDate(event.occurred_at)}</span>`).join('')}</div>` : '<p class="journal-empty">No deposits or withdrawals reported by Alpaca.</p>'}</div>
-      <div class="card"><div class="section-header"><div><div class="section-title">Trades</div><p class="subtitle">Showing up to 15 entries per page. Trade records are read-only; expand a position to see grouped rebuys and partial sells.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade No.</th><th>Opened</th><th>Status</th><th>Instrument</th><th>Quantity</th><th>Buy-in Price</th><th>Sell Price</th><th>Net P/L</th><th>Return</th></tr></thead><tbody>${renderTradeRows(pageTrades())}</tbody></table></div>${renderTradePagination(tradePagination())}${alpacaPositionAndFillTables()}</div>
+      <div class="card"><div class="section-header"><div><div class="section-title">Trades</div><p class="subtitle">Showing up to 15 entries per page. Trade records are read-only; expand a position to see grouped rebuys and partial sells.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade No.</th><th>Opened</th><th>Status</th><th>Instrument</th><th>Quantity</th><th>Buy-in Price</th><th>Sell Price</th><th>Net P/L</th><th>Return</th></tr></thead><tbody>${renderTradeRows(pageTrades())}</tbody></table></div>${renderTradePagination(tradePagination())}</div>
       <div class="card"><div class="section-title">Per-Instrument Analytics</div>${analytics?.stock_performance?.length ? `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Instrument</th><th>P/L</th><th>Trades</th><th>Win Rate</th><th>Average Return</th><th>Average Hold</th></tr></thead><tbody>${analytics.stock_performance.map(row => `<tr><td><strong>${escapeHtml(row.symbol)}</strong></td><td class="${journalClass(row.pnl_usd)}">${journalSigned(row.pnl_usd)}</td><td>${row.trades}</td><td>${journalPercent(row.win_rate_pct)}</td><td>${journalPercent(row.average_return_pct)}</td><td>${Number(row.average_holding_days).toFixed(1)} days</td></tr>`).join('')}</tbody></table></div>` : '<p class="journal-empty">Per-instrument analytics appear after completed trades.</p>'}</div>`;
     const chartCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Equity Curve');
     const chartHeader = chartCard?.querySelector('.section-header');
@@ -398,18 +398,9 @@ function renderJournal() {
     attachInteractiveLineCharts(container);
 }
 
-    // Open Alpaca positions and recent fills, shown inside the collapsible Trades card.
-    function alpacaPositionAndFillTables() {
-        const positions = journalData?.positions || [];
-        const fills = journalData?.fills || [];
-        const positionRows = positions.length ? positions.map(position => `<tr><td><strong>${escapeHtml(position.symbol)}</strong></td><td>${Number(position.qty).toLocaleString('en-US', { maximumFractionDigits: 8 })}</td><td>${journalTradePrice(position.avg_entry_price, 'USD')}</td><td>${journalTradePrice(position.current_price, 'USD')}</td><td>${journalTradePrice(position.market_value, 'USD')}</td><td class="${journalClass(position.unrealized_pl)}">${journalSigned(position.unrealized_pl)}</td></tr>`).join('') : '<tr><td colspan="6" class="journal-empty">No open Alpaca positions.</td></tr>';
-        const fillRows = fills.length ? fills.map(fill => `<tr><td>${formatLocalDate(fill.transaction_time)}</td><td><strong>${escapeHtml(fill.symbol)}</strong></td><td>${escapeHtml(String(fill.side || '').toUpperCase())}</td><td>${Number(fill.qty).toLocaleString('en-US', { maximumFractionDigits: 8 })}</td><td>${journalTradePrice(fill.price, 'USD')}</td></tr>`).join('') : '<tr><td colspan="5" class="journal-empty">No Alpaca fills yet.</td></tr>';
-        return `<div class="journal-performance-heading">Open Alpaca positions</div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Instrument</th><th>Quantity</th><th>Avg. Entry</th><th>Current Price</th><th>Market Value</th><th>Unrealized P/L</th></tr></thead><tbody>${positionRows}</tbody></table></div><div class="journal-performance-heading">Recent Alpaca fills</div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Time</th><th>Instrument</th><th>Side</th><th>Quantity</th><th>Fill Price</th></tr></thead><tbody>${fillRows}</tbody></table></div>`;
-    }
-
     // Entry point for the Alpaca journal: analytics come from /api/alpaca/journal.
     function renderAlpacaJournal(data) {
-        journalData = { analytics: data.analytics || {}, positions: data.positions, fills: data.fills };
+        journalData = { analytics: data.analytics || {} };
         renderJournal();
     }
     return { renderJournal, renderAlpacaJournal, renderTradePagination };

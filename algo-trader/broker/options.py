@@ -12,7 +12,8 @@ from market.quotes import parse_quote
 
 
 load_dotenv()
-from broker.endpoints import OPTIONS_TRADING_BASE as PAPER_BASE
+from broker.endpoints import OPTIONS_TRADING_BASE
+from broker.order_guard import check_order
 DATA_BASE = "https://data.alpaca.markets"
 
 
@@ -47,7 +48,7 @@ class OptionsPaperClient:
         return response.json()
 
     def verify_account(self) -> dict:
-        account = self._get(PAPER_BASE, "account")
+        account = self._get(OPTIONS_TRADING_BASE, "account")
         ids = {str(account.get(key, "")).strip() for key in ("id", "account_number") if account.get(key)}
         if self.account_id not in ids:
             raise OptionsAccountMismatchError("OPTIONS credentials do not resolve to ALPACA_OPTIONS_ACCOUNT_ID")
@@ -76,7 +77,7 @@ class OptionsPaperClient:
             }
             if token:
                 params["page_token"] = token
-            payload = self._get(PAPER_BASE, "options/contracts", params=params)
+            payload = self._get(OPTIONS_TRADING_BASE, "options/contracts", params=params)
             rows = payload.get("option_contracts", []) if isinstance(payload, dict) else payload
             if not isinstance(rows, list):
                 raise ValueError("Alpaca option contracts response is malformed")
@@ -87,7 +88,7 @@ class OptionsPaperClient:
         raise RuntimeError("Alpaca option contract pagination exceeded 30 pages")
 
     def contract(self, symbol: str) -> dict:
-        return self._get(PAPER_BASE, f"options/contracts/{symbol.upper()}")
+        return self._get(OPTIONS_TRADING_BASE, f"options/contracts/{symbol.upper()}")
 
     def option_snapshots(self, symbols: list[str], *, feed: str) -> dict[str, dict]:
         if not symbols:
@@ -160,7 +161,7 @@ class OptionsPaperClient:
     def market_calendar(self, on_date: date) -> dict | None:
         """Return the paper account's regular-session schedule for one date."""
         rows = self._get(
-            PAPER_BASE, "calendar",
+            OPTIONS_TRADING_BASE, "calendar",
             params={"start": on_date.isoformat(), "end": on_date.isoformat()},
         )
         if not isinstance(rows, list):
@@ -172,20 +173,20 @@ class OptionsPaperClient:
         return rows[0]
 
     def positions(self) -> list[dict]:
-        result = self._get(PAPER_BASE, "positions")
+        result = self._get(OPTIONS_TRADING_BASE, "positions")
         if not isinstance(result, list):
             raise ValueError("Alpaca options positions response is malformed")
         return result
 
     def orders(self, status: str = "open") -> list[dict]:
-        result = self._get(PAPER_BASE, "orders", params={"status": status, "asset_class": "us_option", "nested": "true", "limit": 500})
+        result = self._get(OPTIONS_TRADING_BASE, "orders", params={"status": status, "asset_class": "us_option", "nested": "true", "limit": 500})
         if not isinstance(result, list):
             raise ValueError("Alpaca options orders response is malformed")
         return result
 
     def order_by_client_id(self, client_order_id: str) -> dict | None:
         response = self.session.get(
-            f"{PAPER_BASE}/orders:by_client_order_id",
+            f"{OPTIONS_TRADING_BASE}/orders:by_client_order_id",
             headers=self.headers,
             params={"client_order_id": client_order_id},
             timeout=15,
@@ -198,10 +199,11 @@ class OptionsPaperClient:
     def submit_order(self, payload: dict) -> dict:
         """Submit only to paper; lookup idempotency key after ambiguous transport errors."""
         body = dict(payload)
+        check_order(body, multiplier=100.0)
         body.setdefault("client_order_id", f"options-{uuid.uuid4().hex[:24]}")
         try:
             response = self.session.post(
-                f"{PAPER_BASE}/orders", headers=self.headers, json=body, timeout=15,
+                f"{OPTIONS_TRADING_BASE}/orders", headers=self.headers, json=body, timeout=15,
             )
         except requests.RequestException as exc:
             try:
@@ -220,7 +222,7 @@ class OptionsPaperClient:
     def recent_option_activities(self, *, after: str) -> list[dict]:
         """Paper exercise/assignment NTAs can appear the next day; poll on every run."""
         payload = self._get(
-            PAPER_BASE,
+            OPTIONS_TRADING_BASE,
             "account/activities",
             params={"activity_types": "OPASN,OPEXP,OPEXC", "after": after},
         )
@@ -229,4 +231,4 @@ class OptionsPaperClient:
         return payload
 
 
-__all__ = ["OptionsAccountMismatchError", "OptionsPaperClient", "PAPER_BASE", "DATA_BASE"]
+__all__ = ["OptionsAccountMismatchError", "OptionsPaperClient", "OPTIONS_TRADING_BASE", "DATA_BASE"]

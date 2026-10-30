@@ -15,7 +15,7 @@ function safeObject(value) {
 
 function runPythonJson(root, script, env = {}) {
     const configuredPython = process.env.ALGO_TRADER_PYTHON;
-    const executable = configuredPython || '/usr/local/bin/poetry';
+    const executable = configuredPython || 'poetry';
     const args = configuredPython ? ['-c', script] : ['run', 'python', '-c', script];
     return new Promise((resolve, reject) => {
         execFile(executable, args, {

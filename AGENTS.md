@@ -42,7 +42,7 @@ Review and optimization run only when asked. Stay inside the modules named in th
 - Quote source is Alpaca: SIP first, IEX when the account cannot access SIP. Monitor BUY/SELL semantics use executable ask/bid.
 - An alert fires once per episode. Outbox plus retired level. A poll must not spam Telegram.
 - `/api/live-prices` is display-only. It must not write stock state, history, alert state, or equity snapshots.
-- Orders are placed only from `lib/alpaca-orders.js`, behind the preview and budget confirmation in the UI. The trading URL defaults to paper. The algo sleeves default to the paper URL; `algo-trader/broker/endpoints.py` uses whatever `ALPACA_EQUITY_BASE_URL` / `ALPACA_OPTIONS_BASE_URL` set, with paper as the default.
+- Orders are placed only from `lib/alpaca-orders.js` and the Algo order builders. Paper manual orders are confirmed in the UI. Any non-paper endpoint is live trading: it needs `ALPACA_ALLOW_LIVE=1` (the Python endpoint module refuses to load otherwise), and live manual orders and turning real orders on also need the order token. Every order is capped at $100,000 of notional value on paper and live. The trading URLs default to paper.
 - One live order per alert level, enforced by a partial unique index in migration 025. Never weaken it.
 - Provider failure is data. One symbol does not kill the cycle.
 - There is no cap on monitored names.

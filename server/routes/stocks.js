@@ -3,6 +3,21 @@
 const { rawDatabase } = require('../alpaca-profile');
 
 module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
+// /api/stocks speaks USD: stored *_eur field names are returned as *_usd. Values are unchanged.
+function usdShape(value) {
+    if (Array.isArray(value)) return value.map(usdShape);
+    if (value && typeof value === 'object' && !(value instanceof Date)) {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key.replace(/_eur$/, '_usd'), usdShape(item)]));
+    }
+    return value;
+}
+
+app.use('/api/stocks', (req, res, next) => {
+    const json = res.json.bind(res);
+    res.json = body => json(usdShape(body));
+    next();
+});
+
 // ===== API: Stocks =====
 app.get('/api/stocks', (req, res) => {
     try {
@@ -154,7 +169,7 @@ app.post('/api/stocks', async (req, res) => {
     try {
         const symbol = String(req.body?.symbol || '').trim().toUpperCase();
         const name = String(req.body?.name || '').trim();
-        const buyThreshold = Number(req.body?.buy_threshold_eur), sellThreshold = Number(req.body?.sell_threshold_eur);
+        const buyThreshold = Number(req.body?.buy_threshold_usd), sellThreshold = Number(req.body?.sell_threshold_usd);
         if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol)) return res.status(400).json({ error: 'A valid US equity symbol is required' });
         if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
         const db = req.app.locals.db;
@@ -178,8 +193,8 @@ app.post('/api/stocks', async (req, res) => {
 
 app.put('/api/stocks/:id', (req, res) => {
     try {
-        const { buy_threshold_eur, sell_threshold_eur, owned, enabled, name } = req.body;
-        if (buy_threshold_eur !== undefined || sell_threshold_eur !== undefined) {
+        const { buy_threshold_usd, sell_threshold_usd, owned, enabled, name } = req.body;
+        if (buy_threshold_usd !== undefined || sell_threshold_usd !== undefined) {
             return res.status(400).json({ error: 'Existing-stock threshold changes are no longer accepted; manage alert levels instead.' });
         }
         const updates = {};
@@ -228,7 +243,7 @@ app.post('/api/stocks/:id/restore', (req, res) => {
         if (!existing || !Number(existing.archived)) return res.status(404).json({ error: 'Archived stock not found' });
         const name = String(req.body.name ?? existing.name ?? '').trim();
         const currency = String(req.body.currency ?? existing.currency ?? 'USD').trim().toUpperCase();
-        if (req.body.buy_threshold_eur !== undefined || req.body.sell_threshold_eur !== undefined) return res.status(400).json({ error: 'Restore does not change alert levels; manage them separately after restoring.' });
+        if (req.body.buy_threshold_usd !== undefined || req.body.sell_threshold_usd !== undefined) return res.status(400).json({ error: 'Restore does not change alert levels; manage them separately after restoring.' });
         if (!name) return res.status(400).json({ error: 'Name is required' });
         if (!/^[A-Z]{3}$/.test(currency)) return res.status(400).json({ error: 'Currency must be a three-letter code' });
         req.app.locals.db.restoreArchivedStock(existing.id, { name, currency });

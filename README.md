@@ -12,7 +12,7 @@ Try it without any broker account: `npm run demo` runs the full interface on sim
 
 ## Quick start
 
-Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module. The Algo Trader also needs Python 3.11 or 3.12 and Poetry 2.x; see [Algo Trader](#algo-trader).
+Requirements: Node.js 22 or newer, and a C/C++ toolchain with Python 3 for the `better-sqlite3` native module. The Algo Trader also needs Python 3.12 and Poetry 2.x; see [Algo Trader](#algo-trader).
 
 ```bash
 git clone https://github.com/mycode42/OpenStock.git
@@ -37,7 +37,7 @@ The Algo Trader is an optional research and paper-trading subtree in [algo-trade
 
 Setup:
 
-1. Install Python 3.11 or 3.12 and Poetry 2.x. Python 3.13 is not supported.
+1. Install Python 3.12 and Poetry 2.x. Python 3.11 and 3.13 are not supported.
 2. Add `ALPACA_EQUITY_API_KEY`, `ALPACA_EQUITY_API_SECRET` and `ALPACA_EQUITY_ACCOUNT_ID` to the root `.env`. For the options sleeve, add the `ALPACA_OPTIONS_*` set. Keep the Alpaca URLs on paper.
 3. Leave `ALGO_TRADER_ROOT` at `./algo-trader`, or point it at another checkout.
 4. Run the one-time installer from the subtree, with the Telegram chat that receives reports:
@@ -86,15 +86,11 @@ Normal startup uses Alpaca when its API key and secret are configured. Without A
   
   <img width="800" alt="Screenshot 2026-10-28 at 13 35 05" src="https://github.com/user-attachments/assets/7c4db67e-85fc-40b0-8472-8a50cacef214" />
 
-- **Algo Trader pages:** performance research and universe views for a separate Algo Trader installation, with its strategy settings editable from the UI.
+- **Algo Trader pages:** performance, research and universe views for the Algo Trader installation, with its strategy settings editable from the UI.
 
   <img width="800" alt="Screenshot 2026-10-28 at 13 20 51" src="https://github.com/user-attachments/assets/b2bdc6a4-3884-49e0-890b-bb00282a4274" />
 
-- **Algo Trader pages:** research
-  
   <img width="800" alt="Screenshot 2026-10-28 at 13 21 27" src="https://github.com/user-attachments/assets/ae0d0fc7-2303-4786-ab2f-91b396c69b73" />
-
-- **Algo Trader pages:** universe
 
   <img width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/34114b8a-af13-4e7d-8a9a-67d89ca7b0ab" />
 
@@ -118,7 +114,8 @@ Add the Alpaca Trading API key and secret to `.env`. The account is resolved fro
 |----------|---------|-------------|
 | `ALPACA_MANUAL_API_KEY` | empty | Alpaca API key for the dashboard account. |
 | `ALPACA_MANUAL_API_SECRET` | empty | Its secret. Keep it in the ignored `.env` file. |
-| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account.|
+| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the dashboard account. Any URL other than paper is live trading and needs `ALPACA_ALLOW_LIVE=1` and `OPENSTOCK_ORDER_TOKEN`. |
+| `ALPACA_ALLOW_LIVE` | empty | Set to `1` to allow live trading. Every order is capped at $100,000 of notional value, paper or live. |
 | `ORDER_NOTIONAL_USD` | `250` | Default USD budget for a BUY placed from the dashboard. |
 | `ALPACA_EQUITY_*`, `ALPACA_OPTIONS_*` | empty | Keys, secrets and account IDs for the Algo equity and options sleeves. See [Algo Trader](#algo-trader). |
 | `ALPACA_DATA_FEED` | `sip` | Preferred Alpaca stock-data feed. OpenStock falls back between SIP and IEX when feed access is denied. |
@@ -159,7 +156,7 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 | Monitoring | One-shot cycle checks BUY and SELL levels; alerts fire once per episode via Telegram | [Monitoring](docs/monitoring.md) |
 | Trading journal | Alpaca balances, positions and fills; capital events kept apart from P/L | [Features](docs/features.md) |
 | Analytics | P/L, risk, equity curve, drawdown, per-stock performance | [Performance data](docs/performance-data.md) |
-| Manual limit orders | Limit orders from alert levels, confirmed in a preview; paper by default | [Features](docs/features.md) |
+| Manual limit orders | Limit orders from alert levels; paper by default | [Features](docs/features.md) |
 | Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/README.md) |
 | Configuration | Environment variables, price sources, watchlist migration | [Configuration](docs/configuration.md) |
 | API | Endpoints for the dashboard, journal, orders and health | [API](docs/api.md) |
@@ -171,7 +168,6 @@ It uses a separate database and ignores broker credentials. See [Demo mode](docs
 
 - **Alerts that fire once.** Each level queues one alert in a durable outbox. The outbox retries delivery and never sends twice.
 - **A journal that never invents P/L.** Deposits and withdrawals are tracked separately from trading results.
-- **Orders you confirm.** Every paper order shows a preview and needs your confirmation.
 - **Figures that admit missing data.** Metrics show `N/A` or `Insufficient data` until enough history exists.
 
 Screenshots of every screen are in [Features](docs/features.md).

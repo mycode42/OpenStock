@@ -25,9 +25,12 @@ Add the Alpaca Trading API key and secret to `.env`. `ALPACA_MANUAL_BASE_URL` de
 | `MONITOR_CYCLE_DEADLINE_MS` | `45000` | Stop starting new stock work after this cycle budget. |
 | `LIVE_PRICE_REFRESH_MS` | `1000` | Display-only Dashboard refresh cadence. Minimum and default 1000 ms. |
 | `HISTORY_BACKFILL_DELAY_MS` | `1500` | Pause between chart-history backfill requests. |
-| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the manual account (dashboard and manual orders). Set to `https://api.alpaca.markets` only for the live account. |
-| `ALPACA_EQUITY_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Algo Trader trading endpoint. Refused unless it is the paper endpoint. |
-| `ALPACA_OPTIONS_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Options paper endpoint. Refused unless it is the paper endpoint. |
+| `ALPACA_MANUAL_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Trading endpoint for the manual account (dashboard and manual orders). Any URL other than paper is live trading and needs `ALPACA_ALLOW_LIVE=1` and the order token. |
+| `ALPACA_EQUITY_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Algo Trader trading endpoint. Any URL other than paper is live trading and needs `ALPACA_ALLOW_LIVE=1`; the module will not load without it. |
+| `ALPACA_OPTIONS_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Options trading endpoint. Any URL other than paper is live trading and needs `ALPACA_ALLOW_LIVE=1`; the module will not load without it. |
+| `OPENSTOCK_TRUST_PROXY` | empty | Set to `1` only when a reverse proxy is in front of OpenStock. The server then honours `X-Forwarded-Host` and `X-Forwarded-Proto` for the same-origin check, so the proxy must overwrite any values the client sends. Otherwise they are ignored. |
+| `ALPACA_ALLOW_LIVE` | empty | Set to `1` to allow live trading. Live orders also need `OPENSTOCK_ORDER_TOKEN`. Every order is capped at $100,000 of notional value, paper or live. |
+| `OPENSTOCK_ORDER_TOKEN` | empty | Confirms live order actions from the dashboard. Required with `ALPACA_ALLOW_LIVE=1` on a live account; paper needs no token. |
 | `ORDER_NOTIONAL_USD` | `250` | Default USD amount for a BUY limit order. The dashboard asks each time and can use another amount. |
 | `ALGO_TRADER_ROOT` | `./algo-trader` | Data directory of the optional Algo Trader installation. |
 

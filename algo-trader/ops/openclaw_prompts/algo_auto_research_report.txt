@@ -1,8 +1,8 @@
 Pipeline steps
 1. Run exactly one combined nightly cycle:
-cd /opt/algo-trader && /usr/bin/nice -n 2 poetry run python -m research --workers 8
+cd {ROOT} && /usr/bin/nice -n 2 poetry run python -m research --workers 8
 Set the OpenClaw `exec` call's `timeoutSeconds` to `86400` so the run is never cut off. The target is about 6 hours total; that is guidance, not a deadline. The command runs the configured options research batch first, then the equity AutoResearch pipeline. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
-2. Read /opt/algo-trader/data/research/algo-auto/latest.json and /opt/algo-trader/data/options/research/automation/latest.json. The equity report also has a top-level options_research field. Report equity and options under separate headings. Do not edit settings, restart services, or place or modify trades.
+2. Read {ROOT}/data/research/algo-auto/latest.json and {ROOT}/data/options/research/automation/latest.json. The equity report also has a top-level options_research field. Report equity and options under separate headings. Do not edit settings, restart services, or place or modify trades.
 
 Freshness across midnight: each component report can be written after the scheduled cycle starts. For each report, get its file modification time with `stat -c %Y <path>` and convert that timestamp to America/New_York. Compare the report's `run_date_et` to the ET date of that file modification time, not to the automation's scheduled start date. The options report's `created_at` can mark the start of a long run; use its file modification time to determine when the report was written. A report written after midnight with a matching ET write date is fresh.
 
@@ -23,7 +23,7 @@ Options section (separate from equity):
 
 Say that AutoResearch made no order changes and placed no orders. Options research does not read broker credentials or submit orders.
 
-Sunday weekly review: if /opt/algo-trader/data/research/algo-auto/weekly-review/latest.json exists and its status is pending_decision, list each live profile (strategy, regime) with its full-history and recent verification results (overall_pass, positive_fold_fraction, fold_count, probability_of_loss_pct). Ask the operator to reply keep or demote for each. Give the exact commands: `poetry run python -m equity_research.weekly_review keep --strategy S --regime R` and `poetry run python -m equity_research.weekly_review demote --strategy S --regime R`. Do not run keep or demote yourself.
+Sunday weekly review: if {ROOT}/data/research/algo-auto/weekly-review/latest.json exists and its status is pending_decision, list each live profile (strategy, regime) with its full-history and recent verification results (overall_pass, positive_fold_fraction, fold_count, probability_of_loss_pct). Ask the operator to reply keep or demote for each. Give the exact commands: `poetry run python -m equity_research.weekly_review keep --strategy S --regime R` and `poetry run python -m equity_research.weekly_review demote --strategy S --regime R`. Do not run keep or demote yourself.
 
 Options champions: report each strategy/underlying's validation.champion block (promoted, reason, and the candidate and incumbent fold summaries). Status waiting_for_fresh_holdout means too few new sessions exist for a new holdout decision; say so and do not treat it as a failure.
 

@@ -1,6 +1,6 @@
 {
   "name": "openstock",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Alpaca-native stock dashboard and journal",
   "main": "server.js",
   "engines": {
