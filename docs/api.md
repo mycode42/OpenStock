@@ -15,6 +15,7 @@ Part of the [OpenStock README](../README.md).
 | `/api/alpaca/alert-levels/:id/orders` | POST | Place a limit order for a level. Body `{"preview": true}` returns the plan only; `{"confirm": true}` submits. |
 | `/api/alpaca/orders/:id/cancel` | POST | Cancel a live order. |
 | `/api/stocks/:id/history?broker=alpaca` | GET | Alpaca chart history |
+| `/api/algo-trader/research/data-status` | GET | Read-only status of the ThetaData history pipeline and the scheduled job logs. It reports whether `THETA_DATA_API_KEY` is set, never its value. Demo mode returns an empty status. |
 
 ## Origin requirement
 

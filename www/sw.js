@@ -1,10 +1,10 @@
-const CACHE_NAME = 'openstock-v3.1.3-alpaca-only-kpi-colors-1-demo-banner-1-configure-2-session-window-2-popover-grace-1-session-0900-banner-algo-root-removed-1-research-lab-2-system-gauge-2-configure-zones-1-configure-messages-1-config-controls-2-toast-layer-1-stock-ny-1-equity-session-1-history-filters-theme-1';
+const CACHE_NAME = 'openstock-v3.1.4-alpaca-only-kpi-colors-1-demo-banner-1-configure-2-session-window-2-popover-grace-1-session-0900-banner-algo-root-removed-1-research-lab-2-system-gauge-2-configure-zones-1-configure-messages-1-config-controls-2-toast-layer-1-stock-ny-1-equity-session-1-history-filters-theme-1';
 const REQUIRED_ASSETS = [
   './',
   './index.html',
-  './styles.css?v=3.1.3&pull-refresh=1&algo-account-switch=1&strategy-pnl=1&appearance=1&optimizer-table=1&quote-theme=1&algo-universe=1&universe-cards=1&demo-mode=1&chart-range-theme=2&alpaca-usd-profile=1&alpaca-price-yellow=2&universe-chart-black=1&kpi-colors=2&research-lab=1&system-gauge=1',
-  './themes.css?v=3.1.3&appearance=9',
-  './app.js?v=3.1.3&pull-refresh=1&strategy-scorecard=2&appearance=2&optimizer-table=1&chart-range=1&coordinator-regime=1&trade-pagination=2&title-cleanup=1&algo-universe=1&universe-cards=1&research-page=1&demo-mode=1&alpaca-usd-profile=1&demo-banner=1&toast-layer=1',
+  './styles.css?v=3.1.4&pull-refresh=1&algo-account-switch=1&strategy-pnl=1&appearance=1&optimizer-table=1&quote-theme=1&algo-universe=1&universe-cards=1&demo-mode=1&chart-range-theme=2&alpaca-usd-profile=1&alpaca-price-yellow=2&universe-chart-black=1&kpi-colors=2&research-lab=1&system-gauge=1',
+  './themes.css?v=3.1.4&appearance=9',
+  './app.js?v=3.1.4&pull-refresh=1&strategy-scorecard=2&appearance=2&optimizer-table=1&chart-range=1&coordinator-regime=1&trade-pagination=2&title-cleanup=1&algo-universe=1&universe-cards=1&research-page=1&demo-mode=1&alpaca-usd-profile=1&demo-banner=1&toast-layer=1',
   './modules/api.js',
   './modules/state.js',
   './modules/escape.js',
@@ -12,7 +12,7 @@ const REQUIRED_ASSETS = [
   './modules/charts.js?demo-mode=1&alpaca-usd-only=1',
   './modules/dashboard.js?title-cleanup=1&demo-mode=1&alpaca-usd-only=1',
   './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1',
-  './modules/algo-trader.js?v=3.1.3&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1',
+  './modules/algo-trader.js?v=3.1.4&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1',
   './modules/algo-trader/account-view.js',
   './modules/algo-trader/equity-chart.js',
   './modules/algo-trader/format.js',

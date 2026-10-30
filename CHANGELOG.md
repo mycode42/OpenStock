@@ -2,8 +2,12 @@
 
 All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [algo-trader/CHANGELOG.md](algo-trader/CHANGELOG.md).
 
-## Unreleased
+## 3.1.4 - 2026-10-30
 
+- Release 3.1.4 bumps the offline cache name, so returning visitors load the current styles and scripts. The service worker deletes the 3.1.3 cache when it activates.
+- The demo blanks `OPENSTOCK_TRUST_PROXY`, like the other broker settings.
+- `docs/api.md` lists `/api/algo-trader/research/data-status`.
+- The crontab's only absolute path is the `ALGO` line, and the health job reads the user's uid at run time (`scripts/cron-env.sh`).
 ### Changed
 
 - The ThetaData history backfill is one unattended pipeline (`scripts/options/theta_pipeline.py`): the last 20 sessions, then EOD, then opening archives. It resumes daily from cron and, once complete, sends a Telegram message and a research-page notice to cancel the subscription and remove the key. Its status is shown on the Algo research page.

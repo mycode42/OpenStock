@@ -28,6 +28,8 @@ const env = {
     ALPACA_OPTIONS_BASE_URL: '',
     ALPACA_ALLOW_LIVE: '',
     OPENSTOCK_ORDER_TOKEN: '',
+    // The demo is local only, so it never honours forwarded headers from a proxy.
+    OPENSTOCK_TRUST_PROXY: '',
     ALPACA_EQUITY_API_KEY: '',
     ALPACA_EQUITY_API_SECRET: '',
     ALPACA_EQUITY_ACCOUNT_ID: '',
