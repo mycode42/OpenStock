@@ -173,14 +173,14 @@ ALGO_MODE_CONFIG = {
             "swing_llm_driven": 5 * 24 * 60,
         },
         "max_entries_per_strategy_per_day": {
-            "intraday_mean_reversion": 4,
-            "swing_trend_following": 2,
-            "swing_momentum": 2,
-            "swing_multi_factor": 2,
-            "swing_llm_driven": 5,
-            "swing_mean_reversion": 2,
-            "intraday_trend_following": 1,
-            "intraday_momentum": 1,
+            "intraday_mean_reversion": 2,
+            "swing_trend_following": 3,
+            "swing_momentum": 3,
+            "swing_mean_reversion": 4,
+            "intraday_trend_following": 2,
+            "intraday_momentum": 2,
+            "swing_multi_factor": 3,
+            "swing_llm_driven": 2,
         },
         "strategy_group_limits": {
             "swing": {

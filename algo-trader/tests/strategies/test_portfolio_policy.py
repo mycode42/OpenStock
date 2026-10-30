@@ -67,7 +67,7 @@ def _bars(closes, volumes=None):
 
 def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_open_positions"] == 18
-    assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 10
+    assert ALGO_MODE_CONFIG["risk"]["max_trades_per_day"] == 15
     assert ALGO_MODE_CONFIG["risk"]["max_position_pct"] == 0.07
     assert ALGO_MODE_CONFIG["risk"]["max_strategy_position_pct"] == 0.07
     assert ALGO_MODE_CONFIG["risk"]["max_short_positions"] == 5
@@ -75,14 +75,14 @@ def test_algo_risk_profile_matches_live_coordinator_limits():
     assert ALGO_MODE_CONFIG["risk"]["max_sector_pct"] == 0.40
     assert ALGO_MODE_CONFIG["risk"]["min_cash_pct"] == 0.10
     assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]
-    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 6
+    assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["swing"]["max_entries_per_day"] == 11
     assert "max_open_positions" not in ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]
     assert ALGO_MODE_CONFIG["risk"]["strategy_group_limits"]["intraday_core"]["max_entries_per_day"] == 4
     assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_multi_factor"] == 7
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_multi_factor"] == 2
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_multi_factor"] == 3
     assert ALGO_MODE_CONFIG["risk"]["max_positions_per_strategy_by_strategy"]["swing_llm_driven"] == 7
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_llm_driven"] == 5
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 4
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_llm_driven"] == 2
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["intraday_mean_reversion"] == 2
     config = get_algo_configuration()
     assert config["strategies"]["intraday_trend_following"]["enabled"] is True
     assert config["strategies"]["intraday_momentum"]["enabled"] is True
@@ -257,8 +257,8 @@ def test_algo_entry_quota_blocks_new_positions_when_history_is_unavailable():
     assert result.rule == "entry_count_unavailable"
 
 
-def test_algo_risk_validator_blocks_the_tenth_shared_daily_entry():
-    state = _portfolio_state(entry_count_today=10, trade_count_today=10)
+def test_algo_risk_validator_blocks_the_fifteenth_shared_daily_entry():
+    state = _portfolio_state(entry_count_today=15, trade_count_today=15)
 
     result = risk_validator.validate_trade("AAPL", "buy", 1, 100, state, mode="algo")
 
@@ -595,3 +595,17 @@ def test_portfolio_level_keys_are_dropped_silently(caplog):
         config = SwingMeanReversionConfig.from_dict({"max_entries_per_day": 2, "max_positions": 7, "lookback_days": 15})
     assert config.lookback_days == 15
     assert not [r for r in caplog.records if "retired" in r.getMessage()]
+
+
+def test_daily_entry_cap_counts_the_trading_day_not_the_previous_signal_bar():
+    """Yesterday's daily-bar entries must not use up today's budget."""
+    states = {"swing_trend_following": {"AAA": {"strategy": "swing_trend_following", "entry_day": "2026-10-29", "entries_today": 3, "phase": "flat"}}}
+    machine = RuleStrategyStateMachine(
+        states, {}, max_entries_per_day={"swing_trend_following": 3}, trading_day="2026-10-30",
+    )
+    assert machine.allows("swing_trend_following", "BBB", "buy", "2026-10-29T04:00:00Z") is True
+    capped = RuleStrategyStateMachine(
+        {"swing_trend_following": {"AAA": {"strategy": "swing_trend_following", "entry_day": "2026-10-30", "entries_today": 3, "phase": "flat"}}},
+        {}, max_entries_per_day={"swing_trend_following": 3}, trading_day="2026-10-30",
+    )
+    assert capped.allows("swing_trend_following", "BBB", "buy", "2026-10-29T04:00:00Z") is False

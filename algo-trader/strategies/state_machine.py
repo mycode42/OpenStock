@@ -105,8 +105,12 @@ class RuleStrategyStateMachine:
         max_entries_per_day: dict[str, int] | None = None,
         max_positions_per_strategy: int | None = None,
         max_positions_per_strategy_by_strategy: dict[str, int] | None = None,
+        trading_day: str | None = None,
     ):
         from portfolio.config import get_mode_config
+        # The day the daily entry caps are counted against. Daily-bar signals reference the previous session's bar,
+        # so counting by the signal bar's date would charge yesterday's entries to today's budget.
+        self.trading_day = trading_day
 
         risk = get_mode_config("algo")["risk"]
         self.states = states
@@ -347,8 +351,8 @@ class RuleStrategyStateMachine:
             cooldown_until = self._parse_time(state.get("cooldown_until"))
             if phase == COOLDOWN and cooldown_until and current_time and current_time < cooldown_until:
                 return False
-            if current_time:
-                session_day = current_time.astimezone(ET).date().isoformat()
+            if current_time or self.trading_day:
+                session_day = self.trading_day or current_time.astimezone(ET).date().isoformat()
                 entries_today = sum(
                     int(item.get("entries_today", 0) or 0)
                     for by_symbol in self.states.values() for item in by_symbol.values()
@@ -498,7 +502,7 @@ class RuleStrategyStateMachine:
             state["opened_at"] = None
             state["quarantine_reason"] = None
             signal_time = self._parse_time(trade.get("signal_bar_time"))
-            session_day = signal_time.astimezone(ET).date().isoformat() if signal_time else None
+            session_day = self.trading_day or (signal_time.astimezone(ET).date().isoformat() if signal_time else None)
             if session_day != state.get("entry_day"):
                 state["entry_day"] = session_day
                 state["entries_today"] = 0

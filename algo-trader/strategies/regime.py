@@ -309,11 +309,10 @@ def _raw_rule_states(feature_rows: list[dict], feature_set: str) -> tuple[list[s
         vol_features = [row.get("realized_vol_percentile_252d")]
         if feature_set in {"technical", "macro", "marketwide"}:
             vol_features.append(row.get("atr_percentile_252d"))
+        credit_percentile = None
         if feature_set in {"macro", "marketwide"}:
-            vol_features.extend((
-                row.get("vix_percentile_252d"),
-                row.get("high_yield_spread_percentile_252d"),
-            ))
+            vol_features.append(row.get("vix_percentile_252d"))
+            credit_percentile = row.get("high_yield_spread_percentile_252d")
             if (
                 row.get("vix_term_slope") is not None
                 and row.get("vix_percentile_252d") is not None
@@ -322,6 +321,9 @@ def _raw_rule_states(feature_rows: list[dict], feature_set: str) -> tuple[list[s
             ):
                 vol_features.append(0.95)
         vol_values = [float(value) for value in vol_features if isinstance(value, (int, float)) and math.isfinite(value)]
+        # A wide high-yield spread counts only alongside elevated volatility. On its own it is not volatility stress.
+        if credit_percentile is not None and math.isfinite(credit_percentile) and vol_values and max(vol_values) >= 0.80:
+            vol_values.append(float(credit_percentile))
         stress = max(vol_values) if vol_values else None
         if feature_set == "marketwide":
             breadth = row.get("breadth_positive_20d")

@@ -100,6 +100,7 @@ def prepare_scan_scope(
         max_entries_per_day=risk_config.get("max_entries_per_strategy_per_day"),
         max_positions_per_strategy=risk_config.get("max_positions_per_strategy"),
         max_positions_per_strategy_by_strategy=risk_config.get("max_positions_per_strategy_by_strategy"),
+        trading_day=today,
     )
     lifecycle.reconcile(positions, open_orders)
     unowned_positions = sorted(

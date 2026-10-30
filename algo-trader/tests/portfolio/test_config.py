@@ -40,7 +40,7 @@ def test_research_controls_are_detached_from_live_risk_config():
     controls = get_algo_research_controls()
     controls["max_entries_per_strategy_per_day"]["swing_momentum"] = 99
 
-    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_momentum"] == 2
+    assert ALGO_MODE_CONFIG["risk"]["max_entries_per_strategy_per_day"]["swing_momentum"] == 3
 
 
 def test_catalog_groups_preserve_risk_and_coordinator_membership():

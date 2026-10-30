@@ -46,6 +46,27 @@ def _inside_entry_window(
     return earliest <= now.astimezone(ET) < latest
 
 
+def _rejection_lines(report: dict, limit: int = 10) -> list[str]:
+    """One log line per rejected candidate, with the risk or policy reason it was rejected for."""
+    lines = []
+    for row in report.get("decisions") or []:
+        if not isinstance(row, dict) or row.get("approved"):
+            continue
+        signal = row.get("signal") if isinstance(row.get("signal"), dict) else {}
+        lines.append(
+            "Options candidate rejected: underlying=%s strategy=%s structure=%s reason=%s"
+            % (
+                signal.get("underlying") or "?",
+                signal.get("strategy") or "?",
+                signal.get("structure_type") or "?",
+                row.get("reason") or "no reason recorded",
+            )
+        )
+    if len(lines) > limit:
+        lines = lines[:limit] + [f"Options candidate rejections truncated: {len(lines) - limit} more not shown"]
+    return lines
+
+
 def _cycle_summary(report: dict) -> tuple[int, int]:
     decisions = report.get("decisions") or []
     approved = sum(bool(row.get("approved")) for row in decisions if isinstance(row, dict))
@@ -170,6 +191,8 @@ def run_loop(
                             report.get("regime", "unknown"),
                             report.get("volatility_state", "unknown"),
                         )
+                        for line in _rejection_lines(report):
+                            LOG.info(line)
                     except Exception:
                         LOG.exception("Options paper cycle failed; risk gates remain in force and the daemon will retry")
 

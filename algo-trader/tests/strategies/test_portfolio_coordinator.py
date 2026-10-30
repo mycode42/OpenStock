@@ -97,21 +97,21 @@ def test_shared_intraday_budget_rejects_next_entry():
     assert rejected.reason == "shared intraday entry slice is exhausted"
 
 
-def test_shared_daily_budget_is_ten_and_logs_rejection(caplog):
+def test_shared_daily_budget_is_fifteen_and_logs_rejection(caplog):
     coordinator = PortfolioCoordinator()
-    book = coordinator.new_book(equity=100_000, entries_today=10)
+    book = coordinator.new_book(equity=100_000, entries_today=15)
     result = book.review(
         _proposal(strategy="swing_trend_following"), session="regular",
         timestamp=datetime(2026, 10, 9, 10, 0, tzinfo=ET), regime="trending_up",
     )
 
-    assert coordinator.config.max_daily_entries == 10
+    assert coordinator.config.max_daily_entries == 15
     assert not result.approved
     assert result.reason == "shared daily entry budget is exhausted"
     assert "shared daily entry budget is exhausted" in caplog.text
 
 
-def test_shared_swing_slice_allows_only_six_entries_per_day():
+def test_shared_swing_slice_allows_only_eleven_entries_per_day():
     coordinator = PortfolioCoordinator()
     book = coordinator.new_book(equity=100_000)
     stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
@@ -120,7 +120,7 @@ def test_shared_swing_slice_allows_only_six_entries_per_day():
             _proposal(strategy="swing_trend_following", ticker=ticker, qty=1),
             session="regular", timestamp=stamp, regime="trending_up",
         )
-        for ticker in ("NVDA", "AAPL", "JPM", "SPY", "QQQ", "GLD")
+        for ticker in ("NVDA", "AAPL", "JPM", "SPY", "QQQ", "GLD", "XLK", "XLF", "XLE", "XLV", "XLI")
     ]
     rejected = book.review(
         _proposal(strategy="swing_momentum", ticker="TLT", qty=1),
