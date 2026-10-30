@@ -6,7 +6,8 @@ It also includes a built-in algorithmic trading system for equity and options, u
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
-<img width="800" alt="OpenStock dashboard in demo mode" src="docs/screenshots/dashboard.png" />
+<img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/15bc37cd-5ce0-40c9-961f-0c77183970a7" style="clip-path: inset(0 round 16px);"/>
+
 
 ## Quick start: try the demo
 
@@ -140,43 +141,36 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 ## Features
 
 - **Dashboard:** Alpaca USD quotes, alert levels, and Alpaca price-history charts.
-  
-  <img width="800" alt="Dashboard with a stock price-history chart open" src="docs/screenshots/dashboard-chart.png" />
+
+  <img width="800" alt="Dashboard" src="https://github.com/user-attachments/assets/2a521f8a-3b53-4de6-a76f-8bdb88be23d1" />
 
 - **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks BUY and SELL thresholds against Alpaca quotes. Alerts fire once per episode and use a durable outbox for Telegram delivery.
 
-  <img width="800" alt="Configure: alert levels with the real-order switch and budget" src="docs/screenshots/configure-alerts.png" />
+  <img width="800" alt="Configure-Overview" src="https://github.com/user-attachments/assets/893362cf-b60f-4689-b47c-aeaea166181c" />
+
+- **Manual trading:** a triggers can be equipped with real trades that are executed when fired.
+
+  <img width="800" alt="Configure" src="https://github.com/user-attachments/assets/e3d24bb3-ae35-4e2a-9485-c252f85baf31" />
 
 - **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
-  
-  <img width="800" alt="Trading journal" src="docs/screenshots/journal.png" />
 
-- **Capital events:** initial capital, deposits, withdrawals and financing are tracked separately, so they never count as trading P/L.
+  <img width="800" alt="Journal" src="https://github.com/user-attachments/assets/332b8f8e-b22b-4b29-9110-0cf0dcc87836" />
 
-  <img width="800" alt="Journal: performance details, capital movements and trades" src="docs/screenshots/journal-details.png" />
+- **Universe:** shows the current selected dynamic algo trading universe.
 
-- **Analytics:** P/L, risk, equity curve, drawdown, monthly and per-stock performance. Figures show `N/A` or `Insufficient data` until enough history exists.
-  
-  <img width="800" alt="Journal analytics" src="docs/screenshots/journal-details.png" />
+  <img width="800" alt="Universe" src="https://github.com/user-attachments/assets/f7d6f6f6-c0d3-401d-93fc-24f52c9d079b" />
 
-- **Configure:** alert levels per stock, real-order switches with a budget for each level, and manual limit orders from an alert. The demo runs the same page on simulated data.
+- **Performance:** per strategy P&L and latest coordinator & trading activity 
 
-  <img width="800" alt="Configure with the alert editor open" src="docs/screenshots/configure.png" />
+  <img width="800" alt="Algo-Performance" src="https://github.com/user-attachments/assets/39136276-48c6-452b-8795-de5a7604d480" style="clip-path: inset(0 round 16px);"/>
+
+- **Research Lab:** Shows nightly research history and provides manual research and refining option.
+
+  <img width="800" alt="Research" src="https://github.com/user-attachments/assets/287d75c0-c1cb-4ffe-9840-0490c4167d8c" style="clip-path: inset(0 round 16px);"/>
 
 - **Themes:** twelve colour themes, each in light, dark or system mode. The choice is saved in the browser.
 
-  <img width="800" alt="Settings: theme and colour mode" src="docs/screenshots/settings.png" />
-
-- **Algo Trader pages:** performance, research and universe views for the Algo Trader installation, with its strategy settings editable from the UI.
-
-  <img width="800" alt="Algo Trader: equity account" src="docs/screenshots/algo-equity.png" />
-
-  <img width="800" alt="Algo Trader: options account" src="docs/screenshots/algo-options.png" />
-
-  <img width="800" alt="Algo Trader research" src="docs/screenshots/research.png" />
-
-
-  <img width="800" alt="Algo Universe" src="docs/screenshots/algo-universe.png" />
+  <img width="800" alt="Themes" src="https://github.com/user-attachments/assets/0d195d8d-4d29-469c-87d4-0a062f31791a" style= "clip-path: inset(0 round 16px);"/>
 
 
 
