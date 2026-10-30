@@ -6,7 +6,7 @@ It also includes a built-in algorithmic trading system for equity and options, u
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
-<img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/15bc37cd-5ce0-40c9-961f-0c77183970a7" style="clip-path: inset(0 round 16px);"/>
+<img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/15bc37cd-5ce0-40c9-961f-0c77183970a7"/>
 
 
 ## Quick start: try the demo
@@ -162,15 +162,15 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Performance:** per strategy P&L and latest coordinator & trading activity 
 
-  <img width="800" alt="Algo-Performance" src="https://github.com/user-attachments/assets/39136276-48c6-452b-8795-de5a7604d480" style="clip-path: inset(0 round 16px);"/>
+  <img width="800" alt="Algo-Performance" src="https://github.com/user-attachments/assets/39136276-48c6-452b-8795-de5a7604d480"/>
 
 - **Research Lab:** Shows nightly research history and provides manual research and refining option.
 
-  <img width="800" alt="Research" src="https://github.com/user-attachments/assets/287d75c0-c1cb-4ffe-9840-0490c4167d8c" style="clip-path: inset(0 round 16px);"/>
+  <img width="800" alt="Research" src="https://github.com/user-attachments/assets/287d75c0-c1cb-4ffe-9840-0490c4167d8c"/>
 
 - **Themes:** twelve colour themes, each in light, dark or system mode. The choice is saved in the browser.
 
-  <img width="800" alt="Themes" src="https://github.com/user-attachments/assets/0d195d8d-4d29-469c-87d4-0a062f31791a" style= "clip-path: inset(0 round 16px);"/>
+  <img width="800" alt="Themes" src="https://github.com/user-attachments/assets/0d195d8d-4d29-469c-87d4-0a062f31791a"/>
 
 
 
@@ -203,5 +203,8 @@ Screenshots of every screen are in [Features](docs/features.md).
 
 OpenStock's own code is licensed under the ISC licence ([LICENSE](LICENSE)).
 
-The Algo Trader in [algo-trader/](algo-trader/) is MIT-licensed ([its LICENSE](algo-trader/LICENSE)). It builds on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), an MIT-licensed project by Virat Singh (© 2024). That MIT notice is kept in the subtree's LICENSE. Credits are also in the [Algo Trader README](algo-trader/README.md#credits).
+The Algo Trader in [algo-trader/](algo-trader/) is MIT-licensed ([its LICENSE](algo-trader/LICENSE)). 
+It builds on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), an MIT-licensed project by Virat Singh (© 2024). 
+That MIT notice is kept in the subtree's LICENSE. 
+Credits are also in the [Algo Trader README](algo-trader/README.md#credits).
 
