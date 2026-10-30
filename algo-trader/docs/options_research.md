@@ -164,12 +164,14 @@ is separate from live Algo portfolio membership. It starts at 2020-01-01, with
 later listing dates configured per symbol. Symbols with fewer than
 1,013 usable sessions remain marked `collecting` in their per-symbol manifest.
 
-Install the optional client on Python 3.12 or newer and run the collector:
+Install the optional client on Python 3.12 or newer, then run the pipeline. It is the only entry point the cron job uses:
 
 ```sh
 poetry install --with theta,research
-poetry run python scripts/options/theta_historical_backfill.py
+.venv/bin/python -m scripts.options.theta_pipeline
 ```
+
+The pipeline runs three stages for every research symbol, in order: the last 20 SPY sessions (so options trading has recent history first), the full EOD archive from 2020 (`scripts/options/theta_historical_backfill.py`), and the opening-quote archive (`scripts/options/theta_opening_backfill.py`). Each stage resumes from its cache. When both archives are complete for every symbol, the pipeline sends one Telegram message and shows a notice on the research page, then stops calling ThetaData. Its state is in `data/options/research/theta/pipeline_status.json`, and `--status` prints it.
 
 The collector reads `THETA_DATA_API_KEY` from `.env` (it also accepts ThetaData's
 official `THETADATA_API_KEY` name). To backfill a smaller set, repeat

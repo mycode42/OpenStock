@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from market.store import SQLiteBarStore
@@ -685,6 +685,7 @@ def _run_symbols(
     end_date: date,
     *,
     recent_sessions: int = 20,
+    on_recent_complete: Callable[[], None] | None = None,
 ) -> int:
     api_key = _read_api_key()
     client = _theta_client(api_key)
@@ -779,6 +780,8 @@ def _run_symbols(
             return 1
 
         print("ThetaData recent-history pass complete; beginning deeper archive backfill")
+        if on_recent_complete is not None:
+            on_recent_complete()
 
     for symbol in ordered_symbols:
         try:

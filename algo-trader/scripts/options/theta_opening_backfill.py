@@ -22,7 +22,6 @@ from scripts.options.theta_historical_backfill import (
     MAX_RESEARCH_DTE,
     RESEARCH_DIR,
     STRIKE_RANGE,
-    _archive_covers_through,
     _atomic_gzip_json,
     _atomic_json,
     _contract_key,
@@ -294,6 +293,19 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
     }
     _atomic_json(symbol_dir / "opening_manifest.json", manifest)
     return manifest
+
+
+def _archive_covers_through(path: Path, end_date: date) -> bool:
+    """Whether an archive's recorded range reaches end_date."""
+    if not path.is_file():
+        return False
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        archived_end = date.fromisoformat(str(payload.get("end_date", "")))
+    except (OSError, EOFError, json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return archived_end >= end_date
 
 
 def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date) -> dict:
