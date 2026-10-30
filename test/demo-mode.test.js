@@ -127,3 +127,17 @@ test('the Algo Universe and the broker quote one symbol at one price', async () 
         assert.ok(Math.abs(row.quote.midpoint - midpoint) < 0.001, `${symbol}: universe ${row.quote.midpoint} vs quote ${midpoint}`);
     }
 });
+
+test('demo intraday bars replay a real session: stable for the day and closing on the live quote', { skip: !require('node:fs').existsSync(require('node:path').join(__dirname, '..', 'server', 'demo-sessions.json')) && 'needs server/demo-sessions.json from scripts/market/export_demo_sessions.py' }, async () => {
+    const broker = createDemoBroker({ now: () => NOW, ordersEnabled: false });
+    const start = new Date('2026-10-30T08:00:00Z');
+    const first = await broker.getBars('AAPL', { timeframe: '5Min', start, end: NOW, limit: 500 });
+    const again = await broker.getBars('AAPL', { timeframe: '5Min', start, end: NOW, limit: 500 });
+    assert.deepEqual(first.bars, again.bars);
+    assert.equal(first.bars.length, 25);
+    const closes = first.bars.map(bar => bar.c);
+    assert.ok(new Set(closes).size > 10, 'bars should move, not repeat one value');
+    const { quotes } = await broker.getLatestQuotes(['AAPL']);
+    const mid = (quotes.AAPL.bp + quotes.AAPL.ap) / 2;
+    assert.ok(Math.abs(closes.at(-1) - mid) / mid < 0.002, `last close ${closes.at(-1)} should be near the quote ${mid}`);
+});

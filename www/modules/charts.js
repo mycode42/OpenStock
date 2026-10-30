@@ -216,7 +216,7 @@ function renderHistoryChart(points, range, { now = new Date(), priceField = 'pri
         });
     const axisLabels = axisTicks.map(({ fraction, label }) => `<span style="left:${(fraction * 100).toFixed(0)}%">${label}</span>`).join('');
     const priceRange = `${chartPrice(min, currency)} – ${chartPrice(max, currency)}`;
-    return `<div class="history-chart-readout" data-chart-readout><div class="history-meta"><span class="history-price" data-chart-value data-default-chart-value="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div>${chart}<div class="history-dates" aria-label="Chart time axis">${axisLabels}</div></div>`;
+    return `<div class="history-chart-readout" data-chart-readout><div class="history-meta"><span class="history-price" data-chart-value data-default-chart-value="${priceRange}">${priceRange}</span><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div><div class="history-plot"><div class="history-prices" aria-hidden="true"><span>${chartPrice(max, currency)}</span><span>${chartPrice((min + max) / 2, currency)}</span><span>${chartPrice(min, currency)}</span></div>${chart}</div><div class="history-dates" aria-label="Chart time axis">${axisLabels}</div></div>`;
 }
 
 function renderHistoryPanel(panel, history, range, { currency = 'EUR', priceField = 'price_eur', sampleLabel = 'native samples' } = {}) {

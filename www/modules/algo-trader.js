@@ -84,9 +84,14 @@ export function createAlgoTrader({ request, charts }) {
             error: errors[researchMode],
         });
         selectedRunDates[researchMode] = view.selectedDate;
-        // The lab keeps its DOM node across the 15-second archive refresh, so typed values and the live log survive.
+        // Same markup as the last render: leave the DOM alone, so nothing flickers on the 15-second refresh.
+        if (researchHost.renderedHtml === view.html) return;
+        // The lab keeps its DOM node across the archive refresh, so typed values and the live log survive.
         const existingLab = researchHost.querySelector('#research-lab-host');
+        const scroll = window.scrollY;
         researchHost.innerHTML = view.html;
+        researchHost.renderedHtml = view.html;
+        window.scrollTo(0, scroll);
         const statusHost = researchHost.querySelector('#research-data-status');
         if (statusHost) mountDataStatus(statusHost);
         const slot = researchHost.querySelector('#research-lab-slot');
@@ -120,11 +125,16 @@ export function createAlgoTrader({ request, charts }) {
             if (mode === researchMode) renderResearch();
             return;
         }
+        const previous = snapshots[mode];
+        const previousError = errors[mode];
         snapshots[mode] = data;
         errors[mode] = '';
         if (!dirtyAccounts.has(mode)) draftSettingsByAccount[mode] = null;
         if (mode === accountMode && !dirtyAccounts.has(mode)) render();
-        if (mode === researchMode) renderResearch();
+        // The research page reads only the research archive and the demo flag, so repaint only when those change.
+        const researchChanged = !previous || previous.demo_mode !== data.demo_mode
+            || JSON.stringify(previous.research) !== JSON.stringify(data.research) || previousError !== '';
+        if (mode === researchMode && researchChanged) renderResearch();
     }
 
     function load({ silent = false } = {}) {

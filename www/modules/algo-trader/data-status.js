@@ -14,6 +14,8 @@ const PHASE_LABELS = {
 
 let host = null;
 let timer = null;
+// The last good render, so a remount or a failed refresh never blanks the panel.
+let lastHtml = '';
 
 function bytes(value) {
     if (value < 1024) return `${value} B`;
@@ -75,14 +77,19 @@ export function renderDataStatus(status) {
 
 async function load() {
     const status = await apiRequest('/algo-trader/research/data-status', {}, message => {
-        if (host?.isConnected) host.innerHTML = `<p class="data-status-error">${escapeHtml(message)}</p>`;
+        // Keep the last good status on screen; only show the error if there is nothing to keep.
+        if (host?.isConnected && !lastHtml) host.innerHTML = `<p class="data-status-error">${escapeHtml(message)}</p>`;
     });
-    if (status && host?.isConnected) host.innerHTML = renderDataStatus(status);
+    if (!status || !host?.isConnected) return;
+    const html = renderDataStatus(status);
+    if (html === lastHtml) return;
+    lastHtml = html;
+    host.innerHTML = html;
 }
 
 export function mountDataStatus(element) {
     host = element;
-    host.innerHTML = '<p>Loading scheduled job status…</p>';
+    host.innerHTML = lastHtml || '<p class="data-status-loading">Loading scheduled job status…</p>';
     load();
     if (!timer) {
         timer = setInterval(() => {

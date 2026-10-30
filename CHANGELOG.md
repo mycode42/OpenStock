@@ -2,6 +2,26 @@
 
 All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [algo-trader/CHANGELOG.md](algo-trader/CHANGELOG.md).
 
+## Unreleased
+
+### Added
+
+- `algo-trader/scripts/market/export_demo_sessions.py` exports real intraday sessions from the market history for the demo's 1-day charts. The demo uses them when `server/demo-sessions.json` exists, and falls back to the simulated bars when it does not.
+
+### Changed
+
+- Daily entry limits count against the trading day. Daily-bar signals reference the previous session's bar, so counting by that date charged yesterday's entries to today.
+- Entry caps: overall daily 15, swing group 11, intraday group 4. Per strategy: swing trend 3, swing multi-factor 3, swing momentum 3, swing mean reversion 4, swing LLM-driven 2, intraday mean reversion 2, intraday trend following 2, intraday momentum 2.
+- The regime's volatility stress counts the high-yield credit spread only alongside an elevated volatility input. On its own, a wide credit spread no longer cuts risk.
+- The options cycle logs one line per rejected candidate with its reason.
+- The research page repaints only when its own data changes, and keeps the scroll position.
+
+### Fixed
+
+- The Journal equity curve and its KPI sparkline use the theme accent, so they show in light themes.
+- The dashboard's price history charts have price labels on the y-axis.
+- The research status panel keeps its last status on refresh instead of flashing "Loading".
+
 ## 3.1.4 - 2026-10-30
 
 - Release 3.1.4 bumps the offline cache name, so returning visitors load the current styles and scripts. The service worker deletes the 3.1.3 cache when it activates.

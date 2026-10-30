@@ -7,6 +7,16 @@
 const { randomUUID } = require('node:crypto');
 const { AlpacaError } = require('../lib/brokers/alpaca');
 const { CLOSED_TRADES, DEPOSIT_USD, WATCHLIST, basePrice, phaseOf, priceAt } = require('./demo-seed');
+// Real 5-minute sessions (04:00-20:00 ET) exported from our market history, as basis points from each session's first open.
+// Loaded on first use, so the live server never needs the file.
+let demoSessions = null;
+function demoSessionList() {
+    if (!demoSessions) {
+        try { demoSessions = require('./demo-sessions.json').sessions; }
+        catch (error) { if (error.code !== 'MODULE_NOT_FOUND') throw error; demoSessions = []; }
+    }
+    return demoSessions;
+}
 
 const DAY_MS = 86_400_000;
 const HISTORY_DAYS = 120;
@@ -30,6 +40,26 @@ function round(value, digits = 4) {
 function parseStoredTime(value) {
     const time = Date.parse(`${String(value).replace(' ', 'T')}Z`);
     return Number.isFinite(time) ? time : null;
+}
+
+// Eastern date and minute-of-day for a timestamp, from the same zone the demo uses for sessions.
+const easternClock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+function easternSlot(time) {
+    const parts = Object.fromEntries(easternClock.formatToParts(new Date(time)).map(part => [part.type, part.value]));
+    const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+    return { day: `${parts.year}-${parts.month}-${parts.day}`, index: Math.floor((minutes - 240) / 5) };
+}
+
+// One session per symbol and day, chosen by a hash so the same day always draws the same shape.
+function sessionFor(symbol, day) {
+    const key = `${symbol}|${day}`;
+    const sessions = demoSessionList();
+    if (!sessions.length) return null;
+    return sessions[[...key].reduce((sum, character) => (sum * 31 + character.charCodeAt(0)) >>> 0, 7) % sessions.length];
+}
+
+function bpsPrice(anchor, bps) {
+    return anchor * (1 + bps / 10000);
 }
 
 function watchedPriceAt(symbol, time) {
@@ -151,6 +181,39 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false, store
         else if (status === 'canceled') order.status = 'canceled';
     }
 
+    function intradayBars(symbol, minutes, start, end, limit) {
+        const from = new Date(start).getTime();
+        const to = new Date(end).getTime();
+        const nowTime = now().getTime();
+        const today = easternSlot(nowTime).day;
+        const bars = [];
+        const span = Math.max(1, minutes / 5);
+        for (let time = from; time <= to; time += minutes * 60_000) {
+            const slot = easternSlot(time);
+            if (slot.index < 0 || slot.index >= 192) continue;
+            const session = sessionFor(symbol, slot.day);
+            const last = Math.min(191, slot.index + span - 1);
+            const bars5 = session.bars_bps;
+            let high = -Infinity;
+            let low = Infinity;
+            for (let index = slot.index; index <= last; index += 1) {
+                high = Math.max(high, bars5[index][1]);
+                low = Math.min(low, bars5[index][2]);
+            }
+            // Today's session is anchored so its latest bar closes on the live quote. Earlier days start from the reference price.
+            const anchor = slot.day === today
+                ? priceAt(symbol, nowTime) / (1 + sessionFor(symbol, today).bars_bps[Math.min(191, easternSlot(nowTime).index)][3] / 10000)
+                : basePrice(symbol);
+            const close = bpsPrice(anchor, bars5[last][3]);
+            const open = bpsPrice(anchor, bars5[slot.index][0]);
+            bars.push({
+                t: new Date(time).toISOString(), o: round(open), h: round(bpsPrice(anchor, high)), l: round(bpsPrice(anchor, low)),
+                c: round(close), v: 1000 + Math.abs(bars5[last][3] - bars5[slot.index][0]) * 40,
+            });
+        }
+        return { feed: 'simulated', bars: bars.slice(-limit) };
+    }
+
     function fillRows() {
         return ledger.map(fill => ({
             id: fill.id, activity_type: 'FILL', order_id: fill.order_id, symbol: fill.symbol, side: fill.side,
@@ -222,6 +285,9 @@ function createDemoBroker({ now = () => new Date(), ordersEnabled = false, store
 
         async getBars(symbol, { timeframe = '1Day', start, end, limit = 1000 } = {}) {
             const upper = String(symbol).toUpperCase();
+            const intradayMinutes = { '1Min': 1, '5Min': 5, '30Min': 30 }[timeframe];
+            // Real replayed sessions when the fixture exists; otherwise the simulated bars below, so the demo always runs.
+            if (intradayMinutes && WATCHLIST_SYMBOLS.has(upper) && demoSessionList().length) return intradayBars(upper, intradayMinutes, start, end, limit);
             const step = { '1Min': 60_000, '5Min': 300_000, '30Min': 1_800_000, '1Day': DAY_MS, '1Week': 7 * DAY_MS }[timeframe] || DAY_MS;
             const from = new Date(start).getTime();
             const to = new Date(end).getTime();
