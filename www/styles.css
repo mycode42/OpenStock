@@ -112,6 +112,10 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 @media(max-width:640px){.journal-equity-x-labels.equity-x-labels span:nth-child(even){display:none}.journal-equity-x-labels.equity-x-labels span:last-child{display:block}}
 @media(max-width:640px){.journal-kpi:nth-child(1){order:1}.journal-kpi:nth-child(2){order:2}.journal-kpi:nth-child(7){order:3}.journal-kpi:nth-child(8){order:4}.journal-kpi:nth-child(3){order:5}.journal-kpi:nth-child(4){order:6}.journal-kpi:nth-child(9){order:7}.journal-kpi:nth-child(10){order:8}.journal-kpi:nth-child(5){order:9}.journal-kpi:nth-child(6){order:10}.journal-kpi:nth-child(11){order:11}.journal-kpi:nth-child(12){order:12}}
 @media(max-width:640px){.journal-pagination{align-items:flex-start;flex-direction:column}.journal-pagination-actions{max-width:100%;flex-wrap:wrap}.journal-pagination-actions .btn{padding:.35rem .48rem}.journal-pagination-pages{gap:.15rem}}
+/* Trade pages take the theme colours; the base .btn-secondary colours are fixed. */
+.journal-pagination .btn-secondary{background:transparent;border-color:var(--os-border);color:var(--os-muted)}
+.journal-pagination .btn-secondary:hover{background:var(--os-raised);border-color:var(--os-muted);color:var(--os-text)}
+.journal-pagination .btn-secondary[aria-current="page"]{background:var(--os-soft-accent);border-color:var(--os-accent);color:var(--os-text)}
 /* Author display rules otherwise override the browser's default [hidden] rule. */
 [hidden]{display:none!important}
 .pwa-standalone{overscroll-behavior-y:contain}.pull-refresh-indicator{position:fixed;z-index:1000;top:calc(env(safe-area-inset-top,0px) + .5rem);left:50%;display:flex;align-items:center;gap:.55rem;padding:.55rem .9rem;border:1px solid var(--os-border,#343b24);border-radius:999px;background:var(--os-raised,#111);color:var(--os-text,#e5e7eb);box-shadow:0 6px 22px rgba(0,0,0,.45);font-size:.82rem;opacity:0;pointer-events:none;transform:translate(-50%,calc(-100% - .5rem));transition:transform .12s ease-out,opacity .12s ease-out}.pull-refresh-indicator.is-pulling,.pull-refresh-indicator.is-refreshing{opacity:1;transform:translate(-50%,calc(-100% - .5rem + var(--pull-offset,0px)))}.pull-refresh-indicator.is-ready{border-color:var(--os-accent,#c8ff00);color:var(--os-accent,#c8ff00)}.pull-refresh-icon{display:inline-block;font-size:1rem;line-height:1}.pull-refresh-indicator.is-refreshing .pull-refresh-icon{animation:pull-refresh-spin .8s linear infinite}@keyframes pull-refresh-spin{to{transform:rotate(360deg)}}
@@ -539,7 +543,7 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 #page-algo-universe .algo-universe-quote-note{border-color:var(--os-border);background:var(--os-soft-accent);color:var(--os-text)}
 #page-algo-universe .algo-universe-message{border-color:var(--os-border);background:var(--os-surface);color:var(--os-muted)}
 #page-algo-universe .algo-universe-message.error{border-color:#b4515b;color:#b42332}
-#page-algo-universe .algo-universe-stock-card .history-popover{left:calc(100% + .75rem);right:auto;border-color:var(--os-border);background:#0a0a0a!important;color:var(--os-text)}
+#page-algo-universe .algo-universe-stock-card .history-popover{left:calc(100% + .75rem);right:auto;border-color:var(--os-border);background:var(--os-surface)!important;color:var(--os-text)}
 #page-algo-universe .history-title,#page-algo-universe .history-price{color:var(--os-text)}
 #page-algo-universe .history-title span,#page-algo-universe .history-meta,#page-algo-universe .history-dates,#page-algo-universe .history-loading,#page-algo-universe .history-empty{color:var(--os-muted)}
 #page-algo-universe .history-ranges{border-color:var(--os-border)}
