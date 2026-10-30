@@ -24,6 +24,7 @@ const { AlpacaClient } = require('./lib/brokers/alpaca');
 const { createAlpacaQuoteFeed } = require('./server/alpaca-quote-feed');
 const { createDemoBroker } = require('./server/demo-broker');
 const { rawDatabase } = require('./server/alpaca-profile');
+const { SNAPSHOT_MINUTES, captureAlpacaEquitySnapshot } = require('./lib/alpaca-equity-snapshots');
 const { syncOpenOrders } = require('./lib/alpaca-orders');
 
 function createApp({
@@ -121,6 +122,14 @@ function createApp({
     });
 
     require('./server/routes/alpaca')({ app });
+
+    // Manual-account equity snapshots every five minutes, like the Algo and options accounts. Tests take no timers.
+    if (process.env.NODE_ENV !== 'test') {
+        const snapshot = () => captureAlpacaEquitySnapshot({ db, client: app.locals.alpacaClient, now })
+            .catch(error => console.warn(`Equity snapshot skipped: ${error.message}`));
+        snapshot();
+        setInterval(snapshot, SNAPSHOT_MINUTES * 60_000).unref();
+    }
 
     require('./server/routes/dashboard')({
         app,

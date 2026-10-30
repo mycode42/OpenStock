@@ -21,6 +21,19 @@ class LedgerMethods extends TradesMethods {
         return since ? this.db.prepare(query).all(since) : this.db.prepare(query).all();
     }
 
+    addAlpacaEquitySnapshot(snapshot) {
+        return this.db.prepare(`
+            INSERT INTO alpaca_equity_snapshots (snapshot_at, equity_usd, cash_usd, position_value_usd)
+            VALUES (@snapshot_at, @equity_usd, @cash_usd, @position_value_usd)
+            ON CONFLICT(snapshot_at) DO UPDATE SET
+                equity_usd=excluded.equity_usd, cash_usd=excluded.cash_usd, position_value_usd=excluded.position_value_usd
+        `).run(snapshot);
+    }
+
+    getAlpacaEquitySnapshots() {
+        return this.db.prepare('SELECT snapshot_at, equity_usd, cash_usd, position_value_usd FROM alpaca_equity_snapshots ORDER BY snapshot_at ASC').all();
+    }
+
     addEquitySnapshot(snapshot) {
         return this.db.prepare(`
             INSERT INTO equity_snapshots (snapshot_at, cash_eur, position_value_eur, equity_eur, net_contributions_eur, financing_eur, source)

@@ -68,6 +68,7 @@ async function alpacaDashboardData(app) {
 }
 
 async function alpacaJournalData(app) {
+    const db = app.locals.db;
     const client = app.locals.alpacaClient;
     const [account, positions, fills, activities, history] = await Promise.all([
         client.getAccount(),
@@ -113,7 +114,7 @@ async function alpacaJournalData(app) {
         positions: positionView,
         // Recent fills for the table; the analytics below use the full history.
         fills: fillView.slice(-100).reverse(),
-        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, now: new Date() })
+        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, snapshots: db.getAlpacaEquitySnapshots(), now: new Date() })
     };
 }
 

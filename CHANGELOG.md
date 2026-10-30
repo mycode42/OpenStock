@@ -6,6 +6,7 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Changed
 
+- The Journal equity curve for the manual Alpaca account is continuous. The server takes a snapshot every five minutes into `alpaca_equity_snapshots` (migration 031), and the curve uses those points from the first snapshot on. Days before that still come from Alpaca's daily history.
 - Demo: the simulated broker's positions, cash, and open orders survive a restart. Orders the demo database tracks are rebuilt on start, so cancelling after a restart works.
 - Demo: one simulated price per stock. The Dashboard, Algo Universe, and quotes read the same price.
 - Demo: the Journal's return, equity curve, YTD P/L, and win rate agree. The demo has sample closed trades, so the win rate and YTD P/L are not empty. The Algo 1D equity chart is a seeded random walk, not a sine wave.
