@@ -749,3 +749,4 @@ html[data-theme-mode="light"] .sys-high{color:#b91c1c}
 .history-prices{display:flex;flex-direction:column;justify-content:space-between;flex:none;min-width:58px;padding:0 0 4px;text-align:right;font-size:10px;line-height:1;color:var(--os-muted);font-variant-numeric:tabular-nums}
 .data-status-panel{min-height:4.5rem;transition:opacity .2s ease}
 .data-status-loading{color:var(--os-muted);font-size:.85rem;margin:0}
+.history-chart .history-grid{stroke:var(--os-border)}

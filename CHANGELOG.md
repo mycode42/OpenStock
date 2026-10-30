@@ -10,6 +10,7 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Changed
 
+- The entry caps went up: daily 10 to 15, swing group 6 to 11, and the per-strategy caps listed in the defaults file. Once the trading-day count was fixed, the old caps would still have throttled the strategies on a day with many valid signals. The hard dollar guards are unchanged: $100,000 per order and the daily loss limits.
 - Daily entry limits count against the trading day. Daily-bar signals reference the previous session's bar, so counting by that date charged yesterday's entries to today.
 - Entry caps: overall daily 15, swing group 11, intraday group 4. Per strategy: swing trend 3, swing multi-factor 3, swing momentum 3, swing mean reversion 4, swing LLM-driven 2, intraday mean reversion 2, intraday trend following 2, intraday momentum 2.
 - The regime's volatility stress counts the high-yield credit spread only alongside an elevated volatility input. On its own, a wide credit spread no longer cuts risk.
@@ -18,22 +19,34 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Fixed
 
+- The Journal chart labels on the y-axis show distinct values when neighbouring ticks are close together.
+- The dashboard price history popup uses the same grid colour as the Algo Universe, so it is no longer heavy in light mode.
 - The Journal equity curve and its KPI sparkline use the theme accent, so they show in light themes.
 - The dashboard's price history charts have price labels on the y-axis.
 - The research status panel keeps its last status on refresh instead of flashing "Loading".
 
+### Removed
+
+- `www/sw.js`, the offline service worker. It was never registered, so it did nothing, and the checks that read it are removed.
+
 ## 3.1.4 - 2026-10-30
 
-- Release 3.1.4 bumps the offline cache name, so returning visitors load the current styles and scripts. The service worker deletes the 3.1.3 cache when it activates.
-- The demo blanks `OPENSTOCK_TRUST_PROXY`, like the other broker settings.
-- `docs/api.md` lists `/api/algo-trader/research/data-status`.
-- The crontab's only absolute path is the `ALGO` line, and the health job reads the user's uid at run time (`scripts/cron-env.sh`).
-### Changed
+### Added
 
 - The ThetaData history backfill is one unattended pipeline (`scripts/options/theta_pipeline.py`): the last 20 sessions, then EOD, then opening archives. It resumes daily from cron and, once complete, sends a Telegram message and a research-page notice to cancel the subscription and remove the key. Its status is shown on the Algo research page.
 - Scheduled jobs write to one log file each under `algo-trader/data/algo/logs/`, capped daily by `scripts/rotate_logs.py`. The research page lists them with their last error.
-- Fixed the opening backfill, which imported a helper that did not exist.
 - The Journal equity curve for the manual Alpaca account is continuous. The server takes a snapshot every five minutes into `alpaca_equity_snapshots` (migration 031), and the curve uses those points from the first snapshot on. Days before that still come from Alpaca's daily history.
+
+### Changed
+
+- Release 3.1.4 bumps the asset version in every page URL (`?v=3.1.4`), so returning visitors fetch the new files.
+- The demo blanks `OPENSTOCK_TRUST_PROXY`, like the other broker settings.
+- `docs/api.md` lists `/api/algo-trader/research/data-status`.
+- The crontab's only absolute path is the `ALGO` line, and the health job reads the user's uid at run time (`scripts/cron-env.sh`).
+
+### Fixed
+
+- Fixed the opening backfill, which imported a helper that did not exist.
 - Demo: the simulated broker's positions, cash, and open orders survive a restart. Orders the demo database tracks are rebuilt on start, so cancelling after a restart works.
 - Demo: one simulated price per stock. The Dashboard, Algo Universe, and quotes read the same price.
 - Demo: the Journal's return, equity curve, YTD P/L, and win rate agree. The demo has sample closed trades, so the win rate and YTD P/L are not empty. The Algo 1D equity chart is a seeded random walk, not a sine wave.

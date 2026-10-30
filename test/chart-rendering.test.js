@@ -234,17 +234,12 @@ test('hover labels compensate for responsive SVG stretching and support three li
     assert.match(journal, /chartCard\.insertAdjacentElement\('afterend', performanceCard\)/);
 });
 
-test('PWA asset versions derive from the release version and include chart interaction assets', () => {
+test('asset versions derive from the release version and include chart interaction assets', () => {
     const version = require('../package.json').version.replaceAll('.', '\\.');
     const index = fs.readFileSync(path.join(root, 'www/index.html'), 'utf8');
-    const worker = fs.readFileSync(path.join(root, 'www/sw.js'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
     assert.match(index, new RegExp(`styles\\.css\\?v=${version}`));
     assert.match(index, new RegExp(`app\\.js\\?v=${version}`));
-    assert.match(worker, new RegExp(`openstock-v${version}`));
-    assert.match(worker, new RegExp(`styles\\.css\\?v=${version}`));
-    assert.match(worker, new RegExp(`app\\.js\\?v=${version}`));
-    assert.match(worker, /modules\/charts\.js/);
     assert.match(styles, /\.history-chart \.chart-hover-primary\{font-size:10px\}/);
     assert.match(styles, /\.journal-performance-card \.journal-collapsible-content\{padding:1rem 1\.25rem 1\.25rem\}/);
     assert.match(styles, /\.journal-performance-card \.journal-performance-table\{padding:\.9rem 0 0\}/);

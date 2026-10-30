@@ -129,12 +129,14 @@ function journalChartMeta(value, change, detail) {
     return `<div class="journal-chart-meta"><div class="journal-chart-readout">${detailMarkup}<span class="journal-chart-value" data-chart-value data-default-chart-value="${escapeHtml(value)}">${escapeHtml(value)}</span></div><span class="history-change ${changeClass}" data-chart-change data-default-chart-change="${changeText}" data-default-chart-change-class="${changeClass}">${changeText}</span></div>`;
 }
 
-function journalAxisMoney(value) {
+// Axis labels use as many digits as the tick step needs, so neighbouring ticks never print the same label.
+function journalAxisMoney(value, step = 1000) {
     const amount = Number(value);
     if (!Number.isFinite(amount)) return '—';
     const sign = amount < 0 ? '-' : '';
-    if (Math.abs(amount) >= 1000) return `${sign}$${Math.round(Math.abs(amount) / 1000)}k`;
-    return `${sign}$${Math.round(Math.abs(amount)).toLocaleString('en-US')}`;
+    if (step < 1000) return `${sign}$${Math.round(Math.abs(amount)).toLocaleString('en-US')}`;
+    if (step < 10000) return `${sign}$${(Math.abs(amount) / 1000).toFixed(1)}k`;
+    return `${sign}$${Math.round(Math.abs(amount) / 1000)}k`;
 }
 
 function renderEquityCurve(points, resolution = 'snapshot', initialCapital) {
@@ -159,7 +161,8 @@ function renderEquityCurve(points, resolution = 'snapshot', initialCapital) {
     const yAxis = yTicks.map(({ y }) => `<line class="equity-grid-line" x1="${left}" x2="${width - right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/>`).join('');
     const xAxis = xTicks.map(({ x }) => `<line class="equity-axis-tick" x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${top + plotHeight}" y2="${top + plotHeight + 5}"/>`).join('');
     const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}<line class="equity-axis-baseline" x1="${left}" x2="${width - right}" y1="${top + plotHeight}" y2="${top + plotHeight}"/></g>`, lineClass: 'equity-line', linePoints: line, hoverPoints, ariaLabel });
-    const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${journalAxisMoney(value)}</span>`).join('');
+    const axisStep = axisValues.length > 1 ? axisValues[1] - axisValues[0] : 1000;
+    const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${journalAxisMoney(value, axisStep)}</span>`).join('');
     const xLabels = xTicks.map(({ ratio, label }) => `<span style="left:${(left / width * 100 + ratio * plotWidth / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
     const lastEquity = values[values.length - 1];
     const equityChange = capitalBase > 0 ? (lastEquity / capitalBase - 1) * 100 : undefined;

@@ -109,13 +109,11 @@ test('broker Trading screen and order UI are removed', () => {
     const root = path.join(__dirname, '..', 'www');
     const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
-    const serviceWorker = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
 
     assert.doesNotMatch(index, /href="#\/trading"/);
     assert.doesNotMatch(index, /id="page-trading"/);
     assert.doesNotMatch(app, /ENABLE_TRADING|modules\/trading/);
     assert.equal(fs.existsSync(path.join(root, 'modules', 'trading.js')), false);
-    assert.doesNotMatch(serviceWorker, /\.\/modules\/trading\.js/);
 });
 
 test('Journal loads read-only Alpaca account activity', () => {
@@ -165,13 +163,10 @@ test('standalone PWA supports pull-to-refresh and refreshes its cached entry ass
     const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
     const index = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
     const styles = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
-    const serviceWorker = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
     assert.match(app, /display-mode: standalone/);
     assert.match(app, /touchstart/);
     assert.match(app, /Release to refresh/);
     assert.match(app, /window\.location\.reload\(\)/);
     assert.match(index, /id="pull-refresh-indicator"/);
     assert.match(styles, /\.pwa-standalone\{overscroll-behavior-y:contain\}/);
-    assert.match(serviceWorker, new RegExp(`app\\.js\\?v=${version}&pull-refresh=1`));
-    assert.match(serviceWorker, new RegExp(`styles\\.css\\?v=${version}&pull-refresh=1`));
 });
