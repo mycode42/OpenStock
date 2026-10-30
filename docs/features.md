@@ -32,7 +32,8 @@ Part of the [OpenStock README](../README.md). The screenshots come from the demo
 
   <img width="800" alt="Algo Trader: equity account" src="screenshots/algo-equity.png" />
 
-  <img width="800" alt="Algo Trader: options account" src="screenshots/algo-options.png" />
+  <img width="800" alt="Options1" src="https://github.com/user-attachments/assets/2bf4f6ca-e3b8-4745-a3b1-d1f1c103af74" />
+  <img width="800" alt="Options2" src="https://github.com/user-attachments/assets/f1426cdb-0546-4dde-ac81-9ba8554df790" />
 
 - **Algo Universe:** the live eligible universe, its quotes and history.
 
