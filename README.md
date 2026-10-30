@@ -6,7 +6,7 @@ It also includes a built-in algorithmic trading system for equity and options, u
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
-<img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/15bc37cd-5ce0-40c9-961f-0c77183970a7"/>
+<img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/bc19b048-e46d-41b1-bd07-43a6a6cfe98d" />
 
 
 ## Quick start: try the demo
@@ -141,7 +141,7 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Dashboard:** Alpaca USD quotes, alert levels, and Alpaca price-history charts.
 
-  <img width="800" alt="Dashboard" src="https://github.com/user-attachments/assets/2a521f8a-3b53-4de6-a76f-8bdb88be23d1" />
+  <img width="800" alt="Dashboard" src="https://github.com/user-attachments/assets/4a7ef91f-980e-4b50-ac99-9d9f05f11172" />
 
 - **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks BUY and SELL thresholds against Alpaca quotes. Alerts fire once per episode and use a durable outbox for Telegram delivery.
 
@@ -153,11 +153,11 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
 
-  <img width="800" alt="Journal" src="https://github.com/user-attachments/assets/332b8f8e-b22b-4b29-9110-0cf0dcc87836" />
+  <img width="800" alt="Journal" src="https://github.com/user-attachments/assets/40321332-f0d0-4ef6-9571-f0c3b2d5b7b1" />
 
 - **Universe:** shows the current selected dynamic algo trading universe.
 
-  <img width="800" alt="Universe" src="https://github.com/user-attachments/assets/f7d6f6f6-c0d3-401d-93fc-24f52c9d079b" />
+  <img width="1179" height="647" alt="Universe" src="https://github.com/user-attachments/assets/1f382cd4-24d9-4d2f-aa49-f341acf6badf" />
 
 - **Performance:** per strategy P&L and latest coordinator & trading activity 
 
