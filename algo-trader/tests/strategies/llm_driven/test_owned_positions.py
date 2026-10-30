@@ -1,16 +1,15 @@
 """The LLM book honours SELL decisions for owned tickers outside the universe, and nothing else."""
 
-import json
 from datetime import datetime, timedelta, timezone
 
-from strategies.llm_driven.ai import LLMSignalBook
+from strategies.llm_driven.ai import LLMSignalBook, publish_llm_signal_snapshot
 from strategies.llm_driven.owned import owned_long_positions
 
 NOW = datetime(2026, 10, 29, 15, 0, tzinfo=timezone.utc)
 
 
 def _snapshot(path, decisions, owned):
-    path.write_text(json.dumps({
+    publish_llm_signal_snapshot(path, {
         "schema_version": 1, "strategy": "swing_llm_driven", "run_id": "run-1",
         "generated_at": NOW.isoformat(), "expires_at": (NOW + timedelta(minutes=90)).isoformat(),
         "universe": sorted({*decisions, *owned}), "owned_tickers": owned,
@@ -18,19 +17,19 @@ def _snapshot(path, decisions, owned):
             ticker: {"action": action, "confidence": 80.0, "reason": "test", "run_id": "run-1", "generated_at": NOW.isoformat()}
             for ticker, action in decisions.items()
         },
-    }), encoding="utf-8")
+    }, now=NOW)
     return path
 
 
 def test_owned_ticker_outside_the_universe_may_be_sold_but_not_bought(tmp_path):
-    path = _snapshot(tmp_path / "snap.json", {"HELD": "sell", "NEW": "buy"}, ["HELD"])
+    path = _snapshot(tmp_path / "snap.sqlite3", {"HELD": "sell", "NEW": "buy"}, ["HELD"])
     book = LLMSignalBook(path, now=NOW)
     assert book.recommendation("HELD", universe={"AAPL"}).action == "sell"
     assert book.recommendation("NEW", universe={"AAPL"}) is None
 
 
 def test_a_sell_for_a_universe_member_is_unchanged(tmp_path):
-    path = _snapshot(tmp_path / "snap.json", {"AAPL": "buy"}, [])
+    path = _snapshot(tmp_path / "snap.sqlite3", {"AAPL": "buy"}, [])
     book = LLMSignalBook(path, now=NOW)
     assert book.recommendation("AAPL", universe={"AAPL"}).action == "buy"
 

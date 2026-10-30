@@ -2,21 +2,32 @@
 
 from __future__ import annotations
 
+import argparse
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
 import math
-import os
 from pathlib import Path
-import tempfile
+import sqlite3
 
 
 from runtime.paths import ROOT
 from strategies.catalog import canonical_strategy_id
 
 REPOSITORY_ROOT = ROOT
-DEFAULT_AI_SIGNAL_FILE = REPOSITORY_ROOT / "data" / "algo" / "llm_driven" / "signals.json"
+DEFAULT_AI_SIGNAL_DB = REPOSITORY_ROOT / "data" / "algo" / "llm_driven" / "signals.sqlite3"
 MAX_SNAPSHOT_AGE = timedelta(hours=4)
+# Every published run is kept as a row, so the history stays queryable. Only the newest is read.
+SNAPSHOT_TABLE = "llm_signal_snapshot"
+SNAPSHOT_SCHEMA = f"""CREATE TABLE IF NOT EXISTS {SNAPSHOT_TABLE} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE,
+    generated_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+)"""
+SNAPSHOT_RETENTION = 200
 
 
 def _timestamp(value: object, field: str) -> datetime:
@@ -44,8 +55,34 @@ class LLMRecommendation:
 class LLMSignalBook:
     """Load one atomic analysis snapshot and fail closed on stale or bad data."""
 
-    def __init__(self, path: str | Path = DEFAULT_AI_SIGNAL_FILE, *, now: datetime | None = None) -> None:
-        self.path = Path(path)
+    def __init__(self, source: str | Path = DEFAULT_AI_SIGNAL_DB, *, now: datetime | None = None) -> None:
+        self.source = Path(source)
+        self._reset()
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("AI signal book check time must be timezone-aware")
+        try:
+            payload = read_latest_llm_signal_payload(self.source)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            self.status = "invalid"
+            self.error = f"{type(exc).__name__}: {exc}"
+            return
+        if payload is not None:
+            self._load(payload, now)
+
+    @classmethod
+    def from_payload(cls, payload: dict, *, now: datetime | None = None) -> "LLMSignalBook":
+        """Validate a snapshot that is not stored yet, as the runner does before it publishes one."""
+        book = cls.__new__(cls)
+        book.source = None
+        book._reset()
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("AI signal book check time must be timezone-aware")
+        book._load(payload, now)
+        return book
+
+    def _reset(self) -> None:
         self.status = "missing"
         self.owned_tickers: frozenset[str] = frozenset()
         self.error: str | None = None
@@ -54,13 +91,9 @@ class LLMSignalBook:
         self.run_id: str | None = None
         self.universe: frozenset[str] = frozenset()
         self.decisions: dict[str, LLMRecommendation] = {}
-        self._load(now or datetime.now(timezone.utc))
 
-    def _load(self, now: datetime) -> None:
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise ValueError("AI signal book check time must be timezone-aware")
+    def _load(self, payload: object, now: datetime) -> None:
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
             if (
                 not isinstance(payload, dict)
                 or isinstance(payload.get("schema_version"), bool)
@@ -134,9 +167,7 @@ class LLMSignalBook:
             self.universe = frozenset(universe)
             self.owned_tickers = frozenset(str(item).upper() for item in (payload.get("owned_tickers") or []))
             self.decisions = decisions
-        except FileNotFoundError:
-            self.status = "missing"
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (TypeError, ValueError) as exc:
             self.status = "invalid"
             self.error = f"{type(exc).__name__}: {exc}"
 
@@ -167,32 +198,58 @@ class LLMSignalBook:
         }
 
 
-def write_llm_signal_snapshot(path: str | Path, payload: dict) -> None:
-    """Validate and atomically publish an AI run for the Algo scanner."""
+def read_latest_llm_signal_payload(path: str | Path) -> dict | None:
+    """The newest published snapshot, or None when none has been published yet."""
+    database = Path(path)
+    if not database.exists():
+        return None
+    with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=10)) as connection:
+        table = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (SNAPSHOT_TABLE,)).fetchone()
+        if table is None:
+            return None
+        row = connection.execute(f"SELECT payload_json FROM {SNAPSHOT_TABLE} ORDER BY id DESC LIMIT 1").fetchone()
+    return None if row is None else json.loads(row[0])
+
+
+def publish_llm_signal_snapshot(path: str | Path, payload: dict, *, now: datetime | None = None) -> None:
+    """Validate an AI run and append it as the newest snapshot. A rejected run is never stored."""
+    book = LLMSignalBook.from_payload(payload, now=now)
+    if book.status != "ready":
+        raise ValueError(book.error or f"generated AI signal snapshot is {book.status}")
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, sort_keys=True, allow_nan=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        candidate = LLMSignalBook(temporary_name)
-        if candidate.status != "ready":
-            raise ValueError(candidate.error or f"generated AI signal snapshot is {candidate.status}")
-        os.replace(temporary_name, destination)
-    except Exception:
-        try:
-            os.unlink(temporary_name)
-        except FileNotFoundError:
-            pass
-        raise
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    with closing(sqlite3.connect(destination, timeout=30)) as connection, connection:
+        connection.execute(SNAPSHOT_SCHEMA)
+        connection.execute(
+            f"INSERT INTO {SNAPSHOT_TABLE} (run_id, generated_at, expires_at, payload_json) VALUES (?, ?, ?, ?)",
+            (payload["run_id"], payload["generated_at"], payload["expires_at"], text),
+        )
+        connection.execute(
+            f"DELETE FROM {SNAPSHOT_TABLE} WHERE id NOT IN (SELECT id FROM {SNAPSHOT_TABLE} ORDER BY id DESC LIMIT ?)",
+            (SNAPSHOT_RETENTION,),
+        )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Print the newest snapshot with its freshness, for the Algo briefing and silent-run prompts."""
+    parser = argparse.ArgumentParser(description="Print the newest AI signal snapshot as JSON")
+    parser.add_argument("--db", type=Path, default=DEFAULT_AI_SIGNAL_DB)
+    args = parser.parse_args(argv)
+    checked = datetime.now(timezone.utc)
+    book = LLMSignalBook(args.db, now=checked)
+    print(json.dumps({
+        "now_utc": checked.isoformat(),
+        "status": book.status,
+        "fresh": book.status == "ready",
+        "expires_at": book.expires_at.isoformat() if book.expires_at else None,
+        "error": book.error,
+        "snapshot": read_latest_llm_signal_payload(args.db),
+    }, ensure_ascii=False, indent=2))
+    return 0
 
 
 __all__ = [
-    "LLMRecommendation", "LLMSignalBook", "DEFAULT_AI_SIGNAL_FILE",
-    "MAX_SNAPSHOT_AGE", "write_llm_signal_snapshot",
+    "LLMRecommendation", "LLMSignalBook", "DEFAULT_AI_SIGNAL_DB",
+    "MAX_SNAPSHOT_AGE", "publish_llm_signal_snapshot", "read_latest_llm_signal_payload",
 ]

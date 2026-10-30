@@ -4,6 +4,7 @@
 
 ### Changed
 
+- LLM-driven signal snapshots are stored in SQLite (`data/algo/llm_driven/signals.sqlite3`, table `llm_signal_snapshot`, last 200 runs kept) instead of `data/algo/llm_driven/signals.json`. `python -m strategies.llm_driven.snapshot_cli` prints the newest snapshot with its freshness. The briefing and silent-run prompts use it, so they no longer depend on the working directory. The JSON file is no longer written or read.
 - Algo extended-hours trading is re-enabled for plain limit DAY or GTC orders during premarket, after-hours, and overnight sessions. Extended-hours entries and exits never carry a broker bracket or OCO; software stops protect them, and broker protection is attached at the next regular open.
 - Overnight Algo entries are enabled by default (`overnight_entries_enabled`).
 - Extended-session quotes are fresh for 300 seconds instead of 90, so overnight and premarket entries and protective updates are not paused by indicative BOATS quotes. Regular-session quotes keep the 90-second window.

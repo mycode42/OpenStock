@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 from market.data import regular_feed
 from strategies.runner.data import fetch_bars, fetch_latest_quotes
-from strategies.llm_driven.ai import DEFAULT_AI_SIGNAL_FILE, write_llm_signal_snapshot
+from strategies.llm_driven.ai import DEFAULT_AI_SIGNAL_DB, publish_llm_signal_snapshot
 from strategies.universe import load_algo_universe
 from broker.portfolio import convert_to_portfolio, get_alpaca_account, get_alpaca_positions
 from strategies.llm_driven.owned import owned_long_positions
@@ -451,7 +451,7 @@ def _decision_payload(tickers: list[str], raw_decisions: object) -> dict[str, di
 
 def run_analysis(
     *,
-    output_path: str | Path = DEFAULT_AI_SIGNAL_FILE,
+    output_path: str | Path = DEFAULT_AI_SIGNAL_DB,
     ttl_minutes: int = DEFAULT_TTL_MINUTES,
 ) -> dict:
     global _ACTIVE_DIAGNOSTICS
@@ -551,7 +551,7 @@ def run_analysis(
             "decisions": decisions,
         }
         diagnostics.phase("write_snapshot")
-        write_llm_signal_snapshot(output_path, snapshot)
+        publish_llm_signal_snapshot(output_path, snapshot)
 
         market_regime = analyst_signals.get("market_regime_agent", {})
         news = analyst_signals.get("news_sentiment_agent", {})
@@ -599,7 +599,7 @@ def _handle_sigterm(signum, _frame) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create scheduled AI recommendations for Algo llm_driven")
-    parser.add_argument("--output", type=Path, default=DEFAULT_AI_SIGNAL_FILE)
+    parser.add_argument("--output", type=Path, default=DEFAULT_AI_SIGNAL_DB, help="signal snapshot database")
     parser.add_argument("--ttl-minutes", type=int, default=DEFAULT_TTL_MINUTES)
     args = parser.parse_args()
     previous_sigterm = signal.signal(signal.SIGTERM, _handle_sigterm)

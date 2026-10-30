@@ -15,6 +15,16 @@ The definitions live in [`ops/automations.json`](../ops/automations.json). Marke
 | `options-research` | 17:00 daily | `python -m research.options`; prompt in `ops/openclaw_prompts/options-research.md`; delivered to Telegram | agent turn |
 | `equity-research` | 20:00 daily | `python -m research.equity`; prompt in `ops/openclaw_prompts/equity-research.md`; delivered to Telegram | agent turn |
 
+## LLM signal snapshot
+
+The `llm-driven` silent run publishes each validated analysis as a row in `data/algo/llm_driven/signals.sqlite3` (table `llm_signal_snapshot`, last 200 runs kept). The scanner and both LLM briefings read the newest row. To see it, run:
+
+```sh
+cd <algo-trader checkout> && poetry run python -m strategies.llm_driven.snapshot_cli
+```
+
+The output has `now_utc`, `status`, `fresh`, `expires_at`, and the full payload under `snapshot`. `fresh` is the only freshness check the prompts use. The briefing prompts run this command from `{ROOT}`, so the rendered prompt has an absolute path and does not depend on the working directory of the OpenClaw job.
+
 ## Install or update
 
 `scripts/setup.sh` runs this for you, so every job is set up in one step. To run only the installer:

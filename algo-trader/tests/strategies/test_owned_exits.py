@@ -58,11 +58,11 @@ def test_owned_position_keeps_an_exit_generator_when_the_snapshot_is_disabled(tm
     now = datetime(2026, 10, 27, 15, tzinfo=timezone.utc)
     flat = load_llm_context(
         enabled=False, owned_llm_position=False, llm_config=None,
-        checked_at=lambda: now, signal_path=tmp_path / "missing.json",
+        checked_at=lambda: now, signal_db=tmp_path / "missing.sqlite3",
     )
     owned = load_llm_context(
         enabled=False, owned_llm_position=True, llm_config=_config(),
-        checked_at=lambda: now, signal_path=tmp_path / "missing.json",
+        checked_at=lambda: now, signal_db=tmp_path / "missing.sqlite3",
     )
 
     assert flat.generator is None and flat.available is False

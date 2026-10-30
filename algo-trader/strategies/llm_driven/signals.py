@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from strategies.llm_driven.calendar import EventCalendar
 from strategies.llm_driven.config import LLMStrategyConfig
 from strategies.llm_driven.models import ScheduledEvent
-from strategies.llm_driven.ai import LLMSignalBook, DEFAULT_AI_SIGNAL_FILE
+from strategies.llm_driven.ai import LLMSignalBook, DEFAULT_AI_SIGNAL_DB
 from strategies.swing_common import SwingSignal, clean_daily_bars, held_sessions, position_entry_price
 from strategies.signals import Signal
 
@@ -41,13 +41,13 @@ class LLMSignalGenerator:
         calendar: EventCalendar,
         config: LLMStrategyConfig,
         *,
-        ai_signal_file: str | None = None,
+        ai_signal_db: str | None = None,
     ) -> None:
         self.calendar = calendar
         self.config = config
         self.ai_signal_book = (
-            LLMSignalBook(ai_signal_file or DEFAULT_AI_SIGNAL_FILE)
-            if ai_signal_file is not None else None
+            LLMSignalBook(ai_signal_db or DEFAULT_AI_SIGNAL_DB)
+            if ai_signal_db is not None else None
         )
         self.counts = {
             "ai_signals": 0,

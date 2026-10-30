@@ -9,7 +9,7 @@ execution path as the other Algo strategies.
 
 The scheduled analysis is advice, not an order submission. It discards model
 share quantities and publishes only an action, confidence, evidence-based
-reason, and run ID. `LLMSignalBook` accepts only a valid, unexpired snapshot
+reason, and run ID. `LLMSignalBook` accepts only a valid, unexpired snapshot read from the newest row of the signal database
 for known Algo tickers. A Buy requires confidence of at least 70 and opens a
 long position. A Sell signal can close a long position owned by `swing_llm_driven`;
 it cannot take over or close a position owned by another strategy. Watch and
@@ -29,7 +29,7 @@ when an AI snapshot is missing or expired.
 
 ## Module layout
 
-- `ai.py`: `LLMSignalBook`, the snapshot schema, validation, expiry, and atomic
+- `ai.py`: `LLMSignalBook`, the snapshot schema, validation, expiry, and the SQLite publish/read
   publication.
 - `ai_runner.py`: invokes the shared analyst graph and writes the live signal
   snapshot without calling an executor.
@@ -78,7 +78,7 @@ universe used by the Algo scanner, then loads current SPY/QQQ quotes and
 intraday bars from Alpaca before calling `run_event_analysis()` from
 `strategies/llm_driven/analysis/workflow.py`. Its analysts cover market
 regime, news sentiment, social sentiment, technicals, fundamentals, and growth.
-It writes `data/algo/llm_driven/signals.json` atomically. The OpenClaw job adds sourced
+It publishes the validated snapshot as a new row in `data/algo/llm_driven/signals.sqlite3` (table `llm_signal_snapshot`, last 200 runs kept). Print the newest one with `python -m strategies.llm_driven.snapshot_cli`. The OpenClaw job adds sourced
 market-wide news and sentiment context and summarizes only notable monitored
 stock developments for the briefing.
 
