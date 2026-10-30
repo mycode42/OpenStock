@@ -123,3 +123,36 @@ def test_ridge_factor_candidate_reports_recent_rolling_evaluation():
     assert report["adaptive_prequential_ic"]["sample_count"] >= 8
     assert "strictly before" in report["purge_rule"]
     assert report["current_training_label_cutoff"] < report["session_end"]
+
+
+def _force_failed_cycle(monkeypatch, output_dir):
+    def boom(*args, **kwargs):
+        raise ModuleNotFoundError("No module named 'lightgbm'")
+
+    monkeypatch.setattr(auto_research, "run_daily_research", boom)
+    return auto_research.main(["--output-dir", str(output_dir), "--no-refresh"])
+
+
+def test_failed_cycle_keeps_the_last_good_report_and_records_the_error_separately(tmp_path, monkeypatch):
+    import json
+
+    good = {"status": "completed", "run_id": "session-20261028-abc", "note": "last good"}
+    (tmp_path / "latest.json").write_text(json.dumps(good), encoding="utf-8")
+
+    assert _force_failed_cycle(monkeypatch, tmp_path) == 2
+
+    assert json.loads((tmp_path / "latest.json").read_text(encoding="utf-8")) == good
+    error = json.loads((tmp_path / "latest-error.json").read_text(encoding="utf-8"))
+    assert error["status"] == "error"
+    assert error["error"].startswith("ModuleNotFoundError")
+    assert error["run_id"] == f"error-{error['invocation_id']}"
+
+
+def test_failed_cycle_fills_latest_when_no_good_report_exists(tmp_path, monkeypatch):
+    import json
+
+    assert _force_failed_cycle(monkeypatch, tmp_path) == 2
+
+    latest = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    assert latest["status"] == "error"
+    assert (tmp_path / "latest-error.json").exists()

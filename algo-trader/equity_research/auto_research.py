@@ -979,6 +979,21 @@ def _configure_progress_logging(output_dir: Path) -> Path | None:
     return log_path
 
 
+def _record_failure(report: dict, *, output_dir: Path, latest_path: Path, today, optimization_only: bool) -> None:
+    """Record a failed run without replacing the last good report.
+
+    The failure goes to latest-error.json. It fills latest.json or the day's
+    file only when no good report exists yet.
+    """
+    error_path = (output_dir / "optimizer" / "latest-error.json") if optimization_only else (output_dir / "latest-error.json")
+    _atomic_json(error_path, report)
+    if not latest_path.exists():
+        _atomic_json(latest_path, report)
+    day_path = output_dir / f"{today}.json"
+    if not optimization_only and not day_path.exists():
+        _atomic_json(day_path, report)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1131,9 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger.record_completed_report(
                 invocation_id, report, report_path=str(invocation_report_path.resolve()),
             )
-        if not args.optimization_only:
-            _atomic_json(output_dir / f"{today}.json", report)
-        _atomic_json(latest_report_path, report)
+        _record_failure(report, output_dir=output_dir, latest_path=latest_report_path, today=today, optimization_only=args.optimization_only)
         progress_state.update({"status": "failed", "completed_at": datetime.now(timezone.utc).isoformat()})
         snapshot = {**progress_state, "report_path": str(invocation_report_path.resolve())}
         _atomic_json(progress_dir / "progress.json", snapshot)
@@ -1160,9 +1173,12 @@ def main(argv: list[str] | None = None) -> int:
         ledger.record_completed_report(
             invocation_id, report, report_path=str(invocation_report_path.resolve()),
         )
-    if not args.optimization_only:
-        _atomic_json(output_dir / f"{today}.json", report)
-    _atomic_json(latest_report_path, report)
+    if report.get("status") == "error":
+        _record_failure(report, output_dir=output_dir, latest_path=latest_report_path, today=today, optimization_only=args.optimization_only)
+    else:
+        if not args.optimization_only:
+            _atomic_json(output_dir / f"{today}.json", report)
+        _atomic_json(latest_report_path, report)
     progress_state.update({
         "status": "completed" if report.get("status") not in {"error", "partial_error"} else "partial_error",
         "completed_at": datetime.now(timezone.utc).isoformat(),
