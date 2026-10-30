@@ -6,7 +6,7 @@ It also includes a built-in algorithmic trading system for equity and options, u
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
-<img width="800" alt="Screenshot 2026-10-28 at 13 40 08" src="https://github.com/user-attachments/assets/51ec9bbc-aff4-44e4-ae12-9d2480047462" />
+<img width="800" alt="OpenStock dashboard in demo mode" src="docs/screenshots/dashboard.png" />
 
 ## Quick start: try the demo
 
@@ -19,7 +19,7 @@ npm ci
 npm run demo
 ```
 
-Open http://127.0.0.1:3000. The demo runs the full interface on simulated quotes and sample journal data. It never contacts a broker, uses its own database under `data/demo/`, and shows a banner listing the setup still missing. Delete `data/demo/` to start over. To use another port, add `PORT=3001` before `npm run demo`.
+Open http://127.0.0.1:3000. The demo runs the real interface on a simulated paper account. You get a six-stock watchlist with alert levels, held positions and a journal. Open **Configure** to try the real-order switch and budgets, and place a limit order from an alert. Orders are simulated and nothing is sent to a broker. The demo uses its own database under `data/demo/`. Delete that folder to start over. To use another port, add `PORT=3001` before `npm run demo`. See [Demo mode](docs/demo-mode.md).
 
 ## Set up for real
 
@@ -73,7 +73,8 @@ Commands below use `docker`. Rootless Podman accepts the same arguments; replace
 # Build the image from the repository root.
 docker build -t openstock .
 
-# Demo: no credentials, so the app starts in demo mode.
+# Demo: no credentials, so the app starts in demo mode. The container has an empty watchlist and refuses orders;
+# for the full simulated demo with orders, use npm run demo.
 docker run --rm --network host -e PORT=3000 -e DATABASE_PATH=/data/openstock.db \
   -v openstock-data:/data openstock
 ```
@@ -140,34 +141,42 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Dashboard:** Alpaca USD quotes, alert levels, and Alpaca price-history charts.
   
-  <img width="800" alt="Screenshot 2026-10-28 at 13 48 03" src="https://github.com/user-attachments/assets/8a077760-4125-43cc-83d0-3141a5f4bd0c" />
+  <img width="800" alt="Dashboard with a stock price-history chart open" src="docs/screenshots/dashboard-chart.png" />
 
 - **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks BUY and SELL thresholds against Alpaca quotes. Alerts fire once per episode and use a durable outbox for Telegram delivery.
 
-  <img width="800" alt="Screenshot 2026-10-28 at 15 15 38" src="https://github.com/user-attachments/assets/249c61da-0a47-489f-8650-b91414a8fc06" />
+  <img width="800" alt="Configure: alert levels with the real-order switch and budget" src="docs/screenshots/configure-alerts.png" />
 
 - **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
   
-  <img width="800" alt="Screenshot 2026-10-28 at 13 34 18" src="https://github.com/user-attachments/assets/9a7c47a9-cffd-4236-98e1-7b2860158c21" />
+  <img width="800" alt="Trading journal" src="docs/screenshots/journal.png" />
 
 - **Capital events:** initial capital, deposits, withdrawals and financing are tracked separately, so they never count as trading P/L.
 
-  <img width="800" alt="Screenshot 2026-10-28 at 13 38 43" src="https://github.com/user-attachments/assets/daeb17d4-47c6-4541-be2f-2d83fbcab2c8" />
+  <img width="800" alt="Journal: performance details, capital movements and trades" src="docs/screenshots/journal-details.png" />
 
 - **Analytics:** P/L, risk, equity curve, drawdown, monthly and per-stock performance. Figures show `N/A` or `Insufficient data` until enough history exists.
   
-  <img width="800" alt="Screenshot 2026-10-28 at 13 35 05" src="https://github.com/user-attachments/assets/7c4db67e-85fc-40b0-8472-8a50cacef214" />
+  <img width="800" alt="Journal analytics" src="docs/screenshots/journal-details.png" />
+
+- **Configure:** alert levels per stock, real-order switches with a budget for each level, and manual limit orders from an alert. The demo runs the same page on simulated data.
+
+  <img width="800" alt="Configure with the alert editor open" src="docs/screenshots/configure.png" />
+
+- **Themes:** twelve colour themes, each in light, dark or system mode. The choice is saved in the browser.
+
+  <img width="800" alt="Settings: theme and colour mode" src="docs/screenshots/settings.png" />
 
 - **Algo Trader pages:** performance, research and universe views for the Algo Trader installation, with its strategy settings editable from the UI.
 
-  <img width="800" alt="Screenshot 2026-10-28 at 13 20 51" src="https://github.com/user-attachments/assets/b2bdc6a4-3884-49e0-890b-bb00282a4274" />
+  <img width="800" alt="Algo Trader: equity account" src="docs/screenshots/algo-equity.png" />
 
-  <img width="800" alt="Screenshot 2026-10-28 at 13 21 27" src="https://github.com/user-attachments/assets/ae0d0fc7-2303-4786-ab2f-91b396c69b73" />
+  <img width="800" alt="Algo Trader: options account" src="docs/screenshots/algo-options.png" />
 
-  <img width="800" alt="Screenshot 2026-10-28 at 13 45 58" src="https://github.com/user-attachments/assets/34114b8a-af13-4e7d-8a9a-67d89ca7b0ab" />
+  <img width="800" alt="Algo Trader research" src="docs/screenshots/research.png" />
 
 
-  <img width="800" alt="Screenshot 2026-10-28 at 13 22 44" src="https://github.com/user-attachments/assets/0d99c880-96bb-4782-bb4b-71c1e6569a4e" />
+  <img width="800" alt="Algo Universe" src="docs/screenshots/algo-universe.png" />
 
 
 

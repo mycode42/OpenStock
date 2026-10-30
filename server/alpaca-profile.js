@@ -45,7 +45,7 @@ async function alpacaDashboardData(app) {
             broker_quote: quote ? { bid_usd: quote.bid_usd, ask_usd: quote.ask_usd, quote_time: quote.quote_time, source: quote.source } : null,
             market_data: {
                 source: quote?.source || null,
-                label: quote ? `Alpaca ${String(quote.feed || '').toUpperCase()} quotes` : 'No Alpaca quote',
+                label: quote ? (quote.feed === 'simulated' ? 'Simulated market data' : `Alpaca ${String(quote.feed || '').toUpperCase()} quotes`) : 'No Alpaca quote',
                 quote_time: quote?.quote_time || null
             },
             position: position ? {

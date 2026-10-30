@@ -22,6 +22,8 @@ const { dashboardData, captureEquitySnapshot, brokerError } = require('./server/
 const { detectDemoSetup, hasAlpacaCredentials } = require('./server/demo-setup');
 const { AlpacaClient } = require('./lib/brokers/alpaca');
 const { createAlpacaQuoteFeed } = require('./server/alpaca-quote-feed');
+const { createDemoBroker } = require('./server/demo-broker');
+const { syncOpenOrders } = require('./lib/alpaca-orders');
 
 function createApp({
     db: suppliedDb,
@@ -59,6 +61,13 @@ function createApp({
                       : [],
               };
     app.locals.demoData = demoData;
+    // Demo mode runs the real Alpaca code paths against a simulated paper account. It never opens a broker connection.
+    if (app.locals.demoMode) {
+        app.locals.alpacaClient = createDemoBroker({ now, ordersEnabled: process.env.OPENSTOCK_DEMO_DATABASE === '1' });
+        // The monitor normally moves orders on from cancel and fill. The demo has no monitor, so its orders are synced here.
+        const timer = setInterval(() => syncOpenOrders({ db, client: app.locals.alpacaClient, now }).catch(() => {}), 5000);
+        timer.unref();
+    }
     const serializeConfiguredStock = (stock) => serializeBrokerStock(stock, db);
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));

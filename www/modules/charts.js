@@ -253,7 +253,7 @@ async function loadCardHistory(card, range = '1d', { force = false, showLoading 
         panel.innerHTML = '<div class="history-empty">History is unavailable.</div>';
         return;
     }
-    renderHistoryPanel(panel, history, range, broker === 'alpaca' ? { currency: 'USD', priceField: 'price_usd', sampleLabel: history.source?.includes('_sip_') ? 'SIP bars' : 'IEX bars' } : {});
+    renderHistoryPanel(panel, history, range, broker === 'alpaca' ? { currency: 'USD', priceField: 'price_usd', sampleLabel: history.source?.includes('_sip_') ? 'SIP bars' : history.source?.includes('_simulated_') ? 'simulated bars' : 'IEX bars' } : {});
 }
 
 async function loadQuoteCardHistory(card, range = '1d', { force = false, showLoading = true } = {}) {

@@ -22,7 +22,8 @@ function createAlpacaQuoteFeed({ app, now = () => new Date(), refreshMs = Number
                     currency: 'USD',
                     ...quote,
                     feed: result.feed,
-                    source: `alpaca_${result.feed}_quote`
+                    // Demo quotes are simulated, so they are labelled as demo data rather than as Alpaca quotes.
+                    source: result.feed === 'simulated' ? 'demo' : `alpaca_${result.feed}_quote`
                 } : null;
             }).filter(Boolean)
         };

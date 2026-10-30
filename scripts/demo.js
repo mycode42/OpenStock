@@ -8,7 +8,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { initDatabase } = require('../database/init');
 const OpenStockDB = require('../database/db');
-const { seedDemoJournal } = require('../server/demo-journal');
+const { seedDemoWatchlist } = require('../server/demo-seed');
 
 const appDir = path.join(__dirname, '..');
 const demoDir = path.join(appDir, 'data', 'demo');
@@ -34,12 +34,14 @@ const env = {
     ALPACA_OPTIONS_API_KEY: '',
     ALPACA_OPTIONS_API_SECRET: '',
     ALPACA_OPTIONS_ACCOUNT_ID: '',
+    // Simulated orders are accepted only in this database, never in a real one.
+    OPENSTOCK_DEMO_DATABASE: '1',
 };
 
 // Sample journal rows go into the demo database only; seeding is skipped once it has trades.
 initDatabase({ dbPath: env.DATABASE_PATH, silent: true });
 const demoDb = new OpenStockDB(env.DATABASE_PATH);
-seedDemoJournal({ db: demoDb });
+seedDemoWatchlist(demoDb.db);
 demoDb.db.close();
 
 const port = env.PORT || 3000;

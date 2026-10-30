@@ -1,14 +1,5 @@
 'use strict';
 
-const STOCKS = Object.freeze([
-    { id: -101, symbol: 'AAPL', name: 'Apple Inc.', base: 219.42, buyIn: 205.1, quantity: 8, held: true },
-    { id: -102, symbol: 'NVDA', name: 'NVIDIA Corporation', base: 132.86, buyIn: 118.35, quantity: 12, held: true },
-    { id: -103, symbol: 'SAP', name: 'SAP SE', base: 246.8, buyIn: 232.4, quantity: 5, held: true },
-    { id: -104, symbol: 'AIR', name: 'Airbus SE', base: 172.64, buyIn: 176.2, quantity: 0, held: false },
-    { id: -105, symbol: 'MC', name: 'LVMH Moët Hennessy Louis Vuitton', base: 582.3, buyIn: 0, quantity: 0, held: false },
-    { id: -106, symbol: 'ASML', name: 'ASML Holding N.V.', base: 724.6, buyIn: 690.2, quantity: 2, held: true },
-]);
-
 const UNIVERSE = Object.freeze([
     { symbol: 'AAPL', base: 269.18, category: 'large_cap', sector: 'technology' },
     { symbol: 'AMZN', base: 226.42, category: 'large_cap', sector: 'consumer_discretionary' },
@@ -58,87 +49,6 @@ function series(base, symbol, range, now, valueField = 'price_eur') {
     });
 }
 
-function dashboardStocks(nowValue = new Date()) {
-    const now = date(nowValue);
-    const updatedAt = now.toISOString();
-    return STOCKS.map(stock => {
-        const price = demoPrice(stock.base, stock.symbol, now);
-        const spread = price * 0.0004;
-        const buy = Number((price - spread / 2).toFixed(4));
-        const sell = Number((price + spread / 2).toFixed(4));
-        const activeLevels = [
-            { id: stock.id * -10, side: 'BUY', price_eur: Number((price * 0.94).toFixed(2)) },
-            { id: stock.id * -10 - 1, side: 'SELL', price_eur: Number((price * 1.08).toFixed(2)) },
-        ];
-        return {
-            id: stock.id,
-            symbol: stock.symbol,
-            name: stock.name,
-            currency: 'EUR',
-            asset_type: 'stock',
-            enabled: 1,
-            archived: 0,
-            current_price_eur: price,
-            current_bid_eur: buy,
-            current_ask_eur: sell,
-            last_price_update: updatedAt,
-            created_at: updatedAt,
-            updated_at: updatedAt,
-            broker_mapping: null,
-            broker_quote: { bid_eur: buy, ask_eur: sell, spread_eur: Number((sell - buy).toFixed(4)), quote_time: updatedAt, observed_at: updatedAt, source: 'demo' },
-            market_data: { source: 'demo', label: 'Simulated market data', fallback: false, quote_time: updatedAt },
-            position: {
-                owned: stock.held,
-                quantity: stock.quantity,
-                buy_in_price_eur: stock.held ? stock.buyIn : null,
-                source: 'demo portfolio',
-            },
-            alert_levels: activeLevels.map(level => ({ ...level, enabled: 1, active: 1, triggered: 0, retired: 0, trigger_mode: 'PRICE' })),
-        };
-    });
-}
-
-function livePrices(nowValue = new Date()) {
-    const now = date(nowValue);
-    return {
-        observed_at: now.toISOString(),
-        refresh_ms: 1000,
-        cached: false,
-        refreshing: false,
-        prices: dashboardStocks(now).map(stock => ({
-            stock_id: stock.id,
-            price_eur: stock.current_price_eur,
-            bid_eur: stock.broker_quote.bid_eur,
-            ask_eur: stock.broker_quote.ask_eur,
-            quote_time: now.toISOString(),
-            observed_at: now.toISOString(),
-            source: 'demo',
-            fallback: false,
-        })),
-    };
-}
-
-function stockHistory(stockId, range, nowValue = new Date()) {
-    const stock = STOCKS.find(item => item.id === Number(stockId));
-    if (!stock) return null;
-    const now = date(nowValue);
-    const points = series(demoPrice(stock.base, stock.symbol, now), stock.symbol, range, now);
-    if (!points) return null;
-    return {
-        stock_id: stock.id,
-        symbol: stock.symbol,
-        range,
-        currency: 'EUR',
-        native_eur: true,
-        source: 'demo',
-        bucket_seconds: range === '1d' ? 900 : 3600,
-        max_gap_seconds: 0,
-        start_at: points[0].recorded_at,
-        end_at: points[points.length - 1].recorded_at,
-        points,
-    };
-}
-
 function universePayload(nowValue = new Date()) {
     const now = date(nowValue);
     const timestamp = now.toISOString();
@@ -181,37 +91,29 @@ function universeHistory(symbol, range, nowValue = new Date()) {
     return { demo_mode: true, points, start_at: points[0].recorded_at, end_at: points[points.length - 1].recorded_at, observed_at: now.toISOString(), stale: false };
 }
 
+// Demo account history in the same shape as the recorded snapshots: one close per day, plus
+// 5-minute points around the clock for the last 36 hours. The last point is the headline value.
 function equityHistory(account, now) {
-    const days = 75;
     const start = account === 'options' ? 38_000 : 100_000;
     const end = now.getTime();
-    const daily = Array.from({ length: days }, (_, index) => {
-        const progress = index / (days - 1);
-        const wave = Math.sin(progress * Math.PI * 12) * 0.012 + Math.sin(progress * Math.PI * 31) * 0.004;
-        const equity = start * (1 + progress * 0.071 + wave);
-        const timestamp = new Date(end - (days - index) * 86_400_000).toISOString();
+    const positionCount = account === 'options' ? 3 : 5;
+    const row = (time, kind, equity) => {
+        const timestamp = new Date(time).toISOString();
         return {
-            date: timestamp.slice(0, 10), timestamp,
-            equity: Number(equity.toFixed(2)),
-            cash: Number((equity * 0.31).toFixed(2)),
-            invested: Number((equity * 0.69).toFixed(2)),
-            position_count: account === 'options' ? 3 : 5,
+            date: timestamp.slice(0, 10), timestamp, snapshot_kind: kind, equity: Number(equity.toFixed(2)),
+            cash: Number((equity * 0.31).toFixed(2)), invested: Number((equity * 0.69).toFixed(2)), position_count: positionCount,
         };
+    };
+    // Closes stop before the intraday window, so the two series never overlap, as in the recorded history.
+    const days = 118;
+    const trend = progress => start * (1 + progress * 0.071 + Math.sin(progress * Math.PI * 12) * 0.012 + Math.sin(progress * Math.PI * 31) * 0.004);
+    const closes = Array.from({ length: days }, (_, index) => row(end - (days + 2 - index) * 86_400_000, 'close', trend(index / (days - 1))));
+    const latest = trend(1);
+    const intraday = Array.from({ length: 36 * 12 }, (_, index) => {
+        const time = end - (36 * 12 - 1 - index) * 5 * 60_000;
+        return row(time, 'intraday', latest * (1 + Math.sin((time - end) / (4 * 3_600_000)) * 0.0015));
     });
-    const latestDailyEquity = daily[daily.length - 1].equity;
-    const intraday = Array.from({ length: 9 }, (_, index) => {
-        const progress = index / 8;
-        const equity = latestDailyEquity * (1 + Math.sin(progress * Math.PI * 4) * 0.0025);
-        const timestamp = new Date(end - (8 - index) * 2 * 60 * 60_000).toISOString();
-        return {
-            date: timestamp.slice(0, 10), timestamp,
-            equity: Number(equity.toFixed(2)),
-            cash: Number((equity * 0.31).toFixed(2)),
-            invested: Number((equity * 0.69).toFixed(2)),
-            position_count: account === 'options' ? 3 : 5,
-        };
-    });
-    return [...daily, ...intraday];
+    return [...closes, ...intraday];
 }
 
 function researchHistory(now) {
@@ -312,4 +214,4 @@ function labOverview(account = 'options') {
     };
 }
 
-module.exports = { dashboardStocks, labOverview, livePrices, stockHistory, universePayload, universeHistory, algoPayload };
+module.exports = { labOverview, universePayload, universeHistory, algoPayload };

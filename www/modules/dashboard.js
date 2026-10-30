@@ -156,7 +156,7 @@ function renderDashboard() {
             ${heldValue}
             ${sellAlertNote}
             <div class="level-summary"><strong>Active alerts</strong><div>${active.length ? active.map(level => `<a class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'} alert-link" href="#/config?stock=${escapeHtml(stock.id)}&level=${escapeHtml(level.id)}" title="Open this alert in Configure">${escapeHtml(alertText(level))}</a>${alpacaOrderControls(level)}`).join('') : 'None'}</div><strong>Triggered/retired</strong><div>${retired.length ? retired.map(level => `<a class="threshold disabled alert-link" href="#/config?stock=${escapeHtml(stock.id)}&level=${escapeHtml(level.id)}" title="Open this alert in Configure to rearm it">${escapeHtml(alertText(level))} · ${level.retired ? 'retired' : 'triggered'}</a>`).join('') : 'None'}</div></div>
-            <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div>${stock.market_data?.source === 'demo' ? '<div class="position-summary">Sample alerts · read only in demo mode</div>' : '<div class="position-summary">Alpaca alert levels</div>'}<div class="history-popover" role="status" aria-live="polite"></div>
+            <div class="stock-footer" data-live-status>${stock.last_price_update ? `Updated ${formatLocalDateTime(stock.last_price_update)}` : 'Never updated'} · ${escapeHtml(stock.market_data?.label || 'No quote')}</div><div class="position-summary">Alpaca alert levels</div><div class="history-popover" role="status" aria-live="polite"></div>
         </div>`;
     }).join('');
     const emptyState = 'No tickers are configured in the Alpaca USD watchlist.';

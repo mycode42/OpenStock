@@ -55,12 +55,6 @@ app.get('/api/stocks/:id/history', (req, res) => {
         return res.status(400).json({ error: 'Range must be one of: 1d, 1w, 1mo, 1y, 5y' });
     }
 
-    if (req.app.locals.demoMode) {
-        const history = req.app.locals.demoData.stockHistory(req.params.id, range, now());
-        if (!history) return res.status(404).json({ error: 'Stock not found' });
-        return res.json(history);
-    }
-
     (async () => {
         const stock = rawDatabase(req.app.locals.db).prepare(`SELECT id, symbol FROM alpaca_watchlist
             WHERE id=? AND enabled=1 AND archived=0`).get(req.params.id);
