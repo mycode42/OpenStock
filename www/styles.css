@@ -199,6 +199,11 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 .algo-research-recommendation strong{font-size:.74rem}
 .algo-open-history{font-size:.76rem}
 .algo-history-filters button{font-size:.69rem}
+/* The research archive filters take the theme colours. */
+.algo-history-filters{border-color:var(--os-border);background:var(--os-surface)}
+.algo-history-filters button{color:var(--os-muted)}
+.algo-history-filters button:hover{color:var(--os-text)}
+.algo-history-filters button.active{background:var(--os-soft-accent);color:var(--os-accent)}
 .algo-run-version,.algo-run-name{font-size:.76rem}
 .algo-run-version small,.algo-run-name small,.algo-run-return small{font-size:.66rem}
 .algo-run-return{font-size:.8rem}
