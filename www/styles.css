@@ -735,3 +735,11 @@ html[data-theme-mode="light"] .sys-high{color:#b91c1c}
 /* Unit suffixes sit on the input, not on a dark chip */
 #page-config .config-price-input span,
 #page-config .config-percent-input span { background: transparent; }
+
+.data-status-panel{margin-bottom:1rem}
+.data-status-panel h3{margin:.25rem 0 .5rem}
+.data-status-table{width:100%;border-collapse:collapse;font-size:.85rem;margin:.5rem 0 1rem}
+.data-status-table th,.data-status-table td{text-align:left;padding:.3rem .5rem;border-bottom:1px solid rgba(127,127,127,.2);vertical-align:top}
+.data-status-table th{font-weight:600;white-space:nowrap}
+.data-status-action{color:#b7791f}
+.data-status-error{color:#c53030}

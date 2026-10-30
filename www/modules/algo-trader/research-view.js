@@ -50,6 +50,7 @@ export function renderResearchPage({ mode, snapshot, filter, selectedDate, loadi
             <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> RESEARCH ARCHIVE</div><h1>Research</h1>${renderAccountSwitch({ active: mode, ariaLabel: 'Research account', attribute: 'data-research-mode', options: [['equity', 'Equity'], ['options', 'Options']] })}</div>
             <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${demoMode ? 'DEMO RESEARCH' : `${modeLabel.toUpperCase()} RESEARCH`}</span></div>
         </header>
+        <section id="research-data-status" class="card data-status-panel"></section>
         <div id="research-lab-slot"></div>
         <section class="card algo-panel algo-history-panel" id="algo-history">
             <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${title}</h2><p>${description}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${filter === key ? 'active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div></div>

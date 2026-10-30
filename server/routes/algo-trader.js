@@ -7,6 +7,7 @@ const { buildPayload } = require('../algo-trader/equity');
 const { UNIVERSE_HISTORY_RANGES, buildUniversePayload, fetchAlpacaUniverseHistory } = require('../algo-trader/universe');
 const { buildOptionsPayload } = require('../algo-trader/options');
 const { LabError, ResearchLab } = require('../algo-trader/research-lab');
+const { buildDataStatus } = require('../algo-trader/data-status');
 
 module.exports = function registerAlgoTraderRoutes({ app, root = require('../../lib/paths').algoTraderRoot(), now = () => new Date() }) {
     app.get('/api/algo-trader/universe/:symbol/history', async (req, res) => {
@@ -103,6 +104,18 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
         res.status(202);
         return job;
     }));
+    // Read-only status of the scheduled data jobs. Demo mode has no ThetaData or cron jobs to report.
+    app.get('/api/algo-trader/research/data-status', async (_req, res) => {
+        if (app.locals?.demoMode) return res.json({ demo_mode: true, theta: null, logs: [] });
+        try {
+            res.set('Cache-Control', 'no-store');
+            res.json(await buildDataStatus({ root, envPath: path.join(root, '..', '.env'), now: now() }));
+        } catch (error) {
+            console.error(`Algo data status unavailable: ${error.message}`);
+            res.status(503).json({ error: 'Data status is unavailable' });
+        }
+    });
+
     app.get('/api/algo-trader/research/jobs/:id', labRoute(req => lab.jobStatus(req.params.id)));
     app.get('/api/algo-trader/research/jobs/:id/log', labRoute(req => lab.readLogChunk(req.params.id, req.query.offset)));
     app.get('/api/algo-trader/research/jobs/:id/results', labRoute(req => lab.jobResults(req.params.id)));

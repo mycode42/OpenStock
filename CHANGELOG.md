@@ -6,6 +6,9 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Changed
 
+- The ThetaData history backfill is one unattended pipeline (`scripts/options/theta_pipeline.py`): the last 20 sessions, then EOD, then opening archives. It resumes daily from cron and, once complete, sends a Telegram message and a research-page notice to cancel the subscription and remove the key. Its status is shown on the Algo research page.
+- Scheduled jobs write to one log file each under `algo-trader/data/algo/logs/`, capped daily by `scripts/rotate_logs.py`. The research page lists them with their last error.
+- Fixed the opening backfill, which imported a helper that did not exist.
 - The Journal equity curve for the manual Alpaca account is continuous. The server takes a snapshot every five minutes into `alpaca_equity_snapshots` (migration 031), and the curve uses those points from the first snapshot on. Days before that still come from Alpaca's daily history.
 - Demo: the simulated broker's positions, cash, and open orders survive a restart. Orders the demo database tracks are rebuilt on start, so cancelling after a restart works.
 - Demo: one simulated price per stock. The Dashboard, Algo Universe, and quotes read the same price.
