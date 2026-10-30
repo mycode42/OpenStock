@@ -1,34 +1,29 @@
 # OpenStock Algo jobs. Install with: crontab ops/crontab
-# Each job runs the project venv directly (no OpenClaw, no poetry run). Each job logs to its own file in $LOGS.
-# Replace ALGO if the checkout moves. Logs are capped daily by scripts/rotate_logs.py.
+# Edit the one ALGO line below if the checkout moves; every other path is relative to it. Jobs run the project venv
+# directly (no OpenClaw, no poetry run) and each writes to its own log in data/algo/logs/. Logs are capped daily.
 CRON_TZ=America/New_York
 ALGO=/opt/OpenStock/algo-trader
-PY=/opt/OpenStock/algo-trader/.venv/bin/python
-LOGS=/opt/OpenStock/algo-trader/data/algo/logs
 MAILTO=""
-# Cron has no user session bus, so systemctl --user (used by the health check) needs these. 1000 is the openclaw uid.
-XDG_RUNTIME_DIR=/run/user/1000
-DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 
-# Health check, every hour
-0 * * * *      cd $ALGO && $PY -m portfolio.healthcheck >> $LOGS/health.log 2>&1
+# Health check, every hour (sources scripts/cron-env.sh so systemctl --user can see the services)
+0 * * * *      cd $ALGO && . scripts/cron-env.sh && .venv/bin/python -m portfolio.healthcheck >> data/algo/logs/health.log 2>&1
 
 # Options capture (Alpaca OPRA)
-35 9 * * 1-5   cd $ALGO && $PY -m scripts.options.alpaca_daily_capture --phase open --universe research >> $LOGS/options-opening-capture.log 2>&1
-45 15 * * 1-5  cd $ALGO && $PY -m scripts.options.alpaca_daily_capture --universe research >> $LOGS/options-history-capture.log 2>&1
+35 9 * * 1-5   cd $ALGO && .venv/bin/python -m scripts.options.alpaca_daily_capture --phase open --universe research >> data/algo/logs/options-opening-capture.log 2>&1
+45 15 * * 1-5  cd $ALGO && .venv/bin/python -m scripts.options.alpaca_daily_capture --universe research >> data/algo/logs/options-history-capture.log 2>&1
 
 # ThetaData history pipeline: last 20 sessions, then EOD, then opening. Resumes daily until complete, then stops calling ThetaData.
-0 3 * * *      cd $ALGO && $PY -m scripts.options.theta_pipeline >> $LOGS/theta-pipeline.log 2>&1
+0 3 * * *      cd $ALGO && .venv/bin/python -m scripts.options.theta_pipeline >> data/algo/logs/theta-pipeline.log 2>&1
 
 # LLM-driven silent run: refresh the signal snapshot, hourly 04:00-20:00 ET on weekdays
-0 4-20 * * 1-5 cd $ALGO && $PY -m strategies.llm_driven.ai_runner --ttl-minutes 90 >> $LOGS/llm-silent-run.log 2>&1
+0 4-20 * * 1-5 cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 90 >> data/algo/logs/llm-silent-run.log 2>&1
 
 # Morning digest from the latest snapshot
-45 7 * * 1-5   cd $ALGO && $PY scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --telegram >> $LOGS/llm-digest.log 2>&1
+45 7 * * 1-5   cd $ALGO && .venv/bin/python scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --telegram >> data/algo/logs/llm-digest.log 2>&1
 
 # Research reports: run the research cycle, then report on its output
-0 17 * * *     cd $ALGO && { $PY -m research.options && $PY scripts/llm_report.py --prompt ops/prompts/options-research.md --context data/options/research/automation/latest.md --telegram; } >> $LOGS/options-research.log 2>&1
-0 20 * * *     cd $ALGO && { $PY -m research.equity && $PY scripts/llm_report.py --prompt ops/prompts/equity-research.md --context data/research/algo-auto/latest.json --telegram; } >> $LOGS/equity-research.log 2>&1
+0 17 * * *     cd $ALGO && { .venv/bin/python -m research.options && .venv/bin/python scripts/llm_report.py --prompt ops/prompts/options-research.md --context data/options/research/automation/latest.md --telegram; } >> data/algo/logs/options-research.log 2>&1
+0 20 * * *     cd $ALGO && { .venv/bin/python -m research.equity && .venv/bin/python scripts/llm_report.py --prompt ops/prompts/equity-research.md --context data/research/algo-auto/latest.json --telegram; } >> data/algo/logs/equity-research.log 2>&1
 
 # Keep the logs small
-30 4 * * *     cd $ALGO && $PY scripts/rotate_logs.py >> $LOGS/rotate.log 2>&1
+30 4 * * *     cd $ALGO && .venv/bin/python scripts/rotate_logs.py >> data/algo/logs/rotate.log 2>&1

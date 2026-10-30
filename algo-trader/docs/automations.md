@@ -31,7 +31,7 @@ Every job runs from the local crontab with the project venv at `.venv`, which ho
 
 Create the venv once from `algo-trader/` with `POETRY_VIRTUALENVS_IN_PROJECT=true poetry install --with ai,ml,research`. `scripts/llm_report.py` runs a prompt file from `ops/prompts/` through the configured model, adds the data it names, and posts the reply to Telegram with `--telegram`. It uses `TELEGRAM_BOT_TOKEN` and `ALGO_REPORT_TELEGRAM_TO` (or `TELEGRAM_CHAT_ID`) from `.env`. It has no web access, so reports say when a source was not checked. `--dry-run` prints the assembled message without calling a model.
 
-The crontab is written to `algo-trader/ops/crontab`, which has the full set of lines. Install it with `crontab ops/crontab` (this replaces your user crontab), and check it with `crontab -l`. Each line writes to `data/algo/cron.log`.
+The crontab is written to `algo-trader/ops/crontab`, which has the full set of lines. Install it with `crontab ops/crontab` (this replaces your user crontab), and check it with `crontab -l`. Each job writes to its own log in `data/algo/logs/`, and a daily job caps their size. The only path in the file is the `ALGO` line at the top, so change that line if the checkout moves. The health job sources `scripts/cron-env.sh`, which sets the systemd session bus for the account running cron.
 
 ## Install or update
 
