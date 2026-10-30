@@ -2,6 +2,23 @@
 
 All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [algo-trader/CHANGELOG.md](algo-trader/CHANGELOG.md).
 
+## 3.1.3 - 2026-10-30
+
+### Added
+
+- Demo mode runs the real Alpaca code paths against a simulated paper account. The demo has a USD watchlist with alert levels and held positions. Orders can be previewed, placed, cancelled and filled, and they are accepted only in the demo database. Nothing is sent to a broker.
+- The Research Lab shows in demo mode, read-only. Starting a run is refused there.
+- The README uses new screenshots from the demo, and `docs/features.md` mirrors its features and screenshots.
+
+### Changed
+
+- Demo stock history follows the 04:00–20:00 New York session, and the Algo demo equity history uses the snapshot format.
+- The old EUR demo data and the old demo journal were removed.
+
+### Fixed
+
+- Trade pagination, the research archive filters, the research lab gauge and strategy chips, and the Algo Universe hover chart use the theme colours. Light themes no longer show black or fixed dark surfaces.
+
 ## 3.1.2 - 2026-10-30
 
 ### Added
