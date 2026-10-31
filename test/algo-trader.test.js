@@ -202,6 +202,23 @@ test('equity research payload includes the latest optimizer cycle and strategy d
   assert.equal(optimizer.strategies[0].top_tested_delta, 0.6744);
 });
 
+test('equity payload reports entries paused while the market is closed, even if the last scan did not pause', async t => {
+  const root = await fixture(t);
+  await writeCoordinatorState(root, 'CLOSED', {
+    account_id: 'test-account', universe: { tickers: [] },
+    last_scan_at: '2026-10-30T19:59:47-04:00', last_scan_status: 'ok',
+    entries_paused: false, entry_pause_reasons: [],
+  });
+
+  const handlers = routeHandlers(root);
+  const res = response();
+  await handlers['GET /api/algo-trader']({ query: { account: 'equity' } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.account.entries_paused, true);
+  assert.deepEqual(res.body.account.entry_pause_reasons, ['Equity market is closed']);
+});
+
 test('options settings save to their own config without changing equity overrides', async t => {
   const originalEnv = {
     account: process.env.ALPACA_OPTIONS_ACCOUNT_ID,

@@ -15,8 +15,12 @@ MAILTO=""
 # ThetaData history pipeline: last 20 sessions, then EOD, then opening. Every 4 hours: starts it if it is not running (a run already in progress makes this one exit), and stops calling ThetaData once complete.
 0 */4 * * *    cd $ALGO && .venv/bin/python -m scripts.options.theta_pipeline >> data/algo/logs/theta-pipeline.log 2>&1
 
-# LLM-driven silent run: refresh the signal snapshot, hourly 04:00-20:00 ET on weekdays
-0 4-20 * * 1-5 cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 90 >> data/algo/logs/llm-silent-run.log 2>&1
+# LLM-driven silent run: refresh the signal snapshot five times on weekdays ET (pre-market, open, midday, close, extended hours). Snapshots live 180 minutes.
+30 6 * * 1-5   cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 180 >> data/algo/logs/llm-silent-run.log 2>&1
+45 9 * * 1-5   cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 180 >> data/algo/logs/llm-silent-run.log 2>&1
+30 12 * * 1-5  cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 180 >> data/algo/logs/llm-silent-run.log 2>&1
+30 15 * * 1-5  cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 180 >> data/algo/logs/llm-silent-run.log 2>&1
+0 18 * * 1-5   cd $ALGO && .venv/bin/python -m strategies.llm_driven.ai_runner --ttl-minutes 180 >> data/algo/logs/llm-silent-run.log 2>&1
 
 # Morning digest from the latest snapshot
 45 7 * * 1-5   cd $ALGO && .venv/bin/python scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --telegram >> data/algo/logs/llm-digest.log 2>&1

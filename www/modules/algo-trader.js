@@ -85,7 +85,8 @@ export function createAlgoTrader({ request, charts }) {
         });
         selectedRunDates[researchMode] = view.selectedDate;
         // Same markup as the last render: leave the DOM alone, so nothing flickers on the 15-second refresh.
-        if (researchHost.renderedHtml === view.html) return;
+        // The router replaces the host with its loading placeholder on navigation, so repaint when our markup is gone.
+        if (researchHost.renderedHtml === view.html && researchHost.querySelector('.algo-research-page')) return;
         // The lab keeps its DOM node across the archive refresh, so typed values and the live log survive.
         const existingLab = researchHost.querySelector('#research-lab-host');
         const scroll = window.scrollY;

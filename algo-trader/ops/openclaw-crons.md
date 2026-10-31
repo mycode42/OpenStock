@@ -5,7 +5,7 @@ The scheduled Algo jobs run from this `algo-trader/` subtree, wherever OpenStock
 | Job | Schedule | Purpose |
 | --- | --- | --- |
 | `health` | Hourly | Combined read-only equity and options service, account, state, and risk-cycle check. |
-| `llm-driven` | Hourly 04:00–20:00 ET, weekdays | Refresh the read-only `swing_llm_driven` signal snapshot (SQLite, read with `python -m strategies.llm_driven.snapshot_cli`) and report market context. |
+| `llm-driven` | 06:30, 09:45, 12:30, 15:30, 18:00 ET, weekdays | Refresh the read-only `swing_llm_driven` signal snapshot (SQLite, read with `python -m strategies.llm_driven.snapshot_cli`) and report market context. |
 | `options-history-capture` | 15:45 ET, weekdays | Start the same-session Alpaca OPRA option-chain capture before the market close so the 117-symbol archive can finish on time. |
 | `options-opening-capture` | 09:35 ET, weekdays | Save a separate Alpaca OPRA opening snapshot for the 117-symbol options research history universe. |
 | `ThetaData historical options backfill` | Every 25 hours | Resume historical ThetaData EOD quote and open-interest archives across the 117-symbol research universe. |

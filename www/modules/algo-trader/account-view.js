@@ -47,7 +47,12 @@ export function renderAccountPage({ mode, snapshot, settings, range, activityPag
         && account.entries_paused === true
         && pauseReasons.length === 1
         && pauseReasons[0] === 'Options market is closed';
-    const marketClosedPause = closedMarketQuotePause || optionsMarketClosedPause;
+    const equityMarketClosedPause = !isOptions
+        && marketStatus === 'CLOSED'
+        && account.entries_paused === true
+        && pauseReasons.length === 1
+        && pauseReasons[0] === 'Equity market is closed';
+    const marketClosedPause = closedMarketQuotePause || optionsMarketClosedPause || equityMarketClosedPause;
     const entryStatus = marketClosedPause ? 'MARKET CLOSED' : account.entries_paused === true ? 'ENTRIES PAUSED' : account.entries_paused === false ? 'ENTRIES ENABLED' : 'ENTRY STATUS UNKNOWN';
     const entryClass = marketClosedPause ? 'algo-state-pill market-closed' : account.entries_paused === true ? 'algo-state-pill paused' : account.entries_paused === false ? 'algo-state-pill' : 'algo-state-pill unknown';
     const pauseNoticeTitle = marketClosedPause ? 'Market closed' : 'New entries are paused';

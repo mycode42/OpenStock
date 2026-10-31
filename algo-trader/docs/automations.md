@@ -10,7 +10,7 @@ The job definitions are recorded in [`ops/automations.json`](../ops/automations.
 | `options-opening-capture` | 09:35 weekdays | Alpaca OPRA opening snapshot for the research universe | command |
 | `options-history-capture` | 15:45 weekdays | Same-session Alpaca OPRA option-chain capture before the close | command |
 | `ThetaData history pipeline` | Every 4 hours until complete (a run already in progress makes the next one exit) | `scripts/options/theta_pipeline.py`: last 20 sessions, then EOD, then opening archives for the research universe. Stops calling ThetaData once complete; status shows on the Algo research page | command |
-| `llm-driven` | Hourly 04:00–20:00 ET, weekdays | Silent run: refresh the `swing_llm_driven` snapshot, including owned-position reviews; prompt in `ops/prompts/llm-silent-run.md`. No delivery. | agent turn |
+| `llm-driven` | 06:30, 09:45, 12:30, 15:30, 18:00 ET, weekdays | Silent run: refresh the `swing_llm_driven` snapshot, including owned-position reviews; prompt in `ops/prompts/llm-silent-run.md`. No delivery. | agent turn |
 | `llm-digest` | 07:45 ET, weekdays | One briefing from the latest snapshot: owned positions, keep or sell, market context; prompt in `ops/prompts/llm-digest.md`; delivered to Telegram | agent turn |
 | `options-research` | 17:00 daily | `python -m research.options`; prompt in `ops/prompts/options-research.md`; delivered to Telegram | agent turn |
 | `equity-research` | 20:00 daily | `python -m research.equity`; prompt in `ops/prompts/equity-research.md`; delivered to Telegram | agent turn |

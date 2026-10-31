@@ -376,6 +376,10 @@ async function buildPayload(root) {
         strategy.latest_pnl_usd !== null || strategy.cumulative_pnl_usd !== null
     ));
     const fx = hasStrategyPnl ? await readUsdEurRate() : null;
+    // The saved flag is the last scan's result and is not rewritten at the close, so a closed market is reported here, as for Options.
+    const marketClosed = String(state.market_state || '').toUpperCase() === 'CLOSED';
+    const entryPauseReasons = Array.isArray(portfolio.entry_pause_reasons) ? portfolio.entry_pause_reasons.map(reason => String(reason).slice(0, 180)) : [];
+    if (marketClosed) entryPauseReasons.push('Equity market is closed');
     return {
         account: {
             mode: 'paper',
@@ -386,8 +390,8 @@ async function buildPayload(root) {
             regime_engine: String(safeObject(portfolio.market_regime).regime_engine || 'unknown'),
             last_scan_at: isoTimestamp(portfolio.last_scan_at),
             last_scan_status: String(portfolio.last_scan_status || 'unknown'),
-            entries_paused: typeof portfolio.entries_paused === 'boolean' ? portfolio.entries_paused : null,
-            entry_pause_reasons: Array.isArray(portfolio.entry_pause_reasons) ? portfolio.entry_pause_reasons.map(reason => String(reason).slice(0, 180)) : [],
+            entries_paused: marketClosed || (typeof portfolio.entries_paused === 'boolean' ? portfolio.entries_paused : null),
+            entry_pause_reasons: entryPauseReasons,
             active_strategies: Array.isArray(portfolio.active_strategies) ? portfolio.active_strategies : [],
             universe_count: Array.isArray(safeObject(portfolio.universe).tickers) ? portfolio.universe.tickers.length : 0,
         },

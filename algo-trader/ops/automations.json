@@ -83,9 +83,9 @@
     },
     {
       "name": "llm-driven",
-      "description": "Hourly 04:00-20:00 ET on weekdays: refresh the swing_llm_driven snapshot, including owned-position reviews. Silent; fails loudly only.",
+      "description": "Five times on weekdays ET (06:30, 09:45, 12:30, 15:30, 18:00): refresh the swing_llm_driven snapshot, including owned-position reviews. Silent; fails loudly only.",
       "schedule": {
-        "cron": "0 4-20 * * 1-5"
+        "cron": "see ops/crontab (five weekday runs)"
       },
       "agent_turn": {
         "prompt": "ops/prompts/llm-silent-run.md",
