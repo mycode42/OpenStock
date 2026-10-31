@@ -1,8 +1,8 @@
 # OpenStock
 
-**A self-hosted stock dashboard, trading journal, and paper-trading Algo engine, built on Alpaca.**
+**A self-hosted stock dashboard, trading journal, and triggered trading built on Alpaca.**
 
-It also includes a built-in algorithmic trading system for equity and options, under [algo-trader/](algo-trader/).
+It also includes an algorithmic trading system for equity and options.
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
