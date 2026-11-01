@@ -35,6 +35,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 
 ## Approved changes
 
+- **2026-11-01, swing multi-factor research cap.** Raised the adaptive research per-strategy daily-entry cap from 2 to 3 so it matches the existing Algo cap and the coordinated portfolio artifact contract. This changes the research profile only; the live configuration remains unchanged. Approved by Andreas in response to the October 31, 2026 research-run failure.
+
 - **2026-10-29, live opt-in and per-order cap.** Added two rejection messages to `frozen_gates.json`: the live opt-in refusal (`Live trading is off: set ALPACA_ALLOW_LIVE=1 ...`) and the per-order cap (`Order value exceeds the $100,000 per-order limit`). Approved by the repository owner. The cap is also enforced in Python by `algo-trader/broker/order_guard.py`, which raises the same limit with the dollar value. That message is outside the extractor's scope, so `tests/broker/test_order_guard.py` checks it directly.
 
 - **2026-10-29, live daily cap.** Added the live daily limit rejection (`Live daily limit reached: no more than $300,000 of live orders per UTC day`) to `frozen_gates.json`. Approved by the repository owner, who asked for a daily cap of $300,000 in live mode. The check and the order insert run in one transaction. Orders are recorded with their account mode, so paper orders are not counted.

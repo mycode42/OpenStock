@@ -1,3 +1,4 @@
+from equity_research.pipeline.adaptive_evaluation import _profile_for
 from equity_research.pipeline.adaptive_search import (
     DEFAULT_SEARCH_SPACES,
     _baseline_improvement,
@@ -11,9 +12,15 @@ from equity_research.cli import build_parser
 from equity_research.pipeline.adaptive_pipeline import _write_adaptive_coordinator_artifact
 from equity_research.validation.portfolio_simulation import _read_artifact, _validate_artifacts
 from equity_research.settings import (
-    ADAPTIVE_WINDOW_DAYS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS,
+    ADAPTIVE_WINDOW_DAYS, CORE_RESEARCH_CONTROLS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS,
 )
 from strategies.registry import PARAMETER_KEYS
+
+
+def test_swing_multi_factor_adaptive_profile_matches_core_daily_entry_cap():
+    controls = _profile_for("swing_multi_factor", {})["controls"]
+    assert controls == CORE_RESEARCH_CONTROLS
+    assert controls["max_entries_per_strategy_per_day"]["swing_multi_factor"] == 3
 
 
 def test_adaptive_search_domains_match_and_validate_for_all_research_strategies():

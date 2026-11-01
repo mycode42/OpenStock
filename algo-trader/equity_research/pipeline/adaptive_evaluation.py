@@ -106,7 +106,7 @@ def _profile_for(strategy: str, parameters: dict) -> dict:
     controls = deepcopy(CORE_RESEARCH_CONTROLS)
     if strategy == "swing_multi_factor":
         per_strategy = controls.setdefault("max_entries_per_strategy_per_day", {})
-        per_strategy["swing_multi_factor"] = min(int(per_strategy.get("swing_multi_factor", 2)), 2)
+        per_strategy["swing_multi_factor"] = min(int(per_strategy.get("swing_multi_factor", 3)), 3)
     return {
         "name": "adaptive_candidate", "parameters": {strategy: parameters},
         "strategies": [strategy], "controls": controls,
