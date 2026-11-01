@@ -130,7 +130,11 @@ def _force_failed_cycle(monkeypatch, output_dir):
         raise ModuleNotFoundError("No module named 'lightgbm'")
 
     monkeypatch.setattr(auto_research, "run_daily_research", boom)
-    return auto_research.main(["--output-dir", str(output_dir), "--no-refresh"])
+    # These tests cover latest.json error fallback, not Sunday's weekly-review routing.
+    return auto_research.main([
+        "--output-dir", str(output_dir), "--no-refresh",
+        "--verification-history", "recent",
+    ])
 
 
 def test_failed_cycle_keeps_the_last_good_report_and_records_the_error_separately(tmp_path, monkeypatch):
