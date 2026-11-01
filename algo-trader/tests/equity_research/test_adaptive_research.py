@@ -145,6 +145,76 @@ def test_adaptive_improvement_requires_sample_qualified_positive_candidate():
     assert comparison["improved"] is False
 
 
+def _run_fold_with_sensitivity_gate(monkeypatch, *, finalist):
+    from datetime import date
+    from types import SimpleNamespace
+
+    from equity_research.pipeline import adaptive_verification as verification
+
+    calls = []
+    baseline = {
+        "name": "baseline", "parameters": {"lookback": 10}, "fitness": 0.1,
+        "eligible": True, "metrics": {"net_return_pct": 0.1},
+    }
+    candidate = {
+        "name": "candidate", "parameters": {"lookback": 20}, "fitness": 0.2,
+        "eligible": True, "metrics": {"net_return_pct": 0.2},
+    }
+    selected = candidate if finalist else baseline
+    monkeypatch.setattr(verification, "_load_window_data", lambda **kwargs: ({}, []))
+    monkeypatch.setattr(verification, "aggregate_intraday_bars", lambda bars: {})
+    monkeypatch.setattr(verification, "_trading_sessions", lambda *args: [date(2026, 1, 2)])
+    monkeypatch.setattr(verification, "_fit_window_ladder", lambda **kwargs: {
+        "search": {"leaderboard": [candidate, baseline], "candidates": [baseline, candidate]},
+        "selected_candidate": selected, "adaptive_improvement": finalist,
+        "selection_status": "eligible_positive_candidate" if finalist else "no_positive_candidate",
+        "fit_window_days": 30, "fit_window_start": "2025-12-01",
+        "fit_window_end": "2026-01-01", "window_attempts": [],
+    })
+    monkeypatch.setattr(
+        verification, "choose_plateau_candidate",
+        lambda *args: (selected, {"supported": finalist}),
+    )
+    monkeypatch.setattr(verification, "build_replay_timeline", lambda *args: object())
+    def replay(**kwargs):
+        calls.append(kwargs["args"])
+        return {"closed_trades": [], "daily_equity": []}
+    monkeypatch.setattr(verification, "_run_replay", replay)
+    monkeypatch.setattr(verification, "_metrics", lambda *args, **kwargs: {"net_return_pct": 0.0})
+    monkeypatch.setattr(verification, "_fitness", lambda *args: (0.0, {"return": 0.0}))
+    monkeypatch.setattr(verification, "_profile_for", lambda *args: {"controls": {}})
+    monkeypatch.setattr(verification, "walk_forward_efficiency", lambda *args: 0.0)
+
+    args = SimpleNamespace(
+        db="unused.sqlite", symbols_resolved=["T0"], adjustment="split",
+        strategy="swing_multi_factor", seed=1, search_method="bayes", candidates=2,
+        search_space_data={"lookback": [10, 20]}, train_window_options=[30],
+        fitness_weights_data={"return": 1.0}, min_trades=1, capital=1000.0,
+        cost_sensitivity_multipliers=[1.5, 2.0], slippage_bps=5.0, spread_bps=3.0,
+        commission_per_share=0.005, short_borrow_annual_pct=3.0,
+        unknown_borrow_penalty_bps=25.0,
+    )
+    _, fold = verification._run_adaptive_fold((0, {
+        "train_start": "2025-12-01", "train_end": "2026-01-01",
+        "test_start": "2026-01-02", "test_end": "2026-02-01",
+    }, args))
+    return calls, fold
+
+
+def test_adaptive_fold_runs_only_execution_sensitivity_replays_for_finalists(monkeypatch):
+    calls, screened_fold = _run_fold_with_sensitivity_gate(monkeypatch, finalist=False)
+    assert len(calls) == 1  # baseline OOS replay only
+    assert screened_fold["sensitivity_status"] == "deferred_screened_out"
+    assert screened_fold["execution_sensitivity"] is None
+    assert "min_universe_sensitivity" not in screened_fold
+
+    calls, finalist_fold = _run_fold_with_sensitivity_gate(monkeypatch, finalist=True)
+    assert len(calls) == 1 + 3  # baseline plus configured execution-cost/delay replays
+    assert finalist_fold["sensitivity_status"] == "completed"
+    assert len(finalist_fold["execution_sensitivity"]) == 3
+    assert "min_universe_sensitivity" not in finalist_fold
+
+
 def test_verified_adaptive_artifact_matches_portfolio_coordinator_schema(tmp_path):
     strategy = "swing_momentum"
     detail = {

@@ -19,7 +19,7 @@ from equity_research.backtest import _regular_session_bars
 from market.store import SQLiteBarStore, fetch_alpaca_bars
 from strategies.llm_driven import EventCalendar
 from strategies.multi_factor.features import aggregate_intraday_bars
-from strategies.universe import configured_universe
+from strategies.universe import selected_universe
 from market.data import data_tier, regular_feed
 from equity_research.backtest.market_sessions import extended_session_bars
 
@@ -29,19 +29,23 @@ def _parse_date(value: str) -> date:
 
 
 def load_algo_universe() -> tuple[list[str], dict]:
-    """Research symbols: the 117-name candidate pool, traded point-in-time.
+    """Use latest live-eligible selector membership as the research cohort.
 
-    Membership per session comes from the selector (see
-    ``equity_research.backtest.membership``), so the pool is only the candidate set.
+    Selection errors fail closed rather than silently widening the cohort.
+    Historical replay still applies its point-in-time membership rules.
     """
-    from portfolio.config import candidate_pool_tickers
-
-    symbols = candidate_pool_tickers()
+    selection = selected_universe()
+    symbols = list(selection.get("tickers") or [])
     if not symbols:
-        raise ValueError("Candidate pool is empty")
+        raise ValueError("Live selector returned an empty research universe")
     return symbols, {
-        "universe_source": "candidate_pool_point_in_time",
+        "universe_source": "live_eligible_selector",
+        "selector_as_of": selection.get("selector_as_of"),
+        "selector_rules_sha256": selection.get("selector_rules_sha256"),
+        "selector_snapshot": selection.get("selector_snapshot"),
+        "selected_universe_count": len(symbols),
     }
+
 
 def _bar_coverage(store: SQLiteBarStore) -> dict[str, dict]:
     return {

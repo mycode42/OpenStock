@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 import math
 
+import pytest
+
 from equity_research import auto_research
 from equity_research.factor_research import FACTOR_RESEARCH_START, _feature_panel, train_factor_model
 from equity_research.settings import INITIAL_HISTORY_DATE
@@ -43,17 +45,44 @@ def _synthetic_daily_history(session_count: int = 850) -> dict[str, list[dict]]:
 
 
 
-def test_auto_research_uses_the_candidate_pool_with_point_in_time_membership():
+def _selected_research_universe():
+    return {
+        "tickers": [f"T{index:02d}" for index in range(40)],
+        "selector_as_of": "2026-10-30",
+        "selector_rules_sha256": "rules-hash",
+        "selector_snapshot": "selector-snapshot.json",
+    }
+
+
+def test_auto_research_uses_latest_live_selector_universe(monkeypatch):
+    monkeypatch.setattr(
+        "equity_research.data.selected_universe", _selected_research_universe,
+    )
     symbols, metadata = auto_research.load_algo_universe()
 
-    assert len(symbols) == 117
-    assert symbols[:9] == ["NVDA", "AVGO", "TSM", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AMD"]
-    assert set(["PLTR", "CRM", "PANW", "TSLA", "SPCX"]) <= set(symbols)
-    assert metadata == {"universe_source": "candidate_pool_point_in_time"}
+    assert symbols == [f"T{index:02d}" for index in range(40)]
+    assert metadata == {
+        "universe_source": "live_eligible_selector",
+        "selector_as_of": "2026-10-30",
+        "selector_rules_sha256": "rules-hash",
+        "selector_snapshot": "selector-snapshot.json",
+        "selected_universe_count": 40,
+    }
+
+
+def test_auto_research_fails_closed_for_empty_live_selector_universe(monkeypatch):
+    monkeypatch.setattr(
+        "equity_research.data.selected_universe", lambda: {"tickers": []},
+    )
+    with pytest.raises(ValueError, match="empty research universe"):
+        auto_research.load_algo_universe()
 
 
 def test_auto_research_backfills_symbols_missing_from_the_market_store(monkeypatch):
     end_date = date(2026, 10, 8)
+    monkeypatch.setattr(
+        "equity_research.data.selected_universe", _selected_research_universe,
+    )
     symbols = auto_research.load_algo_universe()[0]
     missing_symbol = symbols[-1]
     coverage = [

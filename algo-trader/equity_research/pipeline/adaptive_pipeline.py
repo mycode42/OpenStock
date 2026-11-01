@@ -32,7 +32,7 @@ from ..settings import (
 )
 
 ADAPTIVE_PIPELINE_VERSION = "algo-research-layers-v19-validated-champion-seeding-2026"
-ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v14-champion-live-validation-2026"
+ADAPTIVE_VERIFICATION_VERSION = "algo-adaptive-verification-v16-no-min-universe-sensitivity-2026"
 _ADAPTIVE_COST_MODEL = {
     "slippage_bps": EQUITY_SLIPPAGE_BPS,
     "spread_bps": EQUITY_SPREAD_BPS,

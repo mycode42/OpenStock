@@ -872,7 +872,7 @@ def run_daily_research(args) -> dict:
         "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
         "limitations": [
             "Adaptive fitting, verification, and fold-aligned portfolio replay use 2020 onward; earlier bars are indicator warm-up only.",
-            "The fixed current Algo universe is used across the 2020-onward research range; historical universe membership is not reconstructed.",
+            "The latest live-eligible selector cohort defines the candidate scope; each historical replay applies point-in-time membership rules within that cohort, and symbols outside it are not searched.",
             "The portfolio replay includes strategies enabled in live config with available historical data.",
             "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
             "Each immutable forward candidate version is scored only on sessions after its staging date and with modeled execution costs; results are not a performance forecast.",

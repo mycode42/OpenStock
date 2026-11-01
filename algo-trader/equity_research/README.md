@@ -41,6 +41,13 @@ a rolling reference, while forward trials continue to compare challengers
 against that live profile. Optimizer-only runs only add discovery evidence and
 queue entries; they do not spend time on these validation stages.
 
+Research discovery and rolling verification use the latest live selector's
+eligible equity universe (about 40 symbols, varying with the selector snapshot),
+not the full candidate pool. Its selector date, rules hash, and snapshot are
+recorded with the research-universe metadata. Historical replays continue to
+apply point-in-time membership for those selected symbols. This aligns routine
+research with the live system's current scope and limits the initial search.
+
 The pipeline uses dynamic parameter search over bounded signal-parameter
 spaces. Discovery tries recent windows (10/20/30 sessions for intraday and
 30/60/90 for swing strategies), starting with the middle window and falling
@@ -55,17 +62,26 @@ outcome-horizon purge, and scores the following 63 sessions. The purge protects
 forward outcomes; long feature lookbacks remain available as historical inputs.
 Multi Factor diagnostics also start in 2020 and refit weights from a rolling
 12-observation training window. Bars before 2020 are loaded only for indicator
-warm-up.
+warm-up. Each verification fold first screens its selected training candidate
+against baseline, eligibility, and plateau criteria. Only a supported
+above-baseline finalist receives the extra transaction-cost/delay replays.
+Multi Factor min_universe remains a discovery parameter, but its research-only
+sensitivity sweep is no longer run because the selector cohort now defines the
+research universe. The ordinary OOS replay and rolling fold gates still run;
+execution-sensitivity findings are diagnostic and do not replace or relax those
+gates. Fold and sensitivity durations and completed versus deferred counts are
+recorded for runtime auditing.
 
 There is no longer a global frozen-holdout cutoff. Full research cycles use
 the latest completed common session. Each forward challenger is versioned and
 scored only on sessions after that version's staging date; changing parameters
 creates a new candidate version. Historical walk-forward results are reused
 across research cycles, so a separate forward trial is still required before
-promotion. The current fixed Algo universe is used throughout the historical
-range; point-in-time universe membership is not reconstructed. Multi Factor
-remains on its validated live parameters unless a candidate passes the
-historical and forward promotion gates.
+promotion. The latest selector-eligible live cohort defines the fixed research
+scope; point-in-time membership is applied within that selected cohort, but
+the broader candidate pool is not searched. Multi Factor remains on its
+validated live parameters unless a candidate passes the historical and forward
+promotion gates.
 
 If verification does not produce a coordinator artifact for every active
 strategy, the nightly report is marked partial and portfolio replay is skipped.
