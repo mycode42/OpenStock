@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import json
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -453,7 +454,13 @@ def run_daily_research(args) -> dict:
             output_dir=weekly_root if full_history else adaptive_root,
             workers=args.workers, force=args.force,
             factor_weight_timeline=factor_report.get("weight_timeline") or [],
+            invocation_id=invocation_id,
             on_strategy_complete=strategy_progress,
+            on_fold_progress=lambda strategy, event: stage_progress(
+                "verification", "running",
+                {**event, "fold_status": event.get("status"), "status": "running"},
+                strategy,
+            ),
         )
         if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
     )
@@ -962,7 +969,7 @@ def _configure_progress_logging(output_dir: Path) -> Path | None:
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         handlers.append(RotatingFileHandler(
-            log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8",
+            log_path, maxBytes=5_000_000, backupCount=5, encoding="utf-8",
         ))
     except OSError as exc:
         file_error = exc
@@ -1028,6 +1035,9 @@ def main(argv: list[str] | None = None) -> int:
             "coordinator_artifact", "reused", "seconds", "candidate_count",
             "fold_count", "strategies_total", "data_version", "optimization_only",
             "completed_fold_jobs", "last_test_start", "last_test_end",
+            "fold", "folds_total", "fold_status", "train_start", "train_end",
+            "test_start", "test_end", "fold_elapsed_seconds",
+            "sensitivity_elapsed_seconds", "sensitivity_status", "selected_candidate",
         )
         summary = {key: payload[key] for key in keys if key in payload}
         for field in ("strategies", "errors", "error_strategies"):
@@ -1081,7 +1091,9 @@ def main(argv: list[str] | None = None) -> int:
     log_path = _configure_progress_logging(output_dir)
     today = datetime.now(ET).date().isoformat()
     logger.info(
-        "AutoResearch starting (workers=%d, refresh=%s, optimization_only=%s, factor_only=%s, force=%s)",
+        "AutoResearch starting: invocation_id=%s pid=%d started_at=%s argv=%s "
+        "workers=%d refresh=%s optimization_only=%s factor_only=%s force=%s",
+        invocation_id, os.getpid(), datetime.now().astimezone().isoformat(), sys.argv,
         args.workers, not args.no_refresh, args.optimization_only, args.factor_only, args.force,
     )
     if log_path is not None:
@@ -1105,7 +1117,7 @@ def main(argv: list[str] | None = None) -> int:
             report["run_date_et"] = today
             report["workers_requested"] = args.workers
     except Exception as exc:
-        logger.error("AutoResearch failed: %s: %s", type(exc).__name__, exc)
+        logger.exception("AutoResearch failed: invocation_id=%s %s: %s", invocation_id, type(exc).__name__, exc)
         failed_stage = progress_state.get("current_stage") or "orchestration"
         progress_callback(
             stage=failed_stage, status="failed",
@@ -1189,15 +1201,21 @@ def main(argv: list[str] | None = None) -> int:
     _atomic_json(output_dir / "latest-progress.json", snapshot)
     _atomic_json(progress_dir / "partial-report.json", report)
     discovery_report = ((report.get("adaptive_research") or {}).get("discovery") or {})
+    data_summary = report.get("data") or {}
+    if not isinstance(data_summary, dict):
+        data_summary = {}
+    research_range = data_summary.get("strategy_research_range") or {}
+    if not isinstance(research_range, dict):
+        research_range = {}
     print(json.dumps(_json_safe({
         "status": report["status"],
         "report": str(latest_report_path.resolve()),
-        "run_id": report.get("orchestration", {}).get("run_id"),
-        "range": [
-            report["data"]["strategy_research_range"]["start"],
-            report["data"]["strategy_research_range"]["end"],
-        ],
-        "stored_coverage": report["data"].get("stored_coverage"),
+        "run_id": (report.get("orchestration") or {}).get("run_id"),
+        "range": (
+            [research_range["start"], research_range["end"]]
+            if "start" in research_range and "end" in research_range else None
+        ),
+        "stored_coverage": data_summary.get("stored_coverage"),
         "strategies": len(
             report.get("adaptive_strategy_artifacts")
             or discovery_report.get("strategies") or {}
@@ -1215,7 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         },
         "portfolio": report.get("portfolio_summary"),
-        "cache_hit": report.get("orchestration", {}).get("cache_hit", False),
+        "cache_hit": (report.get("orchestration") or {}).get("cache_hit", False),
         "live_configuration_changed": bool(report.get("live_configuration_changed")),
         "forward_validation": {
             "status": (report.get("forward_validation") or {}).get("status"),

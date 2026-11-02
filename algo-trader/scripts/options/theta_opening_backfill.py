@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time as time_module
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -43,6 +44,8 @@ from scripts.options.theta_historical_backfill import (
 ET = ZoneInfo("America/New_York")
 OPENING_TIME = time(9, 35)
 MINIMUM_CHAIN_CONTRACTS = 20
+MALFORMED_RESPONSE_RETRIES = 1
+MALFORMED_RESPONSE_RETRY_DELAY_SECONDS = 1.0
 
 
 def _source_ranges_match(path: Path, ranges: list[tuple[str, date, date]]) -> bool:
@@ -81,57 +84,107 @@ def _download_open_quotes(
     client: Any,
     ranges: list[tuple[str, date, date]],
     session_dates: list[date],
-) -> tuple[list[dict], list[dict]]:
+    *,
+    only_requests: set[tuple[str, date]] | None = None,
+    underlying_symbol: str | None = None,
+) -> tuple[list[dict], list[dict], list[dict]]:
     requests_to_make = [
         (source_symbol, day)
         for source_symbol, start, end in ranges
         for day in session_dates
         if start <= day <= end
+        and (only_requests is None or (source_symbol, day) in only_requests)
     ]
 
-    def request(source_symbol: str, day: date) -> tuple[list[dict], dict | None]:
+    def error_message(error: Exception) -> str:
+        details = getattr(error, "details", None)
         try:
-            frame = client.option_at_time_quote(
-                symbol=source_symbol,
-                start_date=day,
-                end_date=day,
-                time_of_day=OPENING_TIME.isoformat(),
-                expiration="*",
-                max_dte=MAX_RESEARCH_DTE,
-                strike_range=STRIKE_RANGE,
-            )
-        except Exception as error:
-            details = getattr(error, "details", None)
             details = details() if callable(details) else details
-            message = f"{error} {details or ''}"
-            if (
-                type(error).__name__.lower() == "nodatafounderror"
-                or "no data found for: option_at_time_quote" in message.lower()
-                or "wrong number of data fields" in message.lower()
-            ):
-                return [], {
+        except Exception:
+            details = None
+        message = f"{error} {details or ''}".strip()
+        try:
+            api_key = _read_api_key()
+        except Exception:
+            api_key = ""
+        if api_key:
+            message = message.replace(api_key, "[redacted]")
+        return message[:240]
+
+    def request(source_symbol: str, day: date) -> tuple[list[dict], dict | None, dict | None]:
+        for attempt in range(MALFORMED_RESPONSE_RETRIES + 1):
+            try:
+                frame = client.option_at_time_quote(
+                    symbol=source_symbol,
+                    start_date=day,
+                    end_date=day,
+                    time_of_day=OPENING_TIME.isoformat(),
+                    expiration="*",
+                    max_dte=MAX_RESEARCH_DTE,
+                    strike_range=STRIKE_RANGE,
+                )
+                return _records(frame), None, None
+            except Exception as error:
+                message = error_message(error)
+                lowered = message.lower()
+                if (
+                    type(error).__name__.lower() == "nodatafounderror"
+                    or "no data found for: option_at_time_quote" in lowered
+                ):
+                    return [], {
+                        "symbol": source_symbol,
+                        "date": day.isoformat(),
+                        "reason": message,
+                    }, None
+
+                malformed = (
+                    "corrupt fit data" in lowered
+                    or "wrong number of data fields" in lowered
+                    or "more fields than the established tick width" in lowered
+                )
+                if not malformed:
+                    raise
+                if attempt < MALFORMED_RESPONSE_RETRIES:
+                    print(
+                        f"ThetaData opening malformed response; retrying "
+                        f"underlying={underlying_symbol or source_symbol} source={source_symbol} date={day} "
+                        f"attempt={attempt + 1}/{MALFORMED_RESPONSE_RETRIES + 1} error={message}",
+                        flush=True,
+                    )
+                    time_module.sleep(MALFORMED_RESPONSE_RETRY_DELAY_SECONDS)
+                    continue
+
+                failure = {
                     "symbol": source_symbol,
                     "date": day.isoformat(),
-                    "reason": message[:240],
+                    "reason": message,
                 }
-            raise
-        return _records(frame), None
+                print(
+                    f"ThetaData opening unresolved malformed response; "
+                    f"underlying={underlying_symbol or source_symbol} source={source_symbol} date={day} error={message}",
+                    flush=True,
+                )
+                return [], None, failure
+        raise AssertionError("malformed-response retry loop exhausted unexpectedly")
 
     if not requests_to_make:
-        return [], []
+        return [], [], []
     rows = []
     no_data_requests = []
+    failed_requests = []
     for source, day in requests_to_make:
-        day_rows, no_data = request(source, day)
+        day_rows, no_data, failure = request(source, day)
         rows.extend(day_rows)
         if no_data:
             no_data_requests.append(no_data)
             print(
-                f"ThetaData opening skipped missing/malformed quote day "
-                f"{no_data['symbol']} {no_data['date']}",
+                f"ThetaData opening no-data quote day "
+                f"underlying={underlying_symbol or no_data['symbol']} source={no_data['symbol']} date={no_data['date']}",
                 flush=True,
             )
-    return rows, no_data_requests
+        if failure:
+            failed_requests.append(failure)
+    return rows, no_data_requests, failed_requests
 
 
 def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
@@ -295,15 +348,61 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
     return manifest
 
 
-def _archive_covers_through(path: Path, end_date: date) -> bool:
-    """Whether an archive's recorded range reaches end_date."""
+def _is_malformed_response(message: str) -> bool:
+    lowered = message.lower()
+    return any(marker in lowered for marker in (
+        "corrupt fit data",
+        "wrong number of data fields",
+        "more fields than the established tick width",
+    ))
+
+
+def _request_key(record: dict) -> tuple[str, date] | None:
+    source = str(record.get("symbol") or "").strip().upper()
+    day_text = str(record.get("date") or "")[:10]
+    if not source or not day_text:
+        return None
+    try:
+        day = date.fromisoformat(day_text)
+    except ValueError:
+        return None
+    return source, day
+
+
+def _load_opening_archive(path: Path) -> dict | None:
     if not path.is_file():
-        return False
+        return None
     try:
         with gzip.open(path, "rt", encoding="utf-8") as stream:
             payload = json.load(stream)
+    except (OSError, EOFError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _unresolved_archive_requests(payload: dict | None) -> list[dict]:
+    if not payload:
+        return []
+    unresolved: dict[tuple[str, date], dict] = {}
+    for record in payload.get("failed_requests", []):
+        if isinstance(record, dict) and (key := _request_key(record)):
+            unresolved[key] = record
+    # Older versions misclassified some malformed responses as no-data.
+    for record in payload.get("no_data_requests", []):
+        if isinstance(record, dict) and _is_malformed_response(str(record.get("reason") or "")):
+            if key := _request_key(record):
+                unresolved[key] = record
+    return list(unresolved.values())
+
+
+def _archive_covers_through(path: Path, end_date: date) -> bool:
+    """Coverage requires the date range and no unresolved malformed requests."""
+    payload = _load_opening_archive(path)
+    if payload is None or _unresolved_archive_requests(payload):
+        return False
+    try:
         archived_end = date.fromisoformat(str(payload.get("end_date", "")))
-    except (OSError, EOFError, json.JSONDecodeError, TypeError, ValueError):
+    except (TypeError, ValueError):
         return False
     return archived_end >= end_date
 
@@ -320,10 +419,11 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
     for index, (month_start, month_end) in enumerate(chunks, start=1):
         path = opening_dir / f"{month_start:%Y-%m}.json.gz"
         source_ranges = _source_symbol_ranges(symbol, month_start, month_end)
-        refresh = month_end == end_date
-        if path.is_file() and _source_ranges_match(path, source_ranges):
-            if not refresh or _archive_covers_through(path, month_end):
-                continue
+        source_ranges_match = _source_ranges_match(path, source_ranges)
+        payload = _load_opening_archive(path) if source_ranges_match else None
+        prior_failures = _unresolved_archive_requests(payload)
+        if payload is not None and _archive_covers_through(path, month_end):
+            continue
 
         session_dates = set()
         for stock_row in stock_rows:
@@ -332,22 +432,82 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
             if day and month_start <= day <= month_end and opening and opening > 0:
                 session_dates.add(day)
         session_dates = sorted(session_dates)
-        rows, no_data_requests = _download_open_quotes(client, source_ranges, session_dates)
+        candidate_keys = {
+            (source, day)
+            for source, range_start, range_end in source_ranges
+            for day in session_dates
+            if range_start <= day <= range_end
+        }
+        retry_keys = {
+            key for record in prior_failures
+            if (key := _request_key(record)) and key in candidate_keys
+        }
+        # If this archive already spans the month, retry only its recorded gaps.
+        # Otherwise fetch the whole month so an interrupted/partial month is filled.
+        try:
+            archive_end = date.fromisoformat(str(payload.get("end_date", ""))) if payload else None
+        except ValueError:
+            archive_end = None
+        targeted_retry = bool(retry_keys) and archive_end is not None and archive_end >= month_end
+        only_requests = retry_keys if targeted_retry else None
+
+        new_rows, new_no_data, new_failures = _download_open_quotes(
+            client,
+            source_ranges,
+            session_dates,
+            only_requests=only_requests,
+            underlying_symbol=symbol,
+        )
+        attempted_keys = candidate_keys if only_requests is None else only_requests
+
+        prior_rows = payload.get("rows", []) if payload and isinstance(payload.get("rows", []), list) else []
+        merged_rows: dict[str, dict] = {}
+        for row in [*prior_rows, *new_rows]:
+            if isinstance(row, dict):
+                merged_rows[json.dumps(row, sort_keys=True, separators=(",", ":"), default=str)] = row
+
+        no_data_by_key: dict[tuple[str, date], dict] = {}
+        if payload:
+            for record in payload.get("no_data_requests", []):
+                if isinstance(record, dict) and (key := _request_key(record)) and not _is_malformed_response(str(record.get("reason") or "")):
+                    no_data_by_key[key] = record
+        for record in new_no_data:
+            if key := _request_key(record):
+                no_data_by_key[key] = record
+
+        failures_by_key: dict[tuple[str, date], dict] = {}
+        for record in prior_failures:
+            if (key := _request_key(record)) and key not in attempted_keys:
+                failures_by_key[key] = record
+        for record in new_failures:
+            if key := _request_key(record):
+                failures_by_key[key] = record
+        for key in attempted_keys:
+            if key not in {(item["symbol"].upper(), date.fromisoformat(item["date"][:10])) for item in new_failures}:
+                failures_by_key.pop(key, None)
+
+        source_symbol_ranges = [
+            {"symbol": ticker, "start_date": start.isoformat(), "end_date": end.isoformat()}
+            for ticker, start, end in source_ranges
+        ]
+        failed_requests = list(failures_by_key.values())
         _atomic_gzip_json(path, {
             "provider": "thetadata_option_at_time_quote",
             "underlying": symbol,
             "time_of_day": OPENING_TIME.isoformat(),
             "start_date": month_start.isoformat(),
             "end_date": month_end.isoformat(),
-            "source_symbol_ranges": [
-                {"symbol": ticker, "start_date": start.isoformat(), "end_date": end.isoformat()}
-                for ticker, start, end in source_ranges
-            ],
-            "no_data_requests": no_data_requests,
+            "source_symbol_ranges": source_symbol_ranges,
+            "no_data_requests": list(no_data_by_key.values()),
+            "failed_requests": failed_requests,
             "retrieved_at": datetime.now(ET).isoformat(),
-            "rows": rows,
+            "rows": list(merged_rows.values()),
         })
-        print(f"ThetaData opening {symbol} {month_start:%Y-%m}: rows={len(rows)}", flush=True)
+        print(
+            f"ThetaData opening {symbol} {month_start:%Y-%m}: "
+            f"rows={len(merged_rows)} unresolved_dates={len(failed_requests)}",
+            flush=True,
+        )
 
         if index in {1, 12, 24} or index % 12 == 0:
             partial = _compile_opening_symbol(symbol, start_date=start_date, end_date=end_date)

@@ -553,9 +553,11 @@ def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -
 
     The reserve ETF counts as free cash. When this cycle's entries exceed the raw
     cash above the floor, the reserve is sold and the entries wait one cycle for
-    the proceeds. Otherwise idle cash above the floor is parked. Orders are flagged
-    so execution skips the risk gate. Reserve results never pause entries or open
-    incidents, and failures leave strategies unaffected.
+    the proceeds. Otherwise idle cash above the floor is parked. Orders are tagged
+    for the cash-reserve risk bypass, which remains subject to its configured
+    notional cap; orders outside that cap still pass through normal risk checks.
+    Reserve results never pause entries or open incidents, and failures leave
+    strategies unaffected.
     """
     if dry_run or window.name != "regular" or not get_cash_reserve_settings()["enabled"]:
         return None
@@ -582,11 +584,14 @@ def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -
             return {"defer_entries": entry_notional > 0, "result": {"status": "no_quote"}}
         mid = (bid + ask) / 2
         band = get_algo_execution_settings()["entry_limit_band_bps"] / 10_000.0
+        buy_limit = round(ask * (1 + band), 2)
+        sell_limit = round(bid * (1 - band), 2)
 
         if entry_notional > 0:
             hop = plan_entry_cash(
                 equity=equity, cash=cash, entry_notional=entry_notional,
-                min_cash_pct=get_mode_config("algo")["risk"]["min_cash_pct"], proxy_price=mid, proxy_qty=proxy_qty,
+                min_cash_pct=get_mode_config("algo")["risk"]["min_cash_pct"],
+                proxy_price=sell_limit, proxy_qty=proxy_qty,
             )
             if hop["sell_qty"] <= 0:
                 return {"defer_entries": hop["defer_entries"], "result": {"status": "cash_sufficient" if not hop["defer_entries"] else "cannot_raise_cash"}}
@@ -595,11 +600,12 @@ def _run_cash_reserve(broker, *, window, dry_run: bool, entry_notional: float) -
             plan = plan_cash_reserve(
                 equity=equity, cash=cash, invested_value=invested, proxy_price=mid,
                 proxy_qty=proxy_qty, config=get_cash_reserve_settings(),
+                buy_limit_price=buy_limit, sell_limit_price=sell_limit,
             )
             if plan["action"] == "hold":
                 return {"defer_entries": False, "result": {"status": "hold", "reason": plan["reason"]}}
 
-        limit = round(ask * (1 + band), 2) if plan["action"] == "buy" else round(bid * (1 - band), 2)
+        limit = buy_limit if plan["action"] == "buy" else sell_limit
         stamp = datetime.now(ET).strftime("%Y%m%d%H%M%S")
         trade = {
             "ticker": proxy,

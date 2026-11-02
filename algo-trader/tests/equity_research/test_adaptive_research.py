@@ -9,12 +9,48 @@ from equity_research.pipeline.adaptive_search import (
     _search_space,
 )
 from equity_research.cli import build_parser
-from equity_research.pipeline.adaptive_pipeline import _write_adaptive_coordinator_artifact
+from equity_research.pipeline.adaptive_pipeline import (
+    _verification_progress_log_dir, _write_adaptive_coordinator_artifact,
+)
 from equity_research.validation.portfolio_simulation import _read_artifact, _validate_artifacts
 from equity_research.settings import (
     ADAPTIVE_WINDOW_DAYS, CORE_RESEARCH_CONTROLS, RESEARCHABLE_STRATEGIES, STRATEGY_FLAVORS,
 )
 from strategies.registry import PARAMETER_KEYS
+
+
+def test_verification_progress_logs_are_isolated_per_attempt(tmp_path):
+    first = _verification_progress_log_dir(tmp_path, "stable-invocation")
+    second = _verification_progress_log_dir(tmp_path, "stable-invocation")
+
+    assert first.parent == second.parent
+    assert first != second
+
+
+def test_fold_progress_writer_appends_parseable_jsonl(tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    from equity_research.pipeline.adaptive_verification import _write_fold_progress
+
+    target = tmp_path / "run" / "swing_momentum.jsonl"
+    args = SimpleNamespace(strategy="swing_momentum", progress_log_path=str(target))
+    window = {
+        "train_start": "2025-01-01", "train_end": "2025-06-30",
+        "test_start": "2025-07-01", "test_end": "2025-08-31",
+    }
+
+    _write_fold_progress(args, fold=1, folds_total=3, status="queued", window=window)
+    _write_fold_progress(
+        args, fold=1, folds_total=3, status="completed", window=window,
+        selected_candidate="candidate_1", fold_elapsed_seconds=12.5,
+    )
+
+    rows = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines()]
+    assert [row["status"] for row in rows] == ["queued", "completed"]
+    assert rows[1]["strategy"] == "swing_momentum"
+    assert rows[1]["folds_total"] == 3
+    assert rows[1]["selected_candidate"] == "candidate_1"
 
 
 def test_swing_multi_factor_adaptive_profile_matches_core_daily_entry_cap():

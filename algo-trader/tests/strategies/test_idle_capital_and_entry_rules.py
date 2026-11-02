@@ -32,6 +32,22 @@ def test_cash_reserve_parks_only_spare_cash_above_reserve_and_below_gross_target
     assert plan["qty"] * 100 <= 95_000 - 10_000  # never dips into the reserve
 
 
+def test_cash_reserve_buy_quantity_respects_the_actual_limit_price():
+    plan = plan_cash_reserve(
+        equity=100_000, cash=95_000, invested_value=0, proxy_price=100.50,
+        proxy_qty=0, buy_limit_price=100.53,
+        config={
+            "enabled": True, "reserve_pct": 0.10, "target_gross_pct": 0.90,
+            "max_proxy_pct": 0.80, "min_trade_value": 500,
+        },
+    )
+
+    assert plan["action"] == "buy"
+    assert plan["qty"] == 795
+    assert plan["qty"] * 100.53 <= 80_000
+    assert (plan["qty"] + 1) * 100.53 > 80_000
+
+
 def test_cash_reserve_frees_cash_when_entries_need_it_and_never_sells_more_than_held():
     plan = plan_cash_reserve(
         equity=100_000, cash=8_000, invested_value=70_000, proxy_price=100,
@@ -39,6 +55,19 @@ def test_cash_reserve_frees_cash_when_entries_need_it_and_never_sells_more_than_
     )
     assert plan["action"] == "sell"
     assert 0 < plan["qty"] <= 50
+
+
+def test_cash_reserve_sell_quantity_uses_conservative_limit_price():
+    plan = plan_cash_reserve(
+        equity=100_000, cash=9_000, invested_value=70_000, proxy_price=100,
+        proxy_qty=100, sell_limit_price=99, config={
+            "enabled": True, "reserve_pct": 0.10, "target_gross_pct": 0.90,
+            "max_proxy_pct": 0.80, "min_trade_value": 500,
+        },
+    )
+
+    assert plan["action"] == "sell"
+    assert plan["qty"] == 11  # $1,000 shortfall / $99 conservative proceeds
 
 
 def test_cash_reserve_holds_when_exposure_is_already_at_target():
@@ -133,10 +162,10 @@ def test_entry_cash_hop_sells_reserve_only_for_the_shortfall_and_defers_entries(
 
     hop = plan_entry_cash(
         equity=100_000, cash=5_000, entry_notional=8_000, min_cash_pct=0.10,
-        proxy_price=100, proxy_qty=200,
+        proxy_price=99, proxy_qty=200,
     )
-    # Shortfall = 8,000 + 10,000 floor - 5,000 = 13,000 -> 130 shares.
-    assert hop == {"sell_qty": 130, "defer_entries": True}
+    # Shortfall = 8,000 + 10,000 floor - 5,000 = 13,000; use sale limit.
+    assert hop == {"sell_qty": 132, "defer_entries": True}
 
 
 def test_entry_cash_hop_does_nothing_when_raw_cash_funds_entries_above_the_floor():

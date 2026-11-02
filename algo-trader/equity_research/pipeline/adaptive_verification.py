@@ -6,6 +6,8 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
+import json
+import logging
 import math
 import multiprocessing as mp
 from pathlib import Path
@@ -31,6 +33,27 @@ from ..settings import (
     ROBUSTNESS_BOOTSTRAP_BLOCK_SESSIONS, ROBUSTNESS_BOOTSTRAP_ITERATIONS,
     STRATEGY_FLAVORS,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _write_fold_progress(args, *, fold: int, folds_total: int, status: str, window: dict, **details) -> None:
+    path = getattr(args, "progress_log_path", None)
+    if not path:
+        return
+    event = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "strategy": args.strategy, "fold": fold, "folds_total": folds_total,
+        "status": status, "train_start": window.get("train_start"),
+        "train_end": window.get("train_end"), "test_start": window.get("test_start"),
+        "test_end": window.get("test_end"), **details,
+    }
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, sort_keys=True, default=str) + "\n")
+        stream.flush()
+
 
 def walk_forward_windows(
     trading_dates: list[date], *, train_days: int, test_days: int, step_days: int,
@@ -319,11 +342,34 @@ def run_adaptive_walk_forward(args) -> dict:
         raise ValueError(f"need at least {args.minimum_folds} walk-forward folds; found {len(windows)}")
     fold_jobs = [(index, window, args) for index, window in enumerate(windows)]
     workers = min(args.workers, len(fold_jobs), available_cpu_count())
+    logger.info(
+        "Adaptive verification started: strategy=%s folds=%d workers=%d range=%s..%s",
+        args.strategy, len(fold_jobs), workers, start.isoformat(), end.isoformat(),
+    )
+    for index, window in enumerate(windows, start=1):
+        _write_fold_progress(
+            args, fold=index, folds_total=len(windows), status="queued", window=window,
+        )
     results_by_index = {}
     if workers == 1:
         for job in fold_jobs:
-            index, result = _run_adaptive_fold(job)
-            results_by_index[index] = result
+            index, window, _ = job
+            try:
+                index, result = _run_adaptive_fold(job)
+                results_by_index[index] = result
+                _write_fold_progress(
+                    args, fold=index + 1, folds_total=len(windows), status="completed",
+                    window=window, selected_candidate=result.get("selected_candidate"),
+                    fold_elapsed_seconds=result.get("fold_elapsed_seconds"),
+                    sensitivity_elapsed_seconds=result.get("sensitivity_elapsed_seconds"),
+                    sensitivity_status=result.get("sensitivity_status"),
+                )
+            except Exception as exc:
+                _write_fold_progress(
+                    args, fold=index + 1, folds_total=len(windows), status="error",
+                    window=window, error=f"{type(exc).__name__}: {exc}",
+                )
+                raise
     else:
         # This executor can be created inside a strategy worker. Spawn clean
         # interpreters so fold workers do not inherit the outer pool's queues.
@@ -332,8 +378,28 @@ def run_adaptive_walk_forward(args) -> dict:
         ) as pool:
             futures = {pool.submit(_run_adaptive_fold, job): job[0] for job in fold_jobs}
             for future in as_completed(futures):
-                index, result = future.result()
-                results_by_index[index] = result
+                index = futures[future]
+                window = windows[index]
+                try:
+                    index, result = future.result()
+                    results_by_index[index] = result
+                    _write_fold_progress(
+                        args, fold=index + 1, folds_total=len(windows), status="completed",
+                        window=window, selected_candidate=result.get("selected_candidate"),
+                        fold_elapsed_seconds=result.get("fold_elapsed_seconds"),
+                        sensitivity_elapsed_seconds=result.get("sensitivity_elapsed_seconds"),
+                        sensitivity_status=result.get("sensitivity_status"),
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "Adaptive verification fold failed: strategy=%s fold=%d/%d",
+                        args.strategy, index + 1, len(windows),
+                    )
+                    _write_fold_progress(
+                        args, fold=index + 1, folds_total=len(windows), status="error",
+                        window=window, error=f"{type(exc).__name__}: {exc}",
+                    )
+                    raise
     folds = [results_by_index[index] for index in range(len(windows))]
     for index, fold in enumerate(folds):
         fold["parameter_change_from_previous_fold"] = None if index == 0 else {

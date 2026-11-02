@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, as_completed, wait
 from datetime import date, datetime, timezone
 import hashlib
 import json
 import logging
 import multiprocessing as mp
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -258,17 +259,26 @@ def _discovery_status(detail: dict, path: Path, status: str) -> dict:
     }
 
 
+def _verification_progress_log_dir(output_dir: Path, invocation_id: str | None) -> Path:
+    attempt_id = uuid.uuid4().hex
+    return output_dir / "invocation-logs" / (invocation_id or "legacy") / attempt_id
+
+
 def run_adaptive_verifications(
     *, database: str, symbols: list[str], start: date, end: date,
     data_version: str, output_dir: Path, workers: int, force: bool,
     factor_weight_timeline: list[dict] | None = None,
+    invocation_id: str | None = None,
     on_strategy_complete=None,
+    on_fold_progress=None,
 ) -> dict:
     """Verify the short-window fitting policy on recent chronological folds."""
     factor_weight_timeline = list(factor_weight_timeline or [])
     factor_weight_timeline_sha256 = stable_hash(factor_weight_timeline)
     statuses = {}
     jobs = []
+    progress_log_dir = _verification_progress_log_dir(output_dir, invocation_id)
+    logger.info("Verification fold logs for this attempt: %s", progress_log_dir)
     total = len(RESEARCHABLE_STRATEGIES)
     logger.info("Verification: checking reusable fold results for %d strategies", total)
     for strategy in RESEARCHABLE_STRATEGIES:
@@ -292,7 +302,7 @@ def run_adaptive_verifications(
         else:
             jobs.append((
                 strategy, database, symbols, start, end, data_version,
-                output_dir, options, factor_weight_timeline,
+                output_dir, options, factor_weight_timeline, progress_log_dir,
             ))
 
     if jobs:
@@ -316,21 +326,60 @@ def run_adaptive_verifications(
                     executor.submit(_run_adaptive_verification_job, (*job, per_strategy_workers)): job[0]
                     for job in batch
                 }
-                for future in as_completed(futures):
-                    strategy = futures[future]
-                    try:
-                        statuses[strategy] = future.result()
-                    except Exception as exc:
-                        statuses[strategy] = {
-                            "status": "error", "strategy": strategy,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    status = statuses[strategy].get("status", "unknown")
-                    log = logger.warning if status == "error" else logger.info
-                    log(
-                        "Verification progress %d/%d: %s folds %s",
-                        len(statuses), total, strategy, status,
-                    )
+                offsets = {strategy: 0 for strategy in futures.values()}
+                last_heartbeat = datetime.now(timezone.utc)
+                while futures:
+                    done, _ = wait(futures, timeout=20, return_when=FIRST_COMPLETED)
+                    for strategy in futures.values():
+                        event_path = progress_log_dir / f"{strategy}.verification.jsonl"
+                        try:
+                            with event_path.open("rb") as stream:
+                                stream.seek(offsets[strategy])
+                                chunk = stream.read()
+                            consumed = 0
+                            for raw_line in chunk.splitlines(keepends=True):
+                                if not raw_line.endswith(b"\n"):
+                                    break
+                                consumed += len(raw_line)
+                                try:
+                                    event = json.loads(raw_line.decode("utf-8"))
+                                except (UnicodeDecodeError, json.JSONDecodeError):
+                                    logger.warning("Verification progress log has an invalid record: %s", event_path)
+                                    continue
+                                logger.info(
+                                    "Verification fold progress: strategy=%s fold=%s/%s status=%s elapsed=%.1fs details=%s",
+                                    strategy, event.get("fold"), event.get("folds_total"),
+                                    event.get("status"), event.get("fold_elapsed_seconds", 0.0),
+                                    json.dumps(event, sort_keys=True, default=str),
+                                )
+                                if on_fold_progress:
+                                    on_fold_progress(strategy, event)
+                            offsets[strategy] += consumed
+                        except FileNotFoundError:
+                            pass
+                    now = datetime.now(timezone.utc)
+                    if not done and (now - last_heartbeat).total_seconds() >= 120:
+                        logger.info(
+                            "Verification heartbeat: still waiting on %d strategy worker(s): %s",
+                            len(futures), ",".join(futures.values()),
+                        )
+                        last_heartbeat = now
+                    for future in done:
+                        strategy = futures.pop(future)
+                        try:
+                            statuses[strategy] = future.result()
+                        except Exception as exc:
+                            logger.exception("Verification worker failed: strategy=%s", strategy)
+                            statuses[strategy] = {
+                                "status": "error", "strategy": strategy,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        status = statuses[strategy].get("status", "unknown")
+                        log = logger.warning if status == "error" else logger.info
+                        log(
+                            "Verification progress %d/%d: %s folds %s",
+                            len(statuses), total, strategy, status,
+                        )
     for index, strategy in enumerate(RESEARCHABLE_STRATEGIES, start=1):
         status = statuses.get(strategy) or {}
         if status.get("status") == "error":
@@ -525,7 +574,7 @@ def _adaptive_verification_is_reusable(
 def _run_adaptive_verification_job(payload: tuple) -> dict:
     (
         strategy, database, symbols, start, end, data_version, output_dir,
-        options, factor_weight_timeline, fold_workers,
+        options, factor_weight_timeline, progress_log_dir, fold_workers,
     ) = payload
     from .adaptive_verification import run_adaptive_walk_forward
 
@@ -552,6 +601,7 @@ def _run_adaptive_verification_job(payload: tuple) -> dict:
         adaptive_policy_version=ADAPTIVE_VERIFICATION_VERSION,
         data_version=data_version,
         factor_weight_timeline=factor_weight_timeline,
+        progress_log_path=str(progress_log_dir / f"{strategy}.verification.jsonl"),
     )
     report = run_adaptive_walk_forward(walk_args)
     detail, _ = read_json(report["latest_detail_artifact"])

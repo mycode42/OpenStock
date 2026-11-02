@@ -55,4 +55,4 @@ Review and optimization run only when asked. Stay inside the modules named in th
 - Print or commit tokens, session files, `.env`, or `data/auth.json`.
 - Commit `data/*.log`, pid files, or the live SQLite database.
 - Hand-edit applied migrations or `package-lock.json` unless a dependency was requested.
-- Restart systemd from an edit task.
+- After code changes that affect a running service, restart that service and verify it is active with the updated code. Inspect its current state first, and do not restart unrelated services.

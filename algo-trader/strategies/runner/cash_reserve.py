@@ -36,8 +36,14 @@ def plan_entry_cash(
 def plan_cash_reserve(
     *, equity: float, cash: float, invested_value: float, proxy_price: float,
     proxy_qty: int, config: dict | None = None, entries_pending: bool = False,
+    buy_limit_price: float | None = None, sell_limit_price: float | None = None,
 ) -> dict:
-    """Return {"action": "buy" | "sell" | "hold", "qty": int, "reason": str}."""
+    """Plan reserve trades using mark price and conservative execution prices.
+
+    proxy_price values any existing holding. New buys and reserve sales are
+    sized against their actual limit prices when supplied; defaults preserve the
+    historical mid-price behavior for callers that do not place limit orders.
+    """
     settings = {**get_cash_reserve_settings(), **(config or {})}
     hold = {"action": "hold", "qty": 0}
     if not settings["enabled"]:
@@ -47,7 +53,10 @@ def plan_cash_reserve(
     reserve = settings["reserve_pct"] * equity
     proxy_value = proxy_qty * proxy_price
     if cash < reserve:
-        needed = math.ceil((reserve - cash) / proxy_price)
+        price = sell_limit_price if sell_limit_price is not None else proxy_price
+        if price <= 0 or not math.isfinite(price):
+            return {**hold, "reason": "sell limit price unavailable"}
+        needed = math.ceil((reserve - cash) / price)
         qty = min(int(proxy_qty), needed)
         if qty > 0:
             return {"action": "sell", "qty": qty, "reason": "cash below reserve; free cash for entries"}
@@ -60,7 +69,10 @@ def plan_cash_reserve(
     budget = min(spare_cash, gross_room, proxy_room)
     if budget < settings["min_trade_value"]:
         return {**hold, "reason": "idle cash below minimum trade value or exposure at target"}
-    qty = int(budget // proxy_price)
+    price = buy_limit_price if buy_limit_price is not None else proxy_price
+    if price <= 0 or not math.isfinite(price):
+        return {**hold, "reason": "buy limit price unavailable"}
+    qty = int(budget // price)
     if qty <= 0:
         return {**hold, "reason": "proxy price exceeds idle budget"}
     return {"action": "buy", "qty": qty, "reason": "park idle cash in cash proxy"}

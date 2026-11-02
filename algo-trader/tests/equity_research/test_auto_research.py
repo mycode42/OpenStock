@@ -189,3 +189,39 @@ def test_failed_cycle_fills_latest_when_no_good_report_exists(tmp_path, monkeypa
     latest = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
     assert latest["status"] == "error"
     assert (tmp_path / "latest-error.json").exists()
+
+
+def test_completed_cycle_cli_summary_handles_missing_optional_data(monkeypatch, tmp_path, capsys):
+    import json
+
+    class Ledger:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def interrupt_abandoned_invocations(self, **kwargs):
+            return 0
+
+        def start_invocation(self, *args, **kwargs):
+            pass
+
+        def import_legacy(self, *args, **kwargs):
+            pass
+
+        def record_completed_report(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(auto_research, "ResearchLedger", Ledger)
+    monkeypatch.setattr(auto_research, "_configure_progress_logging", lambda *_: None)
+    monkeypatch.setattr(
+        auto_research, "run_daily_research",
+        lambda _args: {"status": "completed", "weekly_review": {"status": "pending_decision"}},
+    )
+
+    assert auto_research.main([
+        "--output-dir", str(tmp_path), "--no-refresh", "--verification-history", "recent",
+    ]) == 0
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["status"] == "completed"
+    assert summary["range"] is None
+    assert summary["stored_coverage"] is None
