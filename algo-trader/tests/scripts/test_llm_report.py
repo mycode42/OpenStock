@@ -1,6 +1,7 @@
 """The cron report runs a prompt through the configured LLM, skips the model when the snapshot is stale, and never leaks the bot token."""
 
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -52,6 +53,12 @@ def test_fresh_snapshot_goes_to_the_model_with_the_prompt(monkeypatch, env, tmp_
     user_message = model.calls[0][1]
     assert f"Brief the root {llm_report.ROOT}." in user_message
     assert '"AAPL"' in user_message
+    snapshot_context = user_message.split("--- signal snapshot ---\n", 1)[1]
+    status_json = snapshot_context.split("Verified LLM signal snapshot status (JSON):\n", 1)[1]
+    status = json.loads(status_json)
+    assert status["status"] == "fresh" and status["fresh"] is True
+    assert status["now_utc"].endswith("+00:00")
+    assert status["expires_at"] == status["snapshot"]["expires_at"]
     assert env["sent"] == [("the briefing", "123:SECRET", "42")]
 
 
@@ -65,17 +72,26 @@ def test_stale_snapshot_sends_a_notice_and_calls_no_model(monkeypatch, env, tmp_
     assert model.calls == []
 
 
-def test_failed_model_call_reports_only_the_exception_type(monkeypatch, env, tmp_path, capsys):
+@pytest.mark.parametrize(
+    ("error_type", "expected_guidance"),
+    [
+        (type("OpenAITimeoutError", (Exception,), {}), "request timed out"),
+        (type("AuthenticationError", (Exception,), {}), "rejected authentication"),
+    ],
+)
+def test_failed_model_call_classifies_timeout_and_auth_without_leaking_details(monkeypatch, env, tmp_path, capsys, error_type, expected_guidance):
     prompt = tmp_path / "digest.md"
     prompt.write_text("Brief.", encoding="utf-8")
 
     def broken(*args, **kwargs):
-        raise TimeoutError("boom")
+        raise error_type("boom SECRET detail")
 
     monkeypatch.setattr(llm_report, "get_model", broken)
     assert llm_report.main(["--prompt", str(prompt), "--telegram"]) == 1
-    assert env["sent"] == [("Report failed: TimeoutError. Check the model settings and the API key in .env.", "123:SECRET", "42")]
-    assert "boom" in capsys.readouterr().err
+    message = env["sent"][0][0]
+    assert expected_guidance in message
+    assert "SECRET" not in message and "boom" not in message
+    assert "boom SECRET detail" in capsys.readouterr().err
 
 
 def test_dry_run_prints_the_message_without_a_model(monkeypatch, env, tmp_path, capsys):

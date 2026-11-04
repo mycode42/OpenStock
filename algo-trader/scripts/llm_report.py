@@ -49,13 +49,41 @@ def snapshot_status(now: datetime) -> tuple[bool, str]:
         detail = f" ({book.error})" if book.error else ""
         return False, f"The LLM signal snapshot is {book.status}{detail}."
     payload = read_latest_llm_signal_payload(DEFAULT_AI_SIGNAL_DB)
-    return True, "Latest LLM signal snapshot (JSON):\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+    if not isinstance(payload, dict):
+        return False, "The LLM signal snapshot payload is unavailable."
+    context = {
+        "status": "fresh",
+        "fresh": True,
+        "now_utc": now.astimezone(timezone.utc).isoformat(),
+        "expires_at": payload.get("expires_at"),
+        "snapshot": payload,
+    }
+    return True, "Verified LLM signal snapshot status (JSON):\n" + json.dumps(context, ensure_ascii=False, indent=2)
 
 
 def build_message(prompt: str, contexts: list[tuple[str, str]]) -> str:
     sections = [prompt]
     sections.extend(f"--- {name} ---\n{text}" for name, text in contexts)
     return "\n\n".join(sections)
+
+
+def model_failure_notice(exc: Exception) -> str:
+    """Return actionable, secret-safe guidance without conflating timeouts and auth failures."""
+    error_name = type(exc).__name__
+    normalized = error_name.lower()
+    if isinstance(exc, TimeoutError) or "timeout" in normalized:
+        guidance = (
+            "The LLM request timed out; this does not by itself indicate an API-key problem. "
+            "Check provider or network availability and retry."
+        )
+    elif any(
+        marker in normalized
+        for marker in ("authentication", "authorization", "unauthorized", "invalidapikey", "permissiondenied")
+    ):
+        guidance = "The provider rejected authentication or permissions. Verify model access and credential configuration."
+    else:
+        guidance = "The model request failed. Check local report logs for details; this does not by itself indicate an API-key problem."
+    return f"Report failed: {error_name}. {guidance}"
 
 
 def ask_model(user_text: str, provider: str, model: str) -> str:
@@ -141,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         # The detail goes to the local log only; Telegram gets the exception type, in case the message names a URL or key.
         print(f"Report failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         if args.telegram:
-            send_telegram(f"Report failed: {type(exc).__name__}. Check the model settings and the API key in .env.", token, chat_id)
+            send_telegram(model_failure_notice(exc), token, chat_id)
         return 1
 
     print(reply)
