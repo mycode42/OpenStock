@@ -12,7 +12,7 @@ class LLMStrategyConfig:
     allow_long: bool = True
     allow_short: bool = False
     disable_in_volatile: bool = True
-    minimum_confidence: int = 75
+    minimum_confidence: int = 80
     reaction_window_days: int = 3
     minimum_gap_pct: float = 0.02
     maximum_gap_pct: float = 0.08

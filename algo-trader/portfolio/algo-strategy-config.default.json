@@ -231,7 +231,7 @@
     },
     "swing_llm_driven": {
       "enabled": true,
-      "minimum_confidence": 70,
+      "minimum_confidence": 80,
       "regime_weights": {
         "trending_up": 0.58,
         "trending_down": 0.58,
