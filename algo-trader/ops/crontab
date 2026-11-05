@@ -8,9 +8,7 @@ MAILTO=""
 # Health check, every hour (sources scripts/cron-env.sh so systemctl --user can see the services)
 0 * * * *      cd $ALGO && . scripts/cron-env.sh && .venv/bin/python -m portfolio.healthcheck >> data/algo/logs/health.log 2>&1
 
-# Options capture (Alpaca OPRA)
-35 9 * * 1-5   cd $ALGO && .venv/bin/python -m scripts.options.alpaca_daily_capture --phase open --universe research >> data/algo/logs/options-opening-capture.log 2>&1
-45 15 * * 1-5  cd $ALGO && .venv/bin/python -m scripts.options.alpaca_daily_capture --universe research >> data/algo/logs/options-history-capture.log 2>&1
+# Alpaca OPRA captures are scheduled in OpenClaw Automations (America/New_York).
 
 # ThetaData history pipeline: last 20 sessions, then EOD, then opening. Every 4 hours: starts it if it is not running (a run already in progress makes this one exit), and stops calling ThetaData once complete.
 0 */4 * * *    cd $ALGO && .venv/bin/python -m scripts.options.theta_pipeline >> data/algo/logs/theta-pipeline.log 2>&1
