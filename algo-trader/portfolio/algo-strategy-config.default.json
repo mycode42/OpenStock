@@ -258,7 +258,7 @@
     "portfolio_scan_seconds": 60,
     "universe_retry_seconds": 300,
     "quote_stale_seconds": 90,
-    "extended_quote_stale_seconds": 300,
+    "extended_quote_stale_seconds": 900,
     "extended_hours_max_spread_pct": 0.02,
     "entry_limit_band_bps": 10,
     "intraday_stop_vol_multiple": 3.0,

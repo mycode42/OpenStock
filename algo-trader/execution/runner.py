@@ -103,12 +103,20 @@ def get_latest_price(ticker: str) -> float:
     return broker.get_latest_price(ticker, _headers())
 
 
-def get_latest_ask(ticker: str, *, mode: str, feed: str | None = None) -> float:
-    return broker.get_latest_quote(ticker, "ask", _headers(mode), feed=feed)
+def get_latest_ask(
+    ticker: str, *, mode: str, feed: str | None = None, max_age_seconds: int = 90,
+) -> float:
+    return broker.get_latest_quote(
+        ticker, "ask", _headers(mode), feed=feed, max_age_seconds=max_age_seconds,
+    )
 
 
-def get_latest_bid(ticker: str, *, mode: str, feed: str | None = None) -> float:
-    return broker.get_latest_quote(ticker, "bid", _headers(mode), feed=feed)
+def get_latest_bid(
+    ticker: str, *, mode: str, feed: str | None = None, max_age_seconds: int = 90,
+) -> float:
+    return broker.get_latest_quote(
+        ticker, "bid", _headers(mode), feed=feed, max_age_seconds=max_age_seconds,
+    )
 
 
 def account_execution_lock(mode: str, timeout_seconds: float = 10.0):

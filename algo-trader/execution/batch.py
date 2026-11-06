@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from execution.risk_models import ValidationResult
 from market.calendar import extended_session_name
 from market.data import feeds_for_session
-from portfolio.config import get_cash_reserve_settings, is_cash_proxy
+from portfolio.config import get_cash_reserve_settings, is_cash_proxy, quote_stale_limit_seconds
 from portfolio.protection.software import exit_limit_price, exit_order_policy
 
 
@@ -40,7 +40,7 @@ def _extended_limit_trade(trade: dict) -> bool:
     return (
         bool(trade.get("extended_hours"))
         and str(trade.get("order_type") or "").lower() == "limit"
-        and str(trade.get("action") or "").lower() in {"buy", "sell", "cover"}
+        and str(trade.get("action") or "").lower() in {"buy", "sell", "short", "cover"}
         and math.isfinite(limit_price) and limit_price > 0
     )
 
@@ -128,6 +128,7 @@ def execute_trade_batch(
     would_execute_count = 0
     seen_client_order_ids: set[str] = set()
     extended_exit_session = None
+    execution_session = None
 
     # Session detection only decides how exits are priced in extended hours. It never
     # drops an order; the broker has the final word on timing.
@@ -145,8 +146,10 @@ def execute_trade_batch(
                     now,
                     lambda on_date: hooks.get_market_schedule(on_date=on_date, mode="algo"),
                 )
+            execution_session = "regular" if regular_open else extended_session
         except Exception:
             extended_session = None
+            execution_session = None
             regular_open = False
         if not regular_open:
             extended_exit_session = extended_session
@@ -275,8 +278,42 @@ def execute_trade_batch(
                 ref_price = max(hinted_price, live_ask)
                 entry_price = ref_price
             elif not args.dry_run and action == "short":
+                trade_session = trade.get("session_name") or execution_session
+                if extended_hours and trade_session == "overnight":
+                    state = rm_portfolio_state or {}
+                    if state.get("overnight_asset_metadata_available") is not True:
+                        results.append({
+                            "ticker": ticker, "action": action, "qty": qty,
+                            "status": "blocked",
+                            "reason": "Overnight asset eligibility could not be verified",
+                            "rule": "overnight_asset_metadata_unavailable",
+                            "strategy": strategy,
+                        })
+                        continue
+                    overnight_halted = set(state.get("overnight_halted_symbols") or [])
+                    overnight_tradable = set(state.get("overnight_tradable_symbols") or [])
+                    if ticker in overnight_halted or ticker not in overnight_tradable:
+                        results.append({
+                            "ticker": ticker, "action": action, "qty": qty,
+                            "status": "blocked",
+                            "reason": (
+                                "Asset is halted for overnight trading" if ticker in overnight_halted
+                                else "Asset is not verified as overnight tradable"
+                            ),
+                            "rule": "overnight_asset_not_tradable",
+                            "strategy": strategy,
+                        })
+                        continue
                 try:
-                    live_bid = hooks.get_latest_bid(ticker, mode=mode)
+                    if extended_hours:
+                        if trade_session not in {"premarket", "after_hours", "overnight"}:
+                            raise ValueError("Could not verify the active extended-hours session")
+                        live_bid = hooks.get_latest_bid(
+                            ticker, mode=mode, feed=feeds_for_session(trade_session)[1],
+                            max_age_seconds=quote_stale_limit_seconds(trade_session),
+                        )
+                    else:
+                        live_bid = hooks.get_latest_bid(ticker, mode=mode)
                 except Exception as exc:
                     results.append(
                         {

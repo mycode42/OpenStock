@@ -59,6 +59,7 @@ class SignalGenerationContext:
     overnight_swing_signal_bar_symbols: set[str]
     scan_errors: list[str]
     entry_pause_reasons: list[str]
+    signal_diagnostics: list[dict]
 
 
 def generate_strategy_signals(
@@ -84,12 +85,32 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
         context, ticker, owner, position_qty, symbol_bars,
     )
     if forced_exit is not None:
+        context.signal_diagnostics.append({
+            "ticker": ticker, "strategy": forced_exit.get("strategy"),
+            "reason_code": "forced_exit_signal_generated",
+            "reason": forced_exit.get("reason"), "action": forced_exit.get("action"),
+            "timeframe": "5Min", "bar_count": len(symbol_bars),
+            "last_bar_time": symbol_bars[-1].get("t") if symbol_bars else None,
+        })
         return [forced_exit]
     if context.track_owners and position_qty != 0 and owner is None:
         # An unknown holding must not be taken over by an active strategy.
+        context.signal_diagnostics.append({
+            "ticker": ticker,
+            "strategy": None,
+            "reason_code": "unowned_position",
+            "reason": "position has no verified strategy owner",
+        })
         return []
 
     candidates = _strategy_candidates(context, ticker, owner, position_qty)
+    if not candidates:
+        context.signal_diagnostics.append({
+            "ticker": ticker,
+            "strategy": None,
+            "reason_code": "no_active_strategy_candidates",
+            "reason": "no core strategy was active for this symbol in the current regime",
+        })
     llm_signal = _llm_signal(context, ticker, owner, position, position_qty, candidates)
     options = _protective_exit_option(
         context, ticker, owner, position, position_qty, symbol_bars,
@@ -146,6 +167,13 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
         and not overnight_swing_bar_eligible
     ):
         chosen["suppressed_reason"] = "latest completed signal bar is stale or unavailable"
+        context.signal_diagnostics.append({
+            "ticker": ticker, "strategy": chosen.get("strategy"),
+            "reason_code": "signal_bar_stale", "reason": chosen["suppressed_reason"],
+            "timeframe": chosen.get("timeframe"),
+            "bar_count": len(symbol_bars),
+            "last_bar_time": symbol_bars[-1].get("t") if symbol_bars else None,
+        })
     output.append(chosen)
     return output
 
@@ -316,6 +344,12 @@ def _strategy_option(
     if strategy_name == "swing_llm_driven" and (
         context.mode != "algo" or context.session_name not in {None, "regular"}
     ):
+        _record_signal_diagnostic(
+            context, strategy_name, ticker, context.daily_bars.get(ticker, []), None,
+            "strategy_unavailable_for_session",
+            "LLM strategy signals are evaluated only during the regular session",
+            "1Day",
+        )
         return None
 
     strategy_spec = STRATEGY_CATALOG.get(strategy_name)
@@ -329,6 +363,7 @@ def _strategy_option(
             if signal_bars else None
         )
 
+    effective_parameters = None
     signal = _provided_signal(context, strategy_name, ticker, owner, position_qty, llm_signal)
     if context.lifecycle:
         context.lifecycle.observe(strategy_name, ticker, signal_bar_time)
@@ -337,6 +372,17 @@ def _strategy_option(
         try:
             if context.mode == "algo":
                 if strategy_name == "swing_momentum":
+                    _record_signal_diagnostic(
+                        context, strategy_name, ticker, signal_bars, signal_bar_time,
+                        "missing_bars" if not signal_bars else "no_signal",
+                        (
+                            "no 1Day bars were available for cross-sectional momentum ranking"
+                            if not signal_bars else
+                            "cross-sectional momentum ranking returned no qualifying signal"
+                        ),
+                        strategy_spec.bar_interval if strategy_spec else "1Day",
+                        signal_source="momentum_ranking",
+                    )
                     return None
                 # A strategy switched off for new entries still manages its
                 # own holdings; the switch only gates the entry path.
@@ -346,17 +392,24 @@ def _strategy_option(
                     and not position_qty
                     and not getattr(context.runtime_settings, strategy_spec.runtime_setting)
                 ):
+                    _record_signal_diagnostic(
+                        context, strategy_name, ticker, signal_bars, signal_bar_time,
+                        "strategy_runtime_disabled",
+                        f"new entries are disabled by {strategy_spec.runtime_setting}",
+                        strategy_spec.bar_interval if strategy_spec else "5Min",
+                    )
                     return None
                 protective_state = (
                     (context.strategy_states or {}).get(strategy_name, {}).get(ticker, {})
+                )
+                effective_parameters = parameters_for_regime(
+                    strategy_name, str(context.regime.get("regime", "unknown")),
                 )
                 signal = evaluate_rule_signal(
                     strategy_name,
                     ticker,
                     signal_bars,
-                    parameters=parameters_for_regime(
-                        strategy_name, str(context.regime.get("regime", "unknown")),
-                    ),
+                    parameters=effective_parameters,
                     position_qty=position_qty,
                     entry_at=protective_state.get("opened_at"),
                     entry_price=(position.get("avg_entry_price") if position else None),
@@ -369,6 +422,11 @@ def _strategy_option(
         except Exception as exc:
             if context.mode != "algo":
                 raise
+            _record_signal_diagnostic(
+                context, strategy_name, ticker, signal_bars, signal_bar_time,
+                "evaluation_error", f"evaluation failed: {type(exc).__name__}: {exc}",
+                strategy_spec.bar_interval if strategy_spec else "5Min",
+            )
             context.scan_errors.append(
                 f"{strategy_name} signal {ticker}: {type(exc).__name__}: {exc}"
             )
@@ -380,7 +438,38 @@ def _strategy_option(
         else getattr(signal, "action", None)
     )
     expected_exit = "cover" if position_qty < 0 else "sell"
-    if signal is None or (owner and signal_action != expected_exit):
+    if signal is None:
+        source = (
+            "momentum_ranking" if strategy_name == "swing_momentum"
+            else "multi_factor_rebalance" if strategy_name == "swing_multi_factor"
+            else "llm_recommendation" if strategy_name == "swing_llm_driven"
+            else "rule_evaluation"
+        )
+        interval = strategy_spec.bar_interval if strategy_spec else "5Min"
+        _record_signal_diagnostic(
+            context, strategy_name, ticker, signal_bars, signal_bar_time,
+            "missing_bars" if not signal_bars else "no_signal",
+            (
+                f"no {interval} bars were available to evaluate this candidate"
+                if not signal_bars else
+                f"{source} returned no qualifying signal"
+            ),
+            interval,
+            signal_source=source,
+            regime=str(context.regime.get("regime", "unknown")),
+            position_qty=position_qty,
+            last_close=(signal_bars[-1].get("c") if signal_bars else None),
+            effective_parameters=effective_parameters,
+            recommendation_available=llm_signal is not None if strategy_name == "swing_llm_driven" else None,
+        )
+        return None
+    if owner and signal_action != expected_exit:
+        _record_signal_diagnostic(
+            context, strategy_name, ticker, signal_bars, signal_bar_time,
+            "exit_signal_not_qualified",
+            "strategy did not produce the required exit action for its owned position",
+            strategy_spec.bar_interval if strategy_spec else "5Min",
+        )
         return None
 
     item = dict(signal) if isinstance(signal, dict) else signal.to_dict()
@@ -390,8 +479,37 @@ def _strategy_option(
     if context.lifecycle and not context.lifecycle.allows(
         strategy_name, ticker, signal_action, item["signal_bar_time"],
     ):
+        _record_signal_diagnostic(
+            context, strategy_name, ticker, signal_bars, signal_bar_time,
+            "lifecycle_blocked",
+            "candidate signal was not allowed by the strategy lifecycle state",
+            strategy_spec.bar_interval if strategy_spec else "5Min",
+        )
         return None
+    _record_signal_diagnostic(
+        context, strategy_name, ticker, signal_bars, signal_bar_time,
+        "signal_generated", "strategy evaluator produced a candidate signal",
+        strategy_spec.bar_interval if strategy_spec else "5Min",
+        action=signal_action, regime=str(context.regime.get("regime", "unknown")),
+        position_qty=position_qty, effective_parameters=effective_parameters,
+    )
     return item
+
+
+def _record_signal_diagnostic(
+    context: SignalGenerationContext, strategy: str, ticker: str, bars: list[dict],
+    bar_time: str | None, reason_code: str, reason: str, timeframe: str, **details,
+) -> None:
+    context.signal_diagnostics.append({
+        "ticker": ticker,
+        "strategy": strategy,
+        "reason_code": reason_code,
+        "reason": reason,
+        "timeframe": timeframe,
+        "bar_count": len(bars),
+        "last_bar_time": bar_time,
+        **details,
+    })
 
 
 def _provided_signal(
@@ -454,6 +572,11 @@ def _suppress_conflicting_orders(
         or (pending_exit and not chosen.get("coordinator_force_flatten"))
     ):
         chosen["suppressed_reason"] = "a conflicting Alpaca order is already open for this symbol"
+        context.signal_diagnostics.append({
+            "ticker": ticker, "strategy": chosen.get("strategy"),
+            "reason_code": "conflicting_open_order", "reason": chosen["suppressed_reason"],
+            "action": chosen.get("action"), "open_order_count": len(ticker_orders),
+        })
         return True
     return False
 

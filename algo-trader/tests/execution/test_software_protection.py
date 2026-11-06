@@ -259,3 +259,75 @@ def test_failed_exit_is_retried_on_the_next_scan_once_no_exit_is_open():
     assert first_submitted == 0
     assert second_submitted == 1
     assert len(places) == 2
+
+
+def test_extended_short_entry_uses_fresh_session_feed_and_fifteen_minute_window(monkeypatch):
+    monkeypatch.setattr(batch, "datetime", _PremarketClock)
+    hooks, places = _batch_hooks(schedule=_premarket_schedule, quote=100.0)
+    quote_request = {}
+
+    def latest_bid(*args, **kwargs):
+        quote_request.update(kwargs)
+        return 100.0
+
+    hooks = hooks.__class__(**{**hooks.__dict__, "get_latest_bid": latest_bid})
+    results, submitted, _ = execute_trade_batch(
+        trades=[{
+            "ticker": "AAPL", "action": "short", "qty": 1, "entry_price": 100.0,
+            "order_type": "limit", "limit_price": 100.0, "extended_hours": True,
+            "session_name": "premarket", "stop_price": 110.0, "take_profit": 90.0,
+            "strategy": "swing_momentum", "client_order_id": "ext-short-aapl",
+        }],
+        decision_digest="test", args=SimpleNamespace(dry_run=False), mode="algo",
+        positions={}, rm_portfolio_state=None, hooks=hooks,
+    )
+
+    assert submitted == 1
+    assert results[0]["status"] == "submitted"
+    assert quote_request == {"mode": "algo", "feed": "sip", "max_age_seconds": 900}
+    assert places[0]["extended_hours"] is True
+    assert places[0]["order_type"] == "limit"
+    assert places[0]["limit_price"] == 100.0
+
+
+def test_overnight_short_fails_closed_without_asset_eligibility():
+    hooks, places = _batch_hooks(schedule=_regular_schedule, quote=100.0)
+    bid_calls = []
+    hooks = hooks.__class__(**{
+        **hooks.__dict__,
+        "get_latest_bid": lambda *args, **kwargs: bid_calls.append(kwargs) or 100.0,
+    })
+    results, submitted, _ = execute_trade_batch(
+        trades=[{
+            "ticker": "AAPL", "action": "short", "qty": 1, "entry_price": 100.0,
+            "order_type": "limit", "limit_price": 100.0, "extended_hours": True,
+            "session_name": "overnight", "strategy": "swing_momentum",
+            "client_order_id": "overnight-short-aapl",
+        }],
+        decision_digest="test", args=SimpleNamespace(dry_run=False), mode="algo",
+        positions={}, rm_portfolio_state={"shortability_available": True,
+        "easy_to_borrow_symbols": ["AAPL"]}, hooks=hooks,
+    )
+    assert submitted == 0
+    assert results[0]["status"] == "blocked"
+    assert results[0]["rule"] == "overnight_asset_metadata_unavailable"
+    assert bid_calls == [] and places == []
+
+
+def test_extended_short_payload_is_plain_day_sell_to_open_limit():
+    sent = []
+    result = place_order(
+        "AAPL", "short", 10, _order_hooks(sent), order_type="limit",
+        limit_price=100.0, stop_price=110.0, take_profit=90.0, extended_hours=True,
+        client_order_id="extended-short-aapl",
+    )
+
+    assert result["success"] is True
+    payload, order_type = sent[0]
+    assert order_type == "limit"
+    assert payload["side"] == "sell"
+    assert payload["position_intent"] == "sell_to_open"
+    assert payload["time_in_force"] == "day"
+    assert payload["extended_hours"] is True
+    assert payload["limit_price"] == "100.0"
+    assert not (FORBIDDEN_KEYS & set(payload))

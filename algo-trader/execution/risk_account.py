@@ -186,11 +186,22 @@ def _pending_short_exposure(open_orders: list[dict], positions: dict[str, dict])
     return exposure
 
 
+def _asset_has_flag(asset: dict, flag: str) -> bool:
+    attributes = asset.get("attributes")
+    return asset.get(flag) is True or (
+        isinstance(attributes, list) and flag in attributes
+    )
+
+
 def _easy_to_borrow_symbols(mode: str, *, api: ApiRequest) -> set[str]:
     """Read Alpaca's current easy-to-borrow symbols; unknown/HTB names fail closed."""
     assets = api("assets?status=active&asset_class=us_equity", mode=mode)
     if not isinstance(assets, list):
         raise ValueError("Alpaca asset response was not a list")
+    return _easy_to_borrow_from_assets(assets)
+
+
+def _easy_to_borrow_from_assets(assets: list[dict]) -> set[str]:
     return {
         str(asset.get("symbol", "")).upper()
         for asset in assets
@@ -310,6 +321,7 @@ def get_portfolio_state(
     fetch_easy_to_borrow_symbols: Callable[[str], set[str]],
     find_weekly_equity_baseline: Callable[..., dict | None],
     estimate_weekly_pnl: Callable[..., float | None],
+    fetch_asset_metadata: Callable[[str], list[dict]] | None = None,
 ) -> dict:
     """
     Fetch live portfolio state from Alpaca.
@@ -439,11 +451,33 @@ def get_portfolio_state(
         pending_exposure_available = False
         pending_exposure_error = f"Could not value {mode} open buy/short orders"
 
+    overnight_asset_metadata_available = False
+    overnight_tradable_symbols: set[str] = set()
+    overnight_halted_symbols: set[str] = set()
     try:
-        easy_to_borrow_symbols = fetch_easy_to_borrow_symbols(mode)
+        if fetch_asset_metadata is not None:
+            assets = fetch_asset_metadata(mode)
+            if not isinstance(assets, list):
+                raise ValueError("Alpaca asset response was not a list")
+            easy_to_borrow_symbols = _easy_to_borrow_from_assets(assets)
+            overnight_tradable_symbols = {
+                str(asset.get("symbol", "")).upper()
+                for asset in assets
+                if isinstance(asset, dict) and asset.get("symbol")
+                and _asset_has_flag(asset, "overnight_tradable")
+            }
+            overnight_halted_symbols = {
+                str(asset.get("symbol", "")).upper()
+                for asset in assets
+                if isinstance(asset, dict) and asset.get("symbol")
+                and _asset_has_flag(asset, "overnight_halted")
+            }
+            overnight_asset_metadata_available = True
+        else:
+            easy_to_borrow_symbols = fetch_easy_to_borrow_symbols(mode)
         shortability_available = True
     except Exception as exc:
-        log.warning("Could not verify %s shortability: %s", mode, exc)
+        log.warning("Could not verify %s shortability/overnight asset metadata: %s", mode, exc)
 
     pending_buy_reservation = sum(pending_buy_value_by_ticker.values())
     available_cash = cash - pending_buy_reservation
@@ -495,6 +529,9 @@ def get_portfolio_state(
         "sector_alloc": sector_alloc,
         "shortability_available": shortability_available,
         "easy_to_borrow_symbols": sorted(easy_to_borrow_symbols),
+        "overnight_asset_metadata_available": overnight_asset_metadata_available,
+        "overnight_tradable_symbols": sorted(overnight_tradable_symbols),
+        "overnight_halted_symbols": sorted(overnight_halted_symbols),
         "trade_count_today": trade_count_today,
         "entry_count_today": entry_count_today,
         "entry_count_available": entry_count_available,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import logging
 
 from options.risk import load_options_delta_overlay
@@ -34,9 +35,24 @@ def execute_scan_candidates(
     market: MarketSnapshot,
     quotes: QuoteSnapshot,
     generated: list[dict],
+    signal_diagnostics: list[dict] | None = None,
 ) -> ExecutionResult:
     """Enforce scan budgets, coordinator limits, and execution protections."""
     entries_paused = bool(scope.entry_pause_reasons)
+    decision_diagnostics: list[dict] = []
+
+    def record(item: dict, reason_code: str, decision: str, reason: str, **details) -> None:
+        decision_diagnostics.append({
+            "ticker": item.get("ticker"),
+            "strategy": item.get("strategy"),
+            "action": item.get("action"),
+            "decision": decision,
+            "reason_code": reason_code,
+            "reason": reason,
+            "signal_bar_time": item.get("signal_bar_time"),
+            **details,
+        })
+
     if entries_paused:
         reason = "; ".join(dict.fromkeys(scope.entry_pause_reasons))
         for item in generated:
@@ -134,6 +150,11 @@ def execute_scan_candidates(
     trades = []
     for item in ordered_generated:
         if item.get("suppressed_reason"):
+            reason_code = (
+                "entry_paused" if entries_paused and item.get("action") in {"buy", "short"}
+                else "signal_previously_suppressed"
+            )
+            record(item, reason_code, "suppressed", str(item["suppressed_reason"]))
             continue
         action = str(item.get("action", "")).lower()
         strategy = str(item.get("strategy", ""))
@@ -144,6 +165,7 @@ def execute_scan_candidates(
             already_entered = strategy_entry_counts.get(strategy, 0) + batch_entry_counts.get(strategy, 0)
             if strategy_limit is not None and already_entered >= int(strategy_limit):
                 item["suppressed_reason"] = "per-strategy daily entry limit reached"
+                record(item, "strategy_daily_entry_limit", "suppressed", item["suppressed_reason"], limit=int(strategy_limit), count=already_entered)
                 continue
             position_limit = strategy_position_caps.get(
                 strategy, scope.risk_config.get("max_positions_per_strategy"),
@@ -151,6 +173,7 @@ def execute_scan_candidates(
             already_open = strategy_open_counts.get(strategy, 0) + batch_open_counts.get(strategy, 0)
             if position_limit is not None and already_open >= int(position_limit):
                 item["suppressed_reason"] = "per-strategy open-position limit reached"
+                record(item, "strategy_open_position_limit", "suppressed", item["suppressed_reason"], limit=int(position_limit), count=already_open)
                 continue
             group_blocked = False
             for group_name, group in group_limits.items():
@@ -158,6 +181,7 @@ def execute_scan_candidates(
                     continue
                 if group_entry_counts.get(group_name, 0) >= int(group.get("max_entries_per_day", 10**9)):
                     item["suppressed_reason"] = f"{group_name} daily-entry budget reached"
+                    record(item, "strategy_group_daily_entry_limit", "suppressed", item["suppressed_reason"], group=group_name, limit=int(group.get("max_entries_per_day", 10**9)), count=group_entry_counts.get(group_name, 0))
                     group_blocked = True
                 if group_blocked:
                     break
@@ -166,12 +190,14 @@ def execute_scan_candidates(
         quote = quotes.latest_quotes.get(item["ticker"])
         if quote is None:
             item["suppressed_reason"] = "latest Alpaca quote unavailable"
+            record(item, "quote_unavailable", "suppressed", item["suppressed_reason"])
             continue
         price = float(quote["price"])
         quote_time = quote["timestamp"]
         age = (now_utc - quote_time).total_seconds()
         if age < 0 or age > quotes.freshness_limit:
             item["suppressed_reason"] = f"latest Alpaca quote is stale ({age:.0f}s)"
+            record(item, "quote_stale", "suppressed", item["suppressed_reason"], quote_age_seconds=round(age, 3), freshness_limit_seconds=quotes.freshness_limit, quote_timestamp=quote_time.isoformat())
             continue
         execution_price = (
             float(quote["ask"] if item["action"] in {"buy", "cover"} else quote["bid"])
@@ -232,7 +258,19 @@ def execute_scan_candidates(
         )
         if not trade:
             item["suppressed_reason"] = "position or strategy sizing produced zero shares"
+            record(item, "sizing_zero_shares", "suppressed", item["suppressed_reason"], reference_price=execution_price)
             continue
+        if action == "short" and scope.session_name == "overnight":
+            overnight_symbols = set(scope.universe.get("overnight_tradable_tickers") or [])
+            halted_symbols = set(scope.universe.get("overnight_halted_tickers") or [])
+            if scope.universe.get("overnight_metadata_status") != "ok":
+                item["suppressed_reason"] = "overnight asset eligibility is unavailable"
+                record(item, "overnight_asset_metadata_unavailable", "suppressed", item["suppressed_reason"])
+                continue
+            if item["ticker"] not in overnight_symbols or item["ticker"] in halted_symbols:
+                item["suppressed_reason"] = "asset is not currently eligible for overnight trading"
+                record(item, "overnight_asset_ineligible", "suppressed", item["suppressed_reason"])
+                continue
         if scope.mode == "algo" and action in {"buy", "short"}:
             decision = coordinator_book.review(
                 trade,
@@ -245,6 +283,7 @@ def execute_scan_candidates(
             )
             if not decision.approved or decision.proposal is None:
                 item["suppressed_reason"] = f"portfolio coordinator: {decision.reason}"
+                record(item, "portfolio_coordinator_rejected", "suppressed", str(decision.reason))
                 continue
             trade = decision.proposal
         if scope.extended_hours:
@@ -252,6 +291,7 @@ def execute_scan_candidates(
                 "order_type": "limit",
                 "limit_price": execution_price,
                 "extended_hours": True,
+                "session_name": scope.session_name,
             })
         elif scope.mode == "algo" and action in {"buy", "short"}:
             # Regular-session entries use a limit band so a fill never chases the signal.
@@ -264,6 +304,7 @@ def execute_scan_candidates(
             executable = float(quote["bid"] if action == "sell" else quote["ask"])
             if executable <= 0:
                 item["suppressed_reason"] = "no executable Alpaca quote for a limit exit"
+                record(item, "exit_quote_unavailable", "suppressed", item["suppressed_reason"])
                 continue
             band_key = "protective_limit_band_bps" if item.get("software_protection") else "marketable_limit_band_bps"
             band = float(get_algo_execution_settings()[band_key]) / 10_000.0
@@ -318,6 +359,7 @@ def execute_scan_candidates(
                 for order in item_orders
             ):
                 item["suppressed_reason"] = "waiting for the broker order cancellation to finish"
+                record(item, "exit_retry_waiting_for_cancel", "suppressed", item["suppressed_reason"])
                 continue
             retry_after = pending_intent.get("retry_after")
             if item_orders and retry_after:
@@ -327,6 +369,7 @@ def execute_scan_candidates(
                         retry_after_time = retry_after_time.replace(tzinfo=timezone.utc)
                     if retry_after_time > now_utc:
                         item["suppressed_reason"] = "waiting before retrying the broker order cancellation"
+                        record(item, "exit_retry_backoff", "suppressed", item["suppressed_reason"], retry_after=retry_after_time.isoformat())
                         continue
                 except ValueError:
                     pass
@@ -335,6 +378,7 @@ def execute_scan_candidates(
         if item.get("coordinator_force_flatten"):
             trade["coordinator_force_flatten"] = True
         trades.append(trade)
+        record(item, "candidate_ready_for_submission", "proposal_ready", "candidate passed scan sizing and portfolio gates; this is not broker submission confirmation", qty=trade.get("qty"), order_type=trade.get("order_type"), limit_price=trade.get("limit_price"))
         if action in {"buy", "short"}:
             batch_entry_counts[strategy] = batch_entry_counts.get(strategy, 0) + 1
             batch_open_counts[strategy] = batch_open_counts.get(strategy, 0) + 1
@@ -344,8 +388,23 @@ def execute_scan_candidates(
         item["entry_price"] = price
         item["qty"] = trade["qty"]
 
+    event = {
+        "event": "equity_scan_decisions",
+        "scan_timestamp": scope.now.isoformat(),
+        "trading_date": scope.today,
+        "session": scope.session_name,
+        "regime": market.regime_name,
+        "generated_signal_count": len(generated),
+        "proposal_count": len(trades),
+        "signal_decisions": signal_diagnostics or [],
+        "execution_decisions": decision_diagnostics,
+        "entry_pause_reasons": list(dict.fromkeys(scope.entry_pause_reasons)),
+        "scan_errors": scope.scan_errors,
+    }
+    LOG.info("%s", json.dumps(event, separators=(",", ":"), sort_keys=True, default=str))
     return ExecutionResult(
         trades=trades,
+        decision_diagnostics=decision_diagnostics,
         entries_paused=entries_paused,
         options_delta_overlay=options_delta_overlay,
         options_overlay_status=options_overlay_status,

@@ -121,7 +121,7 @@
     {
       "name": "quote windows inverted",
       "set": {
-        "execution.quote_stale_seconds": 400
+        "execution.quote_stale_seconds": 901
       },
       "error": "execution.quote_stale_seconds cannot exceed execution.extended_quote_stale_seconds"
     },

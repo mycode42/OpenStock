@@ -58,6 +58,11 @@ def _fetch_active_assets(mode: str) -> dict[str, dict]:
     }
 
 
+def _has_asset_attribute(asset: dict, attribute: str) -> bool:
+    attributes = asset.get("attributes") or []
+    return asset.get(attribute) is True or (isinstance(attributes, list) and attribute in attributes)
+
+
 def current_selector_rules_sha256() -> str:
     """Hash of the selector rules in force now; a change forces a universe reload."""
     from options.research.universe_selection import _rules_hash, load_rules
@@ -116,6 +121,8 @@ def load_algo_universe() -> dict:
         "overnight_metadata_status": "unavailable",
         "easy_to_borrow_tickers": [],
         "shortability_metadata_status": "unavailable",
+        "overnight_tradable_tickers": [],
+        "overnight_halted_tickers": [],
     })
     try:
         assets = _fetch_active_assets("algo")
@@ -131,4 +138,12 @@ def load_algo_universe() -> dict:
         and str(assets.get(ticker, {}).get("borrow_status", "")).lower() == "easy_to_borrow"
     )
     result["shortability_metadata_status"] = "ok"
+    result["overnight_tradable_tickers"] = sorted(
+        ticker for ticker in result["tickers"]
+        if _has_asset_attribute(assets.get(ticker, {}), "overnight_tradable")
+    )
+    result["overnight_halted_tickers"] = sorted(
+        ticker for ticker in result["tickers"]
+        if _has_asset_attribute(assets.get(ticker, {}), "overnight_halted")
+    )
     return result

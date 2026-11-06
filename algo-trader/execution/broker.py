@@ -57,7 +57,9 @@ def get_latest_price(ticker: str, headers: dict) -> float:
     return price
 
 
-def get_latest_quote(ticker: str, side: str, headers: dict, *, feed: str | None = None) -> float:
+def get_latest_quote(
+    ticker: str, side: str, headers: dict, *, feed: str | None = None, max_age_seconds: int = 90,
+) -> float:
     """Fetch and validate a fresh ask or bid from the selected market feed."""
     if side not in {"ask", "bid"}:
         raise ValueError("side must be ask or bid")
@@ -73,8 +75,10 @@ def get_latest_quote(ticker: str, side: str, headers: dict, *, feed: str | None 
     parsed = parse_quote(quote, side=side, assume_utc=False)
     price, timestamp = parsed["price"], parsed["timestamp"]
     age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-    if age < 0 or age > 90:
-        raise ValueError(f"Latest Alpaca {side} for {ticker} is stale ({age:.0f}s)")
+    if age < 0 or age > max_age_seconds:
+        raise ValueError(
+            f"Latest Alpaca {side} for {ticker} is stale ({age:.0f}s; limit {max_age_seconds}s)"
+        )
     return price
 
 

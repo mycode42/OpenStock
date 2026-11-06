@@ -72,7 +72,7 @@ def test_extended_hours_exit_rejects_market_order_without_broker_submission(monk
     )
 
     assert not result["success"]
-    assert "Extended-hours orders require a buy/sell/cover limit order" in result["error"]
+    assert "Extended-hours orders require a buy/sell/short/cover limit order" in result["error"]
 
 
 def test_off_hours_exit_is_not_refused_by_a_session_gate():
@@ -480,9 +480,18 @@ def test_opening_buy_is_still_reserved_and_short_cover_legs_do_not_reduce_availa
         get_algo_fill_activities=lambda since, mode: [],
         get_open_orders=lambda mode: cover_legs,
         fetch_easy_to_borrow_symbols=lambda mode: {"AAPL"},
+        fetch_asset_metadata=lambda mode: [
+            {"symbol": "AAPL", "tradable": True, "shortable": True,
+             "borrow_status": "easy_to_borrow", "attributes": ["overnight_tradable"]},
+            {"symbol": "XYZ", "attributes": ["overnight_tradable", "overnight_halted"]},
+        ],
         find_weekly_equity_baseline=lambda **kwargs: None,
         estimate_weekly_pnl=lambda *args, **kwargs: 0.0,
     )
 
     assert state["available_cash"] == pytest.approx(30000)
     assert state["pending_buy_value_by_ticker"] == {}
+    assert state["overnight_asset_metadata_available"] is True
+    assert state["overnight_tradable_symbols"] == ["AAPL", "XYZ"]
+    assert state["overnight_halted_symbols"] == ["XYZ"]
+    assert state["easy_to_borrow_symbols"] == ["AAPL"]

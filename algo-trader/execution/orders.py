@@ -220,8 +220,8 @@ def place_order(
     if extended_hours:
         if mode != "algo":
             return {"success": False, "error": "Extended-hours orders are enabled only for Algo mode"}
-        if action not in {"buy", "sell", "cover"} or order_type != "limit" or limit_price is None or float(limit_price) <= 0:
-            return {"success": False, "error": "Extended-hours orders require a buy/sell/cover limit order with a positive limit price"}
+        if action not in {"buy", "sell", "short", "cover"} or order_type != "limit" or limit_price is None or float(limit_price) <= 0:
+            return {"success": False, "error": "Extended-hours orders require a buy/sell/short/cover limit order with a positive limit price"}
         order = {
             "symbol": ticker,
             "qty": str(int(qty)),

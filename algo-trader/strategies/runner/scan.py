@@ -75,7 +75,7 @@ def scan(
     signals = scan_signals.generate_scan_signals(scope, market, quotes)
     scan_exits.prepare_strategy_exits(scope, signals.generated)
     execution = scan_execution.execute_scan_candidates(
-        scope, market, quotes, signals.generated,
+        scope, market, quotes, signals.generated, signals.signal_diagnostics,
     )
     return build_scan_response(scope, market, quotes, signals, execution)
 

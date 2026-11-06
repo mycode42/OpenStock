@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 
 from strategies.multi_factor import MultiFactorSignal
@@ -17,6 +19,8 @@ from strategies.runner.signal_generation import (
 )
 
 from .scan_types import MarketSnapshot, QuoteSnapshot, ScanScope, SignalSnapshot
+
+LOG = logging.getLogger(__name__)
 
 
 def _limit_entries_to_selected(generated: list[dict], selected_symbols) -> list[dict]:
@@ -97,48 +101,77 @@ def generate_scan_signals(
         )
         if scope.runtime_settings.swing_multi_factor_enabled else {}
     )
-    generated = generate_strategy_signals(
-        SignalGenerationContext(
-            mode=scope.mode,
-            strategy_symbols=scope.strategy_symbols,
-            positions=scope.positions,
-            bars_by_symbol=market.bars_by_symbol,
-            owner_map=scope.owner_map,
-            track_owners=scope.track_owners,
-            coordinator_config=scope.coordinator_config,
-            now=scope.now,
-            regular_close=scope.regular_close,
-            session_name=scope.session_name,
-            regime=market.regime,
-            multi_factor_target_signals=multi_factor_target_signals,
-            llm_generator=market.llm_generator,
-            llm_strategy_enabled=scope.llm_strategy_enabled,
-            strategy_states=scope.strategy_states,
-            daily_bars=market.daily_bars,
-            now_utc=scope.now_utc or datetime.now(timezone.utc),
-            quote_check_time=datetime.now(timezone.utc),
-            selected_symbols=scope.selected_symbols,
-            latest_quotes=quotes.latest_quotes,
-            risk_config=scope.risk_config,
-            rank_score=rank_score,
-            lifecycle=scope.lifecycle,
-            multi_factor_signals=multi_factor_signals,
-            momentum_signals=momentum_signals,
-            runtime_settings=scope.runtime_settings,
-            pending_by_symbol=scope.pending_by_symbol,
-            universe=scope.universe,
-            fresh_signal_bar_symbols=market.fresh_signal_bar_symbols,
-            overnight_swing_signal_bar_symbols=market.overnight_swing_signal_bar_symbols,
-            scan_errors=scope.scan_errors,
-            entry_pause_reasons=scope.entry_pause_reasons,
-        )
+    signal_context = SignalGenerationContext(
+        mode=scope.mode,
+        strategy_symbols=scope.strategy_symbols,
+        positions=scope.positions,
+        bars_by_symbol=market.bars_by_symbol,
+        owner_map=scope.owner_map,
+        track_owners=scope.track_owners,
+        coordinator_config=scope.coordinator_config,
+        now=scope.now,
+        regular_close=scope.regular_close,
+        session_name=scope.session_name,
+        regime=market.regime,
+        multi_factor_target_signals=multi_factor_target_signals,
+        llm_generator=market.llm_generator,
+        llm_strategy_enabled=scope.llm_strategy_enabled,
+        strategy_states=scope.strategy_states,
+        daily_bars=market.daily_bars,
+        now_utc=scope.now_utc or datetime.now(timezone.utc),
+        quote_check_time=datetime.now(timezone.utc),
+        selected_symbols=scope.selected_symbols,
+        latest_quotes=quotes.latest_quotes,
+        risk_config=scope.risk_config,
+        rank_score=rank_score,
+        lifecycle=scope.lifecycle,
+        multi_factor_signals=multi_factor_signals,
+        momentum_signals=momentum_signals,
+        runtime_settings=scope.runtime_settings,
+        pending_by_symbol=scope.pending_by_symbol,
+        universe=scope.universe,
+        fresh_signal_bar_symbols=market.fresh_signal_bar_symbols,
+        overnight_swing_signal_bar_symbols=market.overnight_swing_signal_bar_symbols,
+        scan_errors=scope.scan_errors,
+        entry_pause_reasons=scope.entry_pause_reasons,
+        signal_diagnostics=[],
     )
+    generated = generate_strategy_signals(signal_context)
     # Names outside today's selected universe are exit-only: a held position
     # outside the universe may be closed or reduced, but never opened or added to.
+    selected = {str(symbol).upper() for symbol in scope.selected_symbols}
+    for item in generated:
+        if (
+            str(item.get("action") or "").lower() in {"buy", "short"}
+            and str(item.get("ticker") or "").upper() not in selected
+        ):
+            signal_context.signal_diagnostics.append({
+                "ticker": item.get("ticker"),
+                "strategy": item.get("strategy"),
+                "reason_code": "outside_selected_universe",
+                "reason": "new entries are limited to the selected universe",
+            })
     generated = _limit_entries_to_selected(generated, scope.selected_symbols)
+    signal_diagnostics = signal_context.signal_diagnostics
+    if not generated:
+        event = {
+            "event": "equity_signal_scan_no_signals",
+            "trading_date": scope.today,
+            "regime": market.regime_name,
+            "strategy_count": len({item.get("strategy") for item in signal_diagnostics if item.get("strategy")}),
+            "symbol_count": len({item.get("ticker") for item in signal_diagnostics}),
+            "entry_pause_reasons": scope.entry_pause_reasons,
+            "scan_errors": scope.scan_errors,
+            "multi_factor_diagnostics": multi_factor_diagnostics,
+            "signal_diagnostics": signal_diagnostics,
+        }
+        # The daemon's standard text formatter drops LogRecord.extra fields;
+        # serialize the payload into the message so the reasons reach journald.
+        LOG.info("%s", json.dumps(event, separators=(",", ":"), sort_keys=True, default=str))
     return SignalSnapshot(
         multi_factor_diagnostics=multi_factor_diagnostics,
         rank_score=rank_score,
         momentum_signals=momentum_signals,
         generated=generated,
+        signal_diagnostics=signal_diagnostics,
     )

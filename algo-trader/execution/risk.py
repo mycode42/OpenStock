@@ -122,6 +122,13 @@ def _easy_to_borrow_symbols(mode: str) -> set[str]:
     return _fetch_easy_to_borrow_symbols(mode, api=_api)
 
 
+def _asset_metadata(mode: str) -> list[dict]:
+    payload = _api("assets?status=active&asset_class=us_equity", mode=mode)
+    if not isinstance(payload, list):
+        raise ValueError("Alpaca asset response was not a list")
+    return payload
+
+
 def get_portfolio_state(mode: str = None) -> dict:
     return _fetch_portfolio_state(
         mode,
@@ -132,6 +139,7 @@ def get_portfolio_state(mode: str = None) -> dict:
         get_algo_fill_activities=_get_algo_fill_activities,
         get_open_orders=_get_open_orders,
         fetch_easy_to_borrow_symbols=_easy_to_borrow_symbols,
+        fetch_asset_metadata=_asset_metadata,
         find_weekly_equity_baseline=_find_weekly_equity_baseline,
         estimate_weekly_pnl=_estimate_weekly_pnl,
     )

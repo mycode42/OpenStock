@@ -14,8 +14,8 @@ Enforcement: `algo-trader/tests/policy/test_gate_freeze.py` extracts every rejec
 - **Per-order cap.** No single order may exceed $100,000 of notional value, on paper or live.
 - **Live daily cap.** Live orders may total at most $300,000 of notional value per UTC day. Paper orders are not counted.
 - **No cap on monitored names.** OpenStock imposes no count limit on monitored stocks.
-- **No session or timing gates.** Orders are not refused for being outside regular hours. The broker decides what it accepts.
-- **Shorts are not gated on borrow.** Hard-to-borrow shorts are sized to `portfolio.hard_to_borrow_short_risk_multiplier` (default 0.5). Easy-to-borrow is a preference, not a requirement.
+- **Session-aware execution gates.** Regular-session quotes become stale after 90 seconds; extended-session quotes after 900 seconds (15 minutes). Extended-hours orders are limit-only; opening shorts use DAY sell-to-open limits and retain the existing risk/borrow checks. Overnight shorts fail closed unless current asset eligibility is verified and the asset is not halted.
+- **Short sizing.** Hard-to-borrow shorts are sized to `portfolio.hard_to_borrow_short_risk_multiplier` (default 0.5). Easy-to-borrow is a preference, not a requirement; unavailable overnight asset eligibility still blocks overnight short entries.
 - **No moonshot blocklist.**
 - **LLM confidence.** Options `llm_driven.min_llm_confidence` is 0.70. Algo `swing_llm_driven.minimum_confidence` is 70.
 
@@ -34,6 +34,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 9. **Order-level checks.** Alert level must be active and untriggered. A BUY needs a budget. A SELL needs an open position. One live order per alert level, enforced by a database index.
 
 ## Approved changes
+
+- **2026-11-06, extended-hours quote freshness and short entries.** At Andreas's explicit request, increased the extended-session quote freshness cap from 300 to 900 seconds while keeping regular-session quotes at 90 seconds, enabled extended-hours short entries as DAY limit sell-to-open orders, and retained fail-closed risk, borrow, overnight asset-eligibility, and halt checks. The 15-minute quote age is a hard maximum, not an assertion that the quote is executable or that the order will fill promptly; a DAY order may persist beyond the signal.
 
 - **2026-11-01, swing multi-factor research cap.** Raised the adaptive research per-strategy daily-entry cap from 2 to 3 so it matches the existing Algo cap and the coordinated portfolio artifact contract. This changes the research profile only; the live configuration remains unchanged. Approved by Andreas in response to the October 31, 2026 research-run failure.
 

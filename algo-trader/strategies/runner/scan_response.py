@@ -37,6 +37,8 @@ def build_scan_response(
         "multi_factor_execution_mode": "live",
         "llm_strategy_diagnostics": llm_diagnostics,
         "signals": signals.generated,
+        "signal_diagnostics": signals.signal_diagnostics,
+        "execution_decisions": execution.decision_diagnostics,
         "portfolio_coordinator": {
             "enabled": True,
             "options_delta_overlay": {

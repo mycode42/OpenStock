@@ -102,6 +102,7 @@ class SignalSnapshot:
     rank_score: dict[str, float]
     momentum_signals: dict[str, Any]
     generated: list[dict]
+    signal_diagnostics: list[dict]
 
 
 @dataclass
@@ -109,6 +110,7 @@ class ExecutionResult:
     """Orders approved by sizing and portfolio coordination."""
 
     trades: list[dict]
+    decision_diagnostics: list[dict]
     entries_paused: bool
     options_delta_overlay: dict
     options_overlay_status: dict
