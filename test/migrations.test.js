@@ -218,3 +218,10 @@ test('a destructive migration copies the database file before it runs', t => {
     copy.close();
 });
 
+
+test('a brand-new database gets no migration backup', t => {
+    const { dir, file } = tempFile();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    assert.deepEqual(fs.readdirSync(dir).filter(name => name.endsWith('.backup')), []);
+});

@@ -19,3 +19,14 @@ test('demo replay produces intraday bars on a Saturday, like on a weekday', () =
     const saturdayBars = bars.filter(bar => new Date(bar.t).getUTCDate() === 7);
     assert.ok(saturdayBars.length > 0, 'expected at least one bar dated Saturday');
 });
+
+test('the weekly chart ends on the live demo quote', () => {
+    const { priceAt } = require('../server/demo-seed');
+    const now = new Date('2026-11-07T12:17:00Z').getTime();
+    const bars = replayBars({
+        symbol: 'TSLA', timeframe: '30Min',
+        start: new Date(now - 7 * 86_400_000).toISOString(), end: new Date(now).toISOString(),
+        limit: 1000, nowTime: now,
+    });
+    assert.equal(bars.at(-1).c, Number(priceAt('TSLA', now).toFixed(4)));
+});

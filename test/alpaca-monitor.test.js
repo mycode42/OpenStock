@@ -153,3 +153,27 @@ test('a rearmed level notifies again on its next firing, with its own outbox row
     assert.equal(tg.sent.length, 2, 'the rearmed level must notify');
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM alpaca_alert_outbox WHERE alpaca_alert_level_id=?').get(levelId).count, 2);
 });
+
+test('without a Telegram recipient the alert stays pending, with no send attempt and no per-cycle error', async t => {
+    const { db, lockPath } = makeDb(t);
+    seedLevel(db, { price: 100 });
+    const client = fakeClient();
+    let calls = 0;
+    const fetchImpl = async () => { calls += 1; return { ok: true, status: 200, json: async () => ({ ok: true }) }; };
+    const runWithoutTelegram = () => runAlpacaMonitor({
+        db, alpacaClient: client, env: ENABLED, config: { lockPath, telegram: { token: '', chatId: '' } }, fetchImpl,
+    });
+    assert.equal(await runWithoutTelegram(), 0);
+    assert.equal(await runWithoutTelegram(), 0);
+    assert.equal(calls, 0);
+    assert.equal(db.prepare('SELECT status, attempt_count FROM alpaca_alert_outbox').get().status, 'PENDING');
+});
+
+test('a delivery that keeps failing is retried up to the limit, then left in the outbox', async t => {
+    const { db, lockPath } = makeDb(t);
+    seedLevel(db, { price: 100 });
+    const client = fakeClient();
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({ ok: false }) });
+    for (let cycle = 0; cycle < 12; cycle += 1) await run({ db, client, lockPath, env: ENABLED, fetchImpl });
+    assert.deepEqual(db.prepare('SELECT status, attempt_count FROM alpaca_alert_outbox').get(), { status: 'FAILED', attempt_count: 10 });
+});

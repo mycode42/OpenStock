@@ -87,14 +87,21 @@ function intradayBars(symbol, minutes, from, to, nowTime) {
             low = Math.min(low, series[index][2]);
         }
         const anchor = anchorFor(symbol, slot.day, nowTime);
-        bars.push({
+        const bar = {
             t: new Date(time).toISOString(),
             o: round(bpsPrice(anchor, series[slot.index][0])),
             h: round(bpsPrice(anchor, high)),
             l: round(bpsPrice(anchor, low)),
             c: round(bpsPrice(anchor, series[last][3])),
             v: 1000 + Math.abs(series[last][3] - series[slot.index][0]) * 40,
-        });
+        };
+        // The bar that contains now closes on the live quote, so the chart ends where the card price is.
+        if (time <= nowTime && nowTime < time + minutes * 60_000) {
+            bar.c = round(priceAt(symbol, nowTime));
+            bar.h = Math.max(bar.h, bar.c);
+            bar.l = Math.min(bar.l, bar.c);
+        }
+        bars.push(bar);
     }
     return bars;
 }

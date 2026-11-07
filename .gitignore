@@ -13,3 +13,5 @@ database/*.db.backup
 
 # Database backups hold live trade data; never commit them.
 database/*.backup
+# Migration backups are written next to whichever database file is in use, so match them anywhere.
+*.pre-*.backup

@@ -10,7 +10,10 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Fixed
 
-- Destructive migrations copy the database file first (`database/*.backup`, ignored by git). Migration 032 is marked destructive.
+- Migration backups are written only for existing databases, and `*.pre-*.backup` files are git-ignored wherever they are written.
+- The demo's one-week chart ends on the live quote, so it matches the card price.
+- Alerts are not sent or logged per cycle while Telegram is not configured; they stay pending in the outbox. A failing alert is retried up to 10 times, then left in the outbox with one error line.
+- Destructive migrations copy the database file first (`*.pre-*.backup`, git-ignored). Migration 032 is marked destructive.
 - The demo keeps the market open every day: intraday bars, the one-week chart and fills follow the quotes on weekends too.
 - The popup title on the Algo Universe and dashboard charts uses the theme text colour, so it is readable in light mode.
 - Job logs on the research page show dates in the app's format, and the demo shows sample job logs and a 14-run research history, so the pager is visible.

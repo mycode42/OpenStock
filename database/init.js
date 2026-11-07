@@ -38,8 +38,9 @@ const migrations = [
 
 // through limits the run to migrations up to that version. Tests use it to check old schemas before later cleanups.
 // A migration marked destructive deletes data, so the database file is copied first: VACUUM INTO writes a consistent copy.
-function backupBeforeDestructive(db, dbPath, migration, silent) {
-  if (!migration.destructive || !fs.existsSync(dbPath)) return null;
+function backupBeforeDestructive(db, dbPath, migration, silent, existingDatabase) {
+  // A brand-new database has nothing to lose, so it gets no backup.
+  if (!migration.destructive || !existingDatabase || !fs.existsSync(dbPath)) return null;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const target = `${dbPath}.pre-${migration.name}-${stamp}.backup`;
   db.prepare('VACUUM INTO ?').run(target);
@@ -51,10 +52,11 @@ function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefau
   const db = new Database(dbPath);
   db.pragma('foreign_keys = ON');
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))" );
+  const existingDatabase = db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n > 0;
   for (const migration of migrations) {
     if (migration.version > through) break;
     if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(migration.version)) continue;
-    backupBeforeDestructive(db, dbPath, migration, silent);
+    backupBeforeDestructive(db, dbPath, migration, silent, existingDatabase);
     db.transaction(() => {
       migration.up(db);
       db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(migration.version, migration.name);
