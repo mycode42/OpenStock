@@ -2,7 +2,16 @@
 
 All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [algo-trader/CHANGELOG.md](algo-trader/CHANGELOG.md).
 
-## Unreleased
+## 3.2.0 - 2026-11-07
+
+Major release. The Algo jobs no longer depend on OpenClaw or cron, and the dashboard runs its own price monitor.
+
+### Highlights
+
+- **Scheduling moved to systemd user timers.** Every Algo job is a timer in `algo-trader/ops/systemd/` with `OnCalendar=... America/New_York`, so jobs fire at Eastern time on any host clock. The crontab and the OpenClaw Algo automations are gone.
+- **One dashboard service.** The price monitor runs inside `openstock.service` every 30 seconds. The separate monitor timer and unit are removed.
+- **Event calendar refresh removed**, with its module, test, docs, and `data/event_calendar.csv`.
+- **Research page.** Job logs show each job's last run and turn red on error. Research history is paginated, newest first, 10 per page.
 
 ### Added
 
@@ -10,7 +19,12 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Changed
 
+- Algo scheduled jobs are systemd user timers (`algo-trader/ops/systemd/*.timer`), installed by `algo-trader/scripts/install_units.py`. Each timer's schedule is in America/New_York. The crontab, `scripts/cron-env.sh`, and the OpenClaw Algo automations are removed. OpenClaw runs none of the Algo jobs.
+- The Alpaca opening and history captures are timers (`options-opening-capture`, `options-history-capture`). Each run appends a timestamped line to its log, including successful runs.
+- The research page's scheduled-job log list shows each job's name and last-written time. A job whose last run had an error shows its name in red. Tap a job for its size, last error, and last line.
+- The research history is paginated, newest first, 10 runs per page, with Previous and Next. Paging keeps the scroll position.
 - The price monitor runs inside `openstock.service` every 30 seconds (`lib/monitor-cycle.js`). The separate `openstock-monitor` timer and service were removed, so restarting the dashboard restarts the monitor too. Cycles never overlap, and demo mode runs none. `npm run monitor` still runs one cycle by hand.
+- Frontend asset version markers and the module import versions are 3.2.0, so returning visitors fetch the new files. every 30 seconds (`lib/monitor-cycle.js`). The separate `openstock-monitor` timer and service were removed, so restarting the dashboard restarts the monitor too. Cycles never overlap, and demo mode runs none. `npm run monitor` still runs one cycle by hand.
 - The entry caps went up: daily 10 to 15, swing group 6 to 11, and the per-strategy caps listed in the defaults file. Once the trading-day count was fixed, the old caps would still have throttled the strategies on a day with many valid signals. The hard dollar guards are unchanged: $100,000 per order and the daily loss limits.
 - Daily entry limits count against the trading day. Daily-bar signals reference the previous session's bar, so counting by that date charged yesterday's entries to today.
 - Entry caps: overall daily 15, swing group 11, intraday group 4. Per strategy: swing trend 3, swing multi-factor 3, swing momentum 3, swing mean reversion 4, swing LLM-driven 2, intraday mean reversion 2, intraday trend following 2, intraday momentum 2.
@@ -28,6 +42,10 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Removed
 
+- The Algo event calendar refresh (`equity_research/event_calendar_refresh.py`), its test, its docs, and `data/event_calendar.csv`.
+- The Algo crontab (`algo-trader/ops/crontab`) and `algo-trader/scripts/cron-env.sh`.
+- `algo-trader/ops/automations.json` and `algo-trader/ops/openclaw-crons.md`, the OpenClaw job mirrors.
+- The `openstock-monitor.service` and `openstock-monitor.timer` units.
 - `www/sw.js`, the offline service worker. It was never registered, so it did nothing, and the checks that read it are removed.
 
 ## 3.1.4 - 2026-10-30

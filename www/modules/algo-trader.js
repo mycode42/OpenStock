@@ -1,7 +1,7 @@
 import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js';
-import { renderResearchPage } from './algo-trader/research-view.js?v=3.1.8';
-import { mountResearchLab } from './algo-trader/research-lab.js?v=3.1.8';
-import { mountDataStatus } from './algo-trader/data-status.js?v=3.1.8';
+import { renderResearchPage } from './algo-trader/research-view.js?v=3.2.0';
+import { mountResearchLab } from './algo-trader/research-lab.js?v=3.2.0';
+import { mountDataStatus } from './algo-trader/data-status.js?v=3.2.0';
 import { readSettingsFromForm as readFormSettings, renderSettingsForm } from './algo-trader/settings-form.js';
 
 export function createAlgoTrader({ request, charts }) {
