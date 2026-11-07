@@ -977,11 +977,15 @@ html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-poi
 
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-legend i,
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) i,
-html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-loading-mark,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-legend i,
-html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) i,
-html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-loading-mark {
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) i {
   background: var(--os-accent);
+  color: var(--os-accent);
+}
+
+/* The loading arrow is a text glyph: colour only. A background would paint a box behind it in the non-default themes. */
+html[data-theme] .algo-page .algo-loading-mark {
+  background: none;
   color: var(--os-accent);
 }
 

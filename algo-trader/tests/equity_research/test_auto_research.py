@@ -159,6 +159,8 @@ def _force_failed_cycle(monkeypatch, output_dir):
         raise ModuleNotFoundError("No module named 'lightgbm'")
 
     monkeypatch.setattr(auto_research, "run_daily_research", boom)
+    # Keep the progress log out of the real research log directory.
+    monkeypatch.setattr(auto_research, "EQUITY_LOG_PATH", output_dir / "equity.log")
     # These tests cover latest.json error fallback, not Sunday's weekly-review routing.
     return auto_research.main([
         "--output-dir", str(output_dir), "--no-refresh",

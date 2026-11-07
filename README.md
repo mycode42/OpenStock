@@ -3,10 +3,18 @@
 **A self-hosted stock dashboard, trading journal, and algo trading built on Alpaca.**
 
 
+> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.2.0.
+
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
 <img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/bc19b048-e46d-41b1-bd07-43a6a6cfe98d" />
 
+
+## Documentation
+
+- [Changelog](CHANGELOG.md): every release, dashboard and Algo Trader together.
+- Dashboard: [features](docs/features.md), [configuration](docs/configuration.md), [monitoring](docs/monitoring.md), [API](docs/api.md), [architecture](docs/architecture.md), [deployment](DEPLOY.md).
+- Algo Trader: [setup](algo-trader/docs/setup.md), [scheduled automations](algo-trader/docs/automations.md), [operations](algo-trader/docs/operations.md), [research and configuration](algo-trader/docs/research-and-config.md), [options trading](algo-trader/docs/options_trading.md), [options research](algo-trader/docs/options_research.md), [LLM-driven strategy](algo-trader/docs/llm_driven_strategy.md), [adaptive research](algo-trader/docs/adaptive_research.md).
 
 ## Quick start: try the demo
 
@@ -42,9 +50,9 @@ Open http://127.0.0.1:3000. The server binds to `127.0.0.1` only.
 
 Check the setup at any time with `curl -s http://127.0.0.1:3000/api/demo-status`. It reports whether the app is in demo mode and what is missing.
 
-## Algo Trader (optional)
+## Algo Trader (part of OpenStock, optional)
 
-The Algo Trader is a research and paper-trading engine: a rule-based equity coordinator with a regime committee, a separate options paper account, and equity and options research with walk-forward validation. The dashboard works without it.
+The Algo Trader is part of OpenStock, like the alert monitor. It is a research and paper-trading engine: a rule-based equity coordinator with a regime committee, a separate options paper account, and equity and options research with walk-forward validation. The dashboard works without it.
 
 Requirements: Python 3.12 and Poetry 2.x (Python 3.11 and 3.13 are not supported), plus a C compiler toolchain for the optional Cython extensions.
 
@@ -57,8 +65,8 @@ Requirements: Python 3.12 and Poetry 2.x (Python 3.11 and 3.13 are not supported
    scripts/setup.sh
    ```
 
-   This installs the Python dependencies, renders the systemd user units into `~/.config/systemd/user` (no root), and installs the scheduled automations. It does not start the services.
-4. Start the services: `systemctl --user enable --now equity options`.
+   This installs the Python dependencies and renders the systemd user units (the two daemons and the scheduled timers) into `~/.config/systemd/user`, with no root. It does not start them.
+4. Start the two daemons: `systemctl --user enable --now equity options`. Then start the scheduled jobs listed in [Scheduled automations](algo-trader/docs/automations.md#setup).
 
 Details: [Algo setup](algo-trader/docs/setup.md), [Scheduled automations](algo-trader/docs/automations.md) and [Operations](algo-trader/docs/operations.md).
 
@@ -176,6 +184,7 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 | Analytics | P/L, risk, equity curve, drawdown, per-stock performance | [Performance data](docs/performance-data.md) |
 | Manual limit orders | Limit orders from alert levels; paper by default | [Features](docs/features.md) |
 | Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/README.md) |
+| Changelog | Every release, dashboard and Algo Trader together | [CHANGELOG.md](CHANGELOG.md) |
 | Configuration | Environment variables, price sources, watchlist migration | [Configuration](docs/configuration.md) |
 | API | Endpoints for the dashboard, journal, orders and health | [API](docs/api.md) |
 | Architecture | Layout, server construction, tests | [Architecture](docs/architecture.md) |
