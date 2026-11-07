@@ -133,23 +133,24 @@ function equityHistory(account, now) {
     return [...closes, ...intraday];
 }
 
+// Fourteen weekly runs, so the research archive shows two pages of ten.
 function researchHistory(now) {
-    return Array.from({ length: 5 }, (_, index) => {
-        const day = new Date(now.getTime() - (4 - index) * 7 * 86_400_000);
+    return Array.from({ length: 14 }, (_, index) => {
+        const day = new Date(now.getTime() - (13 - index) * 7 * 86_400_000);
         const dateValue = day.toISOString().slice(0, 10);
         return {
             date: dateValue,
             created_at: day.toISOString(),
             status: 'completed',
-            result: ['Momentum basket validated', 'Mean-reversion parameters updated', 'Volatility filter improved', 'Risk limits reviewed', 'Weekly strategy scan complete'][index],
+            result: ['Momentum basket validated', 'Mean-reversion parameters updated', 'Volatility filter improved', 'Risk limits reviewed', 'Weekly strategy scan complete'][index % 5],
             portfolio_status: 'simulated',
-            active_trials: 12 + index * 2,
-            promoted: index === 1 ? 0 : 1,
+            active_trials: 12 + (index % 5) * 2,
+            promoted: index % 5 === 1 ? 0 : 1,
             staged: 2,
-            portfolio_return_pct: Number((1.2 + index * 0.46).toFixed(2)),
+            portfolio_return_pct: Number((1.2 + (index % 5) * 0.46).toFixed(2)),
             strategy_fitness: [
-                { name: 'momentum', fitness: 0.31 + index * 0.015, delta_vs_previous: 0.02 },
-                { name: 'mean_reversion', fitness: 0.22 + index * 0.009, delta_vs_previous: 0.01 },
+                { name: 'momentum', fitness: 0.31 + (index % 5) * 0.015, delta_vs_previous: 0.02 },
+                { name: 'mean_reversion', fitness: 0.22 + (index % 5) * 0.009, delta_vs_previous: 0.01 },
             ],
         };
     }).reverse();
@@ -231,4 +232,21 @@ function labOverview(account = 'options') {
     };
 }
 
-module.exports = { labOverview, universePayload, universeHistory, algoPayload };
+// Sample job logs for the demo, in the shape the research page reads. The real ones are written by the scheduled jobs.
+function dataStatusPayload(nowValue = new Date()) {
+    const now = date(nowValue).getTime();
+    const minutesAgo = minutes => new Date(now - minutes * 60_000).toISOString();
+    return {
+        demo_mode: true,
+        theta: null,
+        logs: [
+            { name: 'equity-research.log', size_bytes: 38_200, modified_at: minutesAgo(14 * 60), last_line: 'AutoResearch finished: status=completed', last_error: null },
+            { name: 'health.log', size_bytes: 210_400, modified_at: minutesAgo(12), last_line: '{"ok": true, "equity_ok": true}', last_error: null },
+            { name: 'llm-silent-run.log', size_bytes: 88_100, modified_at: minutesAgo(95), last_line: 'Signal snapshot published', last_error: 'AI analysis failed: LLM request timed out' },
+            { name: 'options-history-capture.log', size_bytes: 2_310, modified_at: minutesAgo(26 * 60), last_line: 'Alpaca options close capture ok: captured 117 of 117, failed 0.', last_error: null },
+            { name: 'rotate.log', size_bytes: 112, modified_at: minutesAgo(9 * 60), last_line: 'rotated: none', last_error: null },
+        ],
+    };
+}
+
+module.exports = { labOverview, universePayload, universeHistory, algoPayload, dataStatusPayload };

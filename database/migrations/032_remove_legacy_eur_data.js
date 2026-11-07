@@ -10,6 +10,8 @@ function hasTable(db, name) {
 module.exports = {
   version: 32,
   name: 'remove_legacy_eur_data',
+  // initDatabase copies the database file before this runs.
+  destructive: true,
   up(db) {
     if (!hasTable(db, 'trades') || !hasTable(db, 'stocks')) return;
     if (hasTable(db, 'trade_merge_events')) {

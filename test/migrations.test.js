@@ -203,3 +203,18 @@ test('migration 032 removes legacy EUR trades and unlinked EUR stocks, and keeps
     db.close();
 });
 
+test('a destructive migration copies the database file before it runs', t => {
+    const { dir, file } = tempFile();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true, through: 31 });
+    const db = new Database(file);
+    db.exec("INSERT INTO stocks (id, symbol, name, currency, buy_threshold_eur, sell_threshold_eur) VALUES (1, 'KEEP', 'Kept', 'EUR', 1, 2)");
+    db.close();
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    const backups = fs.readdirSync(dir).filter(name => name.includes('.pre-remove_legacy_eur_data-') && name.endsWith('.backup'));
+    assert.equal(backups.length, 1);
+    const copy = new Database(path.join(dir, backups[0]), { readonly: true });
+    assert.equal(copy.prepare("SELECT symbol FROM stocks WHERE id=1").get().symbol, 'KEEP');
+    copy.close();
+});
+

@@ -106,7 +106,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
     }));
     // Read-only status of the scheduled data jobs. Demo mode has no ThetaData or cron jobs to report.
     app.get('/api/algo-trader/research/data-status', async (_req, res) => {
-        if (app.locals?.demoMode) return res.json({ demo_mode: true, theta: null, logs: [] });
+        if (app.locals?.demoMode) return res.json(app.locals.demoData.dataStatusPayload(now()));
         try {
             res.set('Cache-Control', 'no-store');
             res.json(await buildDataStatus({ root, envPath: path.join(root, '..', '.env'), now: now() }));

@@ -1,5 +1,6 @@
 import { apiRequest } from '../api.js';
 import { escapeHtml } from '../escape.js';
+import { formatLocalDateTime } from '../formatting.js';
 
 // Read-only status of the scheduled data jobs: the ThetaData history pipeline and the cron logs.
 // The research view replaces its DOM on each refresh, so the panel mounts again each time and reloads itself.
@@ -28,7 +29,7 @@ function bytes(value) {
 }
 
 function stamp(value) {
-    return value ? escapeHtml(new Date(value).toLocaleString()) : '—';
+    return value ? escapeHtml(formatLocalDateTime(value)) : '—';
 }
 
 function thetaBlock(theta) {
@@ -85,8 +86,11 @@ function logsBlock(logs, openLogs) {
 }
 
 export function renderDataStatus(status, openLogs = new Set()) {
-    if (status.demo_mode) return '<p>Scheduled data jobs are not run in demo mode.</p>';
-    return `${thetaBlock(status.theta)}${logsBlock(status.logs || [], openLogs)}`;
+    const logs = status.logs || [];
+    if (status.demo_mode && !logs.length) return '<p>Scheduled data jobs are not run in demo mode.</p>';
+    const theta = status.theta ? thetaBlock(status.theta) : '';
+    const sample = status.demo_mode ? '<p class="data-status-log-hint">Sample job logs for the demo.</p>' : '';
+    return `${theta}${sample}${logsBlock(logs, openLogs)}`;
 }
 
 function paint(status) {

@@ -6,9 +6,16 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Changed
 
-- AGENTS.md states the money rule without currency: the Alpaca accounts are USD, and legacy EUR rows stay as history.
+- AGENTS.md states the money rule without currency: the Alpaca accounts are USD.
 
 ### Fixed
+
+- Destructive migrations copy the database file first (`database/*.backup`, ignored by git). Migration 032 is marked destructive.
+- The demo keeps the market open every day: intraday bars, the one-week chart and fills follow the quotes on weekends too.
+- The popup title on the Algo Universe and dashboard charts uses the theme text colour, so it is readable in light mode.
+- Job logs on the research page show dates in the app's format, and the demo shows sample job logs and a 14-run research history, so the pager is visible.
+- Without a Telegram recipient, the monitor logs the warning once per process. The monitor logs in `memory/` are trimmed once they pass 5 MB.
+- The README and the 3.2.0 entry point to the current version, and the 3.2.0 entry is fixed.
 
 - The live parameter tables on the Research page use the same two columns for every strategy, so the values line up between the swing and intraday tabs.
 
@@ -52,7 +59,8 @@ Major release. The Algo jobs no longer depend on OpenClaw or cron, and the dashb
 - The research page's scheduled-job log list shows each job's name and last-written time. A job whose last run had an error shows its name in red. Tap a job for its size, last error, and last line.
 - The research history is paginated, newest first, 10 runs per page, with Previous and Next. Paging keeps the scroll position.
 - The price monitor runs inside `openstock.service` every 30 seconds (`lib/monitor-cycle.js`). The separate `openstock-monitor` timer and service were removed, so restarting the dashboard restarts the monitor too. Cycles never overlap, and demo mode runs none. `npm run monitor` still runs one cycle by hand.
-- Frontend asset version markers and the module import versions are 3.2.0, so returning visitors fetch the new files. every 30 seconds (`lib/monitor-cycle.js`). The separate `openstock-monitor` timer and service were removed, so restarting the dashboard restarts the monitor too. Cycles never overlap, and demo mode runs none. `npm run monitor` still runs one cycle by hand.
+- Frontend asset version markers and the module import versions are 3.2.0, so returning visitors fetch the new files.
+- The price monitor runs inside `openstock.service` every 30 seconds (`lib/monitor-cycle.js`). The separate `openstock-monitor` timer and service were removed, so restarting the dashboard restarts the monitor too. Cycles never overlap, and demo mode runs none. `npm run monitor` still runs one cycle by hand.
 - The entry caps went up: daily 10 to 15, swing group 6 to 11, and the per-strategy caps listed in the defaults file. Once the trading-day count was fixed, the old caps would still have throttled the strategies on a day with many valid signals. The hard dollar guards are unchanged: $100,000 per order and the daily loss limits.
 - Daily entry limits count against the trading day. Daily-bar signals reference the previous session's bar, so counting by that date charged yesterday's entries to today.
 - Entry caps: overall daily 15, swing group 11, intraday group 4. Per strategy: swing trend 3, swing multi-factor 3, swing momentum 3, swing mean reversion 4, swing LLM-driven 2, intraday mean reversion 2, intraday trend following 2, intraday momentum 2.

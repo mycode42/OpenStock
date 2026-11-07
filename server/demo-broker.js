@@ -16,11 +16,11 @@ const WATCHLIST_SYMBOLS = new Set(WATCHLIST.map(stock => stock.symbol));
 // Local order statuses that a restarted demo broker can rebuild, mapped to the broker status they had.
 const RESTORED_STATUS = { NEW: 'accepted', PARTIALLY_FILLED: 'accepted', FILLED: 'filled', CANCELED: 'canceled', PENDING_CANCEL: 'canceled' };
 
-// Stock bars exist only for weekdays from 04:00 to 20:00 New York time, the extended session Alpaca reports.
-const sessionClock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23', weekday: 'short' });
+// The demo keeps the market open every day: bars exist from 04:00 to 20:00 New York time on weekends too, so quotes, charts and fills agree.
+const sessionClock = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' });
 function inTradingSession(time) {
     const parts = Object.fromEntries(sessionClock.formatToParts(new Date(time)).map(part => [part.type, part.value]));
-    return !['Sat', 'Sun'].includes(parts.weekday) && Number(parts.hour) >= 4 && Number(parts.hour) < 20;
+    return Number(parts.hour) >= 4 && Number(parts.hour) < 20;
 }
 
 function round(value, digits = 4) {

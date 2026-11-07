@@ -43,11 +43,6 @@ function easternSlot(time) {
     return { day: `${parts.year}-${parts.month}-${parts.day}`, index: Math.floor((minutes - 240) / 5) };
 }
 
-function isWeekend(day) {
-    const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
-    return weekday === 0 || weekday === 6;
-}
-
 // One session per symbol and day, chosen by a hash so the same day always draws the same shape.
 function sessionFor(symbol, day) {
     const sessions = sessionList();
@@ -80,7 +75,7 @@ function intradayBars(symbol, minutes, from, to, nowTime) {
     const bars = [];
     for (let time = from; time <= to; time += minutes * 60_000) {
         const slot = easternSlot(time);
-        if (slot.index < 0 || slot.index >= 192 || isWeekend(slot.day)) continue;
+        if (slot.index < 0 || slot.index >= 192) continue;
         const session = sessionFor(symbol, slot.day);
         if (!session) return null;
         const series = session.bars_bps;

@@ -3,7 +3,7 @@
 **A self-hosted stock dashboard, trading journal, and algo trading built on Alpaca.**
 
 
-> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.2.0.
+> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.2.1.
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 

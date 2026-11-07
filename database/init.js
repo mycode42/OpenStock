@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const Database = require('better-sqlite3');
 const paths = require('../lib/paths');
 const migrations = [
@@ -36,6 +37,16 @@ const migrations = [
 ];
 
 // through limits the run to migrations up to that version. Tests use it to check old schemas before later cleanups.
+// A migration marked destructive deletes data, so the database file is copied first: VACUUM INTO writes a consistent copy.
+function backupBeforeDestructive(db, dbPath, migration, silent) {
+  if (!migration.destructive || !fs.existsSync(dbPath)) return null;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const target = `${dbPath}.pre-${migration.name}-${stamp}.backup`;
+  db.prepare('VACUUM INTO ?').run(target);
+  if (!silent) console.log(`Backup before ${migration.name}: ${target}`);
+  return target;
+}
+
 function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true, through = Infinity } = {}) {
   const db = new Database(dbPath);
   db.pragma('foreign_keys = ON');
@@ -43,6 +54,7 @@ function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefau
   for (const migration of migrations) {
     if (migration.version > through) break;
     if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(migration.version)) continue;
+    backupBeforeDestructive(db, dbPath, migration, silent);
     db.transaction(() => {
       migration.up(db);
       db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)').run(migration.version, migration.name);
