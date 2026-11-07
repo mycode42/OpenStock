@@ -177,3 +177,58 @@ test('a delivery that keeps failing is retried up to the limit, then left in the
     for (let cycle = 0; cycle < 12; cycle += 1) await run({ db, client, lockPath, env: ENABLED, fetchImpl });
     assert.deepEqual(db.prepare('SELECT status, attempt_count FROM alpaca_alert_outbox').get(), { status: 'FAILED', attempt_count: 10 });
 });
+
+const { lateLabel, parseStoredUtc } = require('../lib/alpaca-monitor');
+
+// SQLite's default timestamp: UTC, no zone marker.
+function sqliteUtc(date) {
+    return date.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+test('stored queue times are read as UTC whatever the host zone is', () => {
+    assert.equal(parseStoredUtc('2026-11-06 17:26:56'), Date.parse('2026-11-06T17:26:56Z'));
+    assert.equal(parseStoredUtc('2026-11-06T17:26:56.000Z'), Date.parse('2026-11-06T17:26:56Z'));
+});
+
+test('a fresh alert gets no late label, and an alert queued 20 minutes ago gets one with its UTC time', () => {
+    const now = new Date('2026-11-06T17:30:00Z');
+    assert.equal(lateLabel({ created_at: sqliteUtc(new Date(now.getTime() - 5_000)) }, now), '');
+    const label = lateLabel({ created_at: '2026-11-06 17:10:00' }, now);
+    assert.match(label, /<b>Late alert<\/b>, queued 2026-11-06 17:10:00 UTC/);
+});
+
+test('an alert queued without Telegram and sent 20 minutes later carries the late label', async t => {
+    const { db, lockPath } = makeDb(t);
+    seedLevel(db, { price: 100 });
+    const client = fakeClient();
+    const queuedAt = new Date('2026-11-06T17:00:00Z');
+    const sent = [];
+    const fetchImpl = async (url, { body }) => {
+        sent.push(new URLSearchParams(body).get('text'));
+        return { ok: true, status: 200, json: async () => ({ ok: true, result: { message_id: 5 } }) };
+    };
+    await runAlpacaMonitor({ db, alpacaClient: client, env: ENABLED, config: { lockPath, telegram: { token: '', chatId: '' } }, fetchImpl, now: () => queuedAt });
+    // The outbox stamps created_at with SQLite's clock; set it to the queue time the test simulates.
+    db.prepare("UPDATE alpaca_alert_outbox SET created_at='2026-11-06 17:00:00'").run();
+    await runAlpacaMonitor({ db, alpacaClient: client, env: ENABLED, config: { lockPath, telegram: { token: 't', chatId: 'c' } }, fetchImpl, now: () => new Date(queuedAt.getTime() + 20 * 60_000) });
+    assert.equal(sent.length, 1);
+    assert.match(sent[0], /^<b>Late alert<\/b>, queued 2026-11-06 17:00:00 UTC/);
+});
+
+test('an unknown send result is reported once per process and never resent', async t => {
+    const { db, lockPath } = makeDb(t);
+    seedLevel(db, { price: 100 });
+    const client = fakeClient();
+    let calls = 0;
+    const fetchImpl = async () => { calls += 1; throw new Error('socket hang up'); };
+    const errors = [];
+    const once = () => runAlpacaMonitor({
+        db, alpacaClient: client, env: ENABLED, config: { lockPath, telegram: { token: 't', chatId: 'c' } }, fetchImpl,
+        error: message => errors.push(message),
+    });
+    await once();
+    await once();
+    await once();
+    assert.equal(calls, 1);
+    assert.equal(errors.filter(message => message.includes('unknown delivery result')).length, 1);
+});

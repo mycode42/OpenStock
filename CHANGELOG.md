@@ -21,6 +21,7 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 - The live parameter tables on the Research page use the same two columns for every strategy, so the values line up between the swing and intraday tabs.
 - Alerts queued while Telegram was not set up go out with a "Late alert" label, showing when they were queued.
 - An alert whose send result is unknown is reported in the error log once per process and is not resent.
+- The late-alert label reads queue times as UTC, whatever the host time zone, and shows the zone. Tests cover the label, the late delivery and the unknown-result flag.
 
 ### Removed
 
