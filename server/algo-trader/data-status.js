@@ -8,6 +8,8 @@ const { readJson } = require('./io');
 
 const TAIL_BYTES = 64 * 1024;
 const ERROR_LINE = /error|failed|stopped|traceback|exception|not complete/i;
+// A summary such as "completed (0 errors)" is a success, not an error.
+const ZERO_ERRORS = /\(0 errors?\)/gi;
 
 async function countArchives(researchDir, fileName) {
     let entries = [];
@@ -87,7 +89,7 @@ async function logStatus(logDir) {
         const filePath = path.join(logDir, name);
         const stat = await fs.stat(filePath);
         const lines = stat.size ? (await readTail(filePath, stat.size)).split('\n').filter(Boolean) : [];
-        const lastError = [...lines].reverse().find(line => ERROR_LINE.test(line)) || null;
+        const lastError = [...lines].reverse().find(line => ERROR_LINE.test(line.replace(ZERO_ERRORS, ''))) || null;
         rows.push({
             name,
             size_bytes: stat.size,

@@ -48,6 +48,10 @@ MALFORMED_RESPONSE_RETRIES = 1
 MALFORMED_RESPONSE_RETRY_DELAY_SECONDS = 1.0
 PROVIDER_ERROR_RETRIES = 2
 PROVIDER_ERROR_RETRY_DELAY_SECONDS = 5.0
+# A day that still fails after this many runs is a known provider gap. It stops blocking archive coverage,
+# and it is re-requested only every KNOWN_GAP_RETRY_DAYS, so a corrupt day cannot keep research "partial".
+KNOWN_GAP_AFTER_ATTEMPTS = 3
+KNOWN_GAP_RETRY_DAYS = 7
 # A run of this many failed days in a row means the provider is down, so the symbol stops instead of logging every day.
 CONSECUTIVE_FAILED_DAYS_LIMIT = 25
 
@@ -316,6 +320,12 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
     )
 
     months = list(_month_chunks(start_date, end_date))
+    known_provider_gaps = sum(
+        1
+        for month_start, _ in months
+        for record in _unresolved_archive_requests(_load_opening_archive(opening_dir / f"{month_start:%Y-%m}.json.gz"))
+        if _is_known_gap(record)
+    )
     archive_complete = all(
         _archive_covers_through(opening_dir / f"{month_start:%Y-%m}.json.gz", month_end)
         and _source_ranges_match(
@@ -332,6 +342,7 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
         "archive_start_date": start_date.isoformat(),
         "archive_end_date": end_date.isoformat(),
         "archive_complete": archive_complete,
+        "known_provider_gaps": known_provider_gaps,
         "archive_months_complete": sum(
             _archive_covers_through(opening_dir / f"{month_start:%Y-%m}.json.gz", month_end)
             and _source_ranges_match(
@@ -409,10 +420,34 @@ def _unresolved_archive_requests(payload: dict | None) -> list[dict]:
     return list(unresolved.values())
 
 
+def _is_known_gap(record: dict) -> bool:
+    return int(record.get("attempts") or 1) >= KNOWN_GAP_AFTER_ATTEMPTS
+
+
+def _known_gap_retry_due(record: dict, now: datetime) -> bool:
+    try:
+        last_failed = datetime.fromisoformat(str(record.get("last_failed_at") or ""))
+    except (TypeError, ValueError):
+        return True
+    return now - last_failed >= timedelta(days=KNOWN_GAP_RETRY_DAYS)
+
+
+def _blocking_archive_failures(payload: dict | None) -> list[dict]:
+    """Unresolved days that are not yet known provider gaps. Only these keep an archive incomplete."""
+    return [record for record in _unresolved_archive_requests(payload) if not _is_known_gap(record)]
+
+
+def _with_attempt(record: dict, previous: dict | None, now: datetime) -> dict:
+    stamp = now.isoformat()
+    first = previous.get("first_failed_at") if previous and previous.get("first_failed_at") else stamp
+    attempts = int(previous.get("attempts") or 1) + 1 if previous else 1
+    return {**record, "attempts": attempts, "first_failed_at": first, "last_failed_at": stamp}
+
+
 def _archive_covers_through(path: Path, end_date: date) -> bool:
-    """Coverage requires the date range and no unresolved malformed requests."""
+    """Coverage requires the date range and no blocking unresolved requests. Known provider gaps do not block."""
     payload = _load_opening_archive(path)
-    if payload is None or _unresolved_archive_requests(payload):
+    if payload is None or _blocking_archive_failures(payload):
         return False
     try:
         archived_end = date.fromisoformat(str(payload.get("end_date", "")))
@@ -436,8 +471,7 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
         source_ranges_match = _source_ranges_match(path, source_ranges)
         payload = _load_opening_archive(path) if source_ranges_match else None
         prior_failures = _unresolved_archive_requests(payload)
-        if payload is not None and _archive_covers_through(path, month_end):
-            continue
+        now = datetime.now(ET)
 
         session_dates = set()
         for stock_row in stock_rows:
@@ -452,10 +486,13 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
             for day in session_dates
             if range_start <= day <= range_end
         }
-        retry_keys = {
+        due_keys = {
             key for record in prior_failures
-            if (key := _request_key(record)) and key in candidate_keys
+            if (key := _request_key(record)) and (not _is_known_gap(record) or _known_gap_retry_due(record, now))
         }
+        retry_keys = {key for key in due_keys if key in candidate_keys}
+        if payload is not None and _archive_covers_through(path, month_end) and not retry_keys:
+            continue
         # If this archive already spans the month, retry only its recorded gaps.
         # Otherwise fetch the whole month so an interrupted/partial month is filled.
         try:
@@ -493,9 +530,10 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
         for record in prior_failures:
             if (key := _request_key(record)) and key not in attempted_keys:
                 failures_by_key[key] = record
+        prior_by_key = {key: record for record in prior_failures if (key := _request_key(record))}
         for record in new_failures:
             if key := _request_key(record):
-                failures_by_key[key] = record
+                failures_by_key[key] = _with_attempt(record, prior_by_key.get(key), now)
         for key in attempted_keys:
             if key not in {(item["symbol"].upper(), date.fromisoformat(item["date"][:10])) for item in new_failures}:
                 failures_by_key.pop(key, None)

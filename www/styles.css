@@ -548,7 +548,7 @@ select option{background:#0a0a0a;color:#e0e1e5;padding:.4rem}
 #page-algo-universe .algo-universe-quote-note{border-color:var(--os-border);background:var(--os-soft-accent);color:var(--os-text)}
 #page-algo-universe .algo-universe-message{border-color:var(--os-border);background:var(--os-surface);color:var(--os-muted)}
 #page-algo-universe .algo-universe-message.error{border-color:#b4515b;color:#b42332}
-#page-algo-universe .algo-universe-stock-card .history-popover{left:calc(100% + .75rem);right:auto;border-color:var(--os-border);background:var(--os-surface)!important;color:var(--os-text)}
+#page-algo-universe .algo-universe-stock-card .history-popover{left:calc(100% + .75rem);right:auto;border-color:var(--os-border);color:var(--os-text)}
 #page-algo-universe .history-title,#page-algo-universe .history-price{color:var(--os-text)}
 #page-algo-universe .history-title span,#page-algo-universe .history-meta,#page-algo-universe .history-dates,#page-algo-universe .history-loading,#page-algo-universe .history-empty{color:var(--os-muted)}
 #page-algo-universe .history-ranges{border-color:var(--os-border)}
@@ -642,7 +642,8 @@ a.alert-link{text-decoration:none;color:inherit}
 .sys-table { width: 100%; border-collapse: collapse; font-size: .78rem; font-variant-numeric: tabular-nums; }
 .sys-table th, .sys-table td { text-align: left; padding: 3px 6px; border-bottom: 1px solid #1a1a1a; }
 .sys-table th:nth-child(n+2), .sys-table td:nth-child(n+2) { text-align: right; }
-@media (max-width: 720px) { .sys-gauge { margin-left: 0; } .sys-grid { grid-template-columns: 1fr; } .sys-panel { position: fixed; left: 4vw; right: 4vw; top: 6rem; width: auto; } }
+/* On phones the panel opens in the page under the small gauge, so the gauge stays visible and clickable. */
+@media (max-width: 720px) { .sys-gauge { margin-left: 0; flex-wrap: wrap; } .sys-grid { grid-template-columns: 1fr; } .sys-panel { position: relative; left: auto; right: auto; top: auto; width: 100%; margin-top: .5rem; } }
 /* The host load gauge follows the theme; status colours get darker in light modes so they stay readable. */
 .sys-toggle{background:var(--os-raised);border-color:var(--os-border);color:var(--os-text)}
 .sys-toggle:hover{border-color:var(--os-muted)}

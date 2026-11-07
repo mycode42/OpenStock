@@ -1,5 +1,5 @@
 # Template: scripts/install_units.py renders {ROOT}, {ENV_FILE}, and {PYTHON} into ~/.config/systemd/user.
-# Started by equity-research.timer (America/New_York). Output appends to data/algo/logs/.
+# Each run starts its log fresh, so the dashboard shows this run. Started by equity-research.timer (America/New_York). 
 [Unit]
 Description=Algo equity research report
 
@@ -12,7 +12,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 ExecStart={PYTHON} -m research.equity
 ExecStart={PYTHON} scripts/llm_report.py --prompt ops/prompts/equity-research.md --context data/research/algo-auto/latest.json --telegram
-StandardOutput=append:{ROOT}/data/algo/logs/equity-research.log
+StandardOutput=truncate:{ROOT}/data/algo/logs/equity-research.log
 StandardError=append:{ROOT}/data/algo/logs/equity-research.log
 UMask=0077
 NoNewPrivileges=true

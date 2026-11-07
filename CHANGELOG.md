@@ -2,6 +2,20 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
+## 3.2.1 - 2026-11-07
+
+### Changed
+
+- Theta opening backfill: a day that still fails in three separate runs is a known provider gap. It no longer keeps the archive incomplete, so options research stops reporting partial data for it. Known gaps are retried weekly, and the manifest reports them as `known_provider_gaps`.
+- The daily report services (equity research, options research and the LLM digest) start their job log fresh on each run, so the dashboard shows the latest run rather than an old failure.
+
+### Fixed
+
+- The job list on the research page no longer treats a "(0 errors)" summary as an error.
+- The loading arrow on the Algo pages uses the theme accent colour in every theme, with no box behind it.
+- The Algo Universe hover charts use the dark background of the dashboard charts in dark themes.
+- On phones, the expanded CPU and RAM gauge opens under the small gauge, so the small gauge stays visible and clickable.
+
 ## 3.2.0 - 2026-11-07
 
 Major release. The Algo jobs no longer depend on OpenClaw or cron, and the dashboard runs its own price monitor.
