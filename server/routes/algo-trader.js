@@ -8,6 +8,7 @@ const { UNIVERSE_HISTORY_RANGES, buildUniversePayload, fetchAlpacaUniverseHistor
 const { buildOptionsPayload } = require('../algo-trader/options');
 const { LabError, ResearchLab } = require('../algo-trader/research-lab');
 const { buildDataStatus } = require('../algo-trader/data-status');
+const research = require('../algo-trader/research-control');
 
 module.exports = function registerAlgoTraderRoutes({ app, root = require('../../lib/paths').algoTraderRoot(), now = () => new Date() }) {
     app.get('/api/algo-trader/universe/:symbol/history', async (req, res) => {
@@ -80,12 +81,13 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
     });
 
     // Research lab: one job at a time, profiles, and promotion with rollback.
-    const lab = new ResearchLab({ root });
+    const lab = new ResearchLab({ root, nightlyRunning: async () => (await research.researchState()).running });
     const labRoute = (handler) => async (req, res) => {
         try {
             res.json(await handler(req, res));
         } catch (error) {
             if (error instanceof LabError) return res.status(error.status).json({ error: error.message });
+            if (error.status >= 400 && error.status < 500) return res.status(error.status).json({ error: error.message });
             console.error(`Research lab request failed: ${error.message}`);
             res.status(503).json({ error: 'Research lab is unavailable' });
         }
@@ -120,6 +122,12 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
     app.get('/api/algo-trader/research/jobs/:id/log', labRoute(req => lab.readLogChunk(req.params.id, req.query.offset)));
     app.get('/api/algo-trader/research/jobs/:id/results', labRoute(req => lab.jobResults(req.params.id)));
     app.post('/api/algo-trader/research/jobs/:id/cancel', labWrite(req => lab.cancelJob(req.params.id)));
+    // The plan: which profile each strategy runs with, kept between visits.
+    app.get('/api/algo-trader/research/plan', labRoute(req => lab.getPlan(String(req.query?.account || 'equity'))));
+    app.put('/api/algo-trader/research/plan', labWrite(req => lab.setPlan(safeObject(req.body).account, safeObject(req.body).profiles)));
+    app.get('/api/algo-trader/research/plan/preview', labRoute(() => lab.equityPlanPreview()));
+    app.post('/api/algo-trader/research/plan/apply', labWrite(() => lab.equityPlanApply()));
+    app.post('/api/algo-trader/research/plan/rollback', labWrite(() => lab.equityPlanRollback()));
     app.post('/api/algo-trader/research/profiles', labWrite(async req => ({
         profiles: await lab.saveProfile({ ...safeObject(req.body), source_job: safeObject(req.body).source_job || null }),
     })));
@@ -130,6 +138,22 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
         return lab.promote(body.strategy, body.profile);
     }));
     app.post('/api/algo-trader/research/rollback', labWrite(req => lab.rollback(safeObject(req.body).strategy)));
+    // Nightly research timers and the kill switch. Changing them is refused in demo mode, like lab runs.
+    app.get('/api/algo-trader/research/control', async (_req, res) => {
+        if (app.locals?.demoMode) return res.json(research.demoState());
+        try {
+            res.set('Cache-Control', 'no-store');
+            res.json(await research.researchState());
+        } catch (error) {
+            res.status(503).json({ error: `Research control is unavailable: ${error.message}` });
+        }
+    });
+    app.post('/api/algo-trader/research/control/nightly/:name', labWrite(async req => {
+        const enabled = req.body?.enabled;
+        if (typeof enabled !== 'boolean') throw Object.assign(new Error('enabled must be true or false'), { status: 400 });
+        return research.setNightlyEnabled(req.params.name, enabled);
+    }));
+    app.post('/api/algo-trader/research/control/kill', labWrite(() => research.killRunningResearch()));
 };
 
 module.exports.buildPayload = buildPayload;

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
+import os
 from copy import deepcopy
+from pathlib import Path
 from dataclasses import replace
 
 from strategies import mean_reversion, momentum, trend_following
@@ -286,6 +289,14 @@ def refresh_active_parameter_profile() -> dict:
         for regime, values in by_regime.items():
             merged = {**effective[strategy], **values}
             regimes.setdefault(strategy, {})[regime] = validate_parameter_profile({strategy: merged})[strategy]
+
+    # A lab test run applies its chosen profile on top of the live values. The file is read for this process only.
+    overrides_path = os.environ.get("ALGO_LAB_PARAMETER_OVERRIDES")
+    if overrides_path:
+        for strategy, values in json.loads(Path(overrides_path).read_text(encoding="utf-8")).items():
+            if strategy in effective and isinstance(values, dict):
+                merged = {**effective[strategy], **values}
+                effective[strategy] = validate_parameter_profile({strategy: merged})[strategy]
 
     ALGO_DEFAULT_PARAMETERS.clear()
     ALGO_DEFAULT_PARAMETERS.update(effective)

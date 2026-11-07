@@ -8,6 +8,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
+import re
 from pathlib import Path
 import sys
 from time import perf_counter
@@ -108,7 +109,11 @@ def run_daily_research(args) -> dict:
     if data_tier() != "algo_trader_plus" or regular_feed() != FEED:
         raise ValueError("Algo AutoResearch is restricted to Plus SIP data")
 
-    symbols, universe_meta = load_algo_universe()
+    if getattr(args, "underlying_list", None):
+        symbols = list(args.underlying_list)
+        universe_meta = {"source": "lab_override", "symbols": symbols}
+    else:
+        symbols, universe_meta = load_algo_universe()
     database = str(Path(args.db or DEFAULT_DB).resolve())
     store = SQLiteBarStore(database)
     refresh_started = perf_counter()
@@ -153,6 +158,8 @@ def run_daily_research(args) -> dict:
         )
 
     cohort_end = latest_end
+    if getattr(args, "end_date", None) and args.end_date < latest_end:
+        cohort_end = args.end_date
     warmup_start = RESEARCH_START - timedelta(days=RESEARCH_WARMUP_DAYS)
     logger.info("Computing research data fingerprint for the configured universe")
     market_data_version = research_data_version(
@@ -929,6 +936,9 @@ def _data_summary(
 
 
 def _full_history_verification(args) -> bool:
+    # A lab run never writes the shared weekly review, so it never takes the full-history path.
+    if getattr(args, "lab_run", False):
+        return False
     if args.verification_history == "full":
         return True
     if args.verification_history == "recent":
@@ -958,13 +968,66 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--force", action="store_true", help="create a fresh data cohort and recompute cached research stages")
     parser.add_argument("--invocation-id", help="stable research ID used to resume an interrupted cycle")
+    parser.add_argument(
+        "--strategies", default="",
+        help="comma-separated strategy ids to research (default: every researchable strategy)",
+    )
+    parser.add_argument("--underlyings", default="", help="comma-separated tickers to research instead of the live-eligible universe")
+    parser.add_argument("--start", default="", help="first research session (YYYY-MM-DD), not earlier than the default research start")
+    parser.add_argument("--end", default="", help="last research session (YYYY-MM-DD), capped at the latest stored session")
+    parser.add_argument(
+        "--lab-run", action="store_true",
+        help="isolated run from the research lab: writes only under --output-dir, never the nightly or weekly reports",
+    )
     return parser
 
 
-def _configure_progress_logging(output_dir: Path) -> Path | None:
+LAB_EVENT_PREFIX = "LAB_EVENT "
+
+
+def _lab_emit(event: dict) -> None:
+    """Print a progress line the research lab reads. Options runs use the same format."""
+    print(LAB_EVENT_PREFIX + json.dumps(event, sort_keys=True), flush=True)
+
+
+def _apply_strategy_scope(args, parser) -> None:
+    """Narrow the researched strategies to --strategies. Every stage reads the module-level tuple, so one rebind is enough."""
+    global RESEARCHABLE_STRATEGIES, RESEARCH_START
+    requested = [item.strip() for item in (args.strategies or "").split(",") if item.strip()]
+    if requested:
+        unknown = sorted(set(requested) - set(RESEARCHABLE_STRATEGIES))
+        if unknown:
+            parser.error(f"unknown strategies: {', '.join(unknown)}")
+        RESEARCHABLE_STRATEGIES = tuple(name for name in RESEARCHABLE_STRATEGIES if name in requested)
+    if args.start:
+        start = _parse_run_date(args.start, parser, "--start")
+        if start < RESEARCH_START:
+            parser.error(f"--start must be on or after {RESEARCH_START.isoformat()}")
+        RESEARCH_START = start
+    if args.end:
+        args.end_date = _parse_run_date(args.end, parser, "--end")
+        if args.end_date <= RESEARCH_START:
+            parser.error("--end must be after the research start")
+    else:
+        args.end_date = None
+    tickers = [item.strip().upper() for item in (args.underlyings or "").split(",") if item.strip()]
+    bad = [item for item in tickers if not re.fullmatch(r"[A-Z][A-Z0-9.]{0,9}", item)]
+    if bad:
+        parser.error(f"not ticker symbols: {', '.join(bad)}")
+    args.underlying_list = tickers
+
+
+def _parse_run_date(text: str, parser, flag: str) -> date:
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        parser.error(f"{flag} must be a date as YYYY-MM-DD")
+
+
+def _configure_progress_logging(output_dir: Path, *, lab_run: bool = False) -> Path | None:
     """Log to the terminal and a bounded file so a running job can be tailed."""
     handlers = [logging.StreamHandler()]
-    log_path = EQUITY_LOG_PATH
+    log_path = output_dir / "equity.log" if lab_run else EQUITY_LOG_PATH
     file_error = None
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1004,6 +1067,7 @@ def _record_failure(report: dict, *, output_dir: Path, latest_path: Path, today,
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    _apply_strategy_scope(args, parser)
     if args.optimization_only and args.factor_only:
         parser.error("--optimization-only cannot be combined with --factor-only")
     output_dir = Path(args.output_dir)
@@ -1087,8 +1151,26 @@ def main(argv: list[str] | None = None) -> int:
             "progress_path": str((progress_dir / "progress.json").resolve()),
         })
 
-    args.progress_callback = progress_callback
-    log_path = _configure_progress_logging(output_dir)
+    if getattr(args, "lab_run", False):
+        # Lab runs report each strategy as an underlying, so the lab's progress and results read the same way as options.
+        started_strategies = set()
+
+        def lab_progress(*, stage, status, payload=None, strategy=None, _inner=progress_callback):
+            if strategy:
+                if strategy not in started_strategies:
+                    started_strategies.add(strategy)
+                    _lab_emit({"event": "underlying_started", "underlying": strategy, "index": len(started_strategies), "total": len(RESEARCHABLE_STRATEGIES)})
+                if status == "error":
+                    _lab_emit({"event": "underlying_error", "underlying": strategy, "failure": str((payload or {}).get("error") or "error")})
+                elif stage == "verification" and status in ("completed", "reused"):
+                    _lab_emit({"event": "underlying_done", "underlying": strategy, "status": status, "approved": False})
+            _inner(stage=stage, status=status, payload=payload, strategy=strategy)
+
+        _lab_emit({"event": "started", "strategy": "equity", "total": len(RESEARCHABLE_STRATEGIES), "underlyings": list(RESEARCHABLE_STRATEGIES)})
+        args.progress_callback = lab_progress
+    else:
+        args.progress_callback = progress_callback
+    log_path = _configure_progress_logging(output_dir, lab_run=args.lab_run)
     today = datetime.now(ET).date().isoformat()
     logger.info(
         "AutoResearch starting: invocation_id=%s pid=%d started_at=%s argv=%s "

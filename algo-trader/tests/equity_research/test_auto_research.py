@@ -1,3 +1,4 @@
+import json
 from datetime import date, timedelta
 import math
 
@@ -213,7 +214,7 @@ def test_completed_cycle_cli_summary_handles_missing_optional_data(monkeypatch, 
             pass
 
     monkeypatch.setattr(auto_research, "ResearchLedger", Ledger)
-    monkeypatch.setattr(auto_research, "_configure_progress_logging", lambda *_: None)
+    monkeypatch.setattr(auto_research, "_configure_progress_logging", lambda *_, **__: None)
     monkeypatch.setattr(
         auto_research, "run_daily_research",
         lambda _args: {"status": "completed", "weekly_review": {"status": "pending_decision"}},
@@ -227,3 +228,50 @@ def test_completed_cycle_cli_summary_handles_missing_optional_data(monkeypatch, 
     assert summary["status"] == "completed"
     assert summary["range"] is None
     assert summary["stored_coverage"] is None
+
+
+def test_lab_run_is_isolated_and_can_be_scoped_to_chosen_strategies(monkeypatch, tmp_path):
+    monkeypatch.setattr(auto_research, "RESEARCHABLE_STRATEGIES", auto_research.RESEARCHABLE_STRATEGIES)
+    parser = auto_research.build_parser()
+    args = parser.parse_args([
+        "--lab-run", "--output-dir", str(tmp_path),
+        "--strategies", "intraday_trend_following,swing_momentum",
+        "--verification-history", "full",
+    ])
+    # A lab run never takes the full-history path, even when asked for it: that path writes the shared weekly review.
+    assert auto_research._full_history_verification(args) is False
+    auto_research._apply_strategy_scope(args, parser)
+    assert auto_research.RESEARCHABLE_STRATEGIES == ("swing_momentum", "intraday_trend_following")
+    assert auto_research._configure_progress_logging(tmp_path, lab_run=True) == tmp_path / "equity.log"
+
+
+def test_unknown_strategy_is_refused_before_a_run_starts(monkeypatch):
+    monkeypatch.setattr(auto_research, "RESEARCHABLE_STRATEGIES", auto_research.RESEARCHABLE_STRATEGIES)
+    parser = auto_research.build_parser()
+    args = parser.parse_args(["--strategies", "swing_momentum,made_up"])
+    with pytest.raises(SystemExit):
+        auto_research._apply_strategy_scope(args, parser)
+
+
+def test_lab_events_use_the_prefix_the_research_lab_reads(capsys):
+    auto_research._lab_emit({"event": "underlying_done", "underlying": "swing_momentum", "status": "completed", "approved": False})
+    line = capsys.readouterr().out.strip()
+    assert line.startswith("LAB_EVENT ")
+    assert json.loads(line[len("LAB_EVENT "):])["underlying"] == "swing_momentum"
+
+
+def test_run_scope_takes_dates_and_tickers_and_refuses_bad_ones(monkeypatch):
+    monkeypatch.setattr(auto_research, "RESEARCHABLE_STRATEGIES", auto_research.RESEARCHABLE_STRATEGIES)
+    monkeypatch.setattr(auto_research, "RESEARCH_START", auto_research.RESEARCH_START)
+    parser = auto_research.build_parser()
+    args = parser.parse_args(["--underlyings", "aapl, msft", "--start", "2023-01-01", "--end", "2026-06-30"])
+    auto_research._apply_strategy_scope(args, parser)
+    assert args.underlying_list == ["AAPL", "MSFT"]
+    assert auto_research.RESEARCH_START.isoformat() == "2023-01-01"
+    assert args.end_date.isoformat() == "2026-06-30"
+    with pytest.raises(SystemExit):
+        auto_research._apply_strategy_scope(parser.parse_args(["--underlyings", "bad ticker!"]), parser)
+    with pytest.raises(SystemExit):
+        auto_research._apply_strategy_scope(parser.parse_args(["--start", "2019-12-31"]), parser)
+    with pytest.raises(SystemExit):
+        auto_research._apply_strategy_scope(parser.parse_args(["--start", "2024-02-30"]), parser)

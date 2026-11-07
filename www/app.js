@@ -3,9 +3,9 @@ import { createState, sortedStocks, indexStocks } from './modules/state.js';
 import { createCharts } from './modules/charts.js?demo-mode=1&alpaca-usd-only=1';
 import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1&alpaca-usd-only=1';
 import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1';
-import { createAlgoTrader } from './modules/algo-trader.js?v=3.2.1&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
+import { createAlgoTrader } from './modules/algo-trader.js?v=3.2.1&research-control=2&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
 import { createSettings } from './modules/settings.js';
-import { createConfig } from './modules/config.js';
+import { createConfig } from './modules/config.js?v=3.2.1&delivery-unknown=1';
 import { createAlgoUniverse } from './modules/algo-universe.js?cards=1&demo-mode=1';
 
 const state = createState();
@@ -183,5 +183,14 @@ function enableStandalonePullToRefresh() {
 }
 enableStandalonePullToRefresh();
 window.addEventListener('hashchange',()=>loadPage(pageFromHash()));
+// The Settings button toggles: from another page it opens Settings, and on Settings it goes back to the page you came from.
+let returnHash='';
+window.addEventListener('hashchange',event=>{ const from=new URL(event.oldURL).hash; if(pageFromHash(from)!=='settings') returnHash=from; });
+document.addEventListener('click',event=>{
+    const link=event.target.closest('a.settings-nav-button');
+    if(!link||pageFromHash()!=='settings') return;
+    event.preventDefault();
+    window.location.hash=returnHash;
+});
 document.addEventListener('click',event=>{ if(!event.target.closest('.dropdown'))document.querySelectorAll('.dropdown.open').forEach(dropdown=>dropdown.classList.remove('open')); });
 loadPage(pageFromHash());

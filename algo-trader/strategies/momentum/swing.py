@@ -75,8 +75,8 @@ class SwingMomentumConfig:
             ("minimum_time_series_return", 0.0, 0.50),
             ("minimum_average_dollar_volume", 1_000_000, 1_000_000_000),
             ("hard_stop_pct", 0.04, 0.15), ("trailing_stop_pct", 0.03, 0.15),
-            ("trailing_activation_pct", 0.01, 0.12), ("max_position_pct", 0.01, 0.05),
-            ("risk_multiplier", 0.1, 1.0),
+            ("trailing_activation_pct", 0.01, 0.12), ("max_position_pct", 0.01, 0.10),
+            ("risk_multiplier", 0.1, 1.25),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:

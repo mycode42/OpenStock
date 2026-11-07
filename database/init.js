@@ -34,6 +34,7 @@ const migrations = [
   ,require('./migrations/030_alpaca_order_mode')
   ,require('./migrations/031_alpaca_equity_snapshots')
   ,require('./migrations/032_remove_legacy_eur_data')
+  ,require('./migrations/033_alpaca_outbox_unknown_reported')
 ];
 
 // through limits the run to migrations up to that version. Tests use it to check old schemas before later cleanups.

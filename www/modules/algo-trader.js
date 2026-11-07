@@ -1,6 +1,7 @@
+import { apiRequest } from './api.js';
 import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js';
-import { renderResearchPage } from './algo-trader/research-view.js?v=3.2.1';
-import { mountResearchLab } from './algo-trader/research-lab.js?v=3.2.1&params=1';
+import { renderResearchPage } from './algo-trader/research-view.js?v=3.2.1&research-control=1';
+import { mountResearchLab } from './algo-trader/research-lab.js?v=3.2.1&equity-runs=7';
 import { mountDataStatus } from './algo-trader/data-status.js?v=3.2.1&demo-samples=1';
 import { readSettingsFromForm as readFormSettings, renderSettingsForm } from './algo-trader/settings-form.js';
 
@@ -22,6 +23,7 @@ export function createAlgoTrader({ request, charts }) {
     const researchFilters = { equity: 'all', options: 'all' };
     const selectedRunDates = { equity: null, options: null };
     const researchPages = { equity: 1, options: 1 };
+    let researchControl = null;
     let activityPage = 0;
     let pollTimer = null;
 
@@ -82,6 +84,7 @@ export function createAlgoTrader({ request, charts }) {
             filter: researchFilters[researchMode],
             selectedDate: selectedRunDates[researchMode],
             page: researchPages[researchMode],
+            control: researchControl,
             loading: loadingAccounts.has(researchMode),
             error: errors[researchMode],
         });
@@ -146,8 +149,23 @@ export function createAlgoTrader({ request, charts }) {
         return loadAccount(accountMode, { silent });
     }
 
-    function loadResearch({ silent = false } = {}) {
-        return loadAccount(researchMode, { silent });
+    async function loadResearchControl() {
+        const control = await apiRequest('/algo-trader/research/control');
+        if (control) researchControl = control;
+        renderResearch();
+    }
+
+    async function loadResearch({ silent = false } = {}) {
+        await loadAccount(researchMode, { silent });
+        await loadResearchControl();
+    }
+
+    async function postResearchControl(path, body) {
+        const result = await apiRequest(`/algo-trader/research/control${path}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+        }, message => { errors[researchMode] = message; });
+        await loadResearchControl();
+        return result;
     }
 
     let pollLoad = null;
@@ -225,9 +243,20 @@ export function createAlgoTrader({ request, charts }) {
             load();
         }
     });
+    researchHost?.addEventListener('change', event => {
+        const input = event.target.closest('[data-research-nightly]');
+        if (!input || !researchHost.contains(input)) return;
+        // Pausing stops future runs only. A run already in progress is left to finish, or is stopped with Kill.
+        postResearchControl(`/nightly/${encodeURIComponent(input.dataset.researchNightly)}`, { enabled: input.checked });
+    });
     researchHost?.addEventListener('click', event => {
         const button = event.target.closest('button');
         if (!button || !researchHost.contains(button)) return;
+        if (button.dataset.researchControl === 'kill') {
+            if (!window.confirm('Stop the research that is running now? Nothing is promoted by stopping it.')) return;
+            postResearchControl('/kill');
+            return;
+        }
         if (button.dataset.researchMode) {
             const mode = button.dataset.researchMode;
             if (!['equity', 'options'].includes(mode) || mode === researchMode) return;

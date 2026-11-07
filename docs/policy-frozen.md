@@ -35,6 +35,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 
 ## Approved changes
 
+- **2026-11-07, high-risk profile position and risk ceilings.** At Andreas's explicit request, raised the sizing caps so the high-risk research and apply profiles can pass: `portfolio.max_position_pct` and `portfolio.max_strategy_position_pct` from 0.07 to 0.10 in `portfolio/algo-strategy-config.default.json`; the per-strategy `max_position_pct` range from 0.05 to 0.10 and the `risk_multiplier` range from 1.0 to 1.25 for trend following, momentum, mean reversion and multi-factor. The live standard values are unchanged (their `max_position_pct` stays 0.07), so nothing trades larger until a profile is applied. The frozen gate messages are unchanged. Approved by Andreas in chat.
+
 - **2026-11-06, extended-hours quote freshness and short entries.** At Andreas's explicit request, increased the extended-session quote freshness cap from 300 to 900 seconds while keeping regular-session quotes at 90 seconds, enabled extended-hours short entries as DAY limit sell-to-open orders, and retained fail-closed risk, borrow, overnight asset-eligibility, and halt checks. The 15-minute quote age is a hard maximum, not an assertion that the quote is executable or that the order will fill promptly; a DAY order may persist beyond the signal.
 
 - **2026-11-01, swing multi-factor research cap.** Raised the adaptive research per-strategy daily-entry cap from 2 to 3 so it matches the existing Algo cap and the coordinated portfolio artifact contract. This changes the research profile only; the live configuration remains unchanged. Approved by Andreas in response to the October 31, 2026 research-run failure.

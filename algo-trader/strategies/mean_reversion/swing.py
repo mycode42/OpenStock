@@ -95,7 +95,7 @@ class SwingMeanReversionConfig:
             "long_rsi_max": (10, 50), "short_rsi_min": (50, 90),
             "max_reference_slope_pct": (0.005, 0.10), "hard_stop_pct": (0.03, 0.15),
             "trailing_stop_pct": (0.03, 0.15), "trailing_activation_pct": (0.01, 0.10),
-            "max_position_pct": (0.01, 0.05), "risk_multiplier": (0.5, 1.0),
+            "max_position_pct": (0.01, 0.10), "risk_multiplier": (0.5, 1.25),
         }
         for key, (low, high) in number_bounds.items():
             value = getattr(self, key)

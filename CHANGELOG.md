@@ -4,6 +4,22 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ## Unreleased
 
+### Added
+
+- Equity profiles use only the parameters each strategy's validator accepts. Intraday strategies have none, so they have no profiles. A profile value outside a strategy's range is refused before a run or an apply, with the range in the message.
+- An equity run needs at least one strategy, or an explicit full run. An empty choice no longer starts all seven strategies.
+- The high-risk profile fits the sizing caps: portfolio position caps 0.07 to 0.10, strategy position range to 0.10 and risk multiplier range to 1.25 (approved in docs/policy-frozen.md). The live standard values are unchanged.
+- Research lab plan: each strategy has a "Run with" profile, kept between visits. Equity runs apply the chosen profiles for that run only (`ALGO_LAB_PARAMETER_OVERRIDES`), so the live settings stay as they are.
+- Custom equity profiles: set the risk settings of one strategy in the lab. Built-in names are reserved.
+- Apply plan: writes the chosen equity profiles to the live settings in one change, after a diff preview. Roll back restores the settings from before the last apply. Options profiles are applied through the existing promotion.
+- Research lab profiles: each equity strategy and each options strategy has three built-in profiles, standard (the live values), conservative and high-risk. Equity profiles scale the risk settings; options profiles scale the IV edge, delta and risk settings. The profile table shows them beside the live values. Built-in names cannot be used for saved profiles.
+- Equity lab runs take a universe (tickers) and a start and end date, the same as options runs. The end date is capped at the latest stored session.
+- The Settings button toggles: on Settings it returns to the page you came from, and from any other page it opens Settings.
+- Equity lab runs print the same progress lines options runs print, so the lab shows strategies done, the current strategy, and failures.
+- Research lab: equity runs for one, several or all strategies, each in its own folder under the lab. A run waits while the nightly equity research is running, and shows its log and the strategy status from its own report.
+- Research page control: switches pause or enable the nightly equity and options research timers, and a "Kill running research" button stops a run in progress. Killing stops the running nightly service and any research Python process of this user. Stopping a run does not promote anything.
+- Equity research can run one strategy, several, or all of them in an isolated folder (`python -m equity_research.auto_research --lab-run --strategies ...`). A lab run never writes the nightly or weekly reports.
+
 ### Changed
 
 - AGENTS.md states the money rule without currency: the Alpaca accounts are USD.
@@ -21,6 +37,7 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 - The live parameter tables on the Research page use the same two columns for every strategy, so the values line up between the swing and intraday tabs.
 - Alerts queued while Telegram was not set up go out with a "Late alert" label, showing when they were queued.
 - An alert whose send result is unknown is reported in the error log once per process and is not resent.
+- A triggered alert whose Telegram send result is unknown shows a "Delivery unknown · check Telegram" badge on its row in Configure. The outbox remembers that the error-log report was made (migration 033), so one-shot runs do not repeat it.
 - The late-alert label reads queue times as UTC, whatever the host time zone, and shows the zone. Tests cover the label, the late delivery and the unknown-result flag.
 
 ### Removed

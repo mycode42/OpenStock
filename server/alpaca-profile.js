@@ -12,12 +12,15 @@ function configuredWatchlist(db) {
     db = rawDatabase(db);
     const rows = db.prepare(`SELECT id, symbol, name, source_stock_id, enabled, archived, copied_at, copied_fx_rate
         FROM alpaca_watchlist WHERE enabled=1 AND archived=0 ORDER BY symbol`).all();
-    const levels = db.prepare(`SELECT * FROM alpaca_alert_levels WHERE watchlist_id=?
-        ORDER BY side, price_usd, id`);
+    // A level whose alert send result is unknown is flagged, so the config page can ask the user to check Telegram.
+    const levels = db.prepare(`SELECT l.*, EXISTS (SELECT 1 FROM alpaca_alert_outbox o
+        WHERE o.alpaca_alert_level_id = l.id AND o.status = 'SENDING' AND o.last_error LIKE 'Delivery outcome unknown%') AS delivery_unknown
+        FROM alpaca_alert_levels l WHERE l.watchlist_id=?
+        ORDER BY l.side, l.price_usd, l.id`);
     const openOrders = openOrdersByLevel(db);
     return rows.map(row => ({
         ...row,
-        alert_levels: levels.all(row.id).map(level => ({ ...level, open_order: openOrders.get(level.id) || null })),
+        alert_levels: levels.all(row.id).map(level => ({ ...level, delivery_unknown: Boolean(level.delivery_unknown), open_order: openOrders.get(level.id) || null })),
     }));
 }
 

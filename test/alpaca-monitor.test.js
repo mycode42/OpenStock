@@ -232,3 +232,22 @@ test('an unknown send result is reported once per process and never resent', asy
     assert.equal(calls, 1);
     assert.equal(errors.filter(message => message.includes('unknown delivery result')).length, 1);
 });
+
+test('a level whose alert send is unknown is flagged in the profile, and the outbox remembers the report', async t => {
+    const { configuredWatchlist } = require('../server/alpaca-profile');
+    const { db, lockPath } = makeDb(t);
+    const levelId = seedLevel(db, { price: 100 });
+    const client = fakeClient();
+    const fetchImpl = async () => { throw new Error('socket hang up'); };
+    const config = { lockPath, telegram: { token: 't', chatId: 'c' } };
+    await runAlpacaMonitor({ db, alpacaClient: client, env: ENABLED, config, fetchImpl, error: () => {} });
+
+    const level = configuredWatchlist(db).flatMap(stock => stock.alert_levels).find(item => item.id === levelId);
+    assert.equal(level.delivery_unknown, true);
+    assert.ok(db.prepare('SELECT unknown_reported_at FROM alpaca_alert_outbox').get().unknown_reported_at);
+
+    // A later one-shot run, with its own in-memory state, does not report the same alert again.
+    const errors = [];
+    await runAlpacaMonitor({ db, alpacaClient: client, env: ENABLED, config, fetchImpl, error: message => errors.push(message) });
+    assert.equal(errors.filter(message => message.includes('unknown delivery result')).length, 0);
+});

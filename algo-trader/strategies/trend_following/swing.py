@@ -79,7 +79,7 @@ class SwingTrendConfig:
             ("atr_stop_multiple", 1.0, 5.0), ("atr_min_stop_pct", 0.03, 0.10),
             ("atr_max_stop_pct", 0.08, 0.25),
             ("trailing_stop_pct", 0.03, 0.15), ("trailing_activation_pct", 0.01, 0.12),
-            ("max_position_pct", 0.01, 0.05), ("risk_multiplier", 0.1, 1.0),
+            ("max_position_pct", 0.01, 0.10), ("risk_multiplier", 0.1, 1.25),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:

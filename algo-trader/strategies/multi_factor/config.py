@@ -250,8 +250,8 @@ class MultiFactorConfig:
         if self.maximum_holding_sessions <= self.minimum_hold_sessions:
             raise ValueError("maximum_holding_sessions must exceed minimum_hold_sessions")
         for name, low, high in (
-            ("max_position_pct", 0.005, 0.05), ("hard_stop_pct", 0.02, 0.15),
-            ("risk_multiplier", 0.1, 1.0),
+            ("max_position_pct", 0.005, 0.10), ("hard_stop_pct", 0.02, 0.15),
+            ("risk_multiplier", 0.1, 1.25),
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:

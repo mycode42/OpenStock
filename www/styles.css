@@ -779,3 +779,27 @@ html[data-theme-mode="light"] .sys-high{color:#b91c1c}
 .algo-run-pager-actions{display:flex;gap:.4rem}
 @media(max-width:520px){.algo-run-pager{flex-direction:column;align-items:stretch}.algo-run-pager-actions .btn{flex:1 1 0;justify-content:center}}
 .history-chart .history-grid{stroke:var(--os-border)}
+.config-delivery-unknown{display:inline-block;margin-left:.4rem;padding:.12rem .45rem;border:1px solid rgba(245,158,11,.55);border-radius:.35rem;background:rgba(245,158,11,.12);color:#b45309;font-size:.72rem;white-space:nowrap}
+html[data-theme-mode="light"] .config-delivery-unknown{color:#92400e}
+.research-control{display:grid;gap:.6rem;margin-bottom:1rem}
+.research-control-switches{display:flex;flex-wrap:wrap;gap:.6rem 1.2rem}
+.research-switch{display:flex;align-items:center;gap:.55rem;cursor:pointer}
+.research-switch input{width:2.2rem;height:1.2rem;accent-color:var(--os-accent,#c8ff00)}
+.research-switch small{display:block;color:var(--os-muted,#94a3b8);font-size:.75rem}
+.research-control-actions{display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap}
+.research-control-status{color:var(--os-muted,#94a3b8);font-size:.85rem}
+.research-control-note{color:var(--os-muted,#94a3b8);font-size:.8rem;margin:0}
+/* Apple-style slider switch for the nightly research toggles. The native checkbox is kept for keyboard and screen readers. */
+.research-switch input[type="checkbox"]{appearance:none;-webkit-appearance:none;position:relative;flex:0 0 auto;width:44px;height:26px;margin:0;border-radius:999px;background:#39393d;cursor:pointer;transition:background .2s ease}
+.research-switch input[type="checkbox"]::before{content:"";position:absolute;top:2px;left:2px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.3);transition:transform .2s ease}
+.research-switch input[type="checkbox"]:checked{background:var(--os-accent,#34c759)}
+.research-switch input[type="checkbox"]:checked::before{transform:translateX(18px)}
+.research-switch input[type="checkbox"]:disabled{opacity:.5;cursor:not-allowed}
+.research-switch input[type="checkbox"]:focus-visible{outline:2px solid var(--os-accent,#34c759);outline-offset:2px}
+.lab-checks{display:flex;flex-wrap:wrap;gap:.35rem .9rem}
+.lab-check{display:inline-flex;align-items:center;gap:.4rem;font-size:.85rem;cursor:pointer}
+.lab-run-with{display:inline-flex;align-items:center;gap:.5rem;margin:.4rem 0 .6rem;font-size:.9rem}
+.lab-custom{margin-top:.7rem}
+.lab-custom summary{cursor:pointer;color:var(--os-muted,#94a3b8)}
+.lab-custom-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.5rem;margin:.6rem 0}
+.lab-custom-grid label,.lab-custom label{display:grid;gap:.25rem;font-size:.8rem}

@@ -122,7 +122,7 @@ export function createConfig({ request: af, reload, notify }) {
         const target = level.trigger_mode === 'PERCENT' ? ` · target ${escapeHtml(usd(level.price_usd))}` : '';
         return `<div class="config-retired-row config-alert-row" data-alert-id="${id}">${rowZones(
             `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${target}</span>`,
-            '<span class="config-level-state">Triggered</span>',
+            `<span class="config-level-state">Triggered</span>${level.delivery_unknown ? '<span class="config-delivery-unknown" title="The Telegram send may or may not have gone through. Check the chat before you rearm.">Delivery unknown · check Telegram</span>' : ''}`,
             `<span class="config-order-detail">${level.auto_order ? 'Real order on' : 'Notification only'}</span>`,
             actionZone('<button type="button" class="btn config-action btn-success" data-alert-action="rearm">Rearm</button>', deleteButton))}</div>`;
     }
