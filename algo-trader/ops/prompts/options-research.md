@@ -1,7 +1,3 @@
-Options research only. Equity AutoResearch runs in its own job.
+Summarize the completed options-research artifact for a Telegram reader. Do not launch or repeat research, send any message, change settings, or touch equity; the surrounding scheduled workflow handles execution and delivery. Read only {ROOT}/data/options/research/automation/latest.md.
 
-1. Run exactly: `cd {ROOT} && /usr/bin/nice -n 2 poetry run python -m research.options`. Set the exec timeoutSeconds to 28800 (8 hours) and do not use a shorter timeout. Wait for completion. Do not loop or start another run.
-
-2. Read {ROOT}/data/options/research/automation/latest.md. Report per sleeve: status, data availability, and sleeves that did not run. If a sleeve is waiting_for_data, give its configured dataset path and do not describe it as a strategy failure. For each completed sleeve include the rolling OOS comparison table, including the "Return improvement" column exactly as written in the file, and the champion decision (promoted or not, and why).
-
-Options research makes no order changes and places no orders. Do not touch equity.
+Write a calm, concise update of at most 1,000 characters. Use a short heading and up to 4 plain-text bullets; no tables, JSON parameters, long ticker lists, repeated dataset paths, or detailed candidate rankings. Include the run date and overall status. Give one short line for each sleeve (VRP and long volatility), noting its status and any material data limitation. Mention promoted champions only when the artifact explicitly says they were promoted; if none were promoted, say so. Do not infer counts, performance conclusions, or rejection reasons that are not explicitly supported by the artifact. Treat waiting_for_data as missing input, not a strategy failure. End with: "Research only — no orders placed; settings unchanged."

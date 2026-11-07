@@ -709,9 +709,12 @@ def run_forward_validation_cycle(
             })
             refresh_active_parameter_profile()
             promoted = _read_json(PROMOTED_PROFILE_PATH)
-            store = ProfileStore(profile_db, promoted_path=PROMOTED_PROFILE_PATH, lock_path=FORWARD_VALIDATION_PATH)
+            profile_store = ProfileStore(
+                profile_db, promoted_path=PROMOTED_PROFILE_PATH,
+                lock_path=FORWARD_VALIDATION_PATH,
+            )
             # Finish or abandon promotions a previous crash left pending before anything new is staged.
-            store.reconcile(promoted)
+            profile_store.reconcile(promoted)
             active = state.setdefault("active_trials", {})
             history = state.setdefault("history", [])
             if not isinstance(active, dict) or not isinstance(history, list):
@@ -1010,7 +1013,7 @@ def run_forward_validation_cycle(
                 skipped_promotions.append(trial["candidate_id"])
 
         for trial in selected_for_promotion:
-            record = _promote(trial, trial["latest_simulation"], promoted, store)
+            record = _promote(trial, trial["latest_simulation"], promoted, profile_store)
             if record is not None:
                 promoted_rows.append(record)
             else:
@@ -1085,7 +1088,7 @@ def run_forward_validation_cycle(
         if promoted_rows:
             # Protocol: pending rows are already staged; project the JSON, then activate in the database.
             write_json_atomic(PROMOTED_PROFILE_PATH, promoted)
-            store.activate([row["version_id"] for row in promoted_rows])
+            profile_store.activate([row["version_id"] for row in promoted_rows])
         cap = {
             "max_promotions_per_cycle": max_promotions_per_cycle,
             "max_promotions_per_strategy_per_cycle": max_promotions_per_strategy_per_cycle,

@@ -46,6 +46,10 @@ OPENING_TIME = time(9, 35)
 MINIMUM_CHAIN_CONTRACTS = 20
 MALFORMED_RESPONSE_RETRIES = 1
 MALFORMED_RESPONSE_RETRY_DELAY_SECONDS = 1.0
+PROVIDER_ERROR_RETRIES = 2
+PROVIDER_ERROR_RETRY_DELAY_SECONDS = 5.0
+# A run of this many failed days in a row means the provider is down, so the symbol stops instead of logging every day.
+CONSECUTIVE_FAILED_DAYS_LIMIT = 25
 
 
 def _source_ranges_match(path: Path, ranges: list[tuple[str, date, date]]) -> bool:
@@ -112,7 +116,7 @@ def _download_open_quotes(
         return message[:240]
 
     def request(source_symbol: str, day: date) -> tuple[list[dict], dict | None, dict | None]:
-        for attempt in range(MALFORMED_RESPONSE_RETRIES + 1):
+        for attempt in range(max(MALFORMED_RESPONSE_RETRIES, PROVIDER_ERROR_RETRIES) + 1):
             try:
                 frame = client.option_at_time_quote(
                     symbol=source_symbol,
@@ -142,16 +146,18 @@ def _download_open_quotes(
                     or "wrong number of data fields" in lowered
                     or "more fields than the established tick width" in lowered
                 )
-                if not malformed:
-                    raise
-                if attempt < MALFORMED_RESPONSE_RETRIES:
+                # Any other provider error (for example INTERNAL) is retried, then kept as an unresolved day,
+                # so one bad day cannot stop the symbol's remaining days.
+                kind = "malformed response" if malformed else "provider error"
+                retries = MALFORMED_RESPONSE_RETRIES if malformed else PROVIDER_ERROR_RETRIES
+                if attempt < retries:
                     print(
-                        f"ThetaData opening malformed response; retrying "
+                        f"ThetaData opening {kind}; retrying "
                         f"underlying={underlying_symbol or source_symbol} source={source_symbol} date={day} "
-                        f"attempt={attempt + 1}/{MALFORMED_RESPONSE_RETRIES + 1} error={message}",
+                        f"attempt={attempt + 1}/{retries + 1} error={message}",
                         flush=True,
                     )
-                    time_module.sleep(MALFORMED_RESPONSE_RETRY_DELAY_SECONDS)
+                    time_module.sleep(MALFORMED_RESPONSE_RETRY_DELAY_SECONDS if malformed else PROVIDER_ERROR_RETRY_DELAY_SECONDS)
                     continue
 
                 failure = {
@@ -160,7 +166,7 @@ def _download_open_quotes(
                     "reason": message,
                 }
                 print(
-                    f"ThetaData opening unresolved malformed response; "
+                    f"ThetaData opening unresolved {kind}; "
                     f"underlying={underlying_symbol or source_symbol} source={source_symbol} date={day} error={message}",
                     flush=True,
                 )
@@ -172,6 +178,7 @@ def _download_open_quotes(
     rows = []
     no_data_requests = []
     failed_requests = []
+    consecutive_failures = 0
     for source, day in requests_to_make:
         day_rows, no_data, failure = request(source, day)
         rows.extend(day_rows)
@@ -184,6 +191,13 @@ def _download_open_quotes(
             )
         if failure:
             failed_requests.append(failure)
+            consecutive_failures += 1
+            if consecutive_failures >= CONSECUTIVE_FAILED_DAYS_LIMIT:
+                raise RuntimeError(
+                    f"{consecutive_failures} opening requests failed in a row; last: {failure['reason']}"
+                )
+        else:
+            consecutive_failures = 0
     return rows, no_data_requests, failed_requests
 
 

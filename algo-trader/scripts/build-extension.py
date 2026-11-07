@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import shutil
+import tempfile
 from pathlib import Path
 
 from Cython.Build import cythonize
 from setuptools import Distribution, Extension
 from setuptools.command.build_ext import build_ext
-
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSIONS = (
@@ -47,6 +48,18 @@ EXTENSIONS = (
 )
 
 
+def _copy_extension_atomically(source: Path, destination: Path) -> None:
+    """Install a complete extension without truncating a mapped live library."""
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def build() -> None:
     """Compile the extension and copy it into the package tree for Poetry."""
     build_root = ROOT / "build/cython-extension"
@@ -74,7 +87,7 @@ def build() -> None:
         relative_output = output_path.relative_to(build_lib)
         destination = ROOT / relative_output
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(output_path, destination)
+        _copy_extension_atomically(output_path, destination)
 
 
 if __name__ == "__main__":

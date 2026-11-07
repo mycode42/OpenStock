@@ -187,21 +187,29 @@ def test_cycle_caps_promotions_per_cycle(tmp_path, monkeypatch):
             "final_equity": 100_500.0,
         }
 
+    market_data_store = object()
+    regime_store_calls = []
+
+    def fake_current_regime(received_store, end):
+        regime_store_calls.append((received_store, end))
+        return "range_bound"
+
     monkeypatch.setattr(fv, "FORWARD_VALIDATION_PATH", state_path)
     monkeypatch.setattr(fv, "PROMOTED_PROFILE_PATH", promoted_path)
     monkeypatch.setattr(fv, "refresh_active_parameter_profile", lambda: None)
     monkeypatch.setattr(fv, "_forward_session_data_version", lambda *args, **kwargs: "test-data")
-    monkeypatch.setattr(fv, "_current_regime", lambda *args, **kwargs: "range_bound")
+    monkeypatch.setattr(fv, "_current_regime", fake_current_regime)
     monkeypatch.setattr(fv, "_trading_sessions", lambda *args, **kwargs: [SESSIONS[0]])
     monkeypatch.setattr(fv, "_simulate", fake_simulate)
     monkeypatch.setattr(fv, "_target_metrics", fake_metrics)
 
     result = fv.run_forward_validation_cycle(
-        discovery={"strategies": {}}, verification={}, store=None, database=str(root / "market.sqlite3"),
+        discovery={"strategies": {}}, verification={}, store=market_data_store, database=str(root / "market.sqlite3"),
         symbols=["SPY"], end=SESSIONS[-1], data_version="test-data", allow_stage=False,
         ledger_path=database,
     )
 
+    assert regime_store_calls == [(market_data_store, SESSIONS[-1])]
     assert result["status"] == "completed", result
     assert len(result["promoted"]) == 1
     assert len(result["promotion_skipped_candidate_ids"]) == 3

@@ -1,8 +1,10 @@
 """Focused tests for resumable ThetaData opening-quote day failures."""
 
-from datetime import date
+from datetime import date, timedelta
 import gzip
 import json
+
+import pytest
 
 from scripts.options import theta_opening_backfill as opening
 
@@ -96,3 +98,43 @@ def test_legacy_malformed_no_data_entry_is_not_complete(tmp_path):
             }],
         }, stream)
     assert opening._archive_covers_through(archive_path, END) is False
+
+
+class InternalErrorThetaClient:
+    def __init__(self, failing_days):
+        self.calls = []
+        self.failing_days = set(failing_days)
+
+    def option_at_time_quote(self, *, symbol, start_date, **kwargs):
+        self.calls.append((symbol, start_date))
+        if start_date in self.failing_days:
+            raise RuntimeError("<_MultiThreadedRendezvous> status = StatusCode.INTERNAL details = \"Internal server error\"")
+        return [{"symbol": symbol, "date": start_date.isoformat(), "bid": 1.0}]
+
+
+def test_provider_internal_error_is_retried_then_kept_as_unresolved_day(monkeypatch):
+    days = [START, date(2024, 1, 2), END]
+    client = InternalErrorThetaClient(failing_days=[date(2024, 1, 2)])
+    monkeypatch.setattr(opening.time_module, "sleep", lambda seconds: None)
+    monkeypatch.setattr(opening, "_records", lambda frame: frame)
+    monkeypatch.setattr(opening, "_read_api_key", lambda: "test-secret")
+
+    rows, no_data, failures = opening._download_open_quotes(
+        client, [("XYZ", START, END)], days, underlying_symbol="XYZ",
+    )
+
+    assert [row["date"] for row in rows] == [START.isoformat(), END.isoformat()]  # The symbol kept going past the bad day.
+    assert no_data == []
+    assert [record["date"] for record in failures] == [date(2024, 1, 2).isoformat()]
+    assert client.calls.count(("XYZ", date(2024, 1, 2))) == opening.PROVIDER_ERROR_RETRIES + 1
+
+
+def test_consecutive_provider_failures_stop_the_symbol(monkeypatch):
+    days = [START + timedelta(days=offset) for offset in range(opening.CONSECUTIVE_FAILED_DAYS_LIMIT + 5)]
+    client = InternalErrorThetaClient(failing_days=days)
+    monkeypatch.setattr(opening.time_module, "sleep", lambda seconds: None)
+    monkeypatch.setattr(opening, "_records", lambda frame: frame)
+    monkeypatch.setattr(opening, "_read_api_key", lambda: "test-secret")
+
+    with pytest.raises(RuntimeError, match="failed in a row"):
+        opening._download_open_quotes(client, [("XYZ", START, days[-1])], days, underlying_symbol="XYZ")
