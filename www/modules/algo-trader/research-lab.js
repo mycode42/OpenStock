@@ -65,7 +65,7 @@ function renderParameterTable(parameters) {
     const rows = Object.entries(parameters || {})
         .map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(JSON.stringify(value))}</td></tr>`)
         .join('');
-    return rows ? `<table class="lab-table"><tbody>${rows}</tbody></table>` : '<p class="lab-muted">No live parameters saved for this strategy.</p>';
+    return rows ? `<table class="lab-table lab-params"><tbody>${rows}</tbody></table>` : '<p class="lab-muted">No live parameters saved for this strategy.</p>';
 }
 
 function renderStrategyTabs() {

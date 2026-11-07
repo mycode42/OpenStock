@@ -601,6 +601,10 @@ a.alert-link{text-decoration:none;color:inherit}
 .lab-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .lab-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 0.9em; }
 .lab-table th, .lab-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(127, 127, 127, 0.25); vertical-align: top; }
+/* Parameter tables use the same two columns for every strategy, so the values line up from one tab to the next. */
+.lab-params { table-layout: fixed; }
+.lab-params th { width: 55%; }
+.lab-params td { width: 45%; overflow-wrap: anywhere; }
 .lab-changed th, .lab-changed td { font-weight: 600; }
 .lab-form { display: grid; gap: 8px; }
 .lab-form label, .lab-promote label, .lab-save { display: grid; gap: 4px; }
