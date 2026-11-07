@@ -38,7 +38,7 @@ Review and optimization run only when asked. Stay inside the modules named in th
 
 ## Invariants
 
-- EUR money uses JavaScript `Number` and SQLite `REAL`; preserve available precision and format only for display.
+- Money uses JavaScript `Number` and SQLite `REAL`; preserve available precision and format only for display. The Alpaca accounts are USD. Legacy EUR rows and migrations stay as history.
 - Quote source is Alpaca: SIP first, IEX when the account cannot access SIP. Monitor BUY/SELL semantics use executable ask/bid.
 - An alert fires once per episode. Outbox plus retired level. A poll must not spam Telegram.
 - `/api/live-prices` is display-only. It must not write stock state, history, alert state, or equity snapshots.

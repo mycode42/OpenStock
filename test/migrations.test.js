@@ -30,7 +30,7 @@ test('migration 017 upgrades an already-applied broker health table', t => {
     const insert = db.prepare('INSERT INTO schema_migrations(version,name) VALUES (?,?)');
     for (const migration of migrations.filter(item => item.version <= 16)) insert.run(migration.version, migration.name);
     db.close();
-    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true, through: 31 });
     const upgraded = new Database(file);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=17').get()['1'], 1);
     assert.equal(upgraded.prepare('SELECT 1 FROM schema_migrations WHERE version=20').get()['1'], 1);
@@ -66,7 +66,7 @@ test('representative legacy stocks, trades, and journal tables are adopted witho
       INSERT INTO stocks (id, symbol, name, buy_threshold_eur, sell_threshold_eur) VALUES (7, 'OLD', 'Legacy', 1, 2);
       INSERT INTO journal_entries VALUES (1, 7, 'BUY', 2, 10, 'legacy note', '2026-01-01 00:00:00');`);
     db.close();
-    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true, through: 31 });
     const migrated = new Database(file);
     assert.equal(migrated.prepare('SELECT archived FROM stocks WHERE id=7').get().archived, 0);
     assert.equal(migrated.prepare('SELECT price_source FROM stocks WHERE id=7').get().price_source, 'trade_republic');
@@ -85,7 +85,7 @@ test('legacy partial sells preserve the closed and remaining lot quantities', t 
       INSERT INTO journal_entries VALUES (1, 7, 'BUY', 5, 10, 'buy', '2026-01-01 00:00:00');
       INSERT INTO journal_entries VALUES (2, 7, 'SELL', 2, 12, 'sell', '2026-01-02 00:00:00');`);
     db.close();
-    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true, through: 31 });
     const migrated = new Database(file);
     const lots = migrated.prepare('SELECT quantity, closed_at, entry_price_eur, exit_price_eur FROM trades ORDER BY id').all();
     assert.deepEqual(lots, [
@@ -131,7 +131,7 @@ test('migration adopts legacy trigger debounce state and links existing history'
     db.prepare("INSERT INTO stocks(id,symbol,name,buy_threshold_eur,sell_threshold_eur,trigger_state) VALUES (1,'IONQ','IonQ',10,20,'BUY_TRIGGERED'),(2,'TEM','Tempus',11,22,'SELL_TRIGGERED'),(3,'TSLA','Tesla',12,24,'NONE')").run();
     db.prepare("INSERT INTO alerts_log(stock_id,alert_type,price_eur,threshold_eur,sent_at) VALUES (1,'BUY',9,10,'2026-09-14 10:00:00'),(2,'SELL',23,22,'2026-09-14 11:00:00')").run();
     db.close();
-    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true, through: 31 });
     const migrated = new Database(file);
     assert.deepEqual(migrated.prepare("SELECT stocks.symbol,alert_levels.side,alert_levels.triggered,alert_levels.retired,alert_levels.active,alert_levels.enabled FROM alert_levels JOIN stocks ON stocks.id=alert_levels.stock_id WHERE stocks.symbol IN ('IONQ','TEM','TSLA') AND (alert_levels.triggered=1 OR stocks.symbol='TSLA') ORDER BY stocks.symbol").all(), [
         { symbol: 'IONQ', side: 'BUY', triggered: 1, retired: 1, active: 0, enabled: 0 },
@@ -172,3 +172,34 @@ test('migration 006 repairs earlier alert-log foreign keys without losing histor
     assert.equal(repaired.prepare('SELECT alert_level_id FROM alerts_log WHERE id=1').get().alert_level_id, null);
     repaired.close();
 });
+
+test('migration 032 removes legacy EUR trades and unlinked EUR stocks, and keeps USD rows and the Alpaca watchlist', t => {
+    const { dir, file } = tempFile();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    initDatabase({ dbPath: file, seedDefaults: false, silent: true });
+    const db = new Database(file);
+    db.pragma('foreign_keys = ON');
+    const migration = migrations.find(item => item.version === 32);
+    db.exec(`INSERT INTO stocks (id, symbol, name, currency, buy_threshold_eur, sell_threshold_eur) VALUES (1, 'OLDEUR', 'Legacy', 'EUR', 1, 2), (2, 'AAPL', 'Apple', 'USD', 1, 2), (3, 'GONE', 'Unlinked', 'EUR', 1, 2);
+      INSERT INTO alpaca_watchlist (symbol, name, source_stock_id, enabled, archived, copied_fx_rate) VALUES ('OLDEUR', 'Legacy', 1, 1, 0, 1), ('AAPL', 'Apple', 2, 1, 0, 1);`);
+    db.exec(`INSERT INTO alert_levels (stock_id, side, price_eur) VALUES (1, 'BUY', 10);
+      INSERT INTO price_history (stock_id, source) VALUES (1, 'trade_republic_test');`);
+    db.exec(`INSERT INTO trades (trade_id, stock_id, opened_at, quantity, entry_price, entry_price_eur, currency) VALUES ('EUR-1', 1, '2026-01-01T00:00:00Z', 1, 10, 10, 'EUR'),
+      ('USD-1', 2, '2026-01-01T00:00:00Z', 1, 100, 100, 'USD');`);
+    const eurTrade = db.prepare("SELECT id FROM trades WHERE trade_id='EUR-1'").get().id;
+    db.exec(`INSERT INTO trade_merge_events (target_trade_id, source_trade_id, source_trade_json, merged_at) VALUES (${eurTrade}, 0, '{}', '2026-01-02T00:00:00Z')`);
+
+    db.transaction(() => migration.up(db))();
+
+    // EUR stock 1 is still the Alpaca watchlist's source, so it stays. Nothing else in EUR is left.
+    assert.deepEqual(db.prepare("SELECT id FROM stocks WHERE currency='EUR'").all(), [{ id: 1 }]);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM trades WHERE currency='EUR'").get().n, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM trade_merge_events').get().n, 0);
+    assert.equal(db.prepare('SELECT COUNT(*) n FROM alert_levels WHERE stock_id=1').get().n, 1);
+    assert.equal(db.prepare("SELECT symbol FROM stocks WHERE currency='USD'").get().symbol, 'AAPL');
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM trades WHERE trade_id='USD-1'").get().n, 1);
+    const watch = db.prepare("SELECT symbol, source_stock_id FROM alpaca_watchlist ORDER BY symbol").all();
+    assert.deepEqual(watch, [{ symbol: 'AAPL', source_stock_id: 2 }, { symbol: 'OLDEUR', source_stock_id: 1 }]);
+    db.close();
+});
+

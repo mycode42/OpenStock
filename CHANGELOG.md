@@ -2,6 +2,16 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
+## Unreleased
+
+### Changed
+
+- AGENTS.md states the money rule without currency: the Alpaca accounts are USD, and legacy EUR rows stay as history.
+
+### Removed
+
+- Legacy EUR data (migration `032_remove_legacy_eur_data`): the 58 EUR journal trades from the old Trade Republic import and their merge history, and the EUR stocks the Alpaca watchlist does not use, with their alert levels and price history. Six EUR stocks stay, because the Alpaca watchlist still points at them (`source_stock_id` is NOT NULL). USD rows and the Alpaca watchlist are unchanged.
+
 ## 3.2.1 - 2026-11-07
 
 ### Changed

@@ -32,13 +32,16 @@ const migrations = [
   ,require('./migrations/029_drop_trade_republic_data')
   ,require('./migrations/030_alpaca_order_mode')
   ,require('./migrations/031_alpaca_equity_snapshots')
+  ,require('./migrations/032_remove_legacy_eur_data')
 ];
 
-function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true } = {}) {
+// through limits the run to migrations up to that version. Tests use it to check old schemas before later cleanups.
+function initDatabase({ silent = false, dbPath = paths.databasePath(), seedDefaults = true, through = Infinity } = {}) {
   const db = new Database(dbPath);
   db.pragma('foreign_keys = ON');
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')))" );
   for (const migration of migrations) {
+    if (migration.version > through) break;
     if (db.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(migration.version)) continue;
     db.transaction(() => {
       migration.up(db);
