@@ -13,11 +13,15 @@ def test_rendered_units_have_no_placeholders_or_root_settings(tmp_path):
         text = path.read_text(encoding="utf-8")
         assert "{ROOT}" not in text and "{ENV_FILE}" not in text and "{PYTHON}" not in text
         assert "User=" not in text and "Group=" not in text
+        if path.suffix == ".timer":
+            assert "WantedBy=timers.target" in text
+            assert "OnCalendar=" in text and "America/New_York" in text
+            continue
         assert "WantedBy=default.target" in text
         assert f"WorkingDirectory={ROOT}" in text
         assert f"EnvironmentFile={ROOT.parent / '.env'}" in text
         exec_line = next(line for line in text.splitlines() if line.startswith("ExecStart="))
-        assert exec_line.startswith("ExecStart=/venv/bin/python -m ")
+        assert exec_line.startswith("ExecStart=/venv/bin/python -m ") or exec_line.startswith("ExecStart=/venv/bin/python scripts/")
 
 
 def test_default_python_is_the_running_interpreter(tmp_path):

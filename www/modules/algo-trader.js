@@ -1,7 +1,7 @@
 import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js';
-import { renderResearchPage } from './algo-trader/research-view.js';
-import { mountResearchLab } from './algo-trader/research-lab.js';
-import { mountDataStatus } from './algo-trader/data-status.js';
+import { renderResearchPage } from './algo-trader/research-view.js?v=3.1.8';
+import { mountResearchLab } from './algo-trader/research-lab.js?v=3.1.8';
+import { mountDataStatus } from './algo-trader/data-status.js?v=3.1.8';
 import { readSettingsFromForm as readFormSettings, renderSettingsForm } from './algo-trader/settings-form.js';
 
 export function createAlgoTrader({ request, charts }) {
@@ -21,6 +21,7 @@ export function createAlgoTrader({ request, charts }) {
     let range = '1D';
     const researchFilters = { equity: 'all', options: 'all' };
     const selectedRunDates = { equity: null, options: null };
+    const researchPages = { equity: 1, options: 1 };
     let activityPage = 0;
     let pollTimer = null;
 
@@ -80,10 +81,12 @@ export function createAlgoTrader({ request, charts }) {
             snapshot: snapshots[researchMode],
             filter: researchFilters[researchMode],
             selectedDate: selectedRunDates[researchMode],
+            page: researchPages[researchMode],
             loading: loadingAccounts.has(researchMode),
             error: errors[researchMode],
         });
         selectedRunDates[researchMode] = view.selectedDate;
+        researchPages[researchMode] = view.page || 1;
         // Same markup as the last render: leave the DOM alone, so nothing flickers on the 15-second refresh.
         // The router replaces the host with its loading placeholder on navigation, so repaint when our markup is gone.
         if (researchHost.renderedHtml === view.html && researchHost.querySelector('.algo-research-page')) return;
@@ -92,7 +95,6 @@ export function createAlgoTrader({ request, charts }) {
         const scroll = window.scrollY;
         researchHost.innerHTML = view.html;
         researchHost.renderedHtml = view.html;
-        window.scrollTo(0, scroll);
         const statusHost = researchHost.querySelector('#research-data-status');
         if (statusHost) mountDataStatus(statusHost);
         const slot = researchHost.querySelector('#research-lab-slot');
@@ -101,6 +103,8 @@ export function createAlgoTrader({ request, charts }) {
             slot.replaceWith(lab);
             mountResearchLab(lab, researchMode);
         }
+        // Restore only after the lab is back in place: while it is missing the page is shorter, and the browser clamps the scroll.
+        window.scrollTo(0, scroll);
     }
 
     async function loadAccount(mode, { silent = false } = {}) {
@@ -234,7 +238,14 @@ export function createAlgoTrader({ request, charts }) {
         } else if (button.dataset.researchFilter) {
             researchFilters[researchMode] = button.dataset.researchFilter;
             selectedRunDates[researchMode] = null;
+            researchPages[researchMode] = 1;
             renderResearch();
+        } else if (button.dataset.researchPage !== undefined) {
+            const requestedPage = Number(button.dataset.researchPage);
+            if (Number.isInteger(requestedPage) && requestedPage >= 1) {
+                researchPages[researchMode] = requestedPage;
+                renderResearch();
+            }
         } else if (button.dataset.runDate) {
             selectedRunDates[researchMode] = button.dataset.runDate;
             renderResearch();

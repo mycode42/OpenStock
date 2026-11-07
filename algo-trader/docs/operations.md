@@ -21,7 +21,7 @@ systemctl --user restart equity                         # apply config or code c
 journalctl --user -u equity -n 50                       # logs
 ```
 
-Lingering keeps user units running after logout and across reboots (`loginctl enable-linger <user>`). Scheduled research and reports are described in [Scheduled automations](automations.md) and [ops/openclaw-crons.md](../ops/openclaw-crons.md).
+Lingering keeps user units running after logout and across reboots (`loginctl enable-linger <user>`). Scheduled research and reports are described in [Scheduled automations](automations.md) and [the timer units](../ops/systemd/).
 
 Changes to `portfolio/config.py` or the daemon take effect only after a restart.
 

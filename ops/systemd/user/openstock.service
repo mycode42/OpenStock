@@ -12,6 +12,9 @@ EnvironmentFile={ROOT}/.env
 ExecStart={NODE} {ROOT}/server.js
 Restart=always
 RestartSec=5
+# The price monitor runs inside this service. Its one-cycle lock lives in the runtime directory, so a crash clears it.
+RuntimeDirectory=openstock
+Environment=MONITOR_LOCK_PATH=%t/openstock/monitor.lock
 
 [Install]
 WantedBy=default.target

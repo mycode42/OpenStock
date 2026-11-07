@@ -6,55 +6,29 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Database = require('better-sqlite3');
 const { initDatabase } = require('../database/init');
-const { EXIT, safeError } = require('../lib/monitor');
-const { runAlpacaMonitor } = require('../lib/alpaca-monitor');
 const { AlpacaClient } = require('../lib/brokers/alpaca');
+const { EXIT, safeError } = require('../lib/monitor');
+const { monitorPaths, createMonitorLogger, runMonitorCycle } = require('../lib/monitor-cycle');
 
 if (process.argv.includes('--help')) {
-    process.stdout.write('Usage: node scripts/monitor.js\nRuns one live OpenStock monitoring cycle using .env configuration.\n');
+    process.stdout.write('Usage: node scripts/monitor.js\nRuns one live OpenStock monitoring cycle using .env configuration. The dashboard runs the same cycle every 30 seconds.\n');
     process.exit(0);
 }
 
-const appDir = path.join(__dirname, '..');
-const memoryDir = process.env.MONITOR_MEMORY_DIR || path.join(appDir, 'memory');
-const dbPath = process.env.DATABASE_PATH || path.join(appDir, 'database/openstock.db');
-const logPath = process.env.MONITOR_LOG || path.join(memoryDir, 'monitor.log');
-const errorPath = process.env.MONITOR_ERROR_LOG || path.join(memoryDir, 'monitor-error.log');
-fs.mkdirSync(memoryDir, { recursive: true });
-function lineFor(message) { return `[${new Date().toISOString()}] ${message}\n`; }
-function log(message) { const line = lineFor(message); fs.appendFileSync(logPath, line); process.stdout.write(line); }
-function error(message) {
-    const line = lineFor(`ERROR: ${message}`);
-    fs.appendFileSync(errorPath, line);
-    if (errorPath !== logPath) fs.appendFileSync(logPath, line);
-    process.stdout.write(line);
-}
-function positiveSetting(name, fallback) {
-    const value = Number(process.env[name] ?? fallback);
-    if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive number`);
-    return value;
-}
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '..', 'database/openstock.db');
+const logger = createMonitorLogger(monitorPaths());
 
 async function main() {
-    if (!fs.existsSync(dbPath)) { error(`Database not found: ${dbPath}`); return EXIT.CONFIG; }
+    if (!fs.existsSync(dbPath)) { logger.error(`Database not found: ${dbPath}`); return EXIT.CONFIG; }
     initDatabase({ silent: true });
     const db = new Database(dbPath);
     db.pragma('journal_mode = WAL'); db.pragma('foreign_keys = ON');
-    const chatId = process.env.TELEGRAM_CHAT_ID || '';
-    if (!chatId) error('No Telegram recipient configured; trigger notifications will fail safely');
     try {
-        const timeoutMs = positiveSetting('MONITOR_TIMEOUT_MS', 10000);
-        log('=== Monitoring cycle started ===');
-        const config = {
-            timeoutMs,
-            concurrency: positiveSetting('MONITOR_CONCURRENCY', 3),
-            cycleDeadlineMs: positiveSetting('MONITOR_CYCLE_DEADLINE_MS', 45000),
-            lockPath: process.env.MONITOR_LOCK_PATH || path.join(memoryDir, 'monitor.lock'),
-            telegram: { token: process.env.TELEGRAM_BOT_TOKEN, chatId }
-        };
-        return await runAlpacaMonitor({ db, alpacaClient: new AlpacaClient({ timeoutMs }), log, error, config });
-    } catch (monitorError) { error(safeError(monitorError)); return EXIT.CONFIG; }
-    finally { db.close(); }
+        return await runMonitorCycle({ db, makeClient: ({ timeoutMs }) => new AlpacaClient({ timeoutMs }), logger });
+    } finally { db.close(); }
 }
 
-main().then(code => { log(`Monitoring cycle complete (exit=${code})`); process.exitCode = code; }).catch(errorValue => { error(safeError(errorValue)); process.exitCode = EXIT.CONFIG; });
+main().then(code => { process.exitCode = code; }).catch(errorValue => {
+    logger.error(safeError(errorValue));
+    process.exitCode = EXIT.CONFIG;
+});

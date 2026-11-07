@@ -31,6 +31,7 @@ STRIKES_PER_SIDE = 20
 MINIMUM_CHAIN_CONTRACTS = 20
 MAX_QUOTE_BATCH = 100
 CAPTURE_LOCK = RESEARCH_ROOT / ".alpaca-daily-capture.lock"
+ALGO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _as_date(value: Any) -> date | None:
@@ -371,6 +372,15 @@ def capture_symbol(
     }
 
 
+def _say(message: str, log_file: Path | None = None) -> None:
+    print(message, flush=True)
+    if log_file is None:
+        return
+    # One timestamped line per message, so the dashboard's job log shows the last run, success or skip.
+    with log_file.open("a", encoding="utf-8") as handle:
+        handle.write(f"{datetime.now(ET).isoformat(timespec='seconds')} {message}\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Archive daily Alpaca OPRA chains for options research")
     parser.add_argument("--underlying", action="append", help="ticker to capture; repeatable")
@@ -380,7 +390,12 @@ def main() -> int:
         help="configured Algo portfolio or expanded options research history universe",
     )
     parser.add_argument("--feed", choices=("opra", "indicative"), default=os.getenv("ALPACA_OPTIONS_FEED", "opra").strip().lower())
+    parser.add_argument("--log-file", type=Path, help="append timestamped run messages here; relative paths start at algo-trader/")
     args = parser.parse_args()
+    log_file = None
+    if args.log_file is not None:
+        log_file = args.log_file if args.log_file.is_absolute() else ALGO_ROOT / args.log_file
+        log_file.parent.mkdir(parents=True, exist_ok=True)
     if args.feed != "opra":
         parser.error("research archive capture requires the OPRA feed")
     portfolio_symbols = list(dict.fromkeys(
@@ -399,30 +414,31 @@ def main() -> int:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print("Alpaca options history capture is already running; this invocation skipped.")
+            _say("Alpaca options history capture is already running; this invocation skipped.", log_file)
             return 0
         try:
             client = OptionsPaperClient()
             now = datetime.now(ET)
             session = _session_close(client, now.date())
             if session is None:
-                print(f"Alpaca options history capture skipped: {now.date()} is not a market session.")
+                _say(f"Alpaca options history capture skipped: {now.date()} is not a market session.", log_file)
                 return 0
             open_at, close_at = session
             if args.phase == "open":
                 target_at = open_at + timedelta(minutes=5)
                 if now < target_at:
-                    print(f"Alpaca opening capture skipped: wait until {target_at.isoformat()}.")
+                    _say(f"Alpaca opening capture skipped: wait until {target_at.isoformat()}.", log_file)
                     return 0
                 if now > target_at + timedelta(minutes=15):
-                    print(f"Alpaca opening capture skipped: {target_at.isoformat()} window has passed.")
+                    _say(f"Alpaca opening capture skipped: {target_at.isoformat()} window has passed.", log_file)
                     return 0
             else:
                 capture_start = close_at - timedelta(minutes=15)
                 if now < capture_start:
-                    print(
+                    _say(
                         f"Alpaca options history capture skipped: wait until "
-                        f"{capture_start.isoformat()} for the close-side capture window."
+                        f"{capture_start.isoformat()} for the close-side capture window.",
+                        log_file,
                     )
                     return 0
 
@@ -434,14 +450,14 @@ def main() -> int:
                         close_at=close_at, feed=args.feed, phase=args.phase,
                     )
                     results.append(result)
-                    print(
+                    _say(
                         f"Alpaca options {args.phase} archive {symbol}: quotes={result['quote_count']} "
                         f"OI={result['open_interest_coverage']} as_of={result['as_of']}",
-                        flush=True,
+                        log_file,
                     )
                 except Exception as error:
                     failures.append({"underlying": symbol, "error": f"{type(error).__name__}: {str(error)[:300]}"})
-                    print(f"Alpaca options archive {symbol} failed: {failures[-1]['error']}", flush=True)
+                    _say(f"Alpaca options archive {symbol} failed: {failures[-1]['error']}", log_file)
 
             summary = {
                 "session_date": now.date().isoformat(),
@@ -451,7 +467,13 @@ def main() -> int:
                 "failed": failures,
                 "results": results,
             }
-            print(json.dumps(summary, sort_keys=True))
+            print(json.dumps(summary, sort_keys=True), flush=True)
+            outcome = "failed" if failures else "ok"
+            _say(
+                f"Alpaca options {args.phase} capture {outcome} for {now.date()}: "
+                f"captured {len(results)} of {len(symbols)}, failed {len(failures)}.",
+                log_file,
+            )
             return 1 if failures else 0
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)

@@ -17,7 +17,7 @@ Signal → coordinator → risk gate → Alpaca Paper. The risk gate has the fin
 ## Documentation
 
 - [Setup](docs/setup.md): requirements, the one-command setup, and the environment
-- [Scheduled automations](docs/automations.md): the jobs, the crontab, and the logs
+- [Scheduled automations](docs/automations.md): the jobs, the systemd timers, and the logs
 - [Operations](docs/operations.md): common commands, the live universe, and state backups
 - [Research and configuration](docs/research-and-config.md): promotion, config files, and the shared rule set
 - Strategy and research guides: [options research](docs/options_research.md), [options trading](docs/options_trading.md), [equity research](docs/adaptive_research.md), [LLM-driven strategy](docs/llm_driven_strategy.md), [options long volatility](docs/options-long-volatility.md)

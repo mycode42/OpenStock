@@ -4,7 +4,7 @@ Part of the [OpenStock README](../README.md). Settings are in [Configuration](co
 
 ## Monitor cycle
 
-`scripts/monitor.js` runs one cycle per invocation:
+The dashboard runs one cycle every 30 seconds, inside `openstock.service` (`lib/monitor-cycle.js`). `scripts/monitor.js` runs one cycle by hand with the same code:
 
 1. Reads enabled tickers from the Alpaca watchlist.
 2. Fetches executable ask and bid quotes from Alpaca.

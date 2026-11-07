@@ -10,6 +10,7 @@ All notable changes to OpenStock. The Algo Trader subtree keeps its own log in [
 
 ### Changed
 
+- The price monitor runs inside `openstock.service` every 30 seconds (`lib/monitor-cycle.js`). The separate `openstock-monitor` timer and service were removed, so restarting the dashboard restarts the monitor too. Cycles never overlap, and demo mode runs none. `npm run monitor` still runs one cycle by hand.
 - The entry caps went up: daily 10 to 15, swing group 6 to 11, and the per-strategy caps listed in the defaults file. Once the trading-day count was fixed, the old caps would still have throttled the strategies on a day with many valid signals. The hard dollar guards are unchanged: $100,000 per order and the daily loss limits.
 - Daily entry limits count against the trading day. Daily-bar signals reference the previous session's bar, so counting by that date charged yesterday's entries to today.
 - Entry caps: overall daily 15, swing group 11, intraday group 4. Per strategy: swing trend 3, swing multi-factor 3, swing momentum 3, swing mean reversion 4, swing LLM-driven 2, intraday mean reversion 2, intraday trend following 2, intraday momentum 2.

@@ -1,0 +1,24 @@
+# Template: scripts/install_units.py renders {ROOT}, {ENV_FILE}, and {PYTHON} into ~/.config/systemd/user.
+# Started by llm-driven.timer (America/New_York). Output appends to data/algo/logs/.
+[Unit]
+Description=Algo LLM-driven silent run
+
+[Service]
+Type=oneshot
+TimeoutStartSec=12h
+WorkingDirectory={ROOT}
+EnvironmentFile={ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+ExecStart={PYTHON} -m strategies.llm_driven.ai_runner --ttl-minutes 180
+StandardOutput=append:{ROOT}/data/algo/logs/llm-silent-run.log
+StandardError=append:{ROOT}/data/algo/logs/llm-silent-run.log
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths={ROOT}/data /run/lock
+
+[Install]
+WantedBy=default.target

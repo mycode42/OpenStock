@@ -150,10 +150,9 @@ The `pipeline/` package runs adaptive discovery and rolling verification;
 `validation/` owns out-of-sample checks, robustness analysis, and portfolio
 replay. `backtest/` owns deterministic replay, while `benchmarks/` contains
 profiling tools. `data.py` handles SIP data preparation and `factor_research.py`
-fits Multi Factor diagnostics. Event history and live calendar refresh remain
-available through their package commands:
+fits Multi Factor diagnostics. Event history remains available through its package
+command:
 
 ```bash
 python -m equity_research.historical_events --start 2020-01-01
-python -m equity_research.event_calendar_refresh
 ```

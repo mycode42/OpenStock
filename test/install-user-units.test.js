@@ -21,14 +21,14 @@ test('user units render with no pytr, TR, or root settings', () => {
     });
     const target = path.join(dir, 'systemd', 'user');
     const names = fs.readdirSync(target).sort();
-    assert.deepEqual(names, ['openstock-monitor.service', 'openstock-monitor.timer', 'openstock.service']);
+    assert.deepEqual(names, ['openstock.service']);
     for (const name of names) {
         const text = fs.readFileSync(path.join(target, name), 'utf8');
         assert.doesNotMatch(text, /\{ROOT\}|\{NODE\}/);
         assert.doesNotMatch(text, /User=|Group=|pytr|tr-sdk|\/private|\/run\/openstock/);
-        assert.ok(text.includes(`WorkingDirectory=${root}`) || name.endsWith('.timer'));
+        assert.ok(text.includes(`WorkingDirectory=${root}`));
     }
-    const monitor = fs.readFileSync(path.join(target, 'openstock-monitor.service'), 'utf8');
-    assert.match(monitor, /MONITOR_LOCK_PATH=%t\/openstock-monitor\/monitor\.lock/);
+    const dashboard = fs.readFileSync(path.join(target, 'openstock.service'), 'utf8');
+    assert.match(dashboard, /MONITOR_LOCK_PATH=%t\/openstock\/monitor\.lock/);
     fs.rmSync(dir, { recursive: true, force: true });
 });

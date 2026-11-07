@@ -1,0 +1,11 @@
+# Template: scripts/install_units.py renders {ROOT}. Times are America/New_York, so the schedule does not depend on the host clock.
+# Persistent is off: a slot missed while the machine was off is skipped, not run late.
+[Unit]
+Description=Algo morning digest (timer)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 07:45:00 America/New_York
+Unit=llm-digest.service
+
+[Install]
+WantedBy=timers.target

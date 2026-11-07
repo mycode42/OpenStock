@@ -76,13 +76,11 @@ The services run as systemd **user** units under the service account, so none of
 ```bash
 scripts/install-user-units.sh                                  # render the units (re-run after template changes)
 
-# Web application and monitoring timer (one cycle every 30 seconds)
-systemctl --user enable --now openstock.service openstock-monitor.timer
+# Web application, with the price monitor running inside it (one cycle every 30 seconds)
+systemctl --user enable --now openstock.service
 
 # Status
 systemctl --user status openstock.service
-systemctl --user status openstock-monitor.timer
-systemctl --user list-timers | grep openstock
 ```
 
 Lingering keeps these running after logout and across reboots (`loginctl enable-linger <user>`).
@@ -94,7 +92,7 @@ npm run monitor            # run one cycle
 npm run monitor -- --help  # print usage only
 ```
 
-The monitor unit's settings, including its sandboxing and its 30-second timer, are the source of truth in `ops/systemd/user/`. Change them there and re-run `scripts/install-user-units.sh`.
+The dashboard unit in `ops/systemd/user/` is the source of truth. The monitor's lock lives in its runtime directory (`MONITOR_LOCK_PATH`). Change the unit there and re-run `scripts/install-user-units.sh`, then restart `openstock.service`.
 
 ## Logs
 
@@ -168,9 +166,9 @@ The web app listens on `127.0.0.1:3000` only. Expose it through Tailscale Serve:
 ### Monitor not running
 
 ```bash
-systemctl --user status openstock-monitor.timer
-systemctl --user list-timers | grep openstock
-journalctl --user -u openstock-monitor.service -n 50
+systemctl --user status openstock.service
+journalctl --user -u openstock.service -n 50 | grep -i monitor
+tail -n 20 memory/monitor.log
 ```
 
 ### Database locked or corrupted

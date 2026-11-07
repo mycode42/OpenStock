@@ -16,6 +16,7 @@ const state = {
     results: null,
     logText: '',
     logOffset: 0,
+    logOpen: false,
     timer: null,
     message: '',
     error: '',
@@ -30,6 +31,16 @@ function host() {
 
 function tail(text) {
     return String(text || '').split('\n').slice(-LOG_TAIL_LINES).join('\n');
+}
+
+// One line for the collapsed log: the last error if the run has printed one, otherwise the last line.
+function logSummary(text) {
+    const lines = tail(text).split('\n').map(line => line.trim()).filter(Boolean);
+    if (!lines.length) return { kind: 'Status', line: 'Waiting for output…', error: false };
+    const lastError = lines.slice().reverse().find(line => /\b(error|traceback|exception|failed|failure)\b/i.test(line));
+    return lastError
+        ? { kind: 'Last error', line: lastError, error: true }
+        : { kind: 'Last line', line: lines[lines.length - 1], error: false };
 }
 
 function percent(job) {
@@ -76,8 +87,21 @@ function renderLive() {
         <div class="lab-progress"><div style="width:${percent(job)}%"></div></div>
         <p class="lab-muted">${progress.done || 0} of ${progress.total || 0} underlyings${extras ? ` · ${extras}` : ''}</p>
         ${isRunning(job) ? '<button type="button" class="btn btn-secondary" data-lab-action="cancel">Cancel run</button>' : ''}
-        <pre class="lab-log" aria-label="Live research log">${escapeHtml(tail(state.logText) || 'Waiting for output…')}</pre>
+        ${renderLogToggle()}
     </div>`;
+}
+
+function renderLogToggle() {
+    const summary = logSummary(state.logText);
+    const toggle = `<button type="button" class="lab-log-toggle" data-lab-action="toggle-log" aria-expanded="${state.logOpen}" aria-controls="lab-log-full">
+        <span class="lab-log-kind ${summary.error ? 'lab-bad' : ''}">${escapeHtml(summary.kind)}</span>
+        <span class="lab-log-line">${escapeHtml(summary.line)}</span>
+        <span class="lab-log-caret">${state.logOpen ? 'Hide' : 'Show log'}</span>
+    </button>`;
+    const full = state.logOpen
+        ? `<pre class="lab-log" id="lab-log-full" aria-label="Live research log">${escapeHtml(tail(state.logText) || 'Waiting for output…')}</pre>`
+        : '';
+    return toggle + full;
 }
 
 function renderResults() {
@@ -226,9 +250,13 @@ async function pollJob() {
         return refreshOverview();
     }
     // Only the live panel updates while a run is going, so the form and any typing are untouched.
+    renderLiveOnly();
+    return undefined;
+}
+
+function renderLiveOnly() {
     const live = document.getElementById('lab-live');
     if (live) live.innerHTML = renderLive();
-    return undefined;
 }
 
 async function postJson(url, body) {
@@ -315,7 +343,13 @@ export function mountResearchLab(element, account = 'options') {
                 return;
             }
             const button = event.target.closest('[data-lab-action]');
-            if (button && element.contains(button)) handleAction(button.dataset.labAction);
+            if (!button || !element.contains(button)) return;
+            if (button.dataset.labAction === 'toggle-log') {
+                state.logOpen = !state.logOpen;
+                renderLiveOnly();
+                return;
+            }
+            handleAction(button.dataset.labAction);
         });
         element.addEventListener('submit', event => {
             if (event.target.matches('[data-lab-form="start"]')) {

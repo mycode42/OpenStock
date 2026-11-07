@@ -26,6 +26,7 @@ const { createDemoBroker } = require('./server/demo-broker');
 const { rawDatabase } = require('./server/alpaca-profile');
 const { SNAPSHOT_MINUTES, captureAlpacaEquitySnapshot } = require('./lib/alpaca-equity-snapshots');
 const { syncOpenOrders } = require('./lib/alpaca-orders');
+const { monitorPaths, createMonitorLogger, runMonitorCycle, startMonitorLoop } = require('./lib/monitor-cycle');
 
 function createApp({
     db: suppliedDb,
@@ -165,8 +166,23 @@ if (require.main === module) {
     initDatabase({ dbPath });
     const app = createApp({ dbPath });
     const server = app.listen(port, '127.0.0.1', () => console.log(`OpenStock server listening on 127.0.0.1:${port}`));
+    // The price monitor runs in this process every 30 seconds, so alerts start and stop with the dashboard.
+    // Demo mode has no Alpaca account to monitor, so it runs no cycles.
+    let monitorLoop = null;
+    if (!app.locals.demoMode) {
+        const logger = createMonitorLogger(monitorPaths());
+        monitorLoop = startMonitorLoop({
+            logger,
+            runCycle: () => runMonitorCycle({
+                db: app.locals.db.db,
+                makeClient: ({ timeoutMs }) => new AlpacaClient({ timeoutMs }),
+                logger,
+            }),
+        });
+    }
     const shutdown = () => {
         console.log('OpenStock shutting down...');
+        monitorLoop?.stop();
         server.close(() => {
             app.locals.db.db.close();
             process.exit(0);

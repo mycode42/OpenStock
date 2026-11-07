@@ -43,7 +43,7 @@ Part of the [OpenStock README](../README.md). The screenshots come from the demo
 
   <img width="800" alt="Research lab" src="screenshots/research.png" />
 
-- **Scheduled jobs and reports:** the hourly health check, the Alpaca options captures, the ThetaData history pipeline, the LLM-driven silent run, and the morning digest and research reports run from the local crontab, without OpenClaw. The reports are written by a configured LLM (hosted, or a local model) and sent to Telegram. Each job has its own log file, and a daily job keeps the logs small. See [Algo automations](../algo-trader/docs/automations.md).
+- **Scheduled jobs and reports:** the hourly health check, the Alpaca options captures, the ThetaData history pipeline, the LLM-driven silent run, and the morning digest and research reports run from systemd user timers, without OpenClaw. The reports are written by a configured LLM (hosted, or a local model) and sent to Telegram. Each job has its own log file, and a daily job keeps the logs small. See [Algo automations](../algo-trader/docs/automations.md).
 
 ## Features at a glance
 

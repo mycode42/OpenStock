@@ -36,7 +36,7 @@ Open http://127.0.0.1:3000. The server binds to `127.0.0.1` only.
 
 - `.env` is read from the repository directory and is ignored by Git. Never commit credentials.
 - Alpaca provides quotes and chart history (SIP when your account has it, IEX otherwise). OpenStock needs no account ID.
-- Telegram alerts are optional: set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, then run `npm run monitor` for one monitoring cycle. A scheduler runs it in production.
+- Telegram alerts are optional: set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, then run `npm run monitor` for one monitoring cycle. The dashboard runs the cycle every 30 seconds once Alpaca is configured.
 - Live trading is off by default. It needs `ALPACA_ALLOW_LIVE=1` and `OPENSTOCK_ORDER_TOKEN`, and every order is capped at $100,000.
 - To run it as a service on a Linux host, see [DEPLOY.md](DEPLOY.md).
 
@@ -95,14 +95,7 @@ docker stop openstock             # stop it
 
 Notes:
 
-- Start the web container before the monitor, because it creates the database on first start. For Telegram alerts, run the monitor as a second container that uses the same volume:
-
-  ```bash
-  docker run --rm --network host --env-file .env -e DATABASE_PATH=/data/openstock.db \
-    -v openstock-data:/data --entrypoint node openstock scripts/monitor.js
-  ```
-
-  Run that command on a schedule of your choice; cron's shortest interval is one minute.
+- The web container runs the Alpaca monitor every 30 seconds when Alpaca credentials are set, so no second container is needed. Its database is created on first start. To run one cycle by hand: `docker exec openstock node scripts/monitor.js`.
 - Mounting `algo-trader` read-only is what lets the Algo pages read their data and strategy settings. Without it, those pages show an error. The mount is read-only, so the container cannot change the Algo files.
 - Keep `ALGO_TRADER_ROOT` as `./algo-trader`, and keep `ALPACA_OPTIONS_ACCOUNT_ID` in `.env`. The options history is keyed by that ID.
 - To update, pull the repository, rebuild the image, and recreate the container with the same arguments. The data volume is kept.

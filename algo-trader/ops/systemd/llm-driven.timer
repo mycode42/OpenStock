@@ -1,0 +1,15 @@
+# Template: scripts/install_units.py renders {ROOT}. Times are America/New_York, so the schedule does not depend on the host clock.
+# Persistent is off: a slot missed while the machine was off is skipped, not run late.
+[Unit]
+Description=Algo LLM-driven silent run (timer)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 06:30:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 09:45:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 12:30:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 15:30:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 18:00:00 America/New_York
+Unit=llm-driven.service
+
+[Install]
+WantedBy=timers.target

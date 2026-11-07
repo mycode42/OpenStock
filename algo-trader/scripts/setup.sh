@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-command Algo setup: Python dependencies and the user systemd units.
-# Renders the units (no root) but does not start them or create .env. Automations are managed with `openclaw automations`.
+# Renders the units (no root) but does not start them or create .env. Scheduled jobs are the timers in `ops/systemd/`; enable them with `systemctl --user enable --now <name>.timer`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

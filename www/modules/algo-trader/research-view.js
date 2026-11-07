@@ -23,13 +23,20 @@ function renderRunDetail(run) {
         <small class="algo-detail-time">${run.created_at ? `Completed ${escapeHtml(dateTime(run.created_at))}` : ''}${run.duration_seconds !== null && run.duration_seconds !== undefined ? ` · ${Math.round(run.duration_seconds / 60)} min` : ''}</small>`;
 }
 
+const RUNS_PER_PAGE = 10;
+
 export function filterRuns(history, filter) {
     if (filter === 'promoted') return history.filter(run => run.promoted > 0);
     if (filter === 'no-promotion') return history.filter(run => !run.promoted);
     return history;
 }
 
-export function renderResearchPage({ mode, snapshot, filter, selectedDate, loading, error }) {
+function renderRunPager(page, pageCount, total) {
+    if (pageCount <= 1) return '';
+    return `<nav class="algo-run-pager" aria-label="Research history pages"><span>${total} runs · Page ${page} of ${pageCount}</span><div class="algo-run-pager-actions"><button type="button" class="btn btn-sm btn-secondary" data-research-page="${page - 1}" aria-label="Previous page" ${page <= 1 ? 'disabled' : ''}>Previous</button><button type="button" class="btn btn-sm btn-secondary" data-research-page="${page + 1}" aria-label="Next page" ${page >= pageCount ? 'disabled' : ''}>Next</button></div></nav>`;
+}
+
+export function renderResearchPage({ mode, snapshot, filter, selectedDate, page, loading, error }) {
     const isOptions = mode === 'options';
     const modeLabel = isOptions ? 'Options' : 'Equity';
     if (!snapshot) {
@@ -39,10 +46,14 @@ export function renderResearchPage({ mode, snapshot, filter, selectedDate, loadi
 
     const research = snapshot.research || { history: [] };
     const demoMode = snapshot.demo_mode === true;
-    const runs = filterRuns(snapshot.research?.history || [], filter);
+    // Newest first, so page 1 holds the latest 10 runs. The selected run is chosen from all matching runs, not only the visible page.
+    const runs = filterRuns(snapshot.research?.history || [], filter).slice().sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
     const activeDate = runs.some(run => run.date === selectedDate) ? selectedDate : runs[0]?.date || null;
     const selectedRun = runs.find(run => run.date === activeDate) || null;
-        const title = isOptions ? 'Options research history' : 'Equity autoresearch history';
+    const pageCount = Math.max(1, Math.ceil(runs.length / RUNS_PER_PAGE));
+    const currentPage = Math.min(Math.max(1, Number(page) || 1), pageCount);
+    const pageRuns = runs.slice((currentPage - 1) * RUNS_PER_PAGE, currentPage * RUNS_PER_PAGE);
+    const title = isOptions ? 'Options research history' : 'Equity autoresearch history';
     const description = demoMode ? 'Example strategy research reports for preview only.' : isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from the Algo Trader research archive.';
 
     const html = `<main class="algo-page algo-research-page">
@@ -54,9 +65,9 @@ export function renderResearchPage({ mode, snapshot, filter, selectedDate, loadi
         <div id="research-lab-slot"></div>
         <section class="card algo-panel algo-history-panel" id="algo-history">
             <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${title}</h2><p>${description}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${filter === key ? 'active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div></div>
-            <div class="algo-history-layout"><div class="algo-run-list" role="list">${runs.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === activeDate ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === activeDate}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? `${run.promoted ?? 0} approved` : signedPercent(run.portfolio_return_pct)}<small>${isOptions ? 'paper config approval' : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>
+            <div class="algo-history-layout"><div class="algo-run-column"><div class="algo-run-list" role="list">${pageRuns.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === activeDate ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === activeDate}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? `${run.promoted ?? 0} approved` : signedPercent(run.portfolio_return_pct)}<small>${isOptions ? 'paper config approval' : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>${renderRunPager(currentPage, pageCount, runs.length)}</div>
                 <aside class="algo-run-detail">${renderRunDetail(selectedRun)}</aside></div>
         </section>
     </main>`;
-    return { html, selectedDate: activeDate };
+    return { html, selectedDate: activeDate, page: currentPage };
 }

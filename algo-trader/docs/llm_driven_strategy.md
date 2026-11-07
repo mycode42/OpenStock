@@ -66,7 +66,7 @@ selection from the 117-name candidate pool.
 
 ## Live scheduled analysis
 
-The `llm-driven` OpenClaw job runs at 10:00, 13:00, and 15:00 ET on
+The `llm-driven` timer runs at 06:30, 09:45, 12:30, 15:30, and 18:00 ET on
 weekdays. It first runs:
 
 ```bash
@@ -84,24 +84,10 @@ stock developments for the briefing.
 
 The Algo scanner reads the snapshot during its ordinary scans. A missing,
 invalid, or expired snapshot produces no AI entry. The scheduler is independent
-of the deterministic event-calendar refresh below; that calendar and its
-archives remain useful for deterministic research and historical examples.
+of the deterministic calendar adapter below.
 
 Historical event-calendar replays exercise the deterministic calendar adapter. They do not reproduce the scheduled LLM recommendations, so their results should not be presented as AI-strategy performance.
 
-Run `poetry run python -m equity_research.event_calendar_refresh` to refresh
-`data/event_calendar.csv`. The `algo-event-calendar` OpenClaw job runs this at
-04:05 ET on weekdays. It reads the configured fixed Algo universe, obtains scheduled
-earnings and pre/post-market classifications from Nasdaq's public earnings
-calendar, and uses Alpaca's market calendar to map after-hours reports to the
-next session. Earnings without a supplied timing classification are skipped.
-The job writes atomically, archives each point-in-time refresh under
-`data/event_calendar_snapshots/`, and retains the previous live calendar on
-feed failure.
-The encoded CPI and Employment Situation dates currently cover Q4 2026. The
-Federal Reserve calendar includes its published tentative FOMC decision dates
-through 2027. Extend the BLS dates as they are published; calendar diagnostics
-warn when an event type has no upcoming date in the coverage window.
 
 ## Deterministic calendar research adapter (research only)
 

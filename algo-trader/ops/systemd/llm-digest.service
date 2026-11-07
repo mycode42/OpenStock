@@ -1,0 +1,24 @@
+# Template: scripts/install_units.py renders {ROOT}, {ENV_FILE}, and {PYTHON} into ~/.config/systemd/user.
+# Started by llm-digest.timer (America/New_York). Output appends to data/algo/logs/.
+[Unit]
+Description=Algo morning digest
+
+[Service]
+Type=oneshot
+TimeoutStartSec=12h
+WorkingDirectory={ROOT}
+EnvironmentFile={ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+ExecStart={PYTHON} scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --telegram
+StandardOutput=append:{ROOT}/data/algo/logs/llm-digest.log
+StandardError=append:{ROOT}/data/algo/logs/llm-digest.log
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths={ROOT}/data /run/lock
+
+[Install]
+WantedBy=default.target

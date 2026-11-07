@@ -1,7 +1,6 @@
 Pipeline steps
 1. Run exactly one equity AutoResearch cycle (options research is a separate job):
 cd {ROOT} && /usr/bin/nice -n 2 poetry run python -m research.equity
-Set the OpenClaw `exec` tool call's `timeoutSeconds` to `43200` (12 hours) for this command. Do not use a shorter command timeout.
 The command runs the equity AutoResearch pipeline only. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
 2. Read {ROOT}/data/research/algo-auto/latest.json. Report the equity sections only.
 

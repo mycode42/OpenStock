@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "ops" / "systemd"
-UNITS = ("equity.service", "options.service")
+UNITS = tuple(sorted(path.name for path in TEMPLATES.iterdir() if path.suffix in (".service", ".timer")))
 
 
 def user_unit_dir() -> Path:
@@ -54,7 +54,8 @@ def main() -> int:
         print(f"warning: {env_file} is missing; the units will not start until it exists", file=sys.stderr)
     if shutil.which("systemctl"):
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    print("start with: systemctl --user enable --now equity options")
+    print("start the daemons with: systemctl --user enable --now equity options")
+    print("start the scheduled jobs with: systemctl --user enable --now the timers in ops/systemd")
     return 0
 
 

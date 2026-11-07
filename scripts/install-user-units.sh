@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Render the OpenStock systemd user units into ~/.config/systemd/user.
 # No root needed. This only writes files; start them with
-#   systemctl --user enable --now openstock.service openstock-monitor.timer
+#   systemctl --user enable --now openstock.service
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,4 +18,4 @@ done
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload || true
 fi
-echo "start with: systemctl --user enable --now openstock.service openstock-monitor.timer"
+echo "start with: systemctl --user enable --now openstock.service"

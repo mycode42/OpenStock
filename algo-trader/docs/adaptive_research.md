@@ -13,8 +13,8 @@ poetry run python -m research                        # manual aggregate: options
 poetry run python -m equity_research.auto_research --optimization-only --no-refresh --workers 8
 ```
 
-The scheduled OpenClaw jobs run options and equity research separately; see
-[`ops/openclaw-crons.md`](../ops/openclaw-crons.md).
+The timers run options and equity research separately; see
+[Scheduled automations](automations.md).
 
 ## The loop
 

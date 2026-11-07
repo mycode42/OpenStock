@@ -48,7 +48,7 @@ approved candidate becomes champion. Decisions are stored in
 
 ## Nightly automation
 
-The OpenClaw Gateway schedules options and equity research as separate jobs:
+The systemd timers schedule options and equity research as separate jobs:
 `options-research` runs `python -m research.options` at 17:00 ET, and
 `equity-research` runs `python -m research.equity` at 20:00 ET. The options job
 currently runs VRP and long-volatility. VRP screens the 117-symbol history
@@ -200,7 +200,7 @@ after the opening quote backfill, rebuild those derived rows with
 
 ## Daily Alpaca capture
 
-The `options-history-capture` OpenClaw automation starts at 15:45
+The `options-history-capture` timer starts at 15:45
 America/New_York on weekdays, in the final 15 minutes before the regular close.
 It saves same-session OPRA quotes for all 117 options research history tickers,
 for expirations within 60 days and up to 20 strikes on each side of spot per
@@ -218,7 +218,7 @@ have that date. Thus Theta remains the historical backfill source, while daily
 research advances from Alpaca. The capture can also be run manually with
 `poetry run python -m scripts.options.alpaca_daily_capture`.
 
-The `options-opening-capture` automation runs at 09:35 ET on weekdays for the
+The `options-opening-capture` timer runs at 09:35 ET on weekdays for the
 same 117-symbol history universe and stores a current-session opening snapshot
 from Alpaca OPRA directly in SQLite. It uses a fresh
 underlying quote for spot and records each contract's actual quote timestamp.

@@ -1,0 +1,11 @@
+# Template: scripts/install_units.py renders {ROOT}. Times are America/New_York, so the schedule does not depend on the host clock.
+# Persistent is off: a slot missed while the machine was off is skipped, not run late.
+[Unit]
+Description=Algo log rotation (timer)
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 America/New_York
+Unit=rotate-logs.service
+
+[Install]
+WantedBy=timers.target

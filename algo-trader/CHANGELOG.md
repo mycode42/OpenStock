@@ -4,10 +4,13 @@
 
 ### Changed
 
-- Algo runs standalone. All scheduled jobs run from the local crontab (`ops/crontab`) with the project venv at `algo-trader/.venv`. The OpenClaw automations for these jobs were disabled. LLM reports run through `scripts/llm_report.py`. The equity daemon's unit is rendered to the venv.
+- Algo runs standalone. All scheduled jobs run as systemd user timers (`ops/systemd/*.timer`) with the project venv at `algo-trader/.venv`. The OpenClaw automations for these jobs were disabled. LLM reports run through `scripts/llm_report.py`. The equity daemon's unit is rendered to the venv.
 - Algo LLM calls no longer depend on OpenClaw. The silent run reads `LLM_PROVIDER` and `LLM_MODEL` from `.env` and fails if they are unset; it no longer falls back to the OpenClaw model config.
 - New `scripts/llm_report.py` runs a prompt file through the configured provider (hosted or local Ollama or OpenAI-compatible) and can post the reply to Telegram. It is the cron replacement for the agent-turn briefing and research jobs. A stale snapshot produces a notice without a model call.
-- `docs/automations.md` has a crontab example for running every job without OpenClaw.
+- `docs/automations.md` lists every scheduled job and its timer.
+- The Alpaca capture automations write a timestamped run line to `data/algo/logs/` (`--log-file`), including successful runs.
+- Scheduled jobs moved from the crontab to systemd user timers, each with `OnCalendar=... America/New_York`, so they fire at Eastern time on any host clock. The crontab was firing on Berlin time: `CRON_TZ` and `TZ` were both tested and neither changed scheduling. The Alpaca captures moved from OpenClaw to the `options-opening-capture` and `options-history-capture` timers, so no Algo job depends on OpenClaw. The crontab and `scripts/cron-env.sh` were removed.
+- Removed the event calendar refresh (`equity_research/event_calendar_refresh.py`), its test, and its docs. `data/event_calendar.csv` is no longer updated.
 
 - LLM-driven signal snapshots are stored in SQLite (`data/algo/llm_driven/signals.sqlite3`, table `llm_signal_snapshot`, last 200 runs kept) instead of `data/algo/llm_driven/signals.json`. `python -m strategies.llm_driven.snapshot_cli` prints the newest snapshot with its freshness. The briefing and silent-run prompts use it, so they no longer depend on the working directory. The JSON file is no longer written or read.
 - Algo extended-hours trading is re-enabled for plain limit DAY or GTC orders during premarket, after-hours, and overnight sessions. Extended-hours entries and exits never carry a broker bracket or OCO; software stops protect them, and broker protection is attached at the next regular open.

@@ -1,0 +1,25 @@
+# Template: scripts/install_units.py renders {ROOT}, {ENV_FILE}, and {PYTHON} into ~/.config/systemd/user.
+# Started by options-research.timer (America/New_York). Output appends to data/algo/logs/.
+[Unit]
+Description=Algo options research report
+
+[Service]
+Type=oneshot
+TimeoutStartSec=12h
+WorkingDirectory={ROOT}
+EnvironmentFile={ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+ExecStart={PYTHON} -m research.options
+ExecStart={PYTHON} scripts/llm_report.py --prompt ops/prompts/options-research.md --context data/options/research/automation/latest.md --telegram
+StandardOutput=append:{ROOT}/data/algo/logs/options-research.log
+StandardError=append:{ROOT}/data/algo/logs/options-research.log
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths={ROOT}/data /run/lock
+
+[Install]
+WantedBy=default.target
