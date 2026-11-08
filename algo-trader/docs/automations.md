@@ -1,6 +1,6 @@
 # Scheduled automations
 
-Part of the [Algo Trader README](../README.md).
+Part of the [OpenStock README](../../README.md#algo-trader-part-of-openstock-optional).
 
 Every scheduled Algo job is a systemd user timer in `ops/systemd/`, named without a prefix (`health.timer`, `llm-driven.timer`, ...). Nothing depends on OpenClaw or cron. Each timer is written in `America/New_York`, so the jobs fire at Eastern time on any host clock.
 

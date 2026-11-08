@@ -3,7 +3,9 @@
 **A self-hosted stock dashboard, trading journal, and algo trading built on Alpaca.**
 
 
-> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.2.1.
+> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.3.0.
+
+> **Public demo:** https://demo.openstock-trading.com/ runs the same interface on simulated data. No broker is contacted. Settings are read-only and research runs are disabled there.
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
@@ -18,7 +20,7 @@
 
 ## Quick start: try the demo
 
-You need Node.js 22 or newer and a C/C++ toolchain with Python 3 (for the `better-sqlite3` module). No broker account is needed.
+To look around without installing anything, open the [public demo](https://demo.openstock-trading.com/). To run it yourself, you need Node.js 22 or newer and a C/C++ toolchain with Python 3 (for the `better-sqlite3` module). No broker account is needed.
 
 ```bash
 git clone https://github.com/mycode42/OpenStock.git
@@ -183,7 +185,7 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 | Trading journal | Alpaca balances, positions and fills; capital events kept apart from P/L | [Features](docs/features.md) |
 | Analytics | P/L, risk, equity curve, drawdown, per-stock performance | [Performance data](docs/performance-data.md) |
 | Manual limit orders | Limit orders from alert levels; paper by default | [Features](docs/features.md) |
-| Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/README.md) |
+| Algo Trader | Systematic equity and options research with paper execution | [algo-trader/](algo-trader/docs/setup.md) |
 | Changelog | Every release, dashboard and Algo Trader together | [CHANGELOG.md](CHANGELOG.md) |
 | Configuration | Environment variables, price sources, watchlist migration | [Configuration](docs/configuration.md) |
 | API | Endpoints for the dashboard, journal, orders and health | [API](docs/api.md) |
@@ -206,5 +208,5 @@ OpenStock's own code is licensed under the ISC licence ([LICENSE](LICENSE)).
 The Algo Trader in [algo-trader/](algo-trader/) is MIT-licensed ([its LICENSE](algo-trader/LICENSE)). 
 It builds on [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund), an MIT-licensed project by Virat Singh (© 2024). 
 That MIT notice is kept in the subtree's LICENSE. 
-Credits are also in the [Algo Trader README](algo-trader/README.md#credits).
+The Algo Trader's setup is in [algo-trader/docs/setup.md](algo-trader/docs/setup.md).
 

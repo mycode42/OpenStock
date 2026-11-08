@@ -1,6 +1,6 @@
 # Research, promotion, and configuration
 
-Part of the [Algo Trader README](../README.md).
+Part of the [OpenStock README](../../README.md#algo-trader-part-of-openstock-optional).
 
 ## Research and promotion
 

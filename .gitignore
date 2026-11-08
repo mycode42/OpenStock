@@ -1,9 +1,9 @@
 .env
 /private/
 node_modules/
-/data/auth.json
-/data/*.log
-/data/*.pid
+/data/
+# The Algo Trader's data folder is a symlink to ./data.
+/algo-trader/data
 memory/*.log
 memory/*.json
 *.db

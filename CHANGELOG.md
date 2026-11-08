@@ -2,6 +2,13 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
+## Unreleased
+
+### Changed
+
+- One data folder: `data/` at the repository root holds the Algo Trader's data, and `algo-trader/data` is a symlink to it. The four stale root files (`auth.json`, `preferences.json`, `server.log`, `server.pid`) moved to `data/root-legacy/` and were not read by any code. `data/demo/` stays where it was.
+- The Algo Trader's README and `.env.example` are removed. Their setup is in `algo-trader/docs/setup.md`, its credits are in the root README, and the Theta and LLM settings are in the root `.env.example`. The subtree's MIT `LICENSE` stays, because the MIT terms require it.
+
 ## 3.3.0 - 2026-11-08
 
 ### Added
