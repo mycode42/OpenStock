@@ -2,10 +2,12 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
-## Unreleased
+## 3.3.0 - 2026-11-08
 
 ### Added
 
+- Security headers on every response (nosniff, frame denial, no referrer, permissions policy, same-origin opener), and `X-Powered-By` is off.
+- The public demo limits API calls to 240 a minute per client, and writes to 20 a minute. Refused calls get HTTP 429.
 - Equity profiles use only the parameters each strategy's validator accepts. Intraday strategies have none, so they have no profiles. A profile value outside a strategy's range is refused before a run or an apply, with the range in the message.
 - An equity run needs at least one strategy, or an explicit full run. An empty choice no longer starts all seven strategies.
 - The high-risk profile fits the sizing caps: portfolio position caps 0.07 to 0.10, strategy position range to 0.10 and risk multiplier range to 1.25 (approved in docs/policy-frozen.md). The live standard values are unchanged.
@@ -27,12 +29,19 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Changed
 
+- One source per parameter for the position target: each swing strategy's `max_position_pct` in the settings file is its target, read by the live registry. Live values are unchanged (0.04; multi-factor 0.02). Stops and risk multipliers were already read from settings.
+- A lab run tests its profile's target, cap, risk multiplier and stops, so what a run tests is what apply writes. Live and nightly runs have no lab override and are unchanged.
+- Equity presets: the standard target is the live value, conservative is 0.7 times it and high-risk 1.3 times it.
 - Research lab: the strategy selector table sits under Progress and log and Start a run, above the Profiles table.
 - AGENTS.md states the money rule without currency: the Alpaca accounts are USD.
 - Research lab: "Progress and log" replaces the "Live parameters" table beside the run form. The live values stay in the Profiles table. The custom profile panel is open by default and titled "Custom profile".
 
 ### Fixed
 
+- Equity plan rollback refuses when settings were edited after the apply, and names the changed keys. Pass `force` to roll back anyway. Applies made before this change need `force`.
+- The `Conservative` swing mean reversion profile uses risk multiplier 0.5 (the validator minimum); it was 0.45 and always refused. A test checks every equity preset against the validator.
+- Lab runs work without systemd and on hosts without `/proc/meminfo` (macOS): the nightly guard reads "not running" when systemctl is missing, and free memory falls back to the operating system's figure.
+- The `Delivery unknown` badge is readable in dark mode and no longer crowds the text beside it.
 - Equity lab runs that have too little stored history to pass rolling verification (five folds: 364 sessions for swing, 304 for intraday) stop after discovery. The report is marked `discovery_only`, shows the reason, and is not verified out of sample, so nothing from it can be applied or promoted. The nightly run is unchanged.
 - Equity lab runs on one ticker no longer fail at the SIP refresh, which counted the context ETFs against the 20-symbol minimum. The multi-factor diagnostic needs 20 covered symbols; below that it is recorded as skipped, and the nightly run is unchanged.
 - A lab run with one strategy searches and verifies only that strategy. The adaptive pipeline kept its own copy of the strategy list, so intraday strategies were also searched.

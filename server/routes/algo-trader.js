@@ -81,7 +81,18 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
     });
 
     // Research lab: one job at a time, profiles, and promotion with rollback.
-    const lab = new ResearchLab({ root, nightlyRunning: async () => (await research.researchState()).running });
+    // Without systemd (macOS, Docker) there is no nightly timer to wait for, so the guard reads "not running".
+    const lab = new ResearchLab({
+        root,
+        nightlyRunning: async () => {
+            try {
+                return (await research.researchState()).running;
+            } catch (error) {
+                if (error?.code === 'ENOENT') return false;
+                throw error;
+            }
+        },
+    });
     const labRoute = (handler) => async (req, res) => {
         try {
             res.json(await handler(req, res));
@@ -127,7 +138,7 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
     app.put('/api/algo-trader/research/plan', labWrite(req => lab.setPlan(safeObject(req.body).account, safeObject(req.body).profiles)));
     app.get('/api/algo-trader/research/plan/preview', labRoute(req => lab.planPreview(String(req.query?.account || 'equity'))));
     app.post('/api/algo-trader/research/plan/apply', labWrite(req => lab.planApply(safeObject(req.body).account || 'equity')));
-    app.post('/api/algo-trader/research/plan/rollback', labWrite(req => lab.planRollback(safeObject(req.body).account || 'equity')));
+    app.post('/api/algo-trader/research/plan/rollback', labWrite(req => lab.planRollback(safeObject(req.body).account || 'equity', { force: safeObject(req.body).force === true })));
     app.post('/api/algo-trader/research/profiles', labWrite(async req => ({
         profiles: await lab.saveProfile({ ...safeObject(req.body), source_job: safeObject(req.body).source_job || null }),
     })));

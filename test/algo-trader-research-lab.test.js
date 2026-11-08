@@ -222,6 +222,13 @@ test('the demo lab shows the sample profiles of every equity strategy and refuse
     }
 });
 
+test('free memory falls back to the operating system figure where /proc/meminfo does not exist', async t => {
+    const { root } = fixtureRoot(t);
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: path.join(root, 'no-such-meminfo') });
+    const free = await lab.freeMemoryMb();
+    assert.ok(Number.isInteger(free) && free >= 0);
+});
+
 test('overview returns one strategies list per account; every equity strategy lists its three built-in profiles', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });
@@ -371,6 +378,24 @@ test('an equity plan applies as one change with a diff and rolls back to the pre
     await lab.equityPlanRollback();
     assert.equal((await loadSettings(root)).strategies.swing_momentum.max_position_pct, before);
     await assert.rejects(lab.equityPlanRollback(), /no applied equity plan/);
+});
+
+test('rolling back an equity plan refuses when settings were edited after the apply, and force restores anyway', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const { loadSettings } = require('../server/algo-trader/settings');
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo, checkProfiles: async () => {} });
+    const before = (await loadSettings(root)).strategies.swing_momentum.max_position_pct;
+    await lab.setPlan('equity', { swing_momentum: 'conservative' });
+    await lab.equityPlanApply();
+    // A later hand edit to a stop-loss, written to the same override file the apply wrote.
+    const overridePath = path.join(root, 'data', 'algo-strategy-config.json');
+    const edited = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
+    edited.strategies.swing_momentum.hard_stop_pct = 0.05;
+    fs.writeFileSync(overridePath, JSON.stringify(edited));
+    await assert.rejects(lab.equityPlanRollback(), err => err.status === 409 && /settings changed after this apply: .*hard_stop_pct/.test(err.message));
+    assert.equal((await loadSettings(root)).strategies.swing_momentum.hard_stop_pct, 0.05);
+    await lab.equityPlanRollback({ force: true });
+    assert.equal((await loadSettings(root)).strategies.swing_momentum.max_position_pct, before);
 });
 
 test('an options plan applies as one change to the options override and rolls back to the previous file', async t => {

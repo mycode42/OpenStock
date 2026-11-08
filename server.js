@@ -2,6 +2,7 @@ const path = require('node:path');
 const paths = require('./lib/paths');
 require('dotenv').config({ path: paths.configFilePath(), quiet: true });
 const express = require('express');
+const { createRateLimiter } = require('./server/rate-limit');
 const OpenStockDB = require('./database/db');
 const { initDatabase } = require('./database/init');
 const demoData = require('./server/demo-data');
@@ -38,6 +39,7 @@ function createApp({
 } = {}) {
     const db = suppliedDb || new OpenStockDB(dbPath);
     const app = express();
+    app.disable('x-powered-by');
     // Behind a reverse proxy, the proxy sets X-Forwarded-Proto and X-Forwarded-Host. Those headers are
     // honoured only when OPENSTOCK_TRUST_PROXY=1 says a proxy is in front. Otherwise any client can set them.
     const trustProxy = process.env.OPENSTOCK_TRUST_PROXY === '1';
@@ -75,6 +77,26 @@ function createApp({
         timer.unref();
     }
     const serializeConfiguredStock = (stock) => serializeBrokerStock(stock, db);
+    // Security headers on every response. No Content-Security-Policy yet: the pages use inline scripts and styles.
+    app.use((req, res, next) => {
+        res.set({
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+            'Referrer-Policy': 'no-referrer',
+            'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+            'Cross-Origin-Opener-Policy': 'same-origin',
+        });
+        next();
+    });
+    // The public demo limits API calls per client address, so it cannot be flooded. Writes are limited harder.
+    if (app.locals.demoMode) {
+        const apiLimit = createRateLimiter({ windowMs: 60_000, max: 240 });
+        const writeLimit = createRateLimiter({ windowMs: 60_000, max: 20 });
+        app.use('/api', (req, res, next) => {
+            if (['GET', 'HEAD'].includes(req.method)) return apiLimit(req, res, next);
+            return apiLimit(req, res, () => writeLimit(req, res, next));
+        });
+    }
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
     app.use('/api', (req, res, next) => {

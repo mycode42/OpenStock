@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
+const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { execFile, spawn, spawnSync } = require('node:child_process');
@@ -39,6 +40,24 @@ const EQUITY_PRESET_NAMES = Object.freeze(['standard', 'conservative', 'high-ris
 const RESERVED_PROFILE_NAMES = Object.freeze(['standard', 'conservative', 'high-risk']);
 // Keys each equity strategy's validator accepts for a profile (kept in step with strategies/registry.py by a test).
 const EQUITY_PROFILE_KEYS = require('./equity-profile-keys.json');
+// Every leaf of a settings object as "path.to.key" -> JSON text, so two versions can be compared key by key.
+function flattenSettings(value, prefix = '', out = {}) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        for (const key of Object.keys(value)) flattenSettings(value[key], prefix ? `${prefix}.${key}` : key, out);
+    } else {
+        out[prefix] = JSON.stringify(value === undefined ? null : value);
+    }
+    return out;
+}
+
+// Paths whose value differs between the file an apply wrote and the file now on disk.
+function overrideDifferences(applied, current) {
+    const before = flattenSettings(applied || {});
+    const after = flattenSettings(current || {});
+    const paths = new Set([...Object.keys(before), ...Object.keys(after)]);
+    return [...paths].filter(key => before[key] !== after[key]).sort();
+}
+
 function equityProfileKeys(strategy) {
     return Array.isArray(EQUITY_PROFILE_KEYS[strategy]) ? EQUITY_PROFILE_KEYS[strategy] : [];
 }
@@ -307,7 +326,13 @@ class ResearchLab {
     }
 
     async freeMemoryMb() {
-        return parseFreeMemoryMb(await fsp.readFile(this.meminfoPath, 'utf8'));
+        try {
+            return parseFreeMemoryMb(await fsp.readFile(this.meminfoPath, 'utf8'));
+        } catch (error) {
+            // No /proc/meminfo (macOS, some containers): use the operating system's figure instead.
+            if (error instanceof LabError || error.code === 'ENOENT') return Math.floor(os.freemem() / 1048576);
+            throw error;
+        }
     }
 
     activeJob() {
@@ -823,21 +848,34 @@ class ResearchLab {
         // Refuses the whole change if any value breaks the settings rules, so nothing half-applies.
         validateSettings(next, defaults, await loadRules(this.root));
         await writeSettings(this.root, next);
+        // What the apply left in the override file, so a later rollback can tell whether anything was edited since.
+        const appliedOverride = await readJsonFile(overridePath, null);
         const entry = {
             id: randomUUID().slice(0, 8), action: 'apply_plan', account: 'equity',
             applied: preview.strategies.map(item => ({ strategy: item.strategy, profile: item.profile, parameters: item.parameters })),
-            changes: preview.changes, previous_override: previousOverride, at: this.now().toISOString(),
+            changes: preview.changes, previous_override: previousOverride, applied_override: appliedOverride,
+            at: this.now().toISOString(),
         };
         await this.appendEquityHistory(entry);
         return { ...preview, applied: 'next equity cycle', entry };
     }
 
-    async equityPlanRollback() {
+    async equityPlanRollback({ force = false } = {}) {
         const file = path.join(this.labDir, 'history', 'equity-plan.json');
         const data = await readJsonFile(file, { entries: [] });
         const target = [...data.entries].reverse().find(item => item.action === 'apply_plan' && !item.rolled_back_at);
         if (!target) throw new LabError('there is no applied equity plan to roll back', 409);
         const overridePath = path.join(this.root, 'data', 'algo-strategy-config.json');
+        // Rolling back restores the whole file, so any edit made after the apply would be lost. Refuse unless forced.
+        if (!force) {
+            if (target.applied_override === undefined) {
+                throw new LabError('this apply was made before change tracking, so rolling it back could drop later edits. Check the settings, then roll back with force.', 409);
+            }
+            const changed = overrideDifferences(target.applied_override, await readJsonFile(overridePath, null));
+            if (changed.length) {
+                throw new LabError(`the settings changed after this apply: ${changed.join(', ')}. Undo those edits first, or roll back anyway with force.`, 409);
+            }
+        }
         if (target.previous_override === null) {
             await fsp.rm(overridePath, { force: true });
         } else {
@@ -919,8 +957,8 @@ class ResearchLab {
         return account === 'options' ? this.optionsPlanApply() : this.equityPlanApply();
     }
 
-    planRollback(account) {
-        return account === 'options' ? this.optionsPlanRollback() : this.equityPlanRollback();
+    planRollback(account, options = {}) {
+        return account === 'options' ? this.optionsPlanRollback() : this.equityPlanRollback(options);
     }
 
     async appendEquityHistory(entry) {

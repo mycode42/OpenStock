@@ -276,6 +276,14 @@ def refresh_active_parameter_profile() -> dict:
             normalized_values[normalized_key] = value
         metadata[section] = normalized_values
     effective = deepcopy(BASE_ALGO_DEFAULT_PARAMETERS)
+    # The position target is the settings file's value, the same one the live sizing and the lab's apply use.
+    from portfolio.config import get_algo_configuration
+
+    settings_strategies = get_algo_configuration().get("strategies", {})
+    for strategy, values in effective.items():
+        target = (settings_strategies.get(strategy) or {}).get("max_position_pct")
+        if "max_position_pct" in values and isinstance(target, (int, float)) and not isinstance(target, bool):
+            values["max_position_pct"] = float(target)
     for strategy, values in (metadata.get("parameters") or {}).items():
         if strategy not in effective:
             continue

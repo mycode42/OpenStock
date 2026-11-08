@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass
 from copy import deepcopy
 import json
+import os
 import math
 from pathlib import Path
 
@@ -388,6 +389,18 @@ def resolve_mode(cli_mode: str | None = None) -> str:
     return "algo"
 
 
+def _lab_run_values() -> dict:
+    """Parameter values a research lab run overrides, read from the file the run was started with. Empty outside lab runs."""
+    path = os.environ.get("ALGO_LAB_PARAMETER_OVERRIDES")
+    if not path:
+        return {}
+    try:
+        values = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
 def get_mode_config(mode: str | None = None) -> dict:
     """Return effective Algo settings; reject removed Swing and Day account routes."""
     resolve_mode(mode)
@@ -427,15 +440,17 @@ def get_mode_config(mode: str | None = None) -> dict:
         "cooldown_minutes_by_strategy": {},
     })
     for strategy, settings in config["strategies"].items():
-        risk["stop_loss_pct_by_strategy"][strategy] = settings["hard_stop_pct"]
-        risk["trailing_stop_pct_by_strategy"][strategy] = settings["trailing_stop_pct"]
-        risk["trailing_activation_pct_by_strategy"][strategy] = settings["trailing_activation_pct"]
+        # A lab run tests its profile: its values replace the settings for that run only. Live and nightly runs have no override.
+        run_values = _lab_run_values().get(strategy, {})
+        risk["stop_loss_pct_by_strategy"][strategy] = run_values.get("hard_stop_pct", settings["hard_stop_pct"])
+        risk["trailing_stop_pct_by_strategy"][strategy] = run_values.get("trailing_stop_pct", settings["trailing_stop_pct"])
+        risk["trailing_activation_pct_by_strategy"][strategy] = run_values.get("trailing_activation_pct", settings["trailing_activation_pct"])
         risk["max_entries_per_strategy_per_day"][strategy] = settings["max_entries_per_day"]
         risk["max_positions_per_strategy_by_strategy"][strategy] = min(
             settings["max_positions"], portfolio["max_positions_per_strategy"],
         )
-        risk["max_position_pct_by_strategy"][strategy] = settings["max_position_pct"]
-        risk["risk_multiplier_by_strategy"][strategy] = settings["risk_multiplier"]
+        risk["max_position_pct_by_strategy"][strategy] = run_values.get("max_position_pct", settings["max_position_pct"])
+        risk["risk_multiplier_by_strategy"][strategy] = run_values.get("risk_multiplier", settings["risk_multiplier"])
         risk["minimum_hold_minutes_by_strategy"][strategy] = settings["minimum_hold_minutes"]
         risk["cooldown_minutes_by_strategy"][strategy] = settings["cooldown_minutes"]
     risk["strategy_group_limits"] = {
