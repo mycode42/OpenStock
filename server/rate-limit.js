@@ -1,7 +1,7 @@
 'use strict';
 
 // A small fixed-window limiter per client address. In memory, so it resets on restart.
-function createRateLimiter({ windowMs = 60_000, max = 240, now = () => Date.now() } = {}) {
+function createRateLimiter({ windowMs = 60_000, max = 240, now = () => Date.now(), keyOf = req => req.ip || req.socket?.remoteAddress || 'unknown' } = {}) {
     const windows = new Map();
     let lastSweep = now();
     return function rateLimit(req, res, next) {
@@ -10,7 +10,7 @@ function createRateLimiter({ windowMs = 60_000, max = 240, now = () => Date.now(
             for (const [key, entry] of windows) if (entry.reset <= at) windows.delete(key);
             lastSweep = at;
         }
-        const key = req.ip || req.socket?.remoteAddress || 'unknown';
+        const key = keyOf(req);
         let entry = windows.get(key);
         if (!entry || entry.reset <= at) {
             entry = { count: 0, reset: at + windowMs };

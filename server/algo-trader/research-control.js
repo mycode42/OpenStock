@@ -53,9 +53,19 @@ async function nightlyState(runner, key) {
     };
 }
 
+// systemctl --user fails when there is no user session (containers, SSH without lingering). Then no user timers run here.
+function hasNoUserSession(error) {
+    return /Failed to connect to bus|No medium found|Transport endpoint|not been booted with systemd/i.test(`${error?.stderr || ''} ${error?.message || ''}`);
+}
+
 async function researchState({ runner = defaultRunner } = {}) {
-    const nightly = await Promise.all(Object.keys(NIGHTLY).map(key => nightlyState(runner, key)));
-    return { available: true, nightly, running: nightly.some(job => job.running) };
+    try {
+        const nightly = await Promise.all(Object.keys(NIGHTLY).map(key => nightlyState(runner, key)));
+        return { available: true, nightly, running: nightly.some(job => job.running) };
+    } catch (error) {
+        if (!hasNoUserSession(error) && error?.code !== 'ENOENT') throw error;
+        return { available: false, nightly: [], running: false, reason: 'No systemd user session on this host, so the nightly timers are not managed here.' };
+    }
 }
 
 async function setNightlyEnabled(key, enabled, { runner = defaultRunner } = {}) {
@@ -100,4 +110,4 @@ function demoState() {
     return { available: false, nightly, running: false };
 }
 
-module.exports = { NIGHTLY, RESEARCH_PROCESS, researchState, setNightlyEnabled, killRunningResearch, nightlyKey, demoState };
+module.exports = { hasNoUserSession, NIGHTLY, RESEARCH_PROCESS, researchState, setNightlyEnabled, killRunningResearch, nightlyKey, demoState };

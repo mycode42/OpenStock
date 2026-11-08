@@ -158,7 +158,12 @@
       "minimum_hold_minutes": 0,
       "cooldown_minutes": 7200,
       "horizon": "swing",
-      "bar_interval": "1Day"
+      "bar_interval": "1Day",
+      "slope_mode": "off",
+      "max_reference_slope_pct": 0.025,
+      "slope_volatility_multiple": 2.0,
+      "regime_filter": "er",
+      "efficiency_ratio_max": 0.42
     },
     "intraday_trend_following": {
       "enabled": true,

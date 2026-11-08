@@ -41,3 +41,16 @@ test('each client has its own window', () => {
     limit({ ip: 'b' }, fakeResponse(), () => { second = true; });
     assert.equal(first && second, true);
 });
+
+test('a client that changes its forwarded address still counts against its socket address', () => {
+    const socketKey = req => req.socket.remoteAddress;
+    const limit = createRateLimiter({ windowMs: 1000, max: 2, now: () => 0, keyOf: socketKey });
+    const results = [];
+    for (const forwarded of ['1.1.1.1', '2.2.2.2', '3.3.3.3']) {
+        const res = fakeResponse();
+        let passed = false;
+        limit({ ip: forwarded, socket: { remoteAddress: '127.0.0.1' } }, res, () => { passed = true; });
+        results.push(passed ? 'next' : res.statusCode);
+    }
+    assert.deepEqual(results, ['next', 'next', 429]);
+});

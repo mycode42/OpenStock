@@ -243,6 +243,18 @@ test('mean reversion filters are profile keys: a custom profile can set the slop
     assert.ok(mr.tunable.includes('slope_mode') && mr.tunable.includes('regime_filter'));
 });
 
+test('a mean-reversion profile with filter settings applies to the settings file and is read back', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const { loadSettings } = require('../server/algo-trader/settings');
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo, checkProfiles: async () => {} });
+    await lab.setPlan('equity', { swing_mean_reversion: 'high-risk' });
+    await lab.equityPlanApply();
+    const applied = (await loadSettings(root)).strategies.swing_mean_reversion;
+    assert.equal(applied.slope_mode, 'volatility_scaled');
+    assert.equal(applied.regime_filter, 'er');
+    assert.equal(applied.efficiency_ratio_max, 0.5);
+});
+
 test('overview returns one strategies list per account; every equity strategy lists its three built-in profiles', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });

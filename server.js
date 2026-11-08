@@ -90,12 +90,16 @@ function createApp({
     });
     // The public demo limits API calls per client address, so it cannot be flooded. Writes are limited harder.
     if (app.locals.demoMode) {
+        // Clients are counted by the forwarded address. A forwarded header can be forged by a client on this machine,
+        // so every request is also counted by its socket address, which no header can change.
+        const socketAddress = req => req.socket?.remoteAddress || 'unknown';
         const apiLimit = createRateLimiter({ windowMs: 60_000, max: 240 });
         const writeLimit = createRateLimiter({ windowMs: 60_000, max: 20 });
-        app.use('/api', (req, res, next) => {
+        const socketLimit = createRateLimiter({ windowMs: 60_000, max: 1200, keyOf: socketAddress });
+        app.use('/api', (req, res, next) => socketLimit(req, res, () => {
             if (['GET', 'HEAD'].includes(req.method)) return apiLimit(req, res, next);
             return apiLimit(req, res, () => writeLimit(req, res, next));
-        });
+        }));
     }
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));

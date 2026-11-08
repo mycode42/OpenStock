@@ -280,10 +280,20 @@ def refresh_active_parameter_profile() -> dict:
     from portfolio.config import get_algo_configuration
 
     settings_strategies = get_algo_configuration().get("strategies", {})
+    # Keys the settings file owns: the position target, and the swing mean-reversion filters the lab can change.
+    settings_owned = ("max_position_pct", "slope_mode", "regime_filter", "efficiency_ratio_max", "max_reference_slope_pct", "slope_volatility_multiple")
     for strategy, values in effective.items():
-        target = (settings_strategies.get(strategy) or {}).get("max_position_pct")
-        if "max_position_pct" in values and isinstance(target, (int, float)) and not isinstance(target, bool):
-            values["max_position_pct"] = float(target)
+        block = settings_strategies.get(strategy) or {}
+        for key in settings_owned:
+            if key not in values or key not in block:
+                continue
+            value = block[key]
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)) and key != "slope_mode" and key != "regime_filter":
+                values[key] = float(value)
+            elif isinstance(value, str) and key in ("slope_mode", "regime_filter"):
+                values[key] = value
     for strategy, values in (metadata.get("parameters") or {}).items():
         if strategy not in effective:
             continue

@@ -33,3 +33,16 @@ curl -X POST http://127.0.0.1:3000/api/stocks \
 Behind a reverse proxy, set `OPENSTOCK_TRUST_PROXY=1` so the server honours the proxy's `X-Forwarded-Host` and `X-Forwarded-Proto`, and send the public origin, for example `https://openstock.example.com`. When that setting is on, the proxy must overwrite any `X-Forwarded-Host` and `X-Forwarded-Proto` the client sends, so a client cannot supply its own. Without the setting, the forwarded headers are ignored, so a client cannot make a foreign origin match.
 
 Live orders additionally need `ALPACA_ALLOW_LIVE=1` and the `X-OpenStock-Order-Token` header. See [Configuration](configuration.md).
+
+## Research lab and system load
+
+These routes are read by the Research page. Writes need a same-origin request, and in the public demo they are refused with HTTP 409.
+
+- `GET /api/algo-trader/research/lab?account=equity|options`: strategies, their live parameters, profiles, and entry and exit rules. The overview also says whether the lab is read-only (`read_only`).
+- `GET /api/algo-trader/research/plan?account=` and `PUT /api/algo-trader/research/plan`: the profile chosen for each strategy, kept between visits.
+- `GET /api/algo-trader/research/plan/preview?account=`: the settings changes a plan would make. Empty in the demo.
+- `POST /api/algo-trader/research/plan/apply` and `POST /api/algo-trader/research/plan/rollback`: write or restore the settings. Rollback refuses when the settings changed after the apply. Send `{"force": true}` to roll back anyway.
+- `POST /api/algo-trader/research/profiles`: save a custom profile. Numbers, or one of the listed words for `slope_mode` and `regime_filter`.
+- `POST /api/algo-trader/research/jobs` and `POST /api/algo-trader/research/jobs/:id/cancel`: start or cancel a lab run. `GET /research/jobs/:id` returns its stage progress.
+- `GET /api/algo-trader/research/control` and the nightly and kill routes: nightly timers and running research. Without a systemd user session the state reads `available: false`.
+- `GET /api/system/load`: CPU, memory, load and process figures for this host. The public demo returns sample figures instead.

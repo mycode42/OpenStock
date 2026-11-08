@@ -62,3 +62,16 @@ test('the demo state lists both nightly switches and is not available for change
     assert.equal(state.available, false);
     assert.deepEqual(state.nightly.map(job => job.key), ['equity', 'options']);
 });
+
+test('without a systemd user session the research state is unavailable, not an error', async () => {
+    const { researchState } = require('../server/algo-trader/research-control');
+    const state = await researchState({
+        runner: async () => {
+            const error = new Error('Command failed: systemctl --user show');
+            error.stderr = 'Failed to connect to bus: No medium found';
+            throw error;
+        },
+    });
+    assert.equal(state.available, false);
+    assert.equal(state.running, false);
+});

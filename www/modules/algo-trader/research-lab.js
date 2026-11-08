@@ -246,7 +246,7 @@ function renderRules(strategy) {
     const rules = strategy?.rules;
     if (!rules || (!rules.entry?.length && !rules.exit?.length)) return '';
     const list = items => `<ul class="lab-rule-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
-    return `<details class="lab-rules" open><summary>Entry and exit rules: ${escapeHtml(strategy.id.replaceAll('_', ' '))}</summary>
+    return `<details class="lab-rules"><summary>Entry and exit rules: ${escapeHtml(strategy.id.replaceAll('_', ' '))}</summary>
         <div class="lab-rules-grid"><div><strong>Entry</strong>${list(rules.entry)}</div><div><strong>Exit</strong>${list(rules.exit)}</div></div>
     </details>`;
 }

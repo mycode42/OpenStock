@@ -27,6 +27,7 @@ function dt(id) { document.getElementById(id)?.classList.toggle('open'); }
 async function af(path, options={}, onError) { return apiRequest(path, options, (message, details)=>onError ? onError(message, details) : showA(message,'error')); }
 apiRequest('/demo-status').then(status => {
     if (!status?.demo_mode) return;
+    document.documentElement.dataset.demo = '1';
     const banner = document.getElementById('demo-mode-banner');
     if (!banner) return;
     banner.hidden = false;
