@@ -220,16 +220,30 @@ function algoPayload(accountType = 'equity', nowValue = new Date()) {
 
 // Research lab overview with no Algo Trader data behind it: the same strategy list and limits, nothing to tune or run.
 function labOverview(account = 'options') {
-    const { EQUITY_STRATEGIES, LIMITS, LabError, OPTIONS_STRATEGIES } = require('./algo-trader/research-lab');
+    const { EQUITY_PRESET_NAMES, EQUITY_STRATEGIES, LIMITS, LabError, OPTIONS_STRATEGIES, equityPresetParameters, equityProfileKeys } = require('./algo-trader/research-lab');
     if (account !== 'options' && account !== 'equity') throw new LabError('account must be options or equity');
-    const ids = account === 'equity' ? EQUITY_STRATEGIES : OPTIONS_STRATEGIES;
-    return {
+    const base = {
         account,
         limits: { maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart, concurrentJobs: 1 },
         active_job: null,
         start_available: false,
-        strategies: ids.map(id => ({ id, account, parameters: {}, tunable: [], profiles: [], history: [] })),
+        // Demo shows the lab and its sample profiles; runs, plan changes and saved profiles are refused.
+        read_only: true,
     };
+    if (account === 'options') {
+        return { ...base, strategies: OPTIONS_STRATEGIES.map(id => ({ id, account, parameters: {}, tunable: [], profiles: [], history: [] })) };
+    }
+    // The demo's live values are the standard profile, so the profile table reads like the real one.
+    const strategies = EQUITY_STRATEGIES.map(id => {
+        const keys = equityProfileKeys(id);
+        const profiles = keys.length
+            ? EQUITY_PRESET_NAMES.map(name => ({ name, builtin: true, parameters: equityPresetParameters(name, {}, id) }))
+            : [];
+        return {
+            id, account, parameters: profiles[0]?.parameters || {}, tunable: keys, profiles, history: [],
+        };
+    });
+    return { ...base, strategies };
 }
 
 // Sample job logs for the demo, in the shape the research page reads. The real ones are written by the scheduled jobs.

@@ -173,7 +173,7 @@ function renderEquityStart() {
             <label>Start <input type="date" data-lab-equity-field="start" min="2020-01-01" value="${escapeHtml(state.equity.start)}"></label>
             <label>End <input type="date" data-lab-equity-field="end" value="${escapeHtml(state.equity.end)}"></label>
         </div>
-        <button type="submit" class="btn btn-primary" ${busy || !picked ? 'disabled' : ''}>Start research</button>
+        <button type="submit" class="btn btn-primary" ${busy || !picked || state.overview?.read_only ? 'disabled' : ''}>Start research</button>
         ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : !picked ? '<p class="lab-muted">Switch on at least one strategy to start.</p>' : ''}
     </form>`;
 }
@@ -210,8 +210,8 @@ function renderPlanPanel() {
         <p class="lab-plan-live"><strong>Live now:</strong> ${liveLine}</p>
         <div class="lab-plan-actions">
             <button type="button" class="btn btn-secondary" data-lab-action="plan-preview">1 · Preview changes</button>
-            <button type="button" class="btn btn-primary" data-lab-action="plan-apply" ${preview && preview.changes ? '' : 'disabled'}>2 · Apply changes</button>
-            <button type="button" class="btn btn-secondary" data-lab-action="plan-undo" ${live ? '' : 'disabled'}>Undo last apply</button>
+            <button type="button" class="btn btn-primary" data-lab-action="plan-apply" ${!state.overview?.read_only && preview && preview.changes ? '' : 'disabled'}>2 · Apply changes</button>
+            <button type="button" class="btn btn-secondary" data-lab-action="plan-undo" ${!state.overview?.read_only && live ? '' : 'disabled'}>Undo last apply</button>
         </div>
         ${preview ? renderPlanPreview(preview) : ''}
         ${history ? `<details class="lab-plan-history"><summary>Recent applies</summary><ul class="lab-history">${history}</ul></details>` : ''}
@@ -256,7 +256,7 @@ function renderProfilePanel(strategy) {
         <details class="lab-custom" open><summary>Custom profile</summary>
             <label>Name <input type="text" data-lab-custom-name maxlength="40" placeholder="my-profile"></label>
             <div class="lab-custom-grid">${custom}</div>
-            <button type="button" class="btn btn-secondary" data-lab-action="save-custom">Save custom profile</button>
+            <button type="button" class="btn btn-secondary" data-lab-action="save-custom" ${state.overview?.read_only ? 'disabled' : ''}>Save custom profile</button>
         </details>`;
 }
 
@@ -292,7 +292,7 @@ function renderStartForm() {
             <label>Start <input type="date" name="start" data-lab-field value="${escapeHtml(state.form.start)}" min="${escapeHtml(state.overview.limits.earliestStart)}"></label>
             <label>End <input type="date" name="end" data-lab-field value="${escapeHtml(state.form.end)}"></label>
         </div>
-        <button type="submit" class="btn btn-primary" ${busy || !picked ? 'disabled' : ''}>Start research</button>
+        <button type="submit" class="btn btn-primary" ${busy || !picked || state.overview?.read_only ? 'disabled' : ''}>Start research</button>
         ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : !picked ? '<p class="lab-muted">Switch on at least one strategy to start.</p>' : ''}
         ${queued.length ? `<p class="lab-muted">Queued after it: ${queued.map(escapeHtml).join(', ')}</p>` : ''}
     </form>`;
@@ -331,6 +331,7 @@ function renderLab() {
         <div class="lab-head"><div class="algo-section-heading"><div><span class="algo-eyebrow">RESEARCH LAB</span><h2>Interactive ${isOptions ? 'options' : 'equity'} research</h2>${heading}</div></div>
             <div id="system-gauge" class="sys-gauge" aria-label="Host load"></div></div>
         ${notice}
+        ${state.overview.read_only ? '<p class="lab-muted">Demo: sample profiles and results. Runs, plan changes and saved profiles are disabled.</p>' : ''}
         ${body}
     </section>`;
 }

@@ -210,6 +210,18 @@ test('an equity run reports every pipeline stage, and stages that never ran read
     assert.equal(job.stages.percent, 100);
 });
 
+test('the demo lab shows the sample profiles of every equity strategy and refuses changes', () => {
+    const demo = require('../server/demo-data');
+    const overview = demo.labOverview('equity');
+    assert.equal(overview.read_only, true);
+    assert.equal(overview.start_available, false);
+    assert.equal(overview.strategies.length, 7);
+    for (const strategy of overview.strategies) {
+        assert.deepEqual(strategy.profiles.map(profile => profile.name), ['standard', 'conservative', 'high-risk'], strategy.id);
+        assert.ok(strategy.tunable.length > 0, strategy.id);
+    }
+});
+
 test('overview returns one strategies list per account; every equity strategy lists its three built-in profiles', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });

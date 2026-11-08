@@ -1001,7 +1001,7 @@ class ResearchLab {
 }
 
 module.exports = {
-    equityPresetParameters, EQUITY_PRESET_NAMES,
+    equityPresetParameters, equityProfileKeys, EQUITY_PRESET_NAMES,
     EQUITY_STRATEGIES,
     LIMITS,
     LabError,
