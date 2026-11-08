@@ -88,7 +88,7 @@
   },
   "llm_driven": {
     "enabled": true,
-    "min_llm_confidence": 0.7,
+    "min_llm_confidence": 0.8,
     "min_dte": 3,
     "max_dte": 35,
     "target_dte": 21,

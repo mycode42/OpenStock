@@ -229,6 +229,20 @@ test('free memory falls back to the operating system figure where /proc/meminfo 
     assert.ok(Number.isInteger(free) && free >= 0);
 });
 
+test('mean reversion filters are profile keys: a custom profile can set the slope mode and the efficiency-ratio filter', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo, checkProfiles: async () => {} });
+    const saved = await lab.saveProfile({
+        account: 'equity', strategy: 'swing_mean_reversion', name: 'vol-scaled',
+        parameters: { slope_mode: 'volatility_scaled', slope_volatility_multiple: 1.5, regime_filter: 'er', efficiency_ratio_max: 0.4 },
+    });
+    assert.deepEqual(saved.at(-1).parameters, { slope_mode: 'volatility_scaled', slope_volatility_multiple: 1.5, regime_filter: 'er', efficiency_ratio_max: 0.4 });
+    await assert.rejects(lab.saveProfile({ account: 'equity', strategy: 'swing_mean_reversion', name: 'bad-mode', parameters: { slope_mode: 'steep' } }), err => err.status !== 200 && /slope_mode must be one of/.test(err.message));
+    const overview = await lab.overview('equity');
+    const mr = overview.strategies.find(item => item.id === 'swing_mean_reversion');
+    assert.ok(mr.tunable.includes('slope_mode') && mr.tunable.includes('regime_filter'));
+});
+
 test('overview returns one strategies list per account; every equity strategy lists its three built-in profiles', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });

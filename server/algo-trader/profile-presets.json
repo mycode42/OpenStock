@@ -53,21 +53,36 @@
         "risk_multiplier": 0.75,
         "hard_stop_pct": 0.07,
         "trailing_stop_pct": 0.05,
-        "trailing_activation_pct": 0.02
+        "trailing_activation_pct": 0.02,
+        "slope_mode": "off",
+        "max_reference_slope_pct": 0.025,
+        "slope_volatility_multiple": 2.0,
+        "regime_filter": "er",
+        "efficiency_ratio_max": 0.42
       },
       "conservative": {
         "max_position_pct": 0.028,
         "risk_multiplier": 0.5,
         "hard_stop_pct": 0.056,
         "trailing_stop_pct": 0.04,
-        "trailing_activation_pct": 0.016
+        "trailing_activation_pct": 0.016,
+        "slope_mode": "fixed_pct",
+        "max_reference_slope_pct": 0.02,
+        "slope_volatility_multiple": 1.5,
+        "regime_filter": "er",
+        "efficiency_ratio_max": 0.3
       },
       "high-risk": {
         "max_position_pct": 0.052,
         "risk_multiplier": 1.05,
         "hard_stop_pct": 0.084,
         "trailing_stop_pct": 0.06,
-        "trailing_activation_pct": 0.024
+        "trailing_activation_pct": 0.024,
+        "slope_mode": "volatility_scaled",
+        "max_reference_slope_pct": 0.025,
+        "slope_volatility_multiple": 2.5,
+        "regime_filter": "er",
+        "efficiency_ratio_max": 0.5
       }
     },
     "swing_multi_factor": {

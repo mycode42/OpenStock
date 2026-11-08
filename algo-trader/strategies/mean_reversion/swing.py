@@ -29,9 +29,9 @@ class SwingMeanReversionConfig:
     entry_distance_mode: str = "fixed_pct"
     stretch_zscore: float = 1.75
     volatility_lookback_days: int = 20
-    regime_filter: str = "none"
+    regime_filter: str = "er"
     efficiency_ratio_period: int = 20
-    efficiency_ratio_max: float = 0.35
+    efficiency_ratio_max: float = 0.42
     adx_period: int = 14
     adx_max: float = 20.0
     minimum_stretch_days: int = 2
@@ -41,6 +41,10 @@ class SwingMeanReversionConfig:
     short_rsi_min: float = 60.0
     slope_lookback_days: int = 5
     max_reference_slope_pct: float = 0.025
+    # fixed_pct: the slope must stay within max_reference_slope_pct. volatility_scaled: within
+    # slope_volatility_multiple daily sigmas over the slope window. off: no slope check.
+    slope_mode: str = "off"
+    slope_volatility_multiple: float = 2.0
     minimum_hold_sessions: int = 2
     maximum_holding_sessions: int = 10
     hard_stop_pct: float = 0.07
@@ -93,10 +97,12 @@ class SwingMeanReversionConfig:
             "stretch_zscore": (0.75, 3.5), "efficiency_ratio_max": (0.10, 0.60),
             "adx_max": (10, 35),
             "long_rsi_max": (10, 50), "short_rsi_min": (50, 90),
-            "max_reference_slope_pct": (0.005, 0.10), "hard_stop_pct": (0.03, 0.15),
+            "max_reference_slope_pct": (0.005, 0.10), "slope_volatility_multiple": (0.5, 4.0), "hard_stop_pct": (0.03, 0.15),
             "trailing_stop_pct": (0.03, 0.15), "trailing_activation_pct": (0.01, 0.10),
             "max_position_pct": (0.01, 0.10), "risk_multiplier": (0.5, 1.25),
         }
+        if self.slope_mode not in {"fixed_pct", "volatility_scaled", "off"}:
+            raise ValueError("swing_mean_reversion slope_mode must be fixed_pct, volatility_scaled, or off")
         for key, (low, high) in number_bounds.items():
             value = getattr(self, key)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -303,8 +309,17 @@ def signal(
         allow_long = allow_short = True
 
     # A five-session reference slope filter avoids fading a strong one-way move.
-    if abs(reference_slope) > config.max_reference_slope_pct:
-        return None
+    if config.slope_mode == "fixed_pct":
+        if abs(reference_slope) > config.max_reference_slope_pct:
+            return None
+    elif config.slope_mode == "volatility_scaled":
+        # Scale the allowed slope by recent daily volatility: a move is a 'strong one-way move' only relative to normal noise.
+        daily_returns = [values[i] / values[i - 1] - 1 for i in range(len(values) - config.volatility_lookback_days, len(values)) if values[i - 1] > 0]
+        sigma = population_std(daily_returns) if len(daily_returns) >= 5 else None
+        if sigma is None or sigma <= 0:
+            return None
+        if abs(reference_slope) > config.slope_volatility_multiple * sigma * math.sqrt(config.slope_lookback_days):
+            return None
     if config.use_rsi_confirmation:
         relative_strength = rsi(values, 14)
         if relative_strength is None:

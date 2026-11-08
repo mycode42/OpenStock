@@ -104,6 +104,10 @@ def test_migrated_default_scales_equal_the_route_weights_they_replace(default_re
             # The conservative 0.65 is the deliberate size change this migration makes.
             assert active_weights == {0.65, 0.75}
             assert scales[name] == pytest.approx(0.65)
+        elif name in {"swing_trend_following", "swing_momentum", "intraday_trend_following", "intraday_momentum"}:
+            # Trend and momentum keep their trend weight for size. A small range and volatile weight only makes them eligible there.
+            assert active_weights, name
+            assert scales[name] == pytest.approx(max(active_weights)), name
         else:
             assert active_weights, name
             assert scales[name] == pytest.approx(active_weights.pop()), name

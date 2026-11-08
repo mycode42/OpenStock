@@ -17,7 +17,7 @@ Enforcement: `algo-trader/tests/policy/test_gate_freeze.py` extracts every rejec
 - **Session-aware execution gates.** Regular-session quotes become stale after 90 seconds; extended-session quotes after 900 seconds (15 minutes). Extended-hours orders are limit-only; opening shorts use DAY sell-to-open limits and retain the existing risk/borrow checks. Overnight shorts fail closed unless current asset eligibility is verified and the asset is not halted.
 - **Short sizing.** Hard-to-borrow shorts are sized to `portfolio.hard_to_borrow_short_risk_multiplier` (default 0.5). Easy-to-borrow is a preference, not a requirement; unavailable overnight asset eligibility still blocks overnight short entries.
 - **No moonshot blocklist.**
-- **LLM confidence.** Options `llm_driven.min_llm_confidence` is 0.70. Algo `swing_llm_driven.minimum_confidence` is 70.
+- **LLM confidence.** Options `llm_driven.min_llm_confidence` is 0.80. Algo `swing_llm_driven.minimum_confidence` is 80.
 
 ## Gate categories that remain
 
@@ -34,6 +34,10 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 9. **Order-level checks.** Alert level must be active and untriggered. A BUY needs a budget. A SELL needs an open position. One live order per alert level, enforced by a database index.
 
 ## Approved changes
+
+- **2026-11-08, LLM confidence floor 80 for options too.** At Andreas's explicit request, `llm_driven.min_llm_confidence` is 0.80 (was 0.70), matching the Algo LLM floor. The LLM strategies trade only when very confident. Approved by Andreas in chat.
+
+- **2026-11-08, Algo LLM confidence floor 80.** At Andreas's explicit request, the Algo `swing_llm_driven.minimum_confidence` gate is 80, not 70. The live configuration already had 80 since v3.1.4; this aligns the policy with it. The LLM strategy trades only when very confident. Approved by Andreas in chat.
 
 - **2026-11-07, high-risk profile position and risk ceilings.** At Andreas's explicit request, raised the sizing caps so the high-risk research and apply profiles can pass: `portfolio.max_position_pct` and `portfolio.max_strategy_position_pct` from 0.07 to 0.10 in `portfolio/algo-strategy-config.default.json`; the per-strategy `max_position_pct` range from 0.05 to 0.10 and the `risk_multiplier` range from 1.0 to 1.25 for trend following, momentum, mean reversion and multi-factor. The live standard values are unchanged (their `max_position_pct` stays 0.07), so nothing trades larger until a profile is applied. The frozen gate messages are unchanged. Approved by Andreas in chat.
 

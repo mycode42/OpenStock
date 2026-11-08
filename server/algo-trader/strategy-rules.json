@@ -1,0 +1,79 @@
+{
+  "_note": "Entry and exit rules shown on the research page. {name} is filled from the live registry value of that parameter, so the text always matches what the strategy runs with.",
+  "swing_trend_following": {
+    "entry": [
+      "Daily: the {fast_period}-day average is above the {slow_period}-day average (long), or below it (short).",
+      "The slow average has moved at least {minimum_slope_pct} over the last 5 sessions in the same direction."
+    ],
+    "exit": [
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "Trend reversal, after {minimum_hold_sessions} sessions. Forced exit after {maximum_holding_sessions} sessions."
+    ]
+  },
+  "swing_momentum": {
+    "entry": [
+      "Each day the universe is ranked on 5-, 10- and 20-day returns.",
+      "Buys the top {top_n} names if the gap between the best and worst score is at least {minimum_score_spread}, and the name's own return is at least {minimum_time_series_return}."
+    ],
+    "exit": [
+      "Rebalanced daily: a name leaves when it drops out of the top ranks, after {minimum_hold_sessions} sessions."
+    ]
+  },
+  "swing_mean_reversion": {
+    "entry": [
+      "Daily: the close is at least {stretch_pct} below its {lookback_days}-day mean on each of the last {minimum_stretch_days} sessions (short: above it).",
+      "RSI(14) is at or below {long_rsi_max} (short: at or above {short_rsi_min}).",
+      "Slope filter ({slope_mode}): fixed_pct blocks a {slope_lookback_days}-session slope above {max_reference_slope_pct}; volatility_scaled blocks a slope above {slope_volatility_multiple} daily sigmas; off skips it.",
+      "Efficiency-ratio filter ({regime_filter}): with er, names whose {efficiency_ratio_period}-day efficiency ratio is above {efficiency_ratio_max} (a smooth trend) are skipped.",
+      "The last close is above the close before it (short: below)."
+    ],
+    "exit": [
+      "The stretch reverts to {mean_target_fraction} of the way back to the mean, a hard stop, or the {maximum_holding_sessions}-session limit."
+    ]
+  },
+  "swing_multi_factor": {
+    "entry": [
+      "Each day the universe is scored on momentum, low volatility, short-term reversal and value and quality factors.",
+      "Holds the top {top_n} names long and the bottom {top_n} short, with equal weights, subject to sector neutrality."
+    ],
+    "exit": [
+      "Rebalanced daily. A name leaves when it drops out of its side, after {minimum_hold_sessions} sessions."
+    ]
+  },
+  "swing_llm_driven": {
+    "entry": [
+      "An LLM reads the news and returns a buy or sell with confidence. It trades only at confidence {minimum_confidence} or above."
+    ],
+    "exit": [
+      "Stops as set in the settings file for this strategy."
+    ]
+  },
+  "intraday_trend_following": {
+    "entry": [
+      "On 5-minute bars the {fast_period}-bar average crosses above the {slow_period}-bar average (short: below)."
+    ],
+    "exit": [
+      "Trend reversal, a stop, or the session close."
+    ]
+  },
+  "intraday_momentum": {
+    "entry": [
+      "The price is above its session average, and the {lookback}-bar return is at least {minimum_return}.",
+      "Volume is at least {minimum_volume_ratio} times its average."
+    ],
+    "exit": [
+      "A stop, a reversal, or the session close."
+    ]
+  },
+  "intraday_mean_reversion": {
+    "entry": [
+      "Within {entry_window_minutes} minutes of the open, the price is at least {minimum_dip_pct} below the open.",
+      "The bar closes above the previous close, after a higher low, with a bounce of at least {minimum_bounce_pct} off the low (short: a lower high after a rip).",
+      "Entries are capped per day by the strategy's daily entry limit, so a stock can dip several times in one session."
+    ],
+    "exit": [
+      "The price recovers to the session open, a stop, or the session close."
+    ]
+  }
+}

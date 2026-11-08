@@ -19,7 +19,12 @@
     "risk_multiplier",
     "hard_stop_pct",
     "trailing_stop_pct",
-    "trailing_activation_pct"
+    "trailing_activation_pct",
+    "slope_mode",
+    "max_reference_slope_pct",
+    "slope_volatility_multiple",
+    "regime_filter",
+    "efficiency_ratio_max"
   ],
   "swing_multi_factor": [
     "max_position_pct",

@@ -826,3 +826,7 @@ html[data-theme-mode="light"] .config-delivery-unknown{color:#92400e}
 .lab-stage.is-pending,.lab-stage.is-not_run{opacity:.6}
 .lab-stage.is-error,.lab-stage.is-failed{color:#e25555}
 .lab-live.is-finished .lab-progress>div{background:#3fb950}
+.lab-rules{margin:.6rem 0}
+.lab-rules-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;font-size:.9em}
+.lab-rule-list{margin:.3rem 0 0 1rem;padding:0}
+@media (max-width:700px){.lab-rules-grid{grid-template-columns:1fr}}

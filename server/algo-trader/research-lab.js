@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { execFile, spawn, spawnSync } = require('node:child_process');
+const STRATEGY_RULES = require('./strategy-rules.json');
 const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 const { readJson } = require('./io');
@@ -56,6 +57,35 @@ function overrideDifferences(applied, current) {
     const after = flattenSettings(current || {});
     const paths = new Set([...Object.keys(before), ...Object.keys(after)]);
     return [...paths].filter(key => before[key] !== after[key]).sort();
+}
+
+// Profile settings that take a word from a fixed list rather than a number.
+const ENUM_PROFILE_KEYS = Object.freeze({
+    slope_mode: Object.freeze(['fixed_pct', 'volatility_scaled', 'off']),
+    regime_filter: Object.freeze(['none', 'er', 'adx', 'combined']),
+});
+
+// Placeholder names in a strategy's rules text, e.g. {fast_period}.
+function rulePlaceholders(strategy) {
+    const rules = STRATEGY_RULES[strategy];
+    if (!rules) return [];
+    const text = [...(rules.entry || []), ...(rules.exit || [])].join(' ');
+    return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]))];
+}
+
+// Fractions read as percentages when the parameter is a rate.
+const PERCENT_KEY = /(_pct$|^minimum_return$)/;
+function formatRuleValue(key, value) {
+    if (typeof value !== 'number') return String(value);
+    if (PERCENT_KEY.test(key)) return `${(value * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
+    return String(value);
+}
+
+function filledRules(strategy, values) {
+    const rules = STRATEGY_RULES[strategy];
+    if (!rules) return { entry: [], exit: [] };
+    const fill = text => text.replace(/\{(\w+)\}/g, (_, key) => (key in values ? formatRuleValue(key, values[key]) : '—'));
+    return { entry: (rules.entry || []).map(fill), exit: (rules.exit || []).map(fill) };
 }
 
 function equityProfileKeys(strategy) {
@@ -666,6 +696,11 @@ class ResearchLab {
         const clean = {};
         for (const [key, value] of Object.entries(parameters)) {
             if (!allowed.includes(key)) throw new LabError(`${key} is not a tunable equity parameter`);
+            if (ENUM_PROFILE_KEYS[key]) {
+                if (!ENUM_PROFILE_KEYS[key].includes(value)) throw new LabError(`${key} must be one of ${ENUM_PROFILE_KEYS[key].join(', ')}`);
+                clean[key] = value;
+                continue;
+            }
             if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new LabError(`${key} must be a non-negative number`);
             clean[key] = value;
         }
@@ -1014,11 +1049,15 @@ class ResearchLab {
             const registryLive = await this.registryLiveParameters(Object.fromEntries(
                 EQUITY_STRATEGIES.map(id => [id, equityProfileKeys(id)]).filter(([, keys]) => keys.length),
             ));
+            // The rules text names parameters; their live values come from the registry, so the text matches what runs.
+            const ruleKeys = Object.fromEntries(EQUITY_STRATEGIES.map(id => [id, rulePlaceholders(id)]).filter(([, keys]) => keys.length));
+            const ruleValues = await this.registryLiveParameters(ruleKeys);
             return {
                 ...base,
                 start_available: false,
                 strategies: await Promise.all(EQUITY_STRATEGIES.map(async id => ({
                     id, account: 'equity', parameters: { ...(registryLive[id] || {}), ...scalarParameters(settings.strategies?.[id]) },
+                    rules: filledRules(id, { ...(ruleValues[id] || {}), ...scalarParameters(settings.strategies?.[id]) }),
                     tunable: equityProfileKeys(id),
                     profiles: await this.listEquityProfiles(id, scalarParameters(settings.strategies?.[id])),
                     history: [],

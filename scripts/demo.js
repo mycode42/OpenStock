@@ -28,8 +28,9 @@ const env = {
     ALPACA_OPTIONS_BASE_URL: '',
     ALPACA_ALLOW_LIVE: '',
     OPENSTOCK_ORDER_TOKEN: '',
-    // The demo is local only, so it never honours forwarded headers from a proxy.
-    OPENSTOCK_TRUST_PROXY: '',
+    // The demo listens on 127.0.0.1 only. Its public copy is reached through a Cloudflare tunnel on that machine,
+    // so the forwarded protocol and host are needed for the same-origin check on writes.
+    OPENSTOCK_TRUST_PROXY: '1',
     ALPACA_EQUITY_API_KEY: '',
     ALPACA_EQUITY_API_SECRET: '',
     ALPACA_EQUITY_ACCOUNT_ID: '',

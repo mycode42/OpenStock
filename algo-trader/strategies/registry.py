@@ -71,7 +71,7 @@ ALGO_DEFAULT_PARAMETERS = {
         "minimum_dip_pct": 0.014,
         "minimum_bounce_pct": 0.002,
         "minimum_volume_ratio": 1.3,
-        "entry_window_minutes": 90,
+        "entry_window_minutes": 300,
         "higher_low_bars": 1,
         "minimum_rip_pct": 0.014,
         "minimum_fade_pct": 0.002,
@@ -202,7 +202,7 @@ def validate_parameter_profile(profile: dict) -> dict:
         raise ValueError("mean_reversion signal_model must be bollinger or opening_dip")
     number("intraday_mean_reversion", "minimum_dip_pct", 0, 0, 0.5)
     number("intraday_mean_reversion", "minimum_volume_ratio", 1.2, 0, 20)
-    number("intraday_mean_reversion", "entry_window_minutes", 90, 5, 390, integer=True)
+    number("intraday_mean_reversion", "entry_window_minutes", 300, 5, 390, integer=True)
     number("intraday_mean_reversion", "minimum_bounce_pct", 0.001, 0, 0.1)
     number("intraday_mean_reversion", "higher_low_bars", 1, 0, 10, integer=True)
     number("intraday_mean_reversion", "minimum_rip_pct", normalized.get("intraday_mean_reversion", {}).get("minimum_dip_pct", 0), 0, 0.5)

@@ -18,6 +18,8 @@ PARAMETER_SETS = [
      "use_rsi_confirmation": True, "long_rsi_max": 50, "short_rsi_min": 50},
 ]
 
+# These sets pin the filters they test, so the live defaults can change without changing what is compared.
+PARAMETER_SETS = [{"regime_filter": "none", "slope_mode": "fixed_pct", **p} for p in PARAMETER_SETS]
 
 def _bars(seed: int, n: int) -> list[dict]:
     """Oscillating prices around a drift, so stretches and reversals occur often enough to test."""

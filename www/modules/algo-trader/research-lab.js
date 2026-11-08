@@ -241,15 +241,36 @@ function renderEquityResults(data) {
     return `${report}${rows ? `<table class="lab-table lab-results"><thead><tr><th>Strategy</th><th>Status</th><th>Start return</th><th>Best return</th><th>Best max drawdown</th><th>Best final equity</th><th>Selection</th></tr></thead><tbody>${rows}</tbody></table>${note}` : ''}`;
 }
 
+// The entry and exit rules of the selected strategy, with the live parameter values filled in.
+function renderRules(strategy) {
+    const rules = strategy?.rules;
+    if (!rules || (!rules.entry?.length && !rules.exit?.length)) return '';
+    const list = items => `<ul class="lab-rule-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+    return `<details class="lab-rules" open><summary>Entry and exit rules: ${escapeHtml(strategy.id.replaceAll('_', ' '))}</summary>
+        <div class="lab-rules-grid"><div><strong>Entry</strong>${list(rules.entry)}</div><div><strong>Exit</strong>${list(rules.exit)}</div></div>
+    </details>`;
+}
+
+const ENUM_CHOICES = Object.freeze({
+    slope_mode: ['fixed_pct', 'volatility_scaled', 'off'],
+    regime_filter: ['none', 'er', 'adx', 'combined'],
+});
+
 // The built-in profiles for the selected equity strategy, side by side with its live values.
 function renderProfilePanel(strategy) {
     const profiles = strategy?.profiles || [];
     if (!profiles.length) return '';
-    const keys = [...new Set(profiles.flatMap(profile => Object.keys(profile.parameters)))].filter(key => profiles.every(profile => typeof profile.parameters[key] === 'number' || profile.parameters[key] === undefined));
+    const keys = [...new Set(profiles.flatMap(profile => Object.keys(profile.parameters)))].filter(key => profiles.every(profile => ['number', 'string'].includes(typeof profile.parameters[key]) || profile.parameters[key] === undefined));
     const live = strategy.parameters || {};
     const head = `<tr><th>Parameter</th><th>Live now</th>${profiles.map(profile => `<th>${escapeHtml(profile.name)}</th>`).join('')}</tr>`;
     const rows = keys.map(key => `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(JSON.stringify(live[key] ?? '—'))}</td>${profiles.map(profile => `<td>${escapeHtml(JSON.stringify(profile.parameters[key] ?? '—'))}</td>`).join('')}</tr>`).join('');
-    const custom = keys.map(key => `<label>${escapeHtml(key)} <input type="number" step="any" min="0" data-lab-custom-param="${escapeHtml(key)}" value="${escapeHtml(live[key] ?? '')}"></label>`).join('');
+    const custom = keys.map(key => {
+        const options = ENUM_CHOICES[key];
+        if (options) {
+            return `<label>${escapeHtml(key)} <select data-lab-custom-param="${escapeHtml(key)}">${options.map(option => `<option value="${escapeHtml(option)}" ${option === live[key] ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('')}</select></label>`;
+        }
+        return `<label>${escapeHtml(key)} <input type="number" step="any" min="0" data-lab-custom-param="${escapeHtml(key)}" value="${escapeHtml(live[key] ?? '')}"></label>`;
+    }).join('');
     return `<h3>Profiles</h3>
         <p class="lab-muted">Standard is the live values. Conservative and high-risk move the strategy settings; the frozen gates and portfolio caps stay as they are.</p>
         <table class="lab-table lab-params-wide"><thead>${head}</thead><tbody>${rows}</tbody></table>
@@ -319,12 +340,14 @@ function renderLab() {
           </div>
           <div class="lab-fullwidth"><h3>Results</h3>${renderResults()}</div>
           <div class="lab-fullwidth">${renderStrategyTabs()}</div>
+          <div class="lab-fullwidth">${renderRules(strategy)}</div>
           <div class="lab-fullwidth">${renderProfilePanel(strategy)}</div>
           <div class="lab-fullwidth">${renderPlanPanel()}</div>
           `
         : `<div class="lab-grid"><div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div></div><div><h3>Start a run</h3>${renderEquityStart()}</div></div>
           <div class="lab-fullwidth"><h3>Results</h3>${renderResults()}</div>
           <div class="lab-fullwidth">${renderStrategyTabs()}</div>
+          <div class="lab-fullwidth">${renderRules(strategy)}</div>
           <div class="lab-fullwidth">${renderProfilePanel(strategy)}</div>
           <div class="lab-fullwidth">${renderPlanPanel()}</div>`;
     return `<section class="card algo-panel lab-panel" id="research-lab">
@@ -478,7 +501,7 @@ async function handleAction(action) {
         const root = host();
         const name = root?.querySelector('[data-lab-custom-name]')?.value.trim() || '';
         const parameters = Object.fromEntries([...root?.querySelectorAll('[data-lab-custom-param]') || []]
-            .map(input => [input.dataset.labCustomParam, Number(input.value)]));
+            .map(input => [input.dataset.labCustomParam, input.tagName === 'SELECT' ? input.value : Number(input.value)]));
         const saved = await postJson('/algo-trader/research/profiles', { account: state.account, strategy: state.strategy, name, parameters });
         if (saved) state.message = `Saved profile ${name} for ${state.strategy}.`;
         return refreshOverview();
@@ -560,7 +583,12 @@ export function mountResearchLab(element, account = 'options') {
                 state.plan = { ...state.plan, [target.dataset.labPlan]: target.value };
                 state.planPreview = null;
                 render();
-                apiRequest('/algo-trader/research/plan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: state.account, profiles: state.plan }) }, message => { state.error = message; }).then(() => { state.message = 'Plan saved.'; render(); });
+                if (state.overview?.read_only) {
+                    state.message = 'Demo: the plan is kept on this page only. It is not saved.';
+                    render();
+                } else {
+                    apiRequest('/algo-trader/research/plan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: state.account, profiles: state.plan }) }, message => { state.error = message; }).then(saved => { if (saved) { state.message = 'Plan saved.'; render(); } });
+                }
             }
             if (target.matches('[data-lab-input="saveName"]')) state.saveName = target.value;
         };

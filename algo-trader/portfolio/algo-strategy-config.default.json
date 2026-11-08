@@ -84,7 +84,7 @@
       "hard_stop_pct": 0.011,
       "trailing_stop_pct": 0.008,
       "trailing_activation_pct": 0.005,
-      "max_entries_per_day": 2,
+      "max_entries_per_day": 3,
       "max_positions": 7,
       "minimum_hold_minutes": 20,
       "cooldown_minutes": 90,
@@ -96,8 +96,8 @@
       "regime_weights": {
         "trending_up": 1,
         "trending_down": 1,
-        "range_bound": 0,
-        "volatile": 0,
+        "range_bound": 1,
+        "volatile": 0.2,
         "ambiguous": 0,
         "unknown": 0
       },
@@ -119,8 +119,8 @@
       "regime_weights": {
         "trending_up": 0.9,
         "trending_down": 0.9,
-        "range_bound": 0,
-        "volatile": 0,
+        "range_bound": 0.9,
+        "volatile": 0.2,
         "ambiguous": 0,
         "unknown": 0
       },
@@ -165,8 +165,8 @@
       "regime_weights": {
         "trending_up": 0.6,
         "trending_down": 0.6,
-        "range_bound": 0,
-        "volatile": 0,
+        "range_bound": 0.6,
+        "volatile": 0.2,
         "ambiguous": 0,
         "unknown": 0
       },
@@ -188,8 +188,8 @@
       "regime_weights": {
         "trending_up": 0.55,
         "trending_down": 0.55,
-        "range_bound": 0,
-        "volatile": 0,
+        "range_bound": 0.55,
+        "volatile": 0.2,
         "ambiguous": 0,
         "unknown": 0
       },
