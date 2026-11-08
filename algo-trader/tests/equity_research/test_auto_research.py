@@ -122,6 +122,90 @@ def test_auto_research_backfills_symbols_missing_from_the_market_store(monkeypat
     assert calls[0][1]["start"] == f"{INITIAL_HISTORY_DATE.isoformat()}T00:00:00Z"
 
 
+def _single_ticker_refresh_store(end_date):
+    coverage = [
+        {"symbol": symbol, "feed": "sip", "adjustment": "split", "timeframe": "5Min",
+         "first": "2023-04-16", "last": end_date.isoformat()}
+        for symbol in ["SPCX", "QQQ", "GLD", "TLT", "HYG", "LQD"]
+    ]
+
+    class Store:
+        def coverage(self):
+            return coverage
+
+        def write_bars(self, *args, **kwargs):
+            return 0
+
+    return Store()
+
+
+def _patch_refresh_feeds(monkeypatch):
+    monkeypatch.setattr(auto_research, "data_tier", lambda: "algo_trader_plus")
+    monkeypatch.setattr(auto_research, "regular_feed", lambda: "sip")
+    monkeypatch.setattr(auto_research, "fetch_alpaca_bars", lambda requested, **kwargs: {})
+
+
+def test_lab_refresh_accepts_a_single_ticker_universe(monkeypatch):
+    end_date = date(2026, 10, 8)
+    _patch_refresh_feeds(monkeypatch)
+    report = auto_research._refresh_incremental(
+        _single_ticker_refresh_store(end_date), selected_symbols=["SPCX", "QQQ", "GLD", "TLT", "HYG", "LQD"],
+        end_date=end_date, minimum_covered=1,
+    )
+    assert report["missing_selected_history"] == []
+
+
+def test_nightly_refresh_still_requires_the_full_minimum(monkeypatch):
+    end_date = date(2026, 10, 8)
+    _patch_refresh_feeds(monkeypatch)
+    with pytest.raises(ValueError, match="at least 20 are required"):
+        auto_research._refresh_incremental(
+            _single_ticker_refresh_store(end_date), selected_symbols=["SPCX", "QQQ", "GLD", "TLT", "HYG", "LQD"],
+            end_date=end_date,
+        )
+
+def test_verification_needs_five_folds_so_swing_needs_364_sessions_and_intraday_304():
+    assert auto_research._verification_sessions_needed(["swing_momentum"]) == 364
+    assert auto_research._verification_sessions_needed(["intraday_momentum"]) == 304
+    assert auto_research._verification_sessions_needed(["intraday_momentum", "swing_momentum"]) == 364
+
+
+def test_short_history_runs_discovery_only_and_full_history_is_verified(tmp_path):
+    from market.store import SQLiteBarStore
+
+    store = SQLiteBarStore(tmp_path / "bars.sqlite3")
+    # SPCX-like ticker: 100 regular sessions of 5-minute bars, plus one session outside the window.
+    rows = []
+    for day in range(100):
+        session = date(2026, 6, 15) + timedelta(days=day)
+        rows.append((session.isoformat(), 1))
+    rows.append(("2025-03-03", 1))
+    with store._connect() as connection:
+        for session, _ in rows:
+            connection.execute(
+                "INSERT INTO market_bar VALUES ('sip','split','5Min','SPCX',?,1,1,1,1,1,NULL,NULL,'2026-11-08')",
+                (f"{session}T14:00:00.000000Z",),
+            )
+    reason = auto_research._discovery_only_reason(
+        store, ["SPCX"], start=date(2025, 1, 2), end=date(2026, 11, 6), strategies=["swing_momentum"],
+    )
+    assert reason is not None and "364" in reason and "has 101" in reason
+    assert store.session_counts(
+        ["SPCX", "AAPL"], feed="sip", adjustment="split", timeframe="5Min",
+        start="2025-01-02T00:00:00", end="2026-11-06T23:59:59",
+    ) == {"SPCX": 101, "AAPL": 0}
+    # A ticker with enough sessions in the window is verified, so no reason is given.
+    with store._connect() as connection:
+        for day in range(370):
+            session = date(2025, 1, 2) + timedelta(days=day * 7 // 5)
+            connection.execute(
+                "INSERT INTO market_bar VALUES ('sip','split','5Min','AAPL',?,1,1,1,1,1,NULL,NULL,'2026-11-08')",
+                (f"{session.isoformat()}T14:00:00.000000Z",),
+            )
+    assert auto_research._discovery_only_reason(
+        store, ["AAPL"], start=date(2025, 1, 2), end=date(2026, 11, 6), strategies=["swing_momentum"],
+    ) is None
+
 def test_factor_features_are_as_of_and_forward_labels_are_purged():
     history = _synthetic_daily_history(500)
     sessions = [date.fromisoformat(row["date"]) for row in history["SPY"]]
@@ -231,7 +315,9 @@ def test_completed_cycle_cli_summary_handles_missing_optional_data(monkeypatch, 
 
 
 def test_lab_run_is_isolated_and_can_be_scoped_to_chosen_strategies(monkeypatch, tmp_path):
+    from equity_research.pipeline import adaptive_pipeline
     monkeypatch.setattr(auto_research, "RESEARCHABLE_STRATEGIES", auto_research.RESEARCHABLE_STRATEGIES)
+    monkeypatch.setattr(adaptive_pipeline, "RESEARCHABLE_STRATEGIES", adaptive_pipeline.RESEARCHABLE_STRATEGIES)
     parser = auto_research.build_parser()
     args = parser.parse_args([
         "--lab-run", "--output-dir", str(tmp_path),
@@ -242,6 +328,8 @@ def test_lab_run_is_isolated_and_can_be_scoped_to_chosen_strategies(monkeypatch,
     assert auto_research._full_history_verification(args) is False
     auto_research._apply_strategy_scope(args, parser)
     assert auto_research.RESEARCHABLE_STRATEGIES == ("swing_momentum", "intraday_trend_following")
+    # Discovery and verification read the adaptive pipeline's own copy, so the scope must reach it too.
+    assert adaptive_pipeline.RESEARCHABLE_STRATEGIES == ("swing_momentum", "intraday_trend_following")
     assert auto_research._configure_progress_logging(tmp_path, lab_run=True) == tmp_path / "equity.log"
 
 
@@ -264,9 +352,10 @@ def test_run_scope_takes_dates_and_tickers_and_refuses_bad_ones(monkeypatch):
     monkeypatch.setattr(auto_research, "RESEARCHABLE_STRATEGIES", auto_research.RESEARCHABLE_STRATEGIES)
     monkeypatch.setattr(auto_research, "RESEARCH_START", auto_research.RESEARCH_START)
     parser = auto_research.build_parser()
-    args = parser.parse_args(["--underlyings", "aapl, msft", "--start", "2023-01-01", "--end", "2026-06-30"])
+    tickers = ", ".join(f"T{i:02d}" for i in range(20))
+    args = parser.parse_args(["--underlyings", tickers, "--start", "2023-01-01", "--end", "2026-06-30"])
     auto_research._apply_strategy_scope(args, parser)
-    assert args.underlying_list == ["AAPL", "MSFT"]
+    assert args.underlying_list == [f"T{i:02d}" for i in range(20)]
     assert auto_research.RESEARCH_START.isoformat() == "2023-01-01"
     assert args.end_date.isoformat() == "2026-06-30"
     with pytest.raises(SystemExit):

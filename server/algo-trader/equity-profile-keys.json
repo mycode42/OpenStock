@@ -1,10 +1,44 @@
 {
-  "_note": "Parameters an equity profile may set, per strategy. Checked against strategies/registry.py PARAMETER_KEYS by algo-trader/tests/strategies/test_equity_profile_keys.py. Intraday strategies accept none, so their profiles are empty.",
-  "swing_trend_following": ["max_position_pct", "risk_multiplier", "hard_stop_pct", "trailing_stop_pct", "trailing_activation_pct"],
-  "swing_momentum": ["max_position_pct", "risk_multiplier", "hard_stop_pct", "trailing_stop_pct", "trailing_activation_pct"],
-  "swing_mean_reversion": ["max_position_pct", "risk_multiplier", "hard_stop_pct", "trailing_stop_pct", "trailing_activation_pct"],
-  "swing_multi_factor": ["max_position_pct", "risk_multiplier", "hard_stop_pct"],
-  "intraday_mean_reversion": [],
-  "intraday_trend_following": [],
-  "intraday_momentum": []
+  "_note": "Parameters an equity profile may set, per strategy. Swing profiles set risk settings; intraday profiles set signal settings (their sizing stays in the settings file and is not profiled). Checked against strategies/registry.py PARAMETER_KEYS by algo-trader/tests/strategies/test_equity_profile_keys.py.",
+  "swing_trend_following": [
+    "max_position_pct",
+    "risk_multiplier",
+    "hard_stop_pct",
+    "trailing_stop_pct",
+    "trailing_activation_pct"
+  ],
+  "swing_momentum": [
+    "max_position_pct",
+    "risk_multiplier",
+    "hard_stop_pct",
+    "trailing_stop_pct",
+    "trailing_activation_pct"
+  ],
+  "swing_mean_reversion": [
+    "max_position_pct",
+    "risk_multiplier",
+    "hard_stop_pct",
+    "trailing_stop_pct",
+    "trailing_activation_pct"
+  ],
+  "swing_multi_factor": [
+    "max_position_pct",
+    "risk_multiplier",
+    "hard_stop_pct"
+  ],
+  "intraday_mean_reversion": [
+    "entry_rsi",
+    "exit_rsi",
+    "minimum_dip_pct",
+    "minimum_bounce_pct"
+  ],
+  "intraday_trend_following": [
+    "fast_period",
+    "slow_period"
+  ],
+  "intraday_momentum": [
+    "lookback",
+    "minimum_return",
+    "minimum_volume_ratio"
+  ]
 }

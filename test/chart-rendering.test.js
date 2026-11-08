@@ -134,7 +134,7 @@ test('desktop dashboard hover charts are double-sized without changing mobile di
 
 test('active dashboard hover price keeps the original range typography', () => {
     const styles = fs.readFileSync(path.join(root, 'www/styles.css'), 'utf8');
-    assert.match(styles, /\.history-meta,\.history-dates\{color:#94a3b8;font-size:\.72rem\}/);
+    assert.match(styles, /\.history-meta,\.history-dates\{color:(?:var\(--ui-muted,#94a3b8\)|#94a3b8);font-size:\.72rem\}/);
     assert.match(styles, /\.history-price\{color:inherit;font-size:inherit;font-weight:inherit\}/);
 });
 

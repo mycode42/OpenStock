@@ -12,9 +12,11 @@ const state = {
     overview: null,
     strategy: null,
     form: { underlyings: '', start: '', end: '', profile: '' },
-    equity: { strategies: [], fullRun: false, noRefresh: false, underlyings: '', start: '', end: '' },
+    picks: { equity: [], options: [] },
+    equity: { underlyings: '', start: '', end: '' },
     plan: {},
     planPreview: null,
+    planInfo: null,
     job: null,
     results: null,
     logText: '',
@@ -64,21 +66,47 @@ function current() {
     return strategies().find(item => item.id === state.strategy) || null;
 }
 
-function renderParameterTable(parameters) {
-    const rows = Object.entries(parameters || {})
-        .map(([key, value]) => `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(JSON.stringify(value))}</td></tr>`)
-        .join('');
-    return rows ? `<table class="lab-table lab-params"><tbody>${rows}</tbody></table>` : '<p class="lab-muted">No live parameters saved for this strategy.</p>';
-}
-
 function renderStrategyTabs() {
     const tabs = strategies().map(item => `<button type="button" class="lab-tab ${item.id === state.strategy ? 'active' : ''}" data-lab-strategy="${escapeHtml(item.id)}">${escapeHtml(item.id.replaceAll('_', ' '))}</button>`).join('');
     return `<div class="lab-tabs" role="tablist">${tabs}</div>`;
 }
 
+const STAGE_STATUS_LABELS = {
+    pending: 'waiting', running: 'running', completed: 'done', reused: 'reused', skipped: 'skipped',
+    not_run: 'not run', error: 'error', failed: 'failed',
+};
+
+// Equity runs: one row per pipeline stage, a percentage, and a clear finished state.
+function renderEquityLive(job) {
+    const stages = job.stages;
+    const running = isRunning(job);
+    const current = stages.rows.find(row => row.status === 'running');
+    const done = job.state === 'finished';
+    let headline;
+    const next = stages.rows.find(row => row.status === 'pending');
+    if (running) headline = `Running${current ? ` · ${escapeHtml(current.label)}${current.strategies ? ` (${current.strategies.done} of ${current.strategies.total} strategies)` : ''}` : next ? ` · next: ${escapeHtml(next.label)}` : ' · starting'}`;
+    else if (done) headline = `Finished · report ${escapeHtml(state.results?.report?.status ?? 'unknown')}`;
+    else headline = `${escapeHtml(job.state)}: open the log below for the error`;
+    const rows = stages.rows.map(row => {
+        const label = STAGE_STATUS_LABELS[row.status] || row.status;
+        const count = row.strategies ? ` · ${row.strategies.done} of ${row.strategies.total} strategies` : '';
+        return `<li class="lab-stage is-${escapeHtml(row.status)}"><span class="lab-stage-name">${escapeHtml(row.label)}</span><span class="lab-stage-status">${escapeHtml(label)}${count}</span></li>`;
+    }).join('');
+    return `<div class="lab-live ${done ? 'is-finished' : ''}">
+        <div class="lab-live-head"><strong>${escapeHtml((job.strategies || []).map(item => item.replaceAll('_', ' ')).join(', '))}</strong> <span class="lab-muted">${escapeHtml(job.id)}</span></div>
+        <p class="lab-live-state"><strong>${headline}</strong></p>
+        <div class="lab-progress" role="progressbar" aria-label="Run progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${stages.percent}"><div style="width:${stages.percent}%"></div></div>
+        <p class="lab-muted">${stages.percent}%${stages.current_stage ? ` · stage ${escapeHtml(stages.current_stage.replaceAll('_', ' '))}` : ''}</p>
+        <ol class="lab-stages">${rows}</ol>
+        ${running ? '<button type="button" class="btn btn-secondary" data-lab-action="cancel">Cancel run</button>' : ''}
+        ${renderLogToggle()}
+    </div>`;
+}
+
 function renderLive() {
     const job = state.job;
     if (!job || job.account !== state.account) return '<p class="lab-muted">No run in this session yet.</p>';
+    if (job.account === 'equity' && job.stages) return renderEquityLive(job);
     const progress = job.progress || {};
     const extras = [
         progress.current ? `now ${escapeHtml(progress.current)}` : '',
@@ -107,69 +135,125 @@ function renderLogToggle() {
     return toggle + full;
 }
 
-// Equity start form: pick strategies, or leave them all unchecked for a full run. Runs never touch the nightly report.
+// Strategies to run, each with its own profile. The same table for equity and options.
+function renderRunTable() {
+    const picked = new Set(state.picks[state.account]);
+    const rows = strategies().map(item => {
+        const profiles = item.profiles || [];
+        const chosen = state.plan[item.id] || 'standard';
+        const select = profiles.length
+            ? `<select class="lab-run-profile" data-lab-plan="${escapeHtml(item.id)}" aria-label="Profile for ${escapeHtml(item.id)}">${profiles.map(profile => `<option value="${escapeHtml(profile.name)}" ${profile.name === chosen ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('')}</select>`
+            : '<span class="lab-muted">no profile settings</span>';
+        return `<div class="lab-run-row ${picked.has(item.id) ? 'is-picked' : ''}">
+            <label class="research-switch"><input type="checkbox" role="switch" data-lab-pick="${escapeHtml(item.id)}" ${picked.has(item.id) ? 'checked' : ''} aria-label="Run ${escapeHtml(item.id)}"></label>
+            <span class="lab-run-name">${escapeHtml(item.id.replaceAll('_', ' '))}</span>
+            ${select}
+        </div>`;
+    }).join('');
+    const count = picked.size;
+    return `<div class="lab-run-table" role="group" aria-label="Strategies to run">
+        <div class="lab-run-head"><span></span><span>Strategy</span><span>Profile</span></div>
+        ${rows}
+        <div class="lab-run-tools">
+            <span class="lab-muted">${count ? `${count} selected` : 'Nothing selected'}</span>
+            <button type="button" class="btn btn-sm btn-secondary" data-lab-action="select-all-picks">Select all</button>
+            <button type="button" class="btn btn-sm btn-secondary" data-lab-action="clear-picks" ${count ? '' : 'disabled'}>Clear</button>
+        </div>
+    </div>`;
+}
+
 function renderEquityStart() {
-    const chosen = new Set(state.equity.strategies);
-    const boxes = strategies().map(item => `<label class="lab-check"><input type="checkbox" data-lab-equity-strategy="${escapeHtml(item.id)}" ${chosen.has(item.id) ? 'checked' : ''}> ${escapeHtml(item.id.replaceAll('_', ' '))}</label>`).join('');
     const busy = Boolean(state.overview.active_job);
-    const chosenAny = state.equity.fullRun || state.equity.strategies.length > 0;
+    const picked = state.picks.equity.length;
     return `<form class="lab-form" data-lab-form="start-equity">
-        <p class="lab-muted">Choose one or more strategies, or switch on the full run.</p>
-        <label class="research-switch"><input type="checkbox" role="switch" data-lab-equity-full ${state.equity.fullRun ? 'checked' : ''}><span><strong>Full run</strong><small>All seven equity strategies</small></span></label>
-        <div class="lab-checks">${boxes}</div>
-        <label>Universe (tickers, comma separated; blank = the live-eligible universe)
-            <input type="text" data-lab-equity-field="underlyings" value="${escapeHtml(state.equity.underlyings)}" placeholder="AAPL, MSFT"></label>
-        <label>Start <input type="date" data-lab-equity-field="start" min="2020-01-01" value="${escapeHtml(state.equity.start)}"></label>
-        <label>End <input type="date" data-lab-equity-field="end" value="${escapeHtml(state.equity.end)}"></label>
-        <label class="research-switch"><input type="checkbox" role="switch" data-lab-equity-norefresh ${state.equity.noRefresh ? 'checked' : ''}><span><strong>Skip data refresh</strong><small>Use the bars already stored</small></span></label>
-        <button type="submit" class="btn btn-primary" ${busy || !chosenAny ? 'disabled' : ''}>Start research</button>
-        ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : ''}
+        ${renderRunTable()}
+        <label>Universe <span class="lab-muted">(optional: one or more tickers with stored bars. Empty = the live universe)</span>
+            <input type="text" data-lab-equity-field="underlyings" value="${escapeHtml(state.equity.underlyings)}" placeholder="empty = live universe"></label>
+        <div class="lab-dates">
+            <label>Start <input type="date" data-lab-equity-field="start" min="2020-01-01" value="${escapeHtml(state.equity.start)}"></label>
+            <label>End <input type="date" data-lab-equity-field="end" value="${escapeHtml(state.equity.end)}"></label>
+        </div>
+        <button type="submit" class="btn btn-primary" ${busy || !picked ? 'disabled' : ''}>Start research</button>
+        ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : !picked ? '<p class="lab-muted">Switch on at least one strategy to start.</p>' : ''}
     </form>`;
 }
 
-// The applied plan: the preview of the changes, with apply and rollback buttons.
-function renderEquityPlan() {
+// Profile plan: the same panel for equity and options. Preview shows the changes, Apply writes them, Undo restores the last apply.
+function renderPlanPreview(preview) {
+    if (!preview.strategies.length) return '<p class="lab-muted">Nothing to change: the chosen profiles are the live values.</p>';
+    const rows = preview.strategies.flatMap(item => item.diff.filter(row => row.changed).map(row => `<tr class="lab-changed"><td>${escapeHtml(item.strategy.replaceAll('_', ' '))}</td><td>${escapeHtml(item.profile)}</td><td>${escapeHtml(row.key)}</td><td>${escapeHtml(JSON.stringify(row.current))}</td><td>${escapeHtml(JSON.stringify(row.proposed))}</td></tr>`)).join('');
+    const summary = preview.changes
+        ? `<p><strong>${preview.changes} setting(s) change</strong> in ${preview.strategies.length} strategy(ies). Nothing is written until you press Apply.</p>`
+        : '<p class="lab-muted">Nothing to change: the chosen profiles are the live values.</p>';
+    return `${summary}${preview.changes ? `<table class="lab-table"><thead><tr><th>Strategy</th><th>Profile</th><th>Setting</th><th>Live now</th><th>After apply</th></tr></thead><tbody>${rows}</tbody></table>` : ''}`;
+}
+
+function formatWhen(value) {
+    return value ? new Date(value).toLocaleString() : '';
+}
+
+function renderPlanPanel() {
+    const where = state.account === 'options' ? 'options' : 'equity';
+    const chosen = Object.entries(state.plan).filter(([, name]) => name && name !== 'standard');
+    const chosenList = chosen.length
+        ? chosen.map(([id, name]) => `<li>${escapeHtml(id.replaceAll('_', ' '))}: <strong>${escapeHtml(name)}</strong></li>`).join('')
+        : '<li class="lab-muted">Every strategy uses the standard profile, the live values.</li>';
+    const live = state.planInfo?.last_applied;
+    const liveLine = live
+        ? `Applied ${escapeHtml(formatWhen(live.at))}: ${live.profiles.map(escapeHtml).join(', ')}`
+        : 'Nothing applied from the lab yet. The live settings are the standard values.';
+    const history = (state.planInfo?.history || []).map(item => `<li>${escapeHtml(formatWhen(item.at))} · ${item.changes ?? 0} change(s) · ${item.profiles.map(escapeHtml).join(', ')}${item.rolled_back_at ? ' · undone' : ''}</li>`).join('');
     const preview = state.planPreview;
-    const table = preview
-        ? (preview.strategies.length
-            ? `<table class="lab-table"><thead><tr><th>Strategy</th><th>Profile</th><th>Parameter</th><th>Live now</th><th>Applied</th></tr></thead><tbody>${
-                preview.strategies.flatMap(item => item.diff.filter(row => row.changed).map(row => `<tr class="lab-changed"><td>${escapeHtml(item.strategy.replaceAll('_', ' '))}</td><td>${escapeHtml(item.profile)}</td><td>${escapeHtml(row.key)}</td><td>${escapeHtml(JSON.stringify(row.current))}</td><td>${escapeHtml(JSON.stringify(row.proposed))}</td></tr>`)).join('')}</tbody></table>`
-            : '<p class="lab-muted">Every strategy runs with the standard profile, so nothing would change.</p>')
-        : '';
-    return `<h3>Apply the plan</h3>
-        <p class="lab-muted">Applying writes the chosen values to the live equity settings in one change. It takes effect on the next equity cycle. Rollback restores the settings from before the last apply.</p>
-        <div class="lab-save">
-            <button type="button" class="btn btn-secondary" data-lab-action="plan-preview">Preview changes</button>
-            <button type="button" class="btn btn-primary" data-lab-action="plan-apply" ${preview && preview.changes ? '' : 'disabled'}>Apply plan</button>
-            <button type="button" class="btn btn-secondary" data-lab-action="plan-rollback">Roll back last apply</button>
+    return `<section class="lab-plan" aria-label="Profile plan">
+        <h3>Profile plan (${where})</h3>
+        <ul class="lab-plan-list">${chosenList}</ul>
+        <p class="lab-plan-live"><strong>Live now:</strong> ${liveLine}</p>
+        <div class="lab-plan-actions">
+            <button type="button" class="btn btn-secondary" data-lab-action="plan-preview">1 · Preview changes</button>
+            <button type="button" class="btn btn-primary" data-lab-action="plan-apply" ${preview && preview.changes ? '' : 'disabled'}>2 · Apply changes</button>
+            <button type="button" class="btn btn-secondary" data-lab-action="plan-undo" ${live ? '' : 'disabled'}>Undo last apply</button>
         </div>
-        ${table}`;
+        ${preview ? renderPlanPreview(preview) : ''}
+        ${history ? `<details class="lab-plan-history"><summary>Recent applies</summary><ul class="lab-history">${history}</ul></details>` : ''}
+    </section>`;
 }
 
 function renderEquityResults(data) {
     const report = data.report
-        ? `<p class="lab-muted">Report status: ${escapeHtml(data.report.status ?? 'unknown')}${data.report.created_at ? ` · ${escapeHtml(data.report.created_at)}` : ''}</p>`
+        ? `<p class="lab-muted">Report status: ${escapeHtml(data.report.status ?? 'unknown')}${data.report.created_at ? ` · ${escapeHtml(data.report.created_at)}` : ''}</p>${data.report.discovery_only_reason ? `<p class="lab-muted">Discovery only, not verified out of sample: ${escapeHtml(data.report.discovery_only_reason)}. Nothing from this run can be applied or promoted.</p>` : ''}`
         : '<p class="lab-muted">The report appears here when the run finishes.</p>';
-    const rows = (data.strategies || []).map(item => `<tr><td>${escapeHtml(item.strategy.replaceAll('_', ' '))}</td><td>${escapeHtml(item.status ?? '—')}</td></tr>`).join('');
-    return `${report}${rows ? `<table class="lab-table"><thead><tr><th>Strategy</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>` : ''}`;
+    const pct = value => typeof value === 'number' ? `${value.toFixed(2)}%` : '—';
+    const count = value => typeof value === 'number' ? String(value) : '—';
+    const money = value => typeof value === 'number' ? `$${Math.round(value).toLocaleString('en-US')}` : '—';
+    const rows = (data.strategies || []).map(item => {
+        const metrics = item.metrics;
+        const start = metrics?.start;
+        const best = metrics?.best;
+        const selection = metrics?.selection_status === 'no_adaptive_improvement' ? 'no candidate beat the start' : (metrics?.selection_status ?? '—');
+        return `<tr><td>${escapeHtml(item.strategy.replaceAll('_', ' '))}</td><td>${escapeHtml(item.status ?? '—')}</td>
+            <td>${pct(start?.net_return_pct)} · ${count(start?.closed_trades)} trades</td>
+            <td>${pct(best?.net_return_pct)} · ${count(best?.closed_trades)} trades${best?.eligible === false ? ' <span class="lab-muted">(not eligible)</span>' : ''}</td>
+            <td>${pct(best?.max_drawdown_pct)}</td><td>${money(best?.final_equity)}</td>
+            <td>${escapeHtml(selection)}</td></tr>`;
+    }).join('');
+    const window = data.strategies?.find(item => item.metrics?.window)?.metrics?.window;
+    const note = window ? `<p class="lab-muted">In-sample, ${escapeHtml(window.start)} to ${escapeHtml(window.end)} (${escapeHtml(window.completed_sessions)} sessions), net of costs. Start is the profile the run began with. Best is the strongest candidate the search found.</p>` : '';
+    return `${report}${rows ? `<table class="lab-table lab-results"><thead><tr><th>Strategy</th><th>Status</th><th>Start return</th><th>Best return</th><th>Best max drawdown</th><th>Best final equity</th><th>Selection</th></tr></thead><tbody>${rows}</tbody></table>${note}` : ''}`;
 }
 
 // The built-in profiles for the selected equity strategy, side by side with its live values.
-function renderEquityProfiles(strategy) {
+function renderProfilePanel(strategy) {
     const profiles = strategy?.profiles || [];
     if (!profiles.length) return '';
-    const keys = [...new Set(profiles.flatMap(profile => Object.keys(profile.parameters)))];
+    const keys = [...new Set(profiles.flatMap(profile => Object.keys(profile.parameters)))].filter(key => profiles.every(profile => typeof profile.parameters[key] === 'number' || profile.parameters[key] === undefined));
     const live = strategy.parameters || {};
-    const chosen = state.plan[strategy.id] || 'standard';
     const head = `<tr><th>Parameter</th><th>Live now</th>${profiles.map(profile => `<th>${escapeHtml(profile.name)}</th>`).join('')}</tr>`;
     const rows = keys.map(key => `<tr><th>${escapeHtml(key)}</th><td>${escapeHtml(JSON.stringify(live[key] ?? '—'))}</td>${profiles.map(profile => `<td>${escapeHtml(JSON.stringify(profile.parameters[key] ?? '—'))}</td>`).join('')}</tr>`).join('');
-    const choices = profiles.map(profile => `<option value="${escapeHtml(profile.name)}" ${profile.name === chosen ? 'selected' : ''}>${escapeHtml(profile.name)}</option>`).join('');
     const custom = keys.map(key => `<label>${escapeHtml(key)} <input type="number" step="any" min="0" data-lab-custom-param="${escapeHtml(key)}" value="${escapeHtml(live[key] ?? '')}"></label>`).join('');
     return `<h3>Profiles</h3>
-        <p class="lab-muted">Standard is the live values. Conservative and high-risk move the risk settings; the frozen gates and portfolio caps stay as they are.</p>
-        <label class="lab-run-with">Run with <select data-lab-plan="${escapeHtml(strategy.id)}">${choices}</select></label>
+        <p class="lab-muted">Standard is the live values. Conservative and high-risk move the strategy settings; the frozen gates and portfolio caps stay as they are.</p>
         <table class="lab-table lab-params-wide"><thead>${head}</thead><tbody>${rows}</tbody></table>
-        <details class="lab-custom"><summary>Make a custom profile for ${escapeHtml(strategy.id.replaceAll('_', ' '))}</summary>
+        <details class="lab-custom" open><summary>Custom profile</summary>
             <label>Name <input type="text" data-lab-custom-name maxlength="40" placeholder="my-profile"></label>
             <div class="lab-custom-grid">${custom}</div>
             <button type="button" class="btn btn-secondary" data-lab-action="save-custom">Save custom profile</button>
@@ -197,42 +281,21 @@ function renderResults() {
 }
 
 function renderStartForm() {
-    const profiles = current()?.profiles || [];
-    const options = ['<option value="">Live settings (no profile)</option>']
-        .concat(profiles.map(item => `<option value="${escapeHtml(item.name)}" ${state.form.profile === item.name ? 'selected' : ''}>${escapeHtml(item.name)}</option>`))
-        .join('');
     const busy = Boolean(state.overview.active_job);
+    const picked = state.picks.options.length;
+    const queued = (state.overview.queued || []);
     return `<form class="lab-form" data-lab-form="start">
+        ${renderRunTable()}
         <label>Underlyings (max ${state.overview.limits.maxUnderlyings}, comma separated)
             <input type="text" name="underlyings" data-lab-field value="${escapeHtml(state.form.underlyings)}" placeholder="SPY, QQQ, GLD" required></label>
-        <label>Start <input type="date" name="start" data-lab-field value="${escapeHtml(state.form.start)}" min="${escapeHtml(state.overview.limits.earliestStart)}"></label>
-        <label>End <input type="date" name="end" data-lab-field value="${escapeHtml(state.form.end)}"></label>
-        <label>Profile <select name="profile" data-lab-field>${options}</select></label>
-        <button type="submit" class="btn btn-primary" ${busy ? 'disabled' : ''}>Start research</button>
-        ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : ''}
+        <div class="lab-dates">
+            <label>Start <input type="date" name="start" data-lab-field value="${escapeHtml(state.form.start)}" min="${escapeHtml(state.overview.limits.earliestStart)}"></label>
+            <label>End <input type="date" name="end" data-lab-field value="${escapeHtml(state.form.end)}"></label>
+        </div>
+        <button type="submit" class="btn btn-primary" ${busy || !picked ? 'disabled' : ''}>Start research</button>
+        ${busy ? `<p class="lab-muted">Run ${escapeHtml(state.overview.active_job)} is already running.</p>` : !picked ? '<p class="lab-muted">Switch on at least one strategy to start.</p>' : ''}
+        ${queued.length ? `<p class="lab-muted">Queued after it: ${queued.map(escapeHtml).join(', ')}</p>` : ''}
     </form>`;
-}
-
-function renderPromotion() {
-    const strategy = current();
-    const profiles = strategy?.profiles || [];
-    const choices = profiles.map(item => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join('');
-    const history = (strategy?.history || []).slice().reverse()
-        .map(item => `<li>${escapeHtml(item.at)} · ${escapeHtml(item.action)}${item.profile ? ` · ${escapeHtml(item.profile)}` : ''}${item.restored_entry ? ` · restored ${escapeHtml(item.restored_entry)}` : ''}</li>`)
-        .join('');
-    const preview = state.preview;
-    const diff = preview ? `<table class="lab-table"><thead><tr><th>Parameter</th><th>Live now</th><th>Profile</th></tr></thead><tbody>${preview.diff
-        .map(item => `<tr class="${item.changed ? 'lab-changed' : ''}"><th>${escapeHtml(item.key)}</th><td>${escapeHtml(JSON.stringify(item.current))}</td><td>${escapeHtml(JSON.stringify(item.proposed))}</td></tr>`)
-        .join('')}</tbody></table>
-        <p class="lab-muted">${preview.changes} change(s). Applies to the next options paper cycle.</p>
-        <button type="button" class="btn btn-primary" data-lab-action="confirm-promote">Confirm promotion</button>` : '';
-    return `<div class="lab-promote">
-        <label>Profile <select data-lab-input="promoteProfile">${choices || '<option value="">No profiles yet</option>'}</select></label>
-        <button type="button" class="btn btn-secondary" data-lab-action="preview-promote" ${profiles.length ? '' : 'disabled'}>Preview changes</button>
-        <button type="button" class="btn btn-secondary" data-lab-action="rollback">Roll back last promotion</button>
-        ${diff}
-        <h4>History</h4><ul class="lab-history">${history || '<li class="lab-muted">No promotions yet.</li>'}</ul>
-    </div>`;
 }
 
 function renderLab() {
@@ -248,24 +311,26 @@ function renderLab() {
     const strategy = current();
     const heading = isOptions
         ? '<p>One job at a time, on the shared universe. Lab runs never change the live champion; promotion is a separate, confirmed step.</p>'
-        : '<p>Start a run for one, several or all equity strategies. Each run writes to its own folder and never touches the nightly report. Profiles and promotion come next.</p>';
+        : '<p>Pick the strategies, profiles and dates for a run. Every run uses the latest data and writes to its own folder, never the nightly report.</p>';
     const body = isOptions
         ? `<div class="lab-grid">
-            <div><h3>Live parameters</h3>${strategy ? renderParameterTable(strategy.parameters) : ''}</div>
+            <div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div></div>
             <div><h3>Start a run</h3>${renderStartForm()}</div>
           </div>
-          <h3>Progress and log</h3><div id="lab-live">${renderLive()}</div>
-          <h3>Results</h3>${renderResults()}
-          <h3>Promotion</h3>${renderPromotion()}`
-        : `<div class="lab-grid"><div><h3>Live parameters</h3>${strategy ? renderParameterTable(strategy.parameters) : '<p class="lab-muted">No equity strategies found.</p>'}${renderEquityProfiles(strategy)}</div><div><h3>Start a run</h3>${renderEquityStart()}</div></div>
-          ${renderEquityPlan()}
-          <h3>Progress and log</h3><div id="lab-live">${renderLive()}</div>
-          <h3>Results</h3>${renderResults()}`;
+          <div class="lab-fullwidth"><h3>Results</h3>${renderResults()}</div>
+          <div class="lab-fullwidth">${renderStrategyTabs()}</div>
+          <div class="lab-fullwidth">${renderProfilePanel(strategy)}</div>
+          <div class="lab-fullwidth">${renderPlanPanel()}</div>
+          `
+        : `<div class="lab-grid"><div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div></div><div><h3>Start a run</h3>${renderEquityStart()}</div></div>
+          <div class="lab-fullwidth"><h3>Results</h3>${renderResults()}</div>
+          <div class="lab-fullwidth">${renderStrategyTabs()}</div>
+          <div class="lab-fullwidth">${renderProfilePanel(strategy)}</div>
+          <div class="lab-fullwidth">${renderPlanPanel()}</div>`;
     return `<section class="card algo-panel lab-panel" id="research-lab">
         <div class="lab-head"><div class="algo-section-heading"><div><span class="algo-eyebrow">RESEARCH LAB</span><h2>Interactive ${isOptions ? 'options' : 'equity'} research</h2>${heading}</div></div>
             <div id="system-gauge" class="sys-gauge" aria-label="Host load"></div></div>
         ${notice}
-        ${renderStrategyTabs()}
         ${body}
     </section>`;
 }
@@ -293,7 +358,7 @@ async function refreshOverview() {
     const overview = await apiRequest(`/algo-trader/research/lab?account=${encodeURIComponent(requested)}`, {}, message => { state.error = message; });
     if (requested !== state.account) return;
     const plan = await apiRequest(`/algo-trader/research/plan?account=${encodeURIComponent(requested)}`);
-    if (requested === state.account && plan) state.plan = plan.profiles || {};
+    if (requested === state.account && plan) { state.plan = plan.profiles || {}; state.planInfo = plan; }
     if (overview) {
         state.overview = overview;
         if (!strategies().some(item => item.id === state.strategy)) state.strategy = strategies()[0]?.id || null;
@@ -349,7 +414,7 @@ async function startEquityRun() {
     state.error = '';
     const tickers = state.equity.underlyings.split(/[\s,]+/).filter(Boolean);
     const job = await postJson('/algo-trader/research/jobs', {
-        account: 'equity', strategies: state.equity.strategies, full_run: state.equity.fullRun, no_refresh: state.equity.noRefresh,
+        account: 'equity', strategies: state.picks.equity,
         underlyings: tickers, start: state.equity.start || null, end: state.equity.end || null,
         profiles: state.plan,
     });
@@ -369,11 +434,11 @@ async function startRun() {
     state.error = '';
     const job = await postJson('/algo-trader/research/jobs', {
         account: 'options',
-        strategy: state.strategy,
+        strategies: state.picks.options,
         underlyings: state.form.underlyings.split(/[\s,]+/).filter(Boolean),
         start: state.form.start || null,
         end: state.form.end || null,
-        profile: state.form.profile || null,
+        profiles: state.plan,
     });
     if (job) {
         state.job = job;
@@ -388,18 +453,24 @@ async function startRun() {
 
 async function handleAction(action) {
     state.error = '';
-    if (action === 'plan-preview') {
-        state.planPreview = await apiRequest('/algo-trader/research/plan/preview', {}, message => { state.error = message; });
+    if (action === 'select-all-picks') {
+        state.picks[state.account] = strategies().map(item => item.id);
+    } else if (action === 'clear-picks') {
+        state.picks[state.account] = [];
+    } else if (action === 'plan-preview') {
+        state.planPreview = await apiRequest(`/algo-trader/research/plan/preview?account=${encodeURIComponent(state.account)}`, {}, message => { state.error = message; });
     } else if (action === 'plan-apply') {
-        if (!window.confirm('Apply the chosen profiles to the live equity settings? Rollback restores the settings from before.')) return undefined;
-        const result = await postJson('/algo-trader/research/plan/apply', {});
-        if (result) state.message = `Applied ${result.changes} change(s) to the live equity settings.`;
+        const changes = state.planPreview?.changes || 0;
+        if (!changes) return undefined;
+        if (!window.confirm(`Apply ${changes} change(s) to the live ${state.account} settings? Undo restores the settings from before.`)) return undefined;
+        const result = await postJson('/algo-trader/research/plan/apply', { account: state.account });
+        if (result) state.message = `Applied ${result.changes} change(s) to the live ${state.account} settings.`;
         state.planPreview = null;
         return refreshOverview();
-    } else if (action === 'plan-rollback') {
-        if (!window.confirm('Roll back the last apply of the equity plan?')) return undefined;
-        const result = await postJson('/algo-trader/research/plan/rollback', {});
-        if (result) state.message = 'Rolled back the last equity plan apply.';
+    } else if (action === 'plan-undo') {
+        if (!window.confirm(`Undo the last apply to the live ${state.account} settings?`)) return undefined;
+        const result = await postJson('/algo-trader/research/plan/rollback', { account: state.account });
+        if (result) state.message = `Undid the last apply to the live ${state.account} settings.`;
         state.planPreview = null;
         return refreshOverview();
     } else if (action === 'save-custom') {
@@ -407,7 +478,7 @@ async function handleAction(action) {
         const name = root?.querySelector('[data-lab-custom-name]')?.value.trim() || '';
         const parameters = Object.fromEntries([...root?.querySelectorAll('[data-lab-custom-param]') || []]
             .map(input => [input.dataset.labCustomParam, Number(input.value)]));
-        const saved = await postJson('/algo-trader/research/profiles', { account: 'equity', strategy: state.strategy, name, parameters });
+        const saved = await postJson('/algo-trader/research/profiles', { account: state.account, strategy: state.strategy, name, parameters });
         if (saved) state.message = `Saved profile ${name} for ${state.strategy}.`;
         return refreshOverview();
     }
@@ -429,21 +500,6 @@ async function handleAction(action) {
             }
             return refreshOverview();
         }
-    } else if (action === 'preview-promote') {
-        const profile = host()?.querySelector('[data-lab-input="promoteProfile"]')?.value;
-        state.preview = await postJson('/algo-trader/research/promote', { account: 'options', strategy: state.strategy, profile });
-    } else if (action === 'confirm-promote' && state.preview) {
-        const result = await postJson('/algo-trader/research/promote', {
-            account: 'options', strategy: state.strategy, profile: state.preview.profile, confirm: true,
-        });
-        if (result) state.message = `Promoted ${state.preview.profile} to live ${state.strategy} (${result.applied}).`;
-        state.preview = null;
-        return refreshOverview();
-    } else if (action === 'rollback') {
-        const result = await postJson('/algo-trader/research/rollback', { strategy: state.strategy });
-        if (result) state.message = `Rolled back ${state.strategy} (restored ${result.restored}).`;
-        state.preview = null;
-        return refreshOverview();
     }
     render();
     return undefined;
@@ -458,7 +514,7 @@ export function mountResearchLab(element, account = 'options') {
             const strategyButton = event.target.closest('[data-lab-strategy]');
             if (strategyButton) {
                 state.strategy = strategyButton.dataset.labStrategy;
-                state.preview = null;
+                state.planPreview = null;
                 state.saveName = '';
                 render();
                 return;
@@ -471,6 +527,10 @@ export function mountResearchLab(element, account = 'options') {
                 return;
             }
             handleAction(button.dataset.labAction);
+        });
+        // Enter in a field of the equity form only confirms the field. The run starts with the Start button.
+        element.addEventListener('keydown', event => {
+            if (event.key === 'Enter' && event.target.matches('[data-lab-equity-field]')) event.preventDefault();
         });
         element.addEventListener('submit', event => {
             if (event.target.matches('[data-lab-form="start-equity"]')) {
@@ -487,16 +547,19 @@ export function mountResearchLab(element, account = 'options') {
         const capture = event => {
             const target = event.target;
             if (target.matches('[data-lab-field]')) state.form[target.name] = target.value;
-            if (target.matches('[data-lab-equity-strategy]')) {
-                const id = target.dataset.labEquityStrategy;
-                state.equity.strategies = target.checked ? [...new Set([...state.equity.strategies, id])] : state.equity.strategies.filter(item => item !== id);
+            if (target.matches('[data-lab-pick]')) {
+                const id = target.dataset.labPick;
+                const list = state.picks[state.account];
+                state.picks[state.account] = target.checked ? [...new Set([...list, id])] : list.filter(item => item !== id);
+                render();
+                return;
             }
-            if (target.matches('[data-lab-equity-norefresh]')) state.equity.noRefresh = target.checked;
-            if (target.matches('[data-lab-equity-full]')) state.equity.fullRun = target.checked;
             if (target.matches('[data-lab-equity-field]')) state.equity[target.dataset.labEquityField] = target.value;
             if (target.matches('[data-lab-plan]')) {
                 state.plan = { ...state.plan, [target.dataset.labPlan]: target.value };
-                apiRequest('/algo-trader/research/plan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: 'equity', profiles: state.plan }) }, message => { state.error = message; }).then(() => { state.message = 'Plan saved.'; render(); });
+                state.planPreview = null;
+                render();
+                apiRequest('/algo-trader/research/plan', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ account: state.account, profiles: state.plan }) }, message => { state.error = message; }).then(() => { state.message = 'Plan saved.'; render(); });
             }
             if (target.matches('[data-lab-input="saveName"]')) state.saveName = target.value;
         };
@@ -507,7 +570,7 @@ export function mountResearchLab(element, account = 'options') {
     element.dataset.account = account;
     state.account = account;
     state.overview = null;
-    state.preview = null;
+    state.planPreview = null;
     state.message = '';
     state.error = '';
     refreshOverview();

@@ -125,9 +125,9 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
     // The plan: which profile each strategy runs with, kept between visits.
     app.get('/api/algo-trader/research/plan', labRoute(req => lab.getPlan(String(req.query?.account || 'equity'))));
     app.put('/api/algo-trader/research/plan', labWrite(req => lab.setPlan(safeObject(req.body).account, safeObject(req.body).profiles)));
-    app.get('/api/algo-trader/research/plan/preview', labRoute(() => lab.equityPlanPreview()));
-    app.post('/api/algo-trader/research/plan/apply', labWrite(() => lab.equityPlanApply()));
-    app.post('/api/algo-trader/research/plan/rollback', labWrite(() => lab.equityPlanRollback()));
+    app.get('/api/algo-trader/research/plan/preview', labRoute(req => lab.planPreview(String(req.query?.account || 'equity'))));
+    app.post('/api/algo-trader/research/plan/apply', labWrite(req => lab.planApply(safeObject(req.body).account || 'equity')));
+    app.post('/api/algo-trader/research/plan/rollback', labWrite(req => lab.planRollback(safeObject(req.body).account || 'equity')));
     app.post('/api/algo-trader/research/profiles', labWrite(async req => ({
         profiles: await lab.saveProfile({ ...safeObject(req.body), source_job: safeObject(req.body).source_job || null }),
     })));

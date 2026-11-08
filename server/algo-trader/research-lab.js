@@ -2,7 +2,9 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { spawn, spawnSync } = require('node:child_process');
+const { execFile, spawn, spawnSync } = require('node:child_process');
+const { promisify } = require('node:util');
+const execFileAsync = promisify(execFile);
 const { readJson } = require('./io');
 const { loadOptionsSettings, loadSettings, mergeConfig, optionsConfigPath, validateConfigShape, validateOptionsConfig } = require('./settings');
 const { loadRules } = require('./settings-rules');
@@ -14,6 +16,12 @@ const LIMITS = Object.freeze({
     earliestStart: '2020-01-01',
 });
 const OPTIONS_STRATEGIES = Object.freeze(['vrp', 'long_volatility']);
+// Equity pipeline stages in the order the research runs them, as the stage file names them.
+const EQUITY_STAGES = Object.freeze([
+    ['data_refresh', 'Data refresh'], ['factor_model', 'Factor model'], ['discovery', 'Discovery search'],
+    ['verification', 'Rolling verification'], ['candidate_validation', 'Candidate validation'],
+    ['portfolio_replay', 'Portfolio replay'], ['forward_validation', 'Forward validation'], ['report_assembly', 'Report'],
+]);
 const EQUITY_STRATEGIES = Object.freeze([
     'swing_trend_following', 'swing_momentum', 'swing_mean_reversion', 'swing_multi_factor',
     'intraday_mean_reversion', 'intraday_trend_following', 'intraday_momentum',
@@ -24,63 +32,29 @@ const TICKER_PATTERN = /^[A-Z][A-Z0-9.]{0,9}$/;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const PROFILE_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 
-// Built-in equity profiles are multipliers on the live values. Standard is the live values as they are.
-// The factors move the risk-related parameters only; the frozen gates and the portfolio caps are not parameters and are not changed here.
+// The built-in profiles are fixed values in profile-presets.json, not calculated. Standard is the live values on 2026-11-08.
+// Applying a profile never changes these numbers, so applying twice gives the same result.
+const PROFILE_PRESETS = require('./profile-presets.json');
 const EQUITY_PRESET_NAMES = Object.freeze(['standard', 'conservative', 'high-risk']);
-const EQUITY_PRESET_FACTORS = Object.freeze({
-    conservative: {
-        max_position_pct: 0.7, risk_multiplier: 0.6, hard_stop_pct: 0.8, trailing_stop_pct: 0.8,
-        trailing_activation_pct: 0.8, max_entries_per_day: 0.66, max_positions: 0.7, cooldown_minutes: 1.5,
-    },
-    'high-risk': {
-        max_position_pct: 1.3, risk_multiplier: 1.4, hard_stop_pct: 1.2, trailing_stop_pct: 1.2,
-        trailing_activation_pct: 1.2, max_entries_per_day: 1.5, max_positions: 1.3, cooldown_minutes: 0.5,
-    },
-});
-const PRESET_COUNT_KEYS = new Set(['max_entries_per_day', 'max_positions', 'cooldown_minutes']);
+const RESERVED_PROFILE_NAMES = Object.freeze(['standard', 'conservative', 'high-risk']);
 // Keys each equity strategy's validator accepts for a profile (kept in step with strategies/registry.py by a test).
 const EQUITY_PROFILE_KEYS = require('./equity-profile-keys.json');
 function equityProfileKeys(strategy) {
     return Array.isArray(EQUITY_PROFILE_KEYS[strategy]) ? EQUITY_PROFILE_KEYS[strategy] : [];
 }
 
-// Built-in options profiles: multipliers on the live grid values. Conservative needs a higher IV edge and smaller deltas and risk.
-const OPTIONS_PRESET_FACTORS = Object.freeze({
-    vrp: {
-        conservative: { min_iv_minus_rv: 1.5, short_delta_min: 0.8, wing_delta_max: 0.8 },
-        'high-risk': { min_iv_minus_rv: 0.75, short_delta_min: 1.2, wing_delta_max: 1.2 },
-    },
-    long_volatility: {
-        conservative: { max_risk_per_trade_pct: 0.5, max_premium_per_trade_usd: 0.6, stop_loss_pct: 0.8, iv_percentile_ceiling: 0.9 },
-        'high-risk': { max_risk_per_trade_pct: 1.5, max_premium_per_trade_usd: 1.5, stop_loss_pct: 1.2, iv_percentile_ceiling: 1.1 },
-    },
-});
-const RESERVED_PROFILE_NAMES = Object.freeze(['standard', 'conservative', 'high-risk']);
+function fixedPreset(group, strategy, name) {
+    const values = PROFILE_PRESETS[group]?.[strategy]?.[name];
+    if (!values) throw new LabError(`unknown profile ${name}`, 404);
+    return { ...values };
+}
 
-function optionsPresetParameters(strategy, name, livePresent) {
-    if (name === 'standard') return { ...livePresent };
-    const factors = OPTIONS_PRESET_FACTORS[strategy]?.[name];
-    if (!factors) throw new LabError(`unknown profile ${name}`, 404);
-    const out = {};
-    for (const [key, factor] of Object.entries(factors)) {
-        if (typeof livePresent[key] === 'number') out[key] = Number((livePresent[key] * factor).toFixed(4));
-    }
-    return out;
+function optionsPresetParameters(strategy, name) {
+    return fixedPreset('options', strategy, name);
 }
 
 function equityPresetParameters(name, livePresent, strategy) {
-    const live = scalarParameters(livePresent);
-    const allowed = equityProfileKeys(strategy);
-    if (name === 'standard') return Object.fromEntries(Object.entries(live).filter(([key, value]) => allowed.includes(key) && typeof value === 'number'));
-    const factors = EQUITY_PRESET_FACTORS[name];
-    if (!factors) throw new LabError(`unknown profile ${name}`, 404);
-    const out = {};
-    for (const [key, factor] of Object.entries(factors)) {
-        if (!allowed.includes(key) || typeof live[key] !== 'number') continue;
-        const scaled = live[key] * factor;
-        out[key] = PRESET_COUNT_KEYS.has(key) ? Math.max(key === 'cooldown_minutes' ? 0 : 1, Math.round(scaled)) : Number(scaled.toFixed(4));
-    }
-    return out;
+    return fixedPreset('equity', strategy, name);
 }
 
 // Keeps the values a panel can show as plain text: numbers, booleans, strings, and short lists of strings.
@@ -115,9 +89,13 @@ function validateJobRequest(body, { today = new Date().toISOString().slice(0, 10
     if (!isPlainObject(body)) throw new LabError('request body must be an object');
     if (body.account === 'equity') return validateEquityJobRequest(body);
     if (body.account !== 'options') throw new LabError('account must be equity or options', 400);
-    if (!OPTIONS_STRATEGIES.includes(body.strategy)) {
+    // One or more options strategies. Each runs as its own job, so the rest wait in a queue.
+    const optionStrategies = Array.isArray(body.strategies) ? [...new Set(body.strategies)] : [body.strategy];
+    if (!optionStrategies.length || optionStrategies.some(item => !OPTIONS_STRATEGIES.includes(item))) {
         throw new LabError(`strategy must be one of ${OPTIONS_STRATEGIES.join(', ')}`);
     }
+    if (optionStrategies.length > 2) throw new LabError('at most 2 options strategies per run');
+    const optionProfiles = isPlainObject(body.profiles) ? body.profiles : {};
     if (!Array.isArray(body.underlyings) || body.underlyings.length === 0) {
         throw new LabError('underlyings must be a non-empty list');
     }
@@ -135,20 +113,23 @@ function validateJobRequest(body, { today = new Date().toISOString().slice(0, 10
     if (start && end && start >= end) throw new LabError('start must be before end');
     const profile = body.profile ? String(body.profile) : null;
     if (profile && !PROFILE_NAME_PATTERN.test(profile)) throw new LabError('profile name is not valid');
-    return { account: 'options', strategy: body.strategy, underlyings, start, end, profile };
+    const first = optionStrategies[0];
+    return {
+        account: 'options', strategies: optionStrategies, strategy: first, underlyings, start, end,
+        profile: optionProfiles[first] && optionProfiles[first] !== 'standard' ? optionProfiles[first] : (body.profile || null),
+        profiles: optionProfiles,
+    };
 }
 
-// Equity runs research the chosen strategies, or every researchable strategy when none are chosen (a full run).
+// Equity runs research one or more chosen strategies, always on the latest stored data.
 function validateEquityJobRequest(body) {
     const requested = body.strategies === undefined || body.strategies === null ? [] : body.strategies;
-    // An empty list is a full run only when the request asks for one. Otherwise it is an unfinished choice, and it is refused.
-    if (Array.isArray(requested) && requested.length === 0 && body.full_run !== true) {
-        throw new LabError('choose at least one strategy, or ask for the full run');
-    }
     if (!Array.isArray(requested) || requested.some(item => typeof item !== 'string')) {
         throw new LabError('strategies must be a list of strategy names');
     }
+    if (requested.length === 0) throw new LabError('choose at least one strategy');
     const strategies = [...new Set(requested.map(item => item.trim()).filter(Boolean))];
+    if (!strategies.length) throw new LabError('choose at least one strategy');
     const unknown = strategies.filter(item => !EQUITY_STRATEGIES.includes(item));
     if (unknown.length) throw new LabError(`unknown equity strategies: ${unknown.join(', ')}`);
     const tickers = Array.isArray(body.underlyings) ? [...new Set(body.underlyings.map(item => String(item).trim().toUpperCase()).filter(Boolean))] : [];
@@ -168,10 +149,8 @@ function validateEquityJobRequest(body) {
     return {
         account: 'equity',
         strategy: null,
-        strategies: strategies.length ? strategies : [...EQUITY_STRATEGIES],
+        strategies,
         profiles,
-        full_run: strategies.length === 0,
-        no_refresh: body.no_refresh === true,
         underlyings: tickers, start, end, profile: null,
     };
 }
@@ -294,6 +273,7 @@ function processAlive(pid) {
 class ResearchLab {
     constructor({ root, python = process.env.ALGO_TRADER_PYTHON, now = () => new Date(), spawnImpl = spawn, meminfoPath = '/proc/meminfo', nightlyRunning = null, checkProfiles = null }) {
         this.nightlyRunning = nightlyRunning;
+        this.queue = [];
         this.checkProfiles = checkProfiles;
         this.root = root;
         this.labDir = path.join(root, 'data', 'research-lab');
@@ -338,6 +318,11 @@ class ResearchLab {
         const request = validateJobRequest(body, { today: this.now().toISOString().slice(0, 10) });
         if (this.activeJob()) throw new LabError(`research job ${this.activeJob()} is already running`, 409);
         if (request.account === 'equity') return this.startEquityJob(request);
+        // Queued strategies run one after another, each with its own profile, once the job before has finished.
+        const queued = request.strategies.slice(1).map(strategy => ({
+            account: 'options', strategies: [strategy], underlyings: request.underlyings,
+            start: request.start, end: request.end, profiles: request.profiles,
+        }));
         const freeMb = await this.freeMemoryMb();
         if (freeMb < LIMITS.minFreeMemoryMb) {
             throw new LabError(`only ${freeMb} MB of memory is free; a run needs ${LIMITS.minFreeMemoryMb} MB`, 503);
@@ -374,6 +359,7 @@ class ResearchLab {
         };
         await writeJsonAtomic(path.join(dir, 'job.json'), job);
         this.children.set(id, child);
+        this.queue = queued;
         child.on('error', error => this.finishJob(id, { state: 'failed', error: error.message }));
         child.on('exit', (code, signal) => {
             const state = job.cancel_requested ? 'cancelled' : (code === 0 ? 'finished' : 'failed');
@@ -428,7 +414,6 @@ class ResearchLab {
         const logFd = fs.openSync(logPath, 'a');
         const args = ['-m', 'equity_research.auto_research', '--lab-run', '--output-dir', outputDir,
             '--workers', '8', '--strategies', request.strategies.join(',')];
-        if (request.no_refresh) args.push('--no-refresh');
         if (request.underlyings.length) args.push('--underlyings', request.underlyings.join(','));
         if (request.start) args.push('--start', request.start);
         if (request.end) args.push('--end', request.end);
@@ -445,8 +430,8 @@ class ResearchLab {
         });
         fs.closeSync(logFd);
         const job = {
-            id, account: 'equity', strategy: request.full_run ? 'full run' : request.strategies.join(', '),
-            strategies: request.strategies, full_run: request.full_run, no_refresh: request.no_refresh, profiles: request.profiles,
+            id, account: 'equity', strategy: request.strategies.join(', '),
+            strategies: request.strategies, profiles: request.profiles,
             underlyings: request.underlyings, start: request.start, end: request.end, profile: null,
             state: 'running', pid: child.pid, created_at: this.now().toISOString(), updated_at: this.now().toISOString(),
             cancel_requested: false,
@@ -467,16 +452,27 @@ class ResearchLab {
 
     async finishJob(id, patch) {
         this.children.delete(id);
+        let job = null;
         try {
-            const job = await readJsonFile(path.join(this.jobDir(id), 'job.json'), null);
+            job = await readJsonFile(path.join(this.jobDir(id), 'job.json'), null);
             if (!job) return;
             await writeJsonAtomic(path.join(this.jobDir(id), 'job.json'), { ...job, ...patch, pid: null, updated_at: this.now().toISOString() });
         } catch (error) {
             console.error(`Research lab could not record job ${id}: ${error.message}`);
         }
+        if (job?.account === 'options' && this.queue.length && !this.activeJob()) {
+            const next = this.queue.shift();
+            try {
+                await this.startJob(next);
+            } catch (error) {
+                this.queue = [];
+                console.error(`Research lab could not start the next queued run: ${error.message}`);
+            }
+        }
     }
 
     async cancelJob(id) {
+        this.queue = [];
         const job = await this.readJob(id);
         const child = this.children.get(id);
         if (!child || job.state !== 'running') throw new LabError('job is not running', 409);
@@ -490,7 +486,31 @@ class ResearchLab {
         const job = await this.readJob(id);
         const log = await this.readLogText(id);
         const events = parseLabEvents(log.text);
-        return { ...job, progress: summarizeProgress(events), log_bytes: log.size };
+        const stages = job.account === 'equity' ? await this.equityStages(job) : null;
+        return { ...job, progress: summarizeProgress(events), stages, log_bytes: log.size };
+    }
+
+    // One row per pipeline stage, from the run's stage file. A stage that never ran reads "not run" once the run has finished.
+    async equityStages(job) {
+        const progress = await readJsonFile(path.join(this.jobDir(job.id), 'output', 'latest-progress.json'), null) || {};
+        const stages = progress.stages || {};
+        const perStrategy = progress.strategies || {};
+        const total = (job.strategies || []).length;
+        const finished = job.state !== 'running' && job.state !== 'cancelling';
+        const settled = new Set(['completed', 'reused', 'skipped', 'error', 'failed', 'not_run']);
+        const rows = EQUITY_STAGES.map(([key, label]) => {
+            let status = stages[key]?.status || 'pending';
+            if (status === 'pending' && finished) status = 'not_run';
+            const strategyStatuses = perStrategy[key] ? Object.values(perStrategy[key]).map(item => item.status) : [];
+            return {
+                key, label, status, updated_at: stages[key]?.updated_at ?? null,
+                strategies: strategyStatuses.length ? { done: strategyStatuses.filter(value => settled.has(value)).length, total } : null,
+            };
+        });
+        const settledCount = rows.filter(row => settled.has(row.status)).length;
+        const running = rows.filter(row => row.status === 'running').length;
+        const percent = job.state === 'finished' ? 100 : Math.round(((settledCount + 0.5 * running) / rows.length) * 100);
+        return { rows, percent, current_stage: progress.current_stage ?? null, updated_at: progress.updated_at ?? null };
     }
 
     async readLogText(id) {
@@ -550,17 +570,51 @@ class ResearchLab {
         return { job: job.id, strategy: job.strategy, state: job.state, results };
     }
 
+    // In-sample numbers from the discovery search: the run's starting parameters and the best candidate it found.
+    // Only artifacts inside this job's folder are read.
+    async equityDiscoveryMetrics(job, artifact) {
+        const file = artifact?.discovery;
+        if (!file || !String(file).startsWith(this.jobDir(job.id) + path.sep)) return null;
+        const detail = await readJsonFile(file, null);
+        if (!detail) return null;
+        const pick = candidate => {
+            if (!candidate) return null;
+            const metrics = candidate.metrics || {};
+            return {
+                eligible: candidate.eligible ?? null,
+                parameters: candidate.parameters ?? null,
+                net_return_pct: metrics.net_return_pct ?? null,
+                final_equity: metrics.final_equity ?? null,
+                closed_trades: metrics.closed_trade_count ?? null,
+                max_drawdown_pct: metrics.max_drawdown_pct ?? null,
+                profit_factor: metrics.profit_factor ?? null,
+                win_rate_pct: metrics.win_rate_pct ?? null,
+            };
+        };
+        return {
+            window: detail.window ?? null,
+            selection_status: detail.selection_status ?? null,
+            min_trades: detail.min_trades_for_selection ?? null,
+            start: pick(detail.baseline_comparison?.baseline_candidate),
+            best: pick(detail.selected_candidate),
+        };
+    }
+
     // The equity run's report is in its own output folder. Each strategy's artifact status is listed when the report has one.
     async equityJobResults(job) {
         const report = await readJsonFile(path.join(this.jobDir(job.id), 'output', 'latest.json'), null);
         const artifacts = report?.adaptive_strategy_artifacts && typeof report.adaptive_strategy_artifacts === 'object'
             ? report.adaptive_strategy_artifacts : {};
-        const strategies = Object.entries(artifacts).map(([name, artifact]) => ({
+        const strategies = await Promise.all(Object.entries(artifacts).map(async ([name, artifact]) => ({
             strategy: name, status: artifact?.status ?? null,
-        }));
+            metrics: await this.equityDiscoveryMetrics(job, artifact),
+        })));
         return {
             job: job.id, strategy: job.strategy, state: job.state, account: 'equity',
-            report: report ? { status: report.status ?? null, created_at: report.created_at ?? null, portfolio_summary: report.portfolio_summary ?? null } : null,
+            report: report ? {
+                status: report.status ?? null, created_at: report.created_at ?? null, portfolio_summary: report.portfolio_summary ?? null,
+                discovery_only_reason: report.discovery_only_reason ?? null,
+            } : null,
             strategies,
         };
     }
@@ -612,8 +666,22 @@ class ResearchLab {
         return path.join(this.labDir, `plan-${account}.json`);
     }
 
+    planHistoryPath(account) {
+        return path.join(this.labDir, 'history', account === 'equity' ? 'equity-plan.json' : 'options-plan.json');
+    }
+
+    // The saved plan, plus the last apply and the recent applies, so the page can show what is live.
     async getPlan(account) {
-        return readJsonFile(this.planPath(account), { account, profiles: {} });
+        const plan = await readJsonFile(this.planPath(account), { account, profiles: {} });
+        const { entries } = await readJsonFile(this.planHistoryPath(account), { entries: [] });
+        const summarize = entry => ({
+            id: entry.id, at: entry.at, changes: entry.changes ?? null,
+            profiles: (entry.applied || []).map(item => `${item.strategy}: ${item.profile}`),
+            rolled_back_at: entry.rolled_back_at || null,
+        });
+        const applied = entries.filter(entry => entry.action === 'apply_plan');
+        const live = applied.slice().reverse().find(entry => !entry.rolled_back_at);
+        return { ...plan, last_applied: live ? summarize(live) : null, history: applied.slice(-5).reverse().map(summarize) };
     }
 
     async setPlan(account, profiles) {
@@ -636,8 +704,7 @@ class ResearchLab {
     }
 
     async builtinProfiles(strategy) {
-        const live = await this.livePresent(strategy);
-        return RESERVED_PROFILE_NAMES.map(name => ({ name, builtin: true, parameters: optionsPresetParameters(strategy, name, live) }));
+        return RESERVED_PROFILE_NAMES.map(name => ({ name, builtin: true, parameters: optionsPresetParameters(strategy, name) }));
     }
 
     async profileParameters(strategy, name) {
@@ -697,23 +764,54 @@ class ResearchLab {
     }
 
     // Equity plan: the chosen profiles, applied to the live equity settings as one change with a diff and a rollback.
+    // Live values the settings file does not hold, read from the registry the runtime uses. Cached briefly.
+    async registryLiveParameters(keysByStrategy) {
+        const request = JSON.stringify(keysByStrategy);
+        if (this.registryLive?.request === request && Date.now() - this.registryLive.at < 60_000) return this.registryLive.values;
+        const script = path.join(this.root, 'scripts', 'lab_live_parameters.py');
+        const executable = this.python || 'poetry';
+        const command = this.python ? [script, request] : ['run', 'python', script, request];
+        let values = {};
+        try {
+            const { stdout } = await execFileAsync(executable, command, { cwd: this.root, timeout: 60_000, encoding: 'utf8' });
+            values = JSON.parse(stdout || '{}');
+        } catch {
+            values = {};
+        }
+        this.registryLive = { request, at: Date.now(), values };
+        return values;
+    }
+
     async equityPlanPreview() {
         const plan = await this.getPlan('equity');
         const settings = await loadSettings(this.root);
         const strategies = [];
+        const notApplied = [];
         for (const id of EQUITY_STRATEGIES) {
             const name = plan.profiles?.[id];
             if (!name || name === 'standard') continue;
+            // Intraday profiles are tested in lab runs. Applying them needs the promotion path, so they are listed here, not written.
+            if (id.startsWith('intraday_')) {
+                notApplied.push({ strategy: id, profile: name });
+                continue;
+            }
             const live = scalarParameters(settings.strategies?.[id]);
             const profile = (await this.listEquityProfiles(id, live)).find(item => item.name === name);
             if (!profile) throw new LabError(`profile ${name} was not found for ${id}`, 404);
             strategies.push({ strategy: id, profile: name, parameters: profile.parameters, diff: diffParameters(live, profile.parameters) });
         }
-        return { account: 'equity', strategies, changes: strategies.reduce((total, item) => total + item.diff.filter(row => row.changed).length, 0) };
+        return {
+            account: 'equity', strategies, not_applied: notApplied,
+            changes: strategies.reduce((total, item) => total + item.diff.filter(row => row.changed).length, 0),
+        };
     }
 
     async equityPlanApply() {
         const preview = await this.equityPlanPreview();
+        if (preview.not_applied.length) {
+            const names = preview.not_applied.map(item => `${item.strategy} (${item.profile})`).join(', ');
+            throw new LabError(`intraday profiles can be tested in lab runs but not applied yet: ${names}. Set them to standard to apply the rest.`, 409);
+        }
         if (!preview.changes) throw new LabError('the plan changes nothing from the live equity values', 409);
         await this.checkProfileRanges(Object.fromEntries(preview.strategies.map(item => [item.strategy, item.parameters])));
         const settings = await loadSettings(this.root);
@@ -728,7 +826,7 @@ class ResearchLab {
         const entry = {
             id: randomUUID().slice(0, 8), action: 'apply_plan', account: 'equity',
             applied: preview.strategies.map(item => ({ strategy: item.strategy, profile: item.profile, parameters: item.parameters })),
-            previous_override: previousOverride, at: this.now().toISOString(),
+            changes: preview.changes, previous_override: previousOverride, at: this.now().toISOString(),
         };
         await this.appendEquityHistory(entry);
         return { ...preview, applied: 'next equity cycle', entry };
@@ -748,6 +846,81 @@ class ResearchLab {
         target.rolled_back_at = this.now().toISOString();
         await writeJsonAtomic(file, data);
         return { rolled_back: target.id, restored_previous: target.previous_override !== null };
+    }
+
+    // Options plan: the chosen profile per options strategy, applied to the options override file in one change.
+    async optionsPlanPreview() {
+        const plan = await this.getPlan('options');
+        const strategies = [];
+        for (const id of OPTIONS_STRATEGIES) {
+            const name = plan.profiles?.[id];
+            if (!name || name === 'standard') continue;
+            const live = await this.livePresent(id);
+            const profile = (await this.listProfiles(id)).find(item => item.name === name);
+            if (!profile) throw new LabError(`profile ${name} was not found for ${id}`, 404);
+            strategies.push({ strategy: id, profile: name, parameters: profile.parameters, diff: diffParameters(live, profile.parameters) });
+        }
+        return { account: 'options', strategies, changes: strategies.reduce((total, item) => total + item.diff.filter(row => row.changed).length, 0) };
+    }
+
+    async optionsPlanApply() {
+        const preview = await this.optionsPlanPreview();
+        if (!preview.changes) throw new LabError('the plan changes nothing from the live options values', 409);
+        const overridePath = optionsConfigPath(this.root);
+        const previousOverride = await readJsonFile(overridePath, null);
+        const override = previousOverride || {};
+        const next = { ...override };
+        for (const item of preview.strategies) next[item.strategy] = { ...(override[item.strategy] || {}), ...item.parameters };
+        const defaults = await readJson(path.join(this.root, 'options', 'config.default.json'));
+        const merged = mergeConfig(defaults, next);
+        // Refuses the whole change if any value breaks the options rules, so nothing half-applies.
+        validateConfigShape(merged, defaults);
+        validateOptionsConfig(merged);
+        await writeJsonAtomic(overridePath, next);
+        const entry = {
+            id: randomUUID().slice(0, 8), action: 'apply_plan', account: 'options',
+            applied: preview.strategies.map(item => ({ strategy: item.strategy, profile: item.profile, parameters: item.parameters })),
+            changes: preview.changes, previous_override: previousOverride, at: this.now().toISOString(),
+        };
+        await this.appendPlanHistory('options', entry);
+        return { ...preview, applied: 'next options paper cycle', entry };
+    }
+
+    async optionsPlanRollback() {
+        const file = path.join(this.labDir, 'history', 'options-plan.json');
+        const data = await readJsonFile(file, { entries: [] });
+        const target = [...data.entries].reverse().find(item => item.action === 'apply_plan' && !item.rolled_back_at);
+        if (!target) throw new LabError('there is no applied options plan to roll back', 409);
+        const overridePath = optionsConfigPath(this.root);
+        if (target.previous_override === null) {
+            await fsp.rm(overridePath, { force: true });
+        } else {
+            await writeJsonAtomic(overridePath, target.previous_override);
+        }
+        target.rolled_back_at = this.now().toISOString();
+        await writeJsonAtomic(file, data);
+        return { rolled_back: target.id, restored_previous: target.previous_override !== null };
+    }
+
+    async appendPlanHistory(account, entry) {
+        if (account === 'equity') return this.appendEquityHistory(entry);
+        const file = path.join(this.labDir, 'history', 'options-plan.json');
+        const data = await readJsonFile(file, { entries: [] });
+        data.entries.push(entry);
+        await writeJsonAtomic(file, data);
+    }
+
+    // The plan routes take the account: equity or options.
+    planPreview(account) {
+        return account === 'options' ? this.optionsPlanPreview() : this.equityPlanPreview();
+    }
+
+    planApply(account) {
+        return account === 'options' ? this.optionsPlanApply() : this.equityPlanApply();
+    }
+
+    planRollback(account) {
+        return account === 'options' ? this.optionsPlanRollback() : this.equityPlanRollback();
     }
 
     async appendEquityHistory(entry) {
@@ -799,11 +972,15 @@ class ResearchLab {
         if (account === 'equity') {
             // Equity panels show the live parameters; equity runs start from the lab in a later step.
             const settings = await loadSettings(this.root);
+            // Settings hold the sizing and risk values; the signal values of the intraday strategies come from the registry.
+            const registryLive = await this.registryLiveParameters(Object.fromEntries(
+                EQUITY_STRATEGIES.map(id => [id, equityProfileKeys(id)]).filter(([, keys]) => keys.length),
+            ));
             return {
                 ...base,
                 start_available: false,
                 strategies: await Promise.all(EQUITY_STRATEGIES.map(async id => ({
-                    id, account: 'equity', parameters: scalarParameters(settings.strategies?.[id]),
+                    id, account: 'equity', parameters: { ...(registryLive[id] || {}), ...scalarParameters(settings.strategies?.[id]) },
                     tunable: equityProfileKeys(id),
                     profiles: await this.listEquityProfiles(id, scalarParameters(settings.strategies?.[id])),
                     history: [],
@@ -819,7 +996,7 @@ class ResearchLab {
             profiles: await this.listProfiles(strategy),
             history: (await this.history(strategy)).slice(-10),
         })));
-        return { ...base, start_available: true, strategies };
+        return { ...base, start_available: true, strategies, queued: this.queue.map(item => item.strategies[0]) };
     }
 }
 

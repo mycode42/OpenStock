@@ -9,10 +9,15 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 - Equity profiles use only the parameters each strategy's validator accepts. Intraday strategies have none, so they have no profiles. A profile value outside a strategy's range is refused before a run or an apply, with the range in the message.
 - An equity run needs at least one strategy, or an explicit full run. An empty choice no longer starts all seven strategies.
 - The high-risk profile fits the sizing caps: portfolio position caps 0.07 to 0.10, strategy position range to 0.10 and risk multiplier range to 1.25 (approved in docs/policy-frozen.md). The live standard values are unchanged.
+- Research lab: one run table for equity and options. Each strategy has a switch and its profile on the same row, so a run is its own combination of strategies, profiles, tickers and dates. Options runs with several strategies run them one after another (queued).
+- The Start button follows the strategy switches at once. Before, it stayed disabled after a switch was turned on.
+- Research lab: one profile plan panel for equity and options (Preview changes, Apply changes, Undo last apply, with the live state and recent applies). The old options promotion panel is removed.
+- Equity runs always use the latest stored data, need at least one strategy, and take an optional universe of one or more tickers. The full-run and skip-refresh switches are removed. A single-ticker universe is allowed in lab runs; the coverage check counts only the chosen tickers. Swing multi-factor ranks names across the universe, so it may report not applicable on one ticker.
+- Options plan: each options strategy has a "Run with" profile, a custom profile editor, and apply and roll back for the whole plan, like equity. The options start form uses the chosen profile.
 - Research lab plan: each strategy has a "Run with" profile, kept between visits. Equity runs apply the chosen profiles for that run only (`ALGO_LAB_PARAMETER_OVERRIDES`), so the live settings stay as they are.
 - Custom equity profiles: set the risk settings of one strategy in the lab. Built-in names are reserved.
 - Apply plan: writes the chosen equity profiles to the live settings in one change, after a diff preview. Roll back restores the settings from before the last apply. Options profiles are applied through the existing promotion.
-- Research lab profiles: each equity strategy and each options strategy has three built-in profiles, standard (the live values), conservative and high-risk. Equity profiles scale the risk settings; options profiles scale the IV edge, delta and risk settings. The profile table shows them beside the live values. Built-in names cannot be used for saved profiles.
+- Research lab profiles: each equity strategy and each options strategy has three built-in profiles, standard (the live values on 2026-11-08), conservative and high-risk. They are fixed numbers in `server/algo-trader/profile-presets.json`, not computed from the live settings, so applying a plan twice gives the same settings. The profile table shows them beside the live values. Built-in names cannot be used for saved profiles.
 - Equity lab runs take a universe (tickers) and a start and end date, the same as options runs. The end date is capped at the latest stored session.
 - The Settings button toggles: on Settings it returns to the page you came from, and from any other page it opens Settings.
 - Equity lab runs print the same progress lines options runs print, so the lab shows strategies done, the current strategy, and failures.
@@ -22,10 +27,15 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Changed
 
+- Research lab: the strategy selector table sits under Progress and log and Start a run, above the Profiles table.
 - AGENTS.md states the money rule without currency: the Alpaca accounts are USD.
+- Research lab: "Progress and log" replaces the "Live parameters" table beside the run form. The live values stay in the Profiles table. The custom profile panel is open by default and titled "Custom profile".
 
 ### Fixed
 
+- Equity lab runs that have too little stored history to pass rolling verification (five folds: 364 sessions for swing, 304 for intraday) stop after discovery. The report is marked `discovery_only`, shows the reason, and is not verified out of sample, so nothing from it can be applied or promoted. The nightly run is unchanged.
+- Equity lab runs on one ticker no longer fail at the SIP refresh, which counted the context ETFs against the 20-symbol minimum. The multi-factor diagnostic needs 20 covered symbols; below that it is recorded as skipped, and the nightly run is unchanged.
+- A lab run with one strategy searches and verifies only that strategy. The adaptive pipeline kept its own copy of the strategy list, so intraday strategies were also searched.
 - Migration backups are written only for existing databases. `*.pre-*.backup` files are git-ignored wherever they are written, and destructive migrations (migration 032) copy the database first.
 - The demo's one-week chart ends on the live quote, so it matches the card price.
 - Alerts are not sent or logged per cycle while Telegram is not configured; they stay pending in the outbox. A failing alert is retried up to 10 times, then left in the outbox with one error line.

@@ -39,6 +39,12 @@ function stubSpawn() {
     return { spawnImpl, calls };
 }
 
+test('a short equity range is accepted: the pipeline decides from stored bars whether it can be verified', () => {
+    const base = { account: 'equity', strategies: ['swing_mean_reversion'], underlyings: ['SPCX'] };
+    assert.doesNotThrow(() => validateJobRequest({ ...base, start: '2026-08-03', end: '2026-11-06' }, { today: TODAY }));
+    assert.doesNotThrow(() => validateJobRequest({ ...base, start: '2025-01-02', end: '2026-11-06' }, { today: TODAY }));
+});
+
 test('validateJobRequest accepts a valid options request and normalizes tickers', () => {
     const request = validateJobRequest({
         account: 'options', strategy: 'vrp', underlyings: ['aapl', 'MSFT', 'aapl'],
@@ -172,7 +178,39 @@ test('promote keeps existing override values and rollback puts them back', async
     assert.equal(restored.vrp.min_iv_minus_rv, 0.05);
 });
 
-test('overview returns one strategies list per account; swing equity lists its three built-in profiles, intraday none', async t => {
+test('intraday profiles run in lab tests but plan apply refuses them until they go through promotion', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
+    await lab.setPlan('equity', { intraday_momentum: 'conservative' });
+    const preview = await lab.equityPlanPreview();
+    assert.deepEqual(preview.not_applied, [{ strategy: 'intraday_momentum', profile: 'conservative' }]);
+    assert.equal(preview.changes, 0);
+    await assert.rejects(() => lab.equityPlanApply(), err => err.status === 409 && /not applied yet/.test(err.message));
+});
+
+test('an equity run reports every pipeline stage, and stages that never ran read not run once it finishes', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
+    const id = '2026-01-01T00-00-00-000Z-stages';
+    const dir = path.join(root, 'data', 'research-lab', 'jobs', id);
+    fs.mkdirSync(path.join(dir, 'output'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({
+        id, account: 'equity', strategy: 'intraday_momentum', strategies: ['intraday_momentum'],
+        underlyings: ['AAPL'], state: 'finished', created_at: '2026-01-01T00:00:00.000Z',
+    }));
+    fs.writeFileSync(path.join(dir, 'output', 'latest-progress.json'), JSON.stringify({
+        stages: { data_refresh: { status: 'completed' }, discovery: { status: 'completed' } },
+        strategies: { discovery: { intraday_momentum: { status: 'completed' } } },
+    }));
+    const job = await lab.jobStatus(id);
+    const byKey = Object.fromEntries(job.stages.rows.map(row => [row.key, row]));
+    assert.equal(byKey.data_refresh.status, 'completed');
+    assert.deepEqual(byKey.discovery.strategies, { done: 1, total: 1 });
+    assert.equal(byKey.verification.status, 'not_run');
+    assert.equal(job.stages.percent, 100);
+});
+
+test('overview returns one strategies list per account; every equity strategy lists its three built-in profiles', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });
     const options = await lab.overview('options');
@@ -183,7 +221,7 @@ test('overview returns one strategies list per account; swing equity lists its t
     const equity = await lab.overview('equity');
     assert.equal(equity.start_available, false);
     assert.equal(equity.strategies.length, 7);
-    assert.ok(equity.strategies.every(item => item.account === 'equity' && (item.id.startsWith('intraday') ? item.profiles.length === 0 : item.profiles.map(profile => profile.name).join(',') === 'standard,conservative,high-risk')));
+    assert.ok(equity.strategies.every(item => item.account === 'equity' && item.profiles.map(profile => profile.name).join(',') === 'standard,conservative,high-risk'));
     await assert.rejects(lab.overview('crypto'), /account must be/);
 });
 
@@ -196,15 +234,12 @@ test('research lab overview in demo mode returns the strategy list without Algo 
     assert.throws(() => labOverview('bogus'), /account must be/);
 });
 
-test('an equity request is a full run only when it asks for one; an empty choice is refused, a list is a partial run', () => {
+test('an equity request needs at least one strategy; a list is a partial run; there is no full-run flag', () => {
     assert.throws(() => validateJobRequest({ account: 'equity' }, { today: TODAY }), /choose at least one strategy/);
-    const full = validateJobRequest({ account: 'equity', full_run: true }, { today: TODAY });
-    assert.equal(full.full_run, true);
-    assert.equal(full.strategies.length, 7);
-    const some = validateJobRequest({ account: 'equity', strategies: ['swing_momentum', 'swing_momentum', 'intraday_trend_following'], no_refresh: true }, { today: TODAY });
+    assert.throws(() => validateJobRequest({ account: 'equity', strategies: [] }, { today: TODAY }), /choose at least one strategy/);
+    const some = validateJobRequest({ account: 'equity', strategies: ['swing_momentum', 'swing_momentum', 'intraday_trend_following'] }, { today: TODAY });
     assert.deepEqual(some.strategies, ['swing_momentum', 'intraday_trend_following']);
-    assert.equal(some.full_run, false);
-    assert.equal(some.no_refresh, true);
+    assert.equal(some.full_run, undefined);
     assert.throws(() => validateJobRequest({ account: 'equity', strategies: ['made_up'] }, { today: TODAY }), /unknown equity strategies: made_up/);
 });
 
@@ -224,7 +259,7 @@ test('an equity run goes into its own output folder with the chosen strategies a
     const args = calls[0].args;
     assert.ok(args.includes('--lab-run'));
     assert.equal(args[args.indexOf('--strategies') + 1], 'swing_momentum,intraday_trend_following');
-    assert.ok(args.includes('--no-refresh'));
+    assert.ok(!args.includes('--no-refresh'), 'equity runs always use the latest data');
     const outputDir = args[args.indexOf('--output-dir') + 1];
     assert.equal(outputDir, path.join(lab.jobDir(job.id), 'output'));
     assert.ok(!outputDir.includes(path.join(root, 'data', 'research', 'algo-auto')));
@@ -244,34 +279,36 @@ test('equity lab progress lines are read the same way as options progress', () =
     assert.equal(progress.current, 'intraday_momentum');
 });
 
-test('an equity run takes a ticker list and dates, and passes them to the research command', async t => {
+test('an equity run takes a universe of one or more tickers and dates, and passes them to the research command', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const { spawnImpl, calls } = stubSpawn();
     const lab = new ResearchLab({ root, python: '/venv/bin/python', spawnImpl, meminfoPath: meminfo, nightlyRunning: async () => false });
-    const job = await lab.startJob({ account: 'equity', strategies: ['swing_momentum'], underlyings: ['aapl', 'MSFT'], start: '2023-01-01', end: '2026-06-30' });
+    const tickers = Array.from({ length: 20 }, (_, index) => `t${String(index).padStart(2, '0')}`);
+    const job = await lab.startJob({ account: 'equity', strategies: ['swing_momentum'], underlyings: tickers, start: '2023-01-01', end: '2026-06-30' });
     const args = calls[0].args;
-    assert.equal(args[args.indexOf('--underlyings') + 1], 'AAPL,MSFT');
+    assert.equal(args[args.indexOf('--underlyings') + 1], tickers.map(item => item.toUpperCase()).join(','));
     assert.equal(args[args.indexOf('--start') + 1], '2023-01-01');
     assert.equal(args[args.indexOf('--end') + 1], '2026-06-30');
-    assert.deepEqual(job.underlyings, ['AAPL', 'MSFT']);
+    assert.equal(job.underlyings.length, 20);
+    assert.deepEqual(validateJobRequest({ account: 'equity', strategies: ['swing_momentum'], underlyings: ['spcx'] }, { today: TODAY }).underlyings, ['SPCX']);
     await assert.rejects(lab.startJob({ account: 'equity', strategies: ['swing_momentum'], underlyings: ['bad ticker'] }), /ticker symbol/);
     await assert.rejects(lab.startJob({ account: 'equity', strategies: ['swing_momentum'], start: '2024-05-01', end: '2024-05-01' }), /before end/);
 });
 
-test('equity profiles: standard is the live values the validator accepts, conservative is smaller, high-risk is larger', () => {
+test('equity profiles are fixed values: the same whatever the live settings are, so applying twice does not drift', () => {
     const { equityPresetParameters } = require('../server/algo-trader/research-lab');
-    const live = { enabled: true, max_position_pct: 0.07, risk_multiplier: 0.75, hard_stop_pct: 0.06, trailing_stop_pct: 0.045,
-        trailing_activation_pct: 0.02, max_entries_per_day: 3, max_positions: 7, cooldown_minutes: 7200, horizon: 'swing' };
-    const standard = equityPresetParameters('standard', live, 'swing_momentum');
-    assert.deepEqual(standard, { max_position_pct: 0.07, risk_multiplier: 0.75, hard_stop_pct: 0.06, trailing_stop_pct: 0.045, trailing_activation_pct: 0.02 });
-    const conservative = equityPresetParameters('conservative', live, 'swing_momentum');
-    const highRisk = equityPresetParameters('high-risk', live, 'swing_momentum');
-    assert.ok(conservative.max_position_pct < standard.max_position_pct && highRisk.max_position_pct > standard.max_position_pct);
-    assert.ok(conservative.hard_stop_pct < standard.hard_stop_pct && highRisk.hard_stop_pct > standard.hard_stop_pct);
-    assert.deepEqual(Object.keys(equityPresetParameters('high-risk', live, 'swing_multi_factor')), ['max_position_pct', 'risk_multiplier', 'hard_stop_pct']);
-    assert.deepEqual(equityPresetParameters('high-risk', live, 'intraday_momentum'), {});
+    const presets = require('../server/algo-trader/profile-presets.json');
+    const liveA = { max_position_pct: 0.07, risk_multiplier: 0.75, hard_stop_pct: 0.06, trailing_stop_pct: 0.045, trailing_activation_pct: 0.02 };
+    const liveB = { max_position_pct: 0.049, risk_multiplier: 0.45, hard_stop_pct: 0.048, trailing_stop_pct: 0.036, trailing_activation_pct: 0.016 };
+    for (const name of ['standard', 'conservative', 'high-risk']) {
+        assert.deepEqual(equityPresetParameters(name, liveA, 'swing_momentum'), presets.equity.swing_momentum[name]);
+        assert.deepEqual(equityPresetParameters(name, liveB, 'swing_momentum'), presets.equity.swing_momentum[name]);
+    }
+    assert.ok(presets.equity.swing_momentum.conservative.max_position_pct < presets.equity.swing_momentum.standard.max_position_pct);
+    assert.ok(presets.equity.swing_momentum['high-risk'].max_position_pct > presets.equity.swing_momentum.standard.max_position_pct);
+    assert.deepEqual(equityPresetParameters('high-risk', liveA, 'swing_multi_factor'), presets.equity.swing_multi_factor['high-risk']);
+    assert.deepEqual(equityPresetParameters('high-risk', liveA, 'intraday_momentum'), presets.equity.intraday_momentum['high-risk']);
 });
-
 test('options profiles: the three built-ins come first and conservative needs a higher IV edge', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
@@ -322,4 +359,43 @@ test('an equity plan applies as one change with a diff and rolls back to the pre
     await lab.equityPlanRollback();
     assert.equal((await loadSettings(root)).strategies.swing_momentum.max_position_pct, before);
     await assert.rejects(lab.equityPlanRollback(), /no applied equity plan/);
+});
+
+test('an options plan applies as one change to the options override and rolls back to the previous file', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const { optionsConfigPath } = require('../server/algo-trader/settings');
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
+    const overridePath = optionsConfigPath(root);
+    await lab.setPlan('options', { vrp: 'conservative' });
+    const preview = await lab.planPreview('options');
+    assert.ok(preview.changes > 0);
+    assert.equal(preview.strategies[0].profile, 'conservative');
+    await lab.planApply('options');
+    const applied = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
+    assert.equal(applied.vrp.min_iv_minus_rv, preview.strategies[0].parameters.min_iv_minus_rv);
+    await lab.planRollback('options');
+    assert.equal(fs.existsSync(overridePath), false);
+    await assert.rejects(lab.planRollback('options'), /no applied options plan/);
+});
+
+test('several options strategies run one after another, each with its own profile', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const children = [];
+    const spawnImpl = (executable, args, options) => {
+        const child = new EventEmitter();
+        child.pid = 4300 + children.length;
+        child.kill = () => true;
+        children.push({ child, args, options });
+        return child;
+    };
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', spawnImpl, meminfoPath: meminfo });
+    await lab.startJob({ account: 'options', strategies: ['vrp', 'long_volatility'], underlyings: ['AAPL', 'MSFT'],
+        profiles: { vrp: 'conservative', long_volatility: 'high-risk' } });
+    assert.equal(children.length, 1);
+    assert.deepEqual((await lab.overview('options')).queued, ['long_volatility']);
+    children[0].child.emit('exit', 0, null);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(children.length, 2);
+    assert.equal(children[1].args[children[1].args.indexOf('--strategy') + 1], 'long_volatility');
+    assert.deepEqual((await lab.overview('options')).queued, []);
 });

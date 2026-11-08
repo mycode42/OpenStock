@@ -200,6 +200,28 @@ class SQLiteBarStore:
             output.setdefault(symbol, []).append(bar)
         return output
 
+    def session_counts(
+        self, symbols: list[str], *, feed: str, adjustment: str, timeframe: str, start: str, end: str,
+    ) -> dict[str, int]:
+        """Distinct UTC dates with stored bars per symbol between two ISO timestamps (inclusive)."""
+        if not symbols:
+            return {}
+        marks = ",".join("?" for _ in symbols)
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                f"""
+                SELECT symbol, COUNT(DISTINCT substr(timestamp, 1, 10))
+                FROM market_bar
+                WHERE feed = ? AND adjustment = ? AND timeframe = ? AND symbol IN ({marks})
+                  AND timestamp >= ? AND timestamp <= ?
+                GROUP BY symbol
+                """,
+                (feed, adjustment, timeframe, *symbols, start, end),
+            ).fetchall()
+        counts = {symbol: 0 for symbol in symbols}
+        counts.update({symbol: int(count) for symbol, count in rows})
+        return counts
+
     def coverage(self) -> list[dict]:
         with closing(self._connect()) as connection:
             rows = connection.execute("""

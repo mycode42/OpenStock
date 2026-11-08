@@ -139,6 +139,7 @@ def _refresh_incremental(
     data_tier_fn=None,
     regular_feed_fn=None,
     fetch_bars_fn=None,
+    minimum_covered: int = MIN_COVERED_UNIVERSE,
 ) -> dict:
     """Fetch regular SIP history plus recent extended/overnight trial bars."""
     data_tier_fn = data_tier_fn or data_tier
@@ -174,10 +175,10 @@ def _refresh_incremental(
 
     refreshed_coverage = _bar_coverage(store)
     covered_symbols = [symbol for symbol in selected_symbols if symbol in refreshed_coverage]
-    if len(covered_symbols) < MIN_COVERED_UNIVERSE:
+    if len(covered_symbols) < minimum_covered:
         raise ValueError(
             f"Only {len(covered_symbols)} selected research symbols have stored split-adjusted SIP history "
-            f"after refresh; at least {MIN_COVERED_UNIVERSE} are required"
+            f"after refresh; at least {minimum_covered} are required"
         )
 
     from strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
@@ -259,12 +260,12 @@ def _load_daily_history(
     output["SPY"] = [{"t": bar["t"], "c": bar["c"]} for bar in spy_daily]
     return output
 
-def _latest_dates(store: SQLiteBarStore, symbols: list[str]) -> tuple[date, date, list[str]]:
+def _latest_dates(store: SQLiteBarStore, symbols: list[str], minimum: int = MIN_COVERED_UNIVERSE) -> tuple[date, date, list[str]]:
     coverage = _bar_coverage(store)
     available = [symbol for symbol in symbols if symbol in coverage]
     missing = sorted(set(symbols) - set(available))
-    if len(available) < MIN_COVERED_UNIVERSE:
-        raise ValueError(f"Only {len(available)} fixed Algo-universe tickers have SIP bars")
+    if len(available) < minimum:
+        raise ValueError(f"Only {len(available)} fixed Algo-universe tickers have SIP bars; at least {minimum} are required")
     # Keep the earliest date in the local store. Recently listed members simply
     # begin contributing once their own history exists.
     start = min(_parse_date(coverage[symbol]["first"]) for symbol in available)

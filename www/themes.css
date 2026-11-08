@@ -1,15 +1,21 @@
 html[data-theme="openstock"] {
-  --os-page: #000000;
-  --os-nav: #0a0a0a;
-  --os-surface: #0a0a0a;
-  --os-raised: #111111;
-  --os-text: #f8fafc;
-  --os-muted: #94a3b8;
-  --os-border: #252a2e;
+  --os-page: #050506;
+  --os-nav: #0b0c0f;
+  --os-surface: #121317;
+  --os-raised: #1c1d23;
+  --os-text: #f7f7fa;
+  --os-muted: #c2c5ce;
+  --os-border: #474a54;
   --os-accent: #c8ff00;
   --os-accent-ink: #000000;
   --os-soft-accent: rgba(200, 255, 0, .1);
-  --os-browser: #000000;
+  --os-browser: #050506;
+}
+
+/* Dark default: the text colours used on dark backgrounds are Knot's. Other themes do not set these, so their colours do not change. */
+html[data-theme="openstock"]:not([data-theme-mode="light"]) {
+  --ui-muted: #c2c5ce;
+  --ui-text: #f7f7fa;
 }
 
 html[data-theme="claw"] {
@@ -1586,6 +1592,36 @@ html[data-theme="knot"] .algo-kpi,
 html[data-theme="knot"] .algo-panel,
 html[data-theme="knot"] .settings-theme-option {
   border-width: 1.5px;
+}
+
+/* The default theme in dark mode: grey borders and separate dark layers, as in Knot. Light mode keeps its own colours. */
+html[data-theme="openstock"]:not([data-theme-mode="light"]) nav,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) nav .settings-nav-button {
+  border-color: var(--os-border);
+}
+html[data-theme="openstock"]:not([data-theme-mode="light"]) nav {
+  background: var(--os-nav);
+  border-bottom-color: var(--os-border);
+}
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .card,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .summary-card,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .algo-kpi,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .algo-panel,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .journal-kpi {
+  background: var(--os-surface);
+  border: 1.5px solid var(--os-border);
+}
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .stock-card {
+  background: var(--os-raised);
+  border: 1.5px solid var(--os-border);
+  border-left: 4px solid var(--os-accent);
+}
+html[data-theme="openstock"]:not([data-theme-mode="light"]) input,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) select,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .dropdown-trigger,
+html[data-theme="openstock"]:not([data-theme-mode="light"]) .dropdown-panel {
+  background: var(--os-page);
+  border-color: var(--os-border);
 }
 
 html[data-theme="crt"] body,

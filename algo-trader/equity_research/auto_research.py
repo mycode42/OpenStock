@@ -45,7 +45,7 @@ from .settings import (
     ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
     ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
     ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
-    ADAPTIVE_PURGE_SESSIONS, ADAPTIVE_VERIFICATION_CANDIDATES,
+    ADAPTIVE_MINIMUM_FOLDS, ADAPTIVE_PURGE_SESSIONS, ADAPTIVE_VERIFICATION_CANDIDATES,
     ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
     ADAPTIVE_WINDOW_DAYS, DISCOVERY_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
     REGIME_CONTEXT_WARMUP_DAYS, RESEARCH_START, RESEARCH_WARMUP_DAYS,
@@ -56,12 +56,37 @@ AUTO_RESEARCH_PIPELINE_VERSION = "algo-research-layers-v23-continuous-champion-q
 logger = logging.getLogger(__name__)
 
 
-def _refresh_incremental(store, *, selected_symbols, end_date):
+def _refresh_incremental(store, *, selected_symbols, end_date, minimum_covered=MIN_COVERED_UNIVERSE):
     """Refresh the configured universe through the AutoResearch data adapter."""
     return _refresh_incremental_impl(
         store, selected_symbols=selected_symbols, end_date=end_date,
         data_tier_fn=data_tier, regular_feed_fn=regular_feed,
-        fetch_bars_fn=fetch_alpaca_bars,
+        fetch_bars_fn=fetch_alpaca_bars, minimum_covered=minimum_covered,
+    )
+
+
+def _verification_sessions_needed(strategies) -> int:
+    """Sessions one rolling verification needs: the longest fit window, the purge, and the folds that must exist."""
+    family = "swing" if any(name.startswith("swing_") for name in strategies) else "intraday"
+    return (
+        max(ADAPTIVE_WINDOW_DAYS[family]) + ADAPTIVE_PURGE_SESSIONS
+        + (ADAPTIVE_MINIMUM_FOLDS - 1) * ADAPTIVE_VERIFICATION_STEP_DAYS + 1
+    )
+
+
+def _discovery_only_reason(store, symbols, *, start: date, end: date, strategies) -> str | None:
+    """Why a lab run cannot be verified out of sample, or None. Uses the best-covered ticker's stored sessions."""
+    needed = _verification_sessions_needed(strategies)
+    counts = store.session_counts(
+        symbols, feed=FEED, adjustment=ADJUSTMENT, timeframe="5Min",
+        start=f"{start.isoformat()}T00:00:00", end=f"{end.isoformat()}T23:59:59",
+    )
+    best = max(counts.values(), default=0)
+    if best >= needed:
+        return None
+    return (
+        f"rolling verification needs {needed} trading sessions of stored SIP 5-minute bars; "
+        f"the best-covered ticker has {best} between {start.isoformat()} and {end.isoformat()}"
     )
 
 
@@ -126,6 +151,7 @@ def run_daily_research(args) -> dict:
         logger.info("Refreshing SIP bars for %d symbols through %s", len(symbols), refresh_to)
         refresh_report = _refresh_incremental(
             store, selected_symbols=refresh_symbols, end_date=refresh_to,
+            minimum_covered=1 if getattr(args, "underlying_list", None) else MIN_COVERED_UNIVERSE,
         )
     refresh_seconds = round(perf_counter() - refresh_started, 3)
     if refresh_report is not None:
@@ -139,12 +165,15 @@ def run_daily_research(args) -> dict:
         "rows_written": (refresh_report or {}).get("intraday_rows_written", 0),
     })
 
-    history_start, latest_end, missing = _latest_dates(store, symbols)
+    # A lab run with its own universe may research a single ticker. The strategies are per-ticker signals; the
+    # cross-sectional factor stages need a wider universe and report that themselves.
+    minimum_universe = 1 if getattr(args, "underlying_list", None) else MIN_COVERED_UNIVERSE
+    history_start, latest_end, missing = _latest_dates(store, symbols, minimum=minimum_universe)
     covered_symbols = [symbol for symbol in symbols if symbol not in missing]
-    if len(covered_symbols) < MIN_COVERED_UNIVERSE:
+    if len(covered_symbols) < minimum_universe:
         raise ValueError(
             f"Only {len(covered_symbols)} selected equities have common SIP history; "
-            f"at least {MIN_COVERED_UNIVERSE} are required"
+            f"at least {minimum_universe} are required"
         )
     logger.info(
         "Market data ready: %d/%d symbols, common sessions %s through %s",
@@ -321,7 +350,18 @@ def run_daily_research(args) -> dict:
         "sector_map": ALGO_FACTOR_SECTOR_BY_SYMBOL,
         "fundamentals_data_version": fundamentals_data_version,
     })
-    if not args.force and factor_cached and factor_cached.get("fingerprint") == factor_fingerprint:
+    if len(covered_symbols) < factor_model_min_universe:
+        factor_report = {
+            "status": "skipped",
+            "reason": (
+                f"{len(covered_symbols)} covered symbols; the cross-sectional factor model needs "
+                f"{factor_model_min_universe}"
+            ),
+            "weight_timeline": [],
+        }
+        factor_model_timing = {"seconds": 0.0, "reused": False}
+        logger.info("Multi Factor diagnostics skipped: %s", factor_report["reason"])
+    elif not args.force and factor_cached and factor_cached.get("fingerprint") == factor_fingerprint:
         factor_report = factor_cached["report"]
         factor_model_timing = {"seconds": 0.0, "reused": True}
         logger.info("Multi Factor diagnostics: reusing cached result")
@@ -349,6 +389,13 @@ def run_daily_research(args) -> dict:
         "data_version": data_version,
     })
 
+    discovery_only_reason = None
+    if getattr(args, "underlying_list", None) and not args.factor_only:
+        discovery_only_reason = _discovery_only_reason(
+            store, covered_symbols, start=RESEARCH_START, end=cohort_end, strategies=RESEARCHABLE_STRATEGIES,
+        )
+        if discovery_only_reason:
+            logger.info("Discovery only, not verified: %s", discovery_only_reason)
     adaptive_root = Path(args.output_dir) / "adaptive"
     adaptive_discovery_started = perf_counter()
     logger.info(
@@ -374,6 +421,61 @@ def run_daily_research(args) -> dict:
         adaptive_discovery.get("status"), adaptive_discovery_seconds,
     )
     multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("swing_multi_factor", {})
+    if discovery_only_reason:
+        discovery_failed = adaptive_discovery.get("status") in {"error", "partial_error"}
+        report = {
+            "invocation_id": invocation_id,
+            "schema": "swarm_algo_nightly_research_v2",
+            "status": "partial_error" if discovery_failed else "discovery_only",
+            "discovery_only": True,
+            "discovery_only_reason": discovery_only_reason,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "run_date_et": datetime.now(ET).date().isoformat(),
+            "research_only": True,
+            "live_configuration_changed": False,
+            "trade_or_order_actions": 0,
+            "data": _data_summary(
+                history_start, latest_end, cohort_end, latest_age_days,
+                covered_symbols, symbols, missing, universe_meta, refresh_report,
+                research_start=RESEARCH_START, warmup_start=warmup_start,
+            ),
+            "factor_model": factor_report,
+            "adaptive_research": {
+                "discovery": adaptive_discovery,
+                "verification": {"status": "skipped", "reason": discovery_only_reason},
+            },
+            "adaptive_strategy_artifacts": {
+                strategy: {
+                    "status": "discovery_only",
+                    "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
+                    "verification": None,
+                    "coordinator_artifact": None,
+                    "verification_summary": None,
+                }
+                for strategy in RESEARCHABLE_STRATEGIES
+            },
+            "multi_factor_discovery": multi_factor_discovery,
+            "orchestration": {
+                **context,
+                "cohort_id": run_id,
+                "run_id": run_id,
+                "cycle_type": "discovery_only",
+                "cache_hit": False,
+            },
+            "stage_timings": {
+                "adaptive_discovery": {
+                    "seconds": adaptive_discovery_seconds,
+                    "status": adaptive_discovery.get("status"),
+                },
+                "total_seconds": round(perf_counter() - total_started, 3),
+            },
+            "limitations": [
+                discovery_only_reason,
+                "Discovery fitness is in-sample. Nothing here is verified out of sample, so nothing can be applied or promoted from it.",
+            ],
+        }
+        stage_progress("report_assembly", "completed", {"status": report.get("status"), "discovery_only": True})
+        return report
     if optimization_only:
         discovery_failed = adaptive_discovery.get("status") in {"error", "partial_error"}
         report = {
@@ -991,7 +1093,7 @@ def _lab_emit(event: dict) -> None:
 
 
 def _apply_strategy_scope(args, parser) -> None:
-    """Narrow the researched strategies to --strategies. Every stage reads the module-level tuple, so one rebind is enough."""
+    """Narrow the researched strategies to --strategies. This module and the adaptive pipeline each hold their own copy of the tuple, so both are rebound."""
     global RESEARCHABLE_STRATEGIES, RESEARCH_START
     requested = [item.strip() for item in (args.strategies or "").split(",") if item.strip()]
     if requested:
@@ -999,6 +1101,8 @@ def _apply_strategy_scope(args, parser) -> None:
         if unknown:
             parser.error(f"unknown strategies: {', '.join(unknown)}")
         RESEARCHABLE_STRATEGIES = tuple(name for name in RESEARCHABLE_STRATEGIES if name in requested)
+        from .pipeline import adaptive_pipeline
+        adaptive_pipeline.RESEARCHABLE_STRATEGIES = RESEARCHABLE_STRATEGIES
     if args.start:
         start = _parse_run_date(args.start, parser, "--start")
         if start < RESEARCH_START:

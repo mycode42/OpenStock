@@ -1,0 +1,189 @@
+{
+  "_note": "Fixed profile values. Standard is the live values (swing: the settings file on 2026-11-08; intraday: the registry defaults on 2026-11-08); conservative and high-risk are fixed numbers, not calculated at runtime. Intraday profiles tune signals and are used only in lab test runs. Changing a value here is a change of profile.",
+  "equity": {
+    "swing_trend_following": {
+      "standard": {
+        "max_position_pct": 0.07,
+        "risk_multiplier": 0.75,
+        "hard_stop_pct": 0.06,
+        "trailing_stop_pct": 0.045,
+        "trailing_activation_pct": 0.02
+      },
+      "conservative": {
+        "max_position_pct": 0.049,
+        "risk_multiplier": 0.45,
+        "hard_stop_pct": 0.048,
+        "trailing_stop_pct": 0.036,
+        "trailing_activation_pct": 0.016
+      },
+      "high-risk": {
+        "max_position_pct": 0.091,
+        "risk_multiplier": 1.05,
+        "hard_stop_pct": 0.072,
+        "trailing_stop_pct": 0.054,
+        "trailing_activation_pct": 0.024
+      }
+    },
+    "swing_momentum": {
+      "standard": {
+        "max_position_pct": 0.07,
+        "risk_multiplier": 0.75,
+        "hard_stop_pct": 0.06,
+        "trailing_stop_pct": 0.045,
+        "trailing_activation_pct": 0.02
+      },
+      "conservative": {
+        "max_position_pct": 0.049,
+        "risk_multiplier": 0.45,
+        "hard_stop_pct": 0.048,
+        "trailing_stop_pct": 0.036,
+        "trailing_activation_pct": 0.016
+      },
+      "high-risk": {
+        "max_position_pct": 0.091,
+        "risk_multiplier": 1.05,
+        "hard_stop_pct": 0.072,
+        "trailing_stop_pct": 0.054,
+        "trailing_activation_pct": 0.024
+      }
+    },
+    "swing_mean_reversion": {
+      "standard": {
+        "max_position_pct": 0.07,
+        "risk_multiplier": 0.75,
+        "hard_stop_pct": 0.07,
+        "trailing_stop_pct": 0.05,
+        "trailing_activation_pct": 0.02
+      },
+      "conservative": {
+        "max_position_pct": 0.049,
+        "risk_multiplier": 0.45,
+        "hard_stop_pct": 0.056,
+        "trailing_stop_pct": 0.04,
+        "trailing_activation_pct": 0.016
+      },
+      "high-risk": {
+        "max_position_pct": 0.091,
+        "risk_multiplier": 1.05,
+        "hard_stop_pct": 0.084,
+        "trailing_stop_pct": 0.06,
+        "trailing_activation_pct": 0.024
+      }
+    },
+    "swing_multi_factor": {
+      "standard": {
+        "max_position_pct": 0.07,
+        "risk_multiplier": 0.5,
+        "hard_stop_pct": 0.06
+      },
+      "conservative": {
+        "max_position_pct": 0.049,
+        "risk_multiplier": 0.3,
+        "hard_stop_pct": 0.048
+      },
+      "high-risk": {
+        "max_position_pct": 0.091,
+        "risk_multiplier": 0.7,
+        "hard_stop_pct": 0.072
+      }
+    },
+    "intraday_trend_following": {
+      "standard": {
+        "fast_period": 9,
+        "slow_period": 21
+      },
+      "conservative": {
+        "fast_period": 12,
+        "slow_period": 34
+      },
+      "high-risk": {
+        "fast_period": 6,
+        "slow_period": 15
+      }
+    },
+    "intraday_momentum": {
+      "standard": {
+        "lookback": 12,
+        "minimum_return": 0.015,
+        "minimum_volume_ratio": 1.2
+      },
+      "conservative": {
+        "lookback": 12,
+        "minimum_return": 0.025,
+        "minimum_volume_ratio": 1.5
+      },
+      "high-risk": {
+        "lookback": 8,
+        "minimum_return": 0.01,
+        "minimum_volume_ratio": 1.0
+      }
+    },
+    "intraday_mean_reversion": {
+      "standard": {
+        "entry_rsi": 32,
+        "exit_rsi": 58,
+        "minimum_dip_pct": 0.014,
+        "minimum_bounce_pct": 0.002
+      },
+      "conservative": {
+        "entry_rsi": 25,
+        "exit_rsi": 55,
+        "minimum_dip_pct": 0.02,
+        "minimum_bounce_pct": 0.003
+      },
+      "high-risk": {
+        "entry_rsi": 38,
+        "exit_rsi": 62,
+        "minimum_dip_pct": 0.008,
+        "minimum_bounce_pct": 0.001
+      }
+    }
+  },
+  "options": {
+    "vrp": {
+      "standard": {
+        "min_iv_minus_rv": 0.04,
+        "short_delta_min": 0.1,
+        "wing_delta_max": 0.07
+      },
+      "conservative": {
+        "min_iv_minus_rv": 0.06,
+        "short_delta_min": 0.08,
+        "wing_delta_max": 0.056
+      },
+      "high-risk": {
+        "min_iv_minus_rv": 0.03,
+        "short_delta_min": 0.12,
+        "wing_delta_max": 0.084
+      }
+    },
+    "long_volatility": {
+      "standard": {
+        "close_dte": 3,
+        "iv_percentile_ceiling": 75,
+        "max_dte": 45,
+        "max_holding_days": 14,
+        "max_premium_per_trade_usd": 1000,
+        "max_risk_per_trade_pct": 0.07,
+        "max_spread_pct": 0.15,
+        "min_dte": 7,
+        "min_open_interest": 100,
+        "otm_delta": 0.25,
+        "profit_target_pct": 0.4,
+        "stop_loss_pct": 0.5
+      },
+      "conservative": {
+        "max_risk_per_trade_pct": 0.035,
+        "max_premium_per_trade_usd": 600,
+        "stop_loss_pct": 0.4,
+        "iv_percentile_ceiling": 67.5
+      },
+      "high-risk": {
+        "max_risk_per_trade_pct": 0.105,
+        "max_premium_per_trade_usd": 1500,
+        "stop_loss_pct": 0.6,
+        "iv_percentile_ceiling": 82.5
+      }
+    }
+  }
+}
