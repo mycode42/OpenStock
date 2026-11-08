@@ -45,11 +45,10 @@ def _load_window_data(
     context_symbols = list(dict.fromkeys([*symbols, "QQQ", "GLD", "TLT", "HYG", "LQD"]))
     if bar_cache.enabled():
         # Shared arrays: every fold worker maps the same file instead of holding its own dicts.
-        cache_dir = bar_cache.build(
+        bars = bar_cache.load_window_bars(
             db, cache_root=DATA_DIR / "research" / "bar-cache", feed=FEED, timeframe="5Min",
-            adjustment=adjustment, symbols=context_symbols,
+            adjustment=adjustment, symbols=context_symbols, start=warm_start, end=end.isoformat(),
         )
-        bars = bar_cache.window_bars(cache_dir, context_symbols, warm_start, end.isoformat())
     else:
         bars = store.bars(
             context_symbols, feed=FEED, timeframe="5Min", start=warm_start,

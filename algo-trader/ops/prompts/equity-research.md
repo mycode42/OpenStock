@@ -2,7 +2,7 @@ Pipeline steps
 1. Run exactly one equity AutoResearch cycle (options research is a separate job):
 cd {ROOT} && /usr/bin/nice -n 2 poetry run python -m research.equity
 The command runs the equity AutoResearch pipeline only. Wait for completion. Do not loop or launch another cycle. If it exits nonzero, report the equity failure clearly and do not present an older equity latest.json as this run.
-2. Read {ROOT}/data/research/algo-auto/latest.json. Report the equity sections only.
+2. Use the compact equity report JSON supplied below. It is generated from {ROOT}/data/research/algo-auto/latest.json; that full file remains the extended authoritative report and is not sent to the model. Report the equity sections only.
 
 Keep the Telegram report under 2,000 characters. Use the equity report's fitness_timeline first; read referenced verification artifacts only when needed to explain dates or diagnostics. Never scan the artifact directory or report equity strategies absent from orchestration.strategies.
 

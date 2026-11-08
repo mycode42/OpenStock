@@ -12,6 +12,7 @@ represent exactly, and the caller then falls back to the dict path.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ import shutil
 import sqlite3
 import uuid
 from collections.abc import Sequence
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +33,8 @@ _CHUNK = 4096
 _NUMERIC = ("o", "h", "l", "c", "v")
 _FILES = {"t": "<i8", "o": "<f8", "h": "<f8", "l": "<f8", "c": "<f8", "v": "<f8",
           "n": "<f8", "vw": "<f8", "has_n": "|b1", "has_vw": "|b1", "ing": "<i4"}
+_CACHE_KEY = re.compile(r"^[0-9a-f]{24}$")
+_LOCK_NAME = ".cache-maintenance.lock"
 
 
 def enabled() -> bool:
@@ -61,7 +64,39 @@ def cache_key(db_path, *, feed: str, timeframe: str, adjustment: str, symbols) -
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:24]
 
 
+def _acquire_cache_lock(cache_root, *, exclusive: bool = False, blocking: bool = True) -> int:
+    root = Path(cache_root)
+    root.mkdir(parents=True, exist_ok=True)
+    fd = os.open(root / _LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600)
+    operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    if not blocking:
+        operation |= fcntl.LOCK_NB
+    try:
+        fcntl.flock(fd, operation)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+@contextmanager
+def _shared_cache_lock(cache_root):
+    fd = _acquire_cache_lock(cache_root)
+    try:
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def build(db_path, cache_root, *, feed: str, timeframe: str, adjustment: str, symbols) -> Path:
+    """Build or reuse a cache while excluding concurrent cache pruning."""
+    with _shared_cache_lock(cache_root):
+        return _build_locked(db_path, cache_root, feed=feed, timeframe=timeframe,
+                             adjustment=adjustment, symbols=symbols)
+
+
+def _build_locked(db_path, cache_root, *, feed: str, timeframe: str, adjustment: str, symbols) -> Path:
     """Write the cache for every row of ``symbols`` and return its directory.
 
     An existing cache with the same key is reused. Concurrent builders write to
@@ -178,19 +213,42 @@ class LazyBars(Sequence):
 class CacheView:
     def __init__(self, directory: Path) -> None:
         self.directory = Path(directory)
-        manifest = json.loads((self.directory / "manifest.json").read_text(encoding="utf-8"))
-        if manifest.get("format") != FORMAT:
-            raise ValueError("bar cache format is not supported")
-        self.symbols = manifest["symbols"]
-        self.ingested = manifest["ingested"]
-        rows = manifest["rows"]
+        self._lock_fd = _acquire_cache_lock(self.directory.parent)
         self.arrays = {}
-        for name, dtype in _FILES.items():
-            path = self.directory / f"{name}.bin"
-            if rows == 0:
-                self.arrays[name] = np.zeros(0, dtype=dtype)
-            else:
-                self.arrays[name] = np.memmap(path, dtype=dtype, mode="r", shape=(rows,))
+        try:
+            manifest = json.loads((self.directory / "manifest.json").read_text(encoding="utf-8"))
+            if manifest.get("format") != FORMAT:
+                raise ValueError("bar cache format is not supported")
+            self.symbols = manifest["symbols"]
+            self.ingested = manifest["ingested"]
+            rows = manifest["rows"]
+            for name, dtype in _FILES.items():
+                path = self.directory / f"{name}.bin"
+                if rows == 0:
+                    self.arrays[name] = np.zeros(0, dtype=dtype)
+                else:
+                    self.arrays[name] = np.memmap(path, dtype=dtype, mode="r", shape=(rows,))
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        for array in getattr(self, "arrays", {}).values():
+            mmap = getattr(array, "_mmap", None)
+            if mmap is not None:
+                mmap.close()
+        self.arrays = {}
+        fd = getattr(self, "_lock_fd", None)
+        if fd is not None:
+            self._lock_fd = None
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def window(self, symbol: str, start: str, end: str) -> LazyBars:
         """Bars for ``symbol`` between two ISO dates, inclusive, as the store would return them."""
@@ -228,3 +286,102 @@ def window_bars(directory: Path, symbols, start: str, end: str) -> dict[str, Laz
     """Drop-in for ``SQLiteBarStore.bars``: one entry per requested symbol, upper-cased keys."""
     view = CacheView(directory)
     return {symbol.upper(): view.window(symbol, start, end) for symbol in symbols}
+
+def load_window_bars(db_path, cache_root, *, feed: str, timeframe: str, adjustment: str,
+                     symbols, start: str, end: str) -> dict[str, LazyBars]:
+    """Build/reuse and map a cache under one lease, closing the prune race."""
+    with _shared_cache_lock(cache_root):
+        directory = build(db_path, cache_root, feed=feed, timeframe=timeframe,
+                          adjustment=adjustment, symbols=symbols)
+        return window_bars(directory, symbols, start, end)
+
+
+def _valid_current_cache(directory: Path, db_path) -> bool:
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        if manifest.get("format") != FORMAT:
+            return False
+        feed, timeframe, adjustment = manifest["feed"], manifest["timeframe"], manifest["adjustment"]
+        rows, symbols, ingested = manifest["rows"], manifest["symbols"], manifest["ingested"]
+        if not all(isinstance(value, str) for value in (feed, timeframe, adjustment)):
+            return False
+        if type(rows) is not int or rows < 0 or not isinstance(symbols, dict) or not isinstance(ingested, list):
+            return False
+        spans = []
+        for symbol, span in symbols.items():
+            if not isinstance(symbol, str) or not isinstance(span, list) or len(span) != 2:
+                return False
+            offset, count = span
+            if type(offset) is not int or type(count) is not int or offset < 0 or count < 0 or offset + count > rows:
+                return False
+            if count:
+                spans.append((offset, offset + count))
+        spans.sort()
+        if any(left[1] > right[0] for left, right in zip(spans, spans[1:])):
+            return False
+        if sum(end - start for start, end in spans) != rows:
+            return False
+        for name, dtype in _FILES.items():
+            if (directory / f"{name}.bin").stat().st_size != rows * np.dtype(dtype).itemsize:
+                return False
+        expected = cache_key(db_path, feed=feed, timeframe=timeframe,
+                             adjustment=adjustment, symbols=symbols)
+        return directory.name == expected
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+
+
+def _tree_bytes(directory: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(directory, followlinks=False):
+        for name in files:
+            try:
+                path = Path(root) / name
+                if not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def prune_obsolete(db_path, cache_root, *, dry_run: bool = False) -> dict:
+    """Remove only cache-key directories invalid for the current DB fingerprint.
+
+    The exclusive non-blocking lease makes active builders/readers cause a safe
+    skip. Unknown paths and symlinks are always preserved.
+    """
+    root = Path(cache_root)
+    try:
+        lock_fd = _acquire_cache_lock(root, exclusive=True, blocking=False)
+    except BlockingIOError:
+        return {"status": "skipped", "reason": "cache has active reader or builder", "removed": [], "bytes_freed": 0}
+    try:
+        database = Path(db_path)
+        if not database.is_file():
+            return {"status": "skipped", "reason": "source database is unavailable", "removed": [], "bytes_freed": 0}
+        removals = []
+        kept = []
+        for entry in sorted(root.iterdir()):
+            if entry.name == _LOCK_NAME:
+                continue
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            if entry.name.startswith(".building-"):
+                reason = "abandoned staging directory (exclusive cache lease acquired)"
+            elif _CACHE_KEY.fullmatch(entry.name):
+                if _valid_current_cache(entry, database):
+                    kept.append(entry.name)
+                    continue
+                reason = "cache key is stale or cache contents are invalid"
+            else:
+                continue
+            removals.append({"path": str(entry), "reason": reason, "bytes": _tree_bytes(entry)})
+        result = {"status": "dry-run" if dry_run else "complete", "kept_current": kept,
+                  "removed": removals, "bytes_freed": sum(item["bytes"] for item in removals)}
+        if not dry_run:
+            for item in removals:
+                shutil.rmtree(item["path"])
+        return result
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)

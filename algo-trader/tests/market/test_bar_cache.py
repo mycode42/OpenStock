@@ -76,3 +76,42 @@ def test_build_refuses_data_it_cannot_represent_exactly(tmp_path):
     with pytest.raises(ValueError, match="not stored as REAL"):
         bar_cache.build(path, tmp_path / "cache", feed="sip", timeframe="5Min", adjustment="split",
                         symbols=["AAA"])
+
+
+def test_prune_removes_stale_cache_and_keeps_current_key(database, tmp_path):
+    import os
+
+    cache_root = tmp_path / "cache"
+    old = bar_cache.build(database, cache_root, feed="sip", timeframe="5Min",
+                          adjustment="split", symbols=["AAA"])
+    previous = database.stat().st_mtime_ns
+    os.utime(database, ns=(previous + 2_000_000_000, previous + 2_000_000_000))
+    current = bar_cache.build(database, cache_root, feed="sip", timeframe="5Min",
+                              adjustment="split", symbols=["AAA"])
+    assert old != current
+
+    plan = bar_cache.prune_obsolete(database, cache_root, dry_run=True)
+    assert plan["status"] == "dry-run"
+    assert [item["path"] for item in plan["removed"]] == [str(old)]
+    assert old.is_dir() and current.is_dir()
+
+    result = bar_cache.prune_obsolete(database, cache_root)
+    assert result["status"] == "complete"
+    assert not old.exists()
+    assert current.is_dir()
+    assert result["bytes_freed"] > 0
+
+
+def test_prune_skips_while_cache_view_is_live(database, tmp_path):
+    cache_root = tmp_path / "cache"
+    bars = bar_cache.load_window_bars(
+        database, cache_root, feed="sip", timeframe="5Min", adjustment="split",
+        symbols=["AAA"], start="2024-01-01", end="2024-12-31",
+    )
+    result = bar_cache.prune_obsolete(database, cache_root)
+    assert result["status"] == "skipped"
+    assert "active reader" in result["reason"]
+    assert bars["AAA"]
+    bars.clear()
+    result = bar_cache.prune_obsolete(database, cache_root)
+    assert result["status"] == "complete"
