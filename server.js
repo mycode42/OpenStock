@@ -92,14 +92,20 @@ function createApp({
     if (app.locals.demoMode) {
         // Clients are counted by the forwarded address. A forwarded header can be forged by a client on this machine,
         // so every request is also counted by its socket address, which no header can change.
+        // Behind the Cloudflare tunnel every visitor reaches this server from 127.0.0.1, so visitors are told apart by
+        // CF-Connecting-IP, which Cloudflare sets. Direct connections have no such header, and are counted by socket address.
+        const visitorOf = req => req.get('cf-connecting-ip') || req.ip || req.socket?.remoteAddress || 'unknown';
         const socketAddress = req => req.socket?.remoteAddress || 'unknown';
-        const apiLimit = createRateLimiter({ windowMs: 60_000, max: 240 });
-        const writeLimit = createRateLimiter({ windowMs: 60_000, max: 20 });
-        const socketLimit = createRateLimiter({ windowMs: 60_000, max: 1200, keyOf: socketAddress });
-        app.use('/api', (req, res, next) => socketLimit(req, res, () => {
-            if (['GET', 'HEAD'].includes(req.method)) return apiLimit(req, res, next);
-            return apiLimit(req, res, () => writeLimit(req, res, next));
-        }));
+        const apiLimit = createRateLimiter({ windowMs: 60_000, max: 240, keyOf: visitorOf });
+        const writeLimit = createRateLimiter({ windowMs: 60_000, max: 20, keyOf: visitorOf });
+        const directLimit = createRateLimiter({ windowMs: 60_000, max: 1200, keyOf: socketAddress });
+        app.use('/api', (req, res, next) => {
+            const direct = (cb) => (req.get('cf-connecting-ip') ? cb() : directLimit(req, res, cb));
+            return direct(() => {
+                if (['GET', 'HEAD'].includes(req.method)) return apiLimit(req, res, next);
+                return apiLimit(req, res, () => writeLimit(req, res, next));
+            });
+        });
     }
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));

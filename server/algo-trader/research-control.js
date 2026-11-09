@@ -55,7 +55,7 @@ async function nightlyState(runner, key) {
 
 // systemctl --user fails when there is no user session (containers, SSH without lingering). Then no user timers run here.
 function hasNoUserSession(error) {
-    return /Failed to connect to bus|No medium found|Transport endpoint|not been booted with systemd/i.test(`${error?.stderr || ''} ${error?.message || ''}`);
+    return /Failed to connect to|No medium found|Transport endpoint|not been booted with systemd/i.test(`${error?.stderr || ''} ${error?.message || ''}`);
 }
 
 async function researchState({ runner = defaultRunner } = {}) {

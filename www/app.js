@@ -5,7 +5,7 @@ import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mod
 import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1';
 import { createAlgoTrader } from './modules/algo-trader.js?v=3.3.0&research-control=2&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1';
 import { createSettings } from './modules/settings.js';
-import { createConfig } from './modules/config.js?v=3.3.0&delivery-unknown=1';
+import { createConfig } from './modules/config.js?v=3.3.0&demo-real=1';
 import { createAlgoUniverse } from './modules/algo-universe.js?cards=1&demo-mode=1';
 
 const state = createState();

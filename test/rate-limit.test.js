@@ -54,3 +54,16 @@ test('a client that changes its forwarded address still counts against its socke
     }
     assert.deepEqual(results, ['next', 'next', 429]);
 });
+
+test('visitors behind the tunnel are told apart by their forwarded visitor address', () => {
+    const visitorOf = req => req.get('cf-connecting-ip') || req.ip;
+    const limit = createRateLimiter({ windowMs: 1000, max: 1, now: () => 0, keyOf: visitorOf });
+    const seen = [];
+    for (const visitor of ['203.0.113.1', '203.0.113.2']) {
+        const req = { ip: '127.0.0.1', get: name => (name === 'cf-connecting-ip' ? visitor : undefined) };
+        let passed = false;
+        limit(req, fakeResponse(), () => { passed = true; });
+        seen.push(passed);
+    }
+    assert.deepEqual(seen, [true, true]);
+});

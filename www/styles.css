@@ -839,3 +839,4 @@ html[data-theme-mode="light"] .config-delivery-unknown{color:#92400e}
 /* Demo: the real-order controls keep their space but cannot be used, and nothing says a real order is on. */
 html[data-demo="1"] .config-real-order{visibility:hidden}
 html[data-demo="1"] .config-order-detail{visibility:hidden}
+html[data-demo="1"] .config-real-word,html[data-demo="1"] .config-real-count{display:none}

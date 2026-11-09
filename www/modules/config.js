@@ -49,7 +49,7 @@ export function createConfig({ request: af, reload, notify }) {
     function levelSummary(stock) {
         const active = (stock.alert_levels || []).filter(level => level.enabled && level.active && !level.retired);
         if (!active.length) return '<span class="config-level-empty">No active levels</span>';
-        return active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${level.auto_order ? ' · real order' : ''}</span>`).join('');
+        return active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${level.auto_order ? '<span class="config-real-word"> · real order</span>' : ''}</span>`).join('');
     }
 
     function positionSummary(stock) {
@@ -183,7 +183,7 @@ export function createConfig({ request: af, reload, notify }) {
         const activeCount = stocks.filter(stock => stock.enabled).length;
         const heldCount = stocks.filter(stock => Number(stock.position?.quantity) > 0).length;
         const realCount = stocks.reduce((total, stock) => total + (stock.alert_levels || []).filter(level => level.auto_order).length, 0);
-        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, real-order switches and one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${escapeHtml(orders.mode)}</strong></span></div></div>
+        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, <span class="config-real-word">real-order switches and </span>one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span class="config-real-count"><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${escapeHtml(orders.mode)}</strong></span></div></div>
             <div class="config-search"><input id="config-stock-filter" type="search" placeholder="Filter symbols" aria-label="Filter symbols" value="${escapeHtml(stockFilter)}"></div></header>
             <div class="config-stock-list">${stocks.length ? stocks.map(stockCard).join('') : '<p class="journal-empty">No Alpaca watchlist symbols yet.</p>'}<div class="config-filter-empty empty-state" hidden>No symbols match this filter.</div></div>`;
         if (pendingLevelId) {
