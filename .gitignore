@@ -15,3 +15,6 @@ database/*.db.backup
 database/*.backup
 # Migration backups are written next to whichever database file is in use, so match them anywhere.
 *.pre-*.backup
+# Database backups made by hand before risky changes (*.db.pre-*.bak); they hold live trade data.
+database/*.bak
+*.db.*.bak
