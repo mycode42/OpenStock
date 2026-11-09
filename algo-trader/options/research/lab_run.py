@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strategy", required=True, choices=("vrp", "long_volatility"))
     parser.add_argument("--underlyings", required=True, help="comma-separated tickers")
     parser.add_argument("--workers", type=int, default=8, help="fold workers per underlying")
+    parser.add_argument("--replay-only", action="store_true", help="replay the chosen parameters; no search or validation")
+    parser.add_argument("--live-config", default=None, help="research JSON with the live settings, replayed for comparison")
     args = parser.parse_args(argv)
 
     underlyings = [item.strip().upper() for item in args.underlyings.split(",") if item.strip()]
@@ -38,8 +40,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             report = run_research(
                 args.strategy, config_path=args.config, underlying=underlying,
-                parallel_workers=args.workers,
+                parallel_workers=args.workers, replay_only=args.replay_only,
             )
+            # The live settings replay over the same history, so the lab can compare the two.
+            live_report = None
+            if args.live_config:
+                live_report = run_research(
+                    args.strategy, config_path=args.live_config, underlying=underlying,
+                    parallel_workers=args.workers, replay_only=True,
+                )
             validation = report.get("validation") or {}
             emit({
                 "event": "underlying_done",
@@ -50,6 +59,7 @@ def main(argv: list[str] | None = None) -> int:
                 "approved": bool(validation.get("approved")),
                 "run_dir": report.get("run_dir"),
                 "run_id": report.get("run_id"),
+                "live_run_dir": (live_report or {}).get("run_dir"),
             })
         except Exception as exc:  # one underlying's failure is data, not a crash
             failures += 1

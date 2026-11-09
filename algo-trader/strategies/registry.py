@@ -408,7 +408,19 @@ def evaluate(
     return module.signal(ticker, bars, position_qty=position_qty)
 
 
+def live_parameters_snapshot() -> dict:
+    """Effective parameters without a lab run's overrides: what the live system runs with."""
+    saved = os.environ.pop("ALGO_LAB_PARAMETER_OVERRIDES", None)
+    try:
+        refresh_active_parameter_profile()
+        return deepcopy(ALGO_DEFAULT_PARAMETERS)
+    finally:
+        if saved is not None:
+            os.environ["ALGO_LAB_PARAMETER_OVERRIDES"] = saved
+        refresh_active_parameter_profile()
+
+
 __all__ = [
     "ALGO_DEFAULT_PARAMETERS", "PARAMETER_KEYS", "RULE_MODULES", "evaluate",
-    "validate_parameter_profile",
+    "live_parameters_snapshot", "validate_parameter_profile",
 ]

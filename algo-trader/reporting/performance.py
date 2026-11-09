@@ -19,7 +19,7 @@ load_dotenv()
 import requests
 from broker.accounts import get_account_for_mode, verify_account_for_mode
 from market.calendar import get_market_schedule
-from equity_research.validation.drift_monitor import LIVE_FEED_SCHEMA
+LIVE_FEED_SCHEMA = "swarm_algo_live_drift_feed_v1"
 from reporting import journal_store, snapshot_store
 from reporting.journal import dedupe_journal_entries
 from runtime.atomic import atomic_write_json

@@ -45,7 +45,7 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
     config_path = _write_config(tmp_path, data_path=dataset_path, strategies=["llm_driven"])
     calls = []
 
-    def fake_run_research(strategy, *, config_path, data_path, underlying, parallel_workers):
+    def fake_run_research(strategy, *, config_path, data_path, underlying, parallel_workers, replay_only=False):
         calls.append((strategy, config_path, data_path, underlying))
         return {
             "run_id": "event-run-1", "run_dir": str(tmp_path / "runs" / "event-run-1"),

@@ -23,6 +23,32 @@ from strategies.trend_following.swing import SwingTrendConfig
 
 
 ET = ZoneInfo("America/New_York")
+INTRADAY_MAX_HOLDING_SESSIONS = 3
+
+
+def _et_date(value):
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ET)
+    return parsed.astimezone(ET).date()
+
+
+def _sessions_after_entry(entry_at, now_at) -> int | None:
+    """Weekdays after the entry session up to and including the current session. Holidays count as sessions."""
+    from datetime import timedelta
+
+    try:
+        entry_day = _et_date(entry_at)
+        current_day = _et_date(now_at)
+    except (TypeError, ValueError):
+        return None
+    count = 0
+    day = entry_day
+    while day < current_day:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            count += 1
+    return count
 RULE_PARAMETERS = {
     "swing_trend_following": set(SwingTrendConfig.__dataclass_fields__),
     "swing_momentum": set(SwingMomentumConfig.__dataclass_fields__),
@@ -256,6 +282,16 @@ def evaluate_rule_signal(
     name = canonical_strategy_id(name)
     if name not in RULE_PARAMETERS:
         return None
+    # Intraday holdings are closed after a fixed number of sessions, like the swing exits. There is no end-of-day flatten.
+    if name.startswith("intraday_") and position_qty and entry_at and bars:
+        held = _sessions_after_entry(entry_at, bars[-1].get("t"))
+        if held is not None and held >= INTRADAY_MAX_HOLDING_SESSIONS:
+            action = "sell" if position_qty > 0 else "cover"
+            return Signal(
+                ticker, action, name,
+                f"held {INTRADAY_MAX_HOLDING_SESSIONS} sessions after entry; maximum holding reached",
+                0.9,
+            )
     runtime_enabled = None
     if name in {"intraday_trend_following", "intraday_momentum"}:
         runtime_enabled = runtime_enabled_override

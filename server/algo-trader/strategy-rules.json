@@ -54,7 +54,7 @@
       "On 5-minute bars the {fast_period}-bar average crosses above the {slow_period}-bar average (short: below)."
     ],
     "exit": [
-      "Trend reversal, a stop, or the session close."
+      "Trend reversal, a stop, or a forced exit three sessions after entry."
     ]
   },
   "intraday_momentum": {
@@ -63,7 +63,7 @@
       "Volume is at least {minimum_volume_ratio} times its average."
     ],
     "exit": [
-      "A stop, a reversal, or the session close."
+      "Momentum turns negative, a stop, or a forced exit three sessions after entry."
     ]
   },
   "intraday_mean_reversion": {
@@ -73,7 +73,7 @@
       "Entries are capped per day by the strategy's daily entry limit, so a stock can dip several times in one session."
     ],
     "exit": [
-      "The price recovers to the session open, a stop, or the session close."
+      "The price recovers to the session open, a stop, or a forced exit three sessions after entry."
     ]
   }
 }

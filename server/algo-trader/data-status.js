@@ -7,7 +7,13 @@ const path = require('node:path');
 const { readJson } = require('./io');
 
 const TAIL_BYTES = 64 * 1024;
-const ERROR_LINE = /error|failed|stopped|traceback|exception|not complete/i;
+// A real failure: a log level, a traceback, a named exception, or a gRPC error. Narrative words such as "failed"
+// in a summary, and JSON fields that are empty or null, do not count.
+const ERROR_LINE = /\b(ERROR|CRITICAL)\b|Traceback \(most recent|\b[A-Za-z_]*(Error|Exception):|INTERNAL:|debug_error_string = "/;
+const EMPTY_ERROR_FIELD = /"[A-Za-z_]*(errors?|error_strings?)"\s*:\s*(null|\[\]|\{\}|""|0|false)/g;
+// Only the last few lines describe the job's current state; an older failure is history.
+const RECENT_LINES = 30;
+const SUCCESS_LINE = /\b(ok|complete|completed|finished|nothing to do)\b/i;
 // A summary such as "completed (0 errors)" is a success, not an error.
 const ZERO_ERRORS = /\(0 errors?\)/gi;
 
@@ -89,7 +95,11 @@ async function logStatus(logDir) {
         const filePath = path.join(logDir, name);
         const stat = await fs.stat(filePath);
         const lines = stat.size ? (await readTail(filePath, stat.size)).split('\n').filter(Boolean) : [];
-        const lastError = [...lines].reverse().find(line => ERROR_LINE.test(line.replace(ZERO_ERRORS, ''))) || null;
+        const recent = lines.slice(-RECENT_LINES);
+        const errorIndex = recent.findLastIndex(line => ERROR_LINE.test(line.replace(ZERO_ERRORS, '').replace(EMPTY_ERROR_FIELD, '')));
+        // A later success line (complete, finished, ok, nothing to do) means the job recovered after that error.
+        const recovered = errorIndex >= 0 && recent.slice(errorIndex + 1).some(line => SUCCESS_LINE.test(line));
+        const lastError = errorIndex >= 0 && !recovered ? recent[errorIndex] : null;
         rows.push({
             name,
             size_bytes: stat.size,

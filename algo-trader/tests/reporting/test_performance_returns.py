@@ -5,7 +5,6 @@ from decimal import Decimal
 
 import pytest
 
-from equity_research.validation import drift_monitor
 from reporting import performance, snapshot_store
 from reporting.fills import calculate_realized_pnl
 
@@ -77,7 +76,7 @@ def test_uncovered_and_out_of_range_fills_are_counted_not_dropped_silently():
     assert report["strategies"] == {}
 
 
-def test_live_feed_round_trips_into_drift_monitor(tmp_path):
+def test_live_feed_is_written_with_its_schema(tmp_path):
     report = performance.build_strategy_daily_returns(
         [_event("2026-10-20T15:00:00+00:00", {"swing_momentum": "1000"})], SNAPSHOTS,
     )
@@ -86,8 +85,8 @@ def test_live_feed_round_trips_into_drift_monitor(tmp_path):
     performance.write_live_drift_feed(feed, report)
 
     payload = json.loads(feed.read_text())
-    assert payload["schema"] == drift_monitor.LIVE_FEED_SCHEMA
-    assert drift_monitor.load_live_drift_feed(feed) == report["strategies"]
+    assert payload["schema"] == performance.LIVE_FEED_SCHEMA
+    assert payload["strategies"] == report["strategies"]
 
 
 def test_stored_close_snapshots_load_in_date_order_for_one_account(tmp_path, monkeypatch):

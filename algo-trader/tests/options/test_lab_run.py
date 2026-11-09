@@ -10,7 +10,7 @@ def _events(output):
 def test_lab_run_emits_progress_and_continues_after_one_underlying_fails(monkeypatch, capsys):
     calls = []
 
-    def fake_run_research(strategy, *, config_path, underlying, parallel_workers):
+    def fake_run_research(strategy, *, config_path, underlying, parallel_workers, replay_only=False):
         calls.append((strategy, underlying, parallel_workers))
         if underlying == "BAD":
             raise ValueError("insufficient history for BAD")

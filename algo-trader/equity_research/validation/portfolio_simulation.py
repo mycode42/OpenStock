@@ -719,3 +719,66 @@ def _parse_strategies(value: str | None) -> list[str]:
     if not strategies or any(strategy not in RESEARCHABLE_STRATEGIES for strategy in strategies):
         raise ValueError(f"Strategies must be selected from: {', '.join(RESEARCHABLE_STRATEGIES)}")
     return strategies
+
+
+SETTINGS_REPLAY_COST_MODEL = {
+    "slippage_bps_each_side": 5,
+    "spread_bps": 3,
+    "commission_per_share_each_side": 0.005,
+    "short_borrow_annual_pct": 3,
+    "unknown_borrow_adverse_fill_penalty_bps": 25,
+}
+
+
+def run_settings_replay(
+    *, database: str, output_dir: Path, symbols: list[str], start: date, end: date,
+    strategies: list[str], initial_capital: float = 100_000.0,
+    parameters_by_strategy: dict | None = None,
+) -> dict:
+    """Replay the effective parameters over one window: live settings, or a lab run's chosen profiles.
+
+    Nothing is searched or verified and nothing is written to live settings.
+    """
+    from copy import deepcopy
+
+    from portfolio.config import get_algo_research_controls
+    from strategies.registry import ALGO_DEFAULT_PARAMETERS
+
+    db = str(Path(database).resolve())
+    source = parameters_by_strategy or ALGO_DEFAULT_PARAMETERS
+    parameters = {strategy: deepcopy(source[strategy]) for strategy in strategies}
+    item = {
+        "index": 0,
+        "window": {
+            "train_start": start.isoformat(), "train_end": start.isoformat(),
+            "test_start": start.isoformat(), "test_end": end.isoformat(),
+        },
+        "profile": parameters,
+        "controls": get_algo_research_controls(),
+        "selected_profiles": {strategy: "effective" for strategy in strategies},
+    }
+    job = (item, symbols, db, None, list(strategies), dict(SETTINGS_REPLAY_COST_MODEL), None, {}, 0, True, [])
+    _, summary = _run_coordinated_fold(job)
+    summary.pop("daily_equity", None)
+    breakdown = strategy_breakdown([summary], initial_capital=initial_capital)
+    return {
+        "schema": "swarm_algo_settings_replay_v1",
+        "status": "completed",
+        "research_only": True,
+        "live_configuration_changed": False,
+        "trade_or_order_actions": 0,
+        "window": {"start": start.isoformat(), "end": end.isoformat()},
+        "universe": {"symbol_count": len(symbols), "symbols": list(symbols)},
+        "strategies": list(strategies),
+        "parameters": parameters,
+        "summary": {
+            key: summary.get(key) for key in (
+                "net_return_pct", "benchmark_net_return_pct", "excess_return_vs_buy_hold_pct_points",
+                "max_drawdown_pct", "closed_trade_count", "entry_count", "average_entries_per_session",
+                "entry_count_by_strategy", "open_position_count",
+            )
+        },
+        "strategy_breakdown": breakdown,
+        "daily_equity": summary.get("daily_equity"),
+        "output_dir": str(output_dir),
+    }

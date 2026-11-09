@@ -112,7 +112,7 @@ def _run_research_job(
 ) -> dict:
     report = run_research(
         strategy, config_path=config_path, data_path=data_path, underlying=underlying,
-        parallel_workers=parallel_workers,
+        parallel_workers=parallel_workers, replay_only=True,
     )
     return _strategy_summary(strategy, report)
 

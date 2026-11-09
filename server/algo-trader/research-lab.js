@@ -409,10 +409,13 @@ class ResearchLab {
         await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
         const configPath = path.join(dir, 'config.json');
         await writeJsonAtomic(configPath, buildJobConfig(baseConfig, { strategy: request.strategy, parameters, ...request }));
+        // The live settings over the same dates, replayed alongside the chosen parameters for comparison.
+        const liveConfigPath = path.join(dir, 'live-config.json');
+        await writeJsonAtomic(liveConfigPath, buildJobConfig(baseConfig, { strategy: request.strategy, parameters: {}, ...request }));
         const logPath = path.join(dir, 'log.txt');
         const logFd = fs.openSync(logPath, 'a');
         const args = ['-m', 'options.research.lab_run', '--config', configPath, '--strategy', request.strategy,
-            '--underlyings', request.underlyings.join(','), '--workers', '8'];
+            '--underlyings', request.underlyings.join(','), '--workers', '8', '--replay-only', '--live-config', liveConfigPath];
         const configured = this.python;
         const executable = configured || 'poetry';
         const command = configured ? args : ['run', 'python', ...args];
@@ -626,6 +629,7 @@ class ResearchLab {
                 continue;
             }
             const report = await readJsonFile(path.join(item.run_dir || '', 'report.json'), null);
+            const liveReport = item.live_run_dir ? await readJsonFile(path.join(item.live_run_dir, 'report.json'), null) : null;
             const wf = report?.walk_forward || {};
             results.push({
                 underlying: item.underlying,
@@ -638,6 +642,7 @@ class ResearchLab {
                 minimum_oos_trades_met: report?.validation?.minimum_oos_trades_met ?? null,
                 parameter_stability_score: report?.validation?.parameter_stability_score ?? null,
                 exploratory: exploratoryOf(report),
+                live_exploratory: exploratoryOf(liveReport),
             });
         }
         return { job: job.id, strategy: job.strategy, state: job.state, results };
@@ -680,6 +685,23 @@ class ResearchLab {
     // The equity run's report is in its own output folder. Each strategy's artifact status is listed when the report has one.
     async equityJobResults(job) {
         const report = await readJsonFile(path.join(this.jobDir(job.id), 'output', 'latest.json'), null);
+        // A replay reports the parameters it ran, the P/L, trades and drawdown over the window. Nothing is searched.
+        if (report?.schema === 'swarm_algo_settings_replay_v1') {
+            return {
+                job: job.id, strategy: job.strategy, state: job.state, account: 'equity',
+                report: { status: report.status ?? null, created_at: report.created_at ?? null, window: report.window ?? null },
+                replay: {
+                    window: report.window ?? null,
+                    summary: report.summary ?? null,
+                    by_strategy: report.strategy_breakdown?.by_strategy ?? {},
+                    by_regime: report.strategy_breakdown?.by_entry_regime ?? {},
+                    parameters: report.parameters ?? {},
+                    live: report.live_comparison ?? null,
+                    universe_size: report.universe?.symbol_count ?? null,
+                },
+                strategies: [],
+            };
+        }
         const artifacts = report?.adaptive_strategy_artifacts && typeof report.adaptive_strategy_artifacts === 'object'
             ? report.adaptive_strategy_artifacts : {};
         const strategies = await Promise.all(Object.entries(artifacts).map(async ([name, artifact]) => ({

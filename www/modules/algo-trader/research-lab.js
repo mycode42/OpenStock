@@ -218,7 +218,43 @@ function renderPlanPanel() {
     </section>`;
 }
 
+// A replay of the chosen parameters over the chosen history: P/L, trades and drawdown, per strategy and per regime.
+function renderReplay(replay) {
+    const s = replay.summary || {};
+    const pct = value => typeof value === 'number' ? `${value.toFixed(2)}%` : '—';
+    const usd = value => typeof value === 'number' ? `$${Math.round(value).toLocaleString('en-US')}` : '—';
+    const count = value => typeof value === 'number' ? String(value) : '—';
+    const table = (groups, label) => {
+        const rows = Object.entries(groups).map(([name, g]) => `<tr><td>${escapeHtml(name.replaceAll('_', ' '))}</td>
+            <td>${count(g.closed_trades)}</td><td>${usd(g.pnl_usd)}</td><td>${pct(g.pnl_pct_of_initial_capital)}</td>
+            <td>${pct(g.win_rate_pct)}</td><td>${usd(g.average_trade_usd)}</td><td>${typeof g.profit_factor === 'number' ? escapeHtml(g.profit_factor.toFixed(2)) : '—'}</td></tr>`).join('');
+        return rows ? `<table class="lab-table"><thead><tr><th>${label}</th><th>Trades</th><th>P/L</th><th>P/L %</th><th>Win rate</th><th>Average trade</th><th>Profit factor</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="lab-muted">No closed trades in this window.</p>';
+    };
+    const window = replay.window ? `${escapeHtml(replay.window.start)} to ${escapeHtml(replay.window.end)}` : '—';
+    const params = Object.entries(replay.parameters || {}).map(([name, values]) => `<li><strong>${escapeHtml(name.replaceAll('_', ' '))}</strong>: <code>${escapeHtml(JSON.stringify(Object.fromEntries(Object.entries(values).filter(([key]) => typeof values[key] !== 'object'))))}</code></li>`).join('');
+    const live = replay.live;
+    const ls = live?.summary || {};
+    const comparison = live ? `<h4>Chosen parameters against live settings</h4>
+        <table class="lab-table"><thead><tr><th></th><th>Chosen</th><th>Live</th><th>Difference</th></tr></thead><tbody>
+        <tr><td>Net return</td><td>${pct(s.net_return_pct)}</td><td>${pct(ls.net_return_pct)}</td><td>${typeof s.net_return_pct === 'number' && typeof ls.net_return_pct === 'number' ? pct(s.net_return_pct - ls.net_return_pct) : '—'}</td></tr>
+        <tr><td>Max drawdown</td><td>${pct(s.max_drawdown_pct)}</td><td>${pct(ls.max_drawdown_pct)}</td><td>${typeof s.max_drawdown_pct === 'number' && typeof ls.max_drawdown_pct === 'number' ? pct(s.max_drawdown_pct - ls.max_drawdown_pct) : '—'}</td></tr>
+        <tr><td>Closed trades</td><td>${count(s.closed_trade_count)}</td><td>${count(ls.closed_trade_count)}</td><td>${typeof s.closed_trade_count === 'number' && typeof ls.closed_trade_count === 'number' ? s.closed_trade_count - ls.closed_trade_count : '—'}</td></tr>
+        <tr><td>Buy and hold</td><td>${pct(s.benchmark_net_return_pct)}</td><td>${pct(ls.benchmark_net_return_pct)}</td><td></td></tr>
+        </tbody></table>
+        <h4>P/L by strategy, live settings</h4>${table(live.strategy_breakdown?.by_strategy || {}, 'Strategy')}` : '';
+    return `<p><strong>Replay ${window}</strong>${replay.universe_size ? ` · ${escapeHtml(replay.universe_size)} tickers` : ''}</p>
+        <p>Net return <strong>${pct(s.net_return_pct)}</strong> · buy and hold ${pct(s.benchmark_net_return_pct)} · max drawdown <strong>${pct(s.max_drawdown_pct)}</strong> · <strong>${count(s.closed_trade_count)}</strong> closed trades (${count(s.entry_count)} entries)</p>
+        ${comparison}
+        <h4>By strategy${live ? ', chosen parameters' : ''}</h4>${table(replay.by_strategy || {}, 'Strategy')}
+        <h4>By entry regime</h4>${table(replay.by_regime || {}, 'Regime')}
+        <details class="lab-rules"><summary>Parameters replayed</summary><ul class="lab-rule-list">${params}</ul></details>`;
+}
+
 function renderEquityResults(data) {
+    if (data.replay) {
+        const head = data.report ? `<p class="lab-muted">Report status: ${escapeHtml(data.report.status ?? 'unknown')}${data.report.created_at ? ` · ${escapeHtml(data.report.created_at)}` : ''}</p>` : '';
+        return `${head}${renderReplay(data.replay)}`;
+    }
     const report = data.report
         ? `<p class="lab-muted">Report status: ${escapeHtml(data.report.status ?? 'unknown')}${data.report.created_at ? ` · ${escapeHtml(data.report.created_at)}` : ''}</p>${data.report.discovery_only_reason ? `<p class="lab-muted">Discovery only, not verified out of sample: ${escapeHtml(data.report.discovery_only_reason)}. Nothing from this run can be applied or promoted.</p>` : ''}`
         : '<p class="lab-muted">The report appears here when the run finishes.</p>';
@@ -294,7 +330,8 @@ function renderResults() {
         const params = Object.fromEntries(tunable.filter(key => key in (item.final_parameters || {})).map(key => [key, item.final_parameters[key]]));
         const ex = item.exploratory;
         const money = value => `$${Math.round(value).toLocaleString('en-US')}`;
-        const exploratoryRow = ex ? `<tr class="lab-exploratory"><td></td><td colspan="4">Exploratory replay, not validated out of sample: ${typeof ex.trades === 'number' ? `${ex.trades} trades` : '—'}, Sharpe ${typeof ex.annualized_sharpe === 'number' ? escapeHtml(ex.annualized_sharpe.toFixed(2)) : '—'}, average trade ${typeof ex.average_trade_pnl === 'number' ? escapeHtml(money(ex.average_trade_pnl)) : '—'}, equity ${typeof ex.start_equity === 'number' && typeof ex.end_equity === 'number' ? `${escapeHtml(money(ex.start_equity))} to ${escapeHtml(money(ex.end_equity))}` : '—'}.</td></tr>` : '';
+        const replayText = (label, value) => value ? `<tr class="lab-exploratory"><td></td><td colspan="4">${label}: ${typeof value.trades === 'number' ? `${value.trades} trades` : '—'}, Sharpe ${typeof value.annualized_sharpe === 'number' ? escapeHtml(value.annualized_sharpe.toFixed(2)) : '—'}, average trade ${typeof value.average_trade_pnl === 'number' ? escapeHtml(money(value.average_trade_pnl)) : '—'}, equity ${typeof value.start_equity === 'number' && typeof value.end_equity === 'number' ? `${escapeHtml(money(value.start_equity))} to ${escapeHtml(money(value.end_equity))}` : '—'}.</td></tr>` : '';
+        const exploratoryRow = replayText('Replay of the chosen parameters (not validated out of sample)', ex) + replayText('Replay of the live settings, same dates', item.live_exploratory);
         return `<tr><td>${escapeHtml(item.underlying)}</td><td>${escapeHtml(item.status)}${item.approved ? ' · approved' : ''}</td>
             <td>${typeof sharpe === 'number' ? escapeHtml(sharpe.toFixed(2)) : '—'}</td><td>${item.observed_oos_trades ?? '—'}</td>
             <td><code>${escapeHtml(JSON.stringify(params))}</code></td></tr>${exploratoryRow}`;

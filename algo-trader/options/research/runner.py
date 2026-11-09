@@ -400,6 +400,7 @@ def run_research(
     output_dir: str | Path | None = None,
     underlying: str | None = None,
     parallel_workers: int | None = None,
+    replay_only: bool = False,
 ) -> dict:
     """Research one options expression module; it never reads credentials or submits orders."""
     strategy = str(strategy).strip().lower()
@@ -515,16 +516,24 @@ def run_research(
             flush=True,
         )
         try:
+            if replay_only:
+                # Replay only: no parameter search and no walk-forward. The chosen parameters run over the whole history.
+                raise ValueError("insufficient history for replay-only research")
             folds, split = make_purged_walk_forward(
                 dataset.observations, strategy=strategy, strategy_section=section, config=research_config,
             )
         except ValueError as exc:
             short_history = research_config.get("short_history_exploration", {})
             minimum_sessions = int(short_history.get("minimum_sessions", 60))
+            if replay_only and len(dataset.observations) < 2:
+                raise
             if (
-                short_history.get("enabled", False)
-                and "insufficient history for" in str(exc)
-                and len(dataset.observations) >= minimum_sessions
+                replay_only
+                or (
+                    short_history.get("enabled", False)
+                    and "insufficient history for" in str(exc)
+                    and len(dataset.observations) >= minimum_sessions
+                )
             ):
                 baseline = candidate_pool(strategy, research_config, base_config)[0]
                 replay = simulate_options_strategy(

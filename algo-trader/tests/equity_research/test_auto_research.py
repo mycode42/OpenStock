@@ -164,47 +164,8 @@ def test_nightly_refresh_still_requires_the_full_minimum(monkeypatch):
             end_date=end_date,
         )
 
-def test_verification_needs_five_folds_so_swing_needs_364_sessions_and_intraday_304():
-    assert auto_research._verification_sessions_needed(["swing_momentum"]) == 364
-    assert auto_research._verification_sessions_needed(["intraday_momentum"]) == 304
-    assert auto_research._verification_sessions_needed(["intraday_momentum", "swing_momentum"]) == 364
 
 
-def test_short_history_runs_discovery_only_and_full_history_is_verified(tmp_path):
-    from market.store import SQLiteBarStore
-
-    store = SQLiteBarStore(tmp_path / "bars.sqlite3")
-    # SPCX-like ticker: 100 regular sessions of 5-minute bars, plus one session outside the window.
-    rows = []
-    for day in range(100):
-        session = date(2026, 6, 15) + timedelta(days=day)
-        rows.append((session.isoformat(), 1))
-    rows.append(("2025-03-03", 1))
-    with store._connect() as connection:
-        for session, _ in rows:
-            connection.execute(
-                "INSERT INTO market_bar VALUES ('sip','split','5Min','SPCX',?,1,1,1,1,1,NULL,NULL,'2026-11-08')",
-                (f"{session}T14:00:00.000000Z",),
-            )
-    reason = auto_research._discovery_only_reason(
-        store, ["SPCX"], start=date(2025, 1, 2), end=date(2026, 11, 6), strategies=["swing_momentum"],
-    )
-    assert reason is not None and "364" in reason and "has 101" in reason
-    assert store.session_counts(
-        ["SPCX", "AAPL"], feed="sip", adjustment="split", timeframe="5Min",
-        start="2025-01-02T00:00:00", end="2026-11-06T23:59:59",
-    ) == {"SPCX": 101, "AAPL": 0}
-    # A ticker with enough sessions in the window is verified, so no reason is given.
-    with store._connect() as connection:
-        for day in range(370):
-            session = date(2025, 1, 2) + timedelta(days=day * 7 // 5)
-            connection.execute(
-                "INSERT INTO market_bar VALUES ('sip','split','5Min','AAPL',?,1,1,1,1,1,NULL,NULL,'2026-11-08')",
-                (f"{session.isoformat()}T14:00:00.000000Z",),
-            )
-    assert auto_research._discovery_only_reason(
-        store, ["AAPL"], start=date(2025, 1, 2), end=date(2026, 11, 6), strategies=["swing_momentum"],
-    ) is None
 
 def test_factor_features_are_as_of_and_forward_labels_are_purged():
     history = _synthetic_daily_history(500)
@@ -253,29 +214,8 @@ def _force_failed_cycle(monkeypatch, output_dir):
     ])
 
 
-def test_failed_cycle_keeps_the_last_good_report_and_records_the_error_separately(tmp_path, monkeypatch):
-    import json
-
-    good = {"status": "completed", "run_id": "session-20261028-abc", "note": "last good"}
-    (tmp_path / "latest.json").write_text(json.dumps(good), encoding="utf-8")
-
-    assert _force_failed_cycle(monkeypatch, tmp_path) == 2
-
-    assert json.loads((tmp_path / "latest.json").read_text(encoding="utf-8")) == good
-    error = json.loads((tmp_path / "latest-error.json").read_text(encoding="utf-8"))
-    assert error["status"] == "error"
-    assert error["error"].startswith("ModuleNotFoundError")
-    assert error["run_id"] == f"error-{error['invocation_id']}"
 
 
-def test_failed_cycle_fills_latest_when_no_good_report_exists(tmp_path, monkeypatch):
-    import json
-
-    assert _force_failed_cycle(monkeypatch, tmp_path) == 2
-
-    latest = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
-    assert latest["status"] == "error"
-    assert (tmp_path / "latest-error.json").exists()
 
 
 def test_completed_cycle_cli_summary_handles_missing_optional_data(monkeypatch, tmp_path, capsys):
@@ -315,21 +255,15 @@ def test_completed_cycle_cli_summary_handles_missing_optional_data(monkeypatch, 
 
 
 def test_lab_run_is_isolated_and_can_be_scoped_to_chosen_strategies(monkeypatch, tmp_path):
-    from equity_research.pipeline import adaptive_pipeline
     monkeypatch.setattr(auto_research, "RESEARCHABLE_STRATEGIES", auto_research.RESEARCHABLE_STRATEGIES)
-    monkeypatch.setattr(adaptive_pipeline, "RESEARCHABLE_STRATEGIES", adaptive_pipeline.RESEARCHABLE_STRATEGIES)
     parser = auto_research.build_parser()
     args = parser.parse_args([
         "--lab-run", "--output-dir", str(tmp_path),
         "--strategies", "intraday_trend_following,swing_momentum",
-        "--verification-history", "full",
+
     ])
-    # A lab run never takes the full-history path, even when asked for it: that path writes the shared weekly review.
-    assert auto_research._full_history_verification(args) is False
     auto_research._apply_strategy_scope(args, parser)
     assert auto_research.RESEARCHABLE_STRATEGIES == ("swing_momentum", "intraday_trend_following")
-    # Discovery and verification read the adaptive pipeline's own copy, so the scope must reach it too.
-    assert adaptive_pipeline.RESEARCHABLE_STRATEGIES == ("swing_momentum", "intraday_trend_following")
     assert auto_research._configure_progress_logging(tmp_path, lab_run=True) == tmp_path / "equity.log"
 
 

@@ -7,7 +7,6 @@ from equity_research.backtest import AlgoPortfolioBacktest, _regular_session_bar
 import equity_research.backtest as backtest_module
 from market.store import SQLiteBarStore
 from equity_research.validation.slippage_sensitivity import parse_slippage_grid
-from equity_research.pipeline.adaptive_verification import walk_forward_windows
 from strategies.rule_pipeline import evaluate_rule_signal
 from strategies.registry import validate_parameter_profile
 from strategies.signals import Signal
@@ -49,18 +48,6 @@ def test_profile_can_change_rule_parameters_but_not_portfolio_risk():
         validate_parameter_profile({"intraday_mean_reversion": {"signal_model": "llm"}})
 
 
-def test_rolling_verification_windows_are_chronological_and_non_overlapping():
-    sessions = [date(2026, 1, 5) + timedelta(days=index) for index in range(8)]
-    windows = walk_forward_windows(sessions, train_days=3, test_days=2, step_days=2)
-
-    assert [(item["train_start"], item["train_end"], item["test_start"], item["test_end"])
-            for item in windows] == [
-        ("2026-01-05", "2026-01-07", "2026-01-08", "2026-01-09"),
-        ("2026-01-07", "2026-01-09", "2026-01-10", "2026-01-11"),
-        ("2026-01-09", "2026-01-11", "2026-01-12", "2026-01-12"),
-    ]
-    with pytest.raises(ValueError, match="must be at least test_days"):
-        walk_forward_windows(sessions, train_days=3, test_days=3, step_days=2)
 
 
 

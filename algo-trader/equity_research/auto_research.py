@@ -12,7 +12,6 @@ import re
 from pathlib import Path
 import sys
 from time import perf_counter
-from types import SimpleNamespace
 from uuid import uuid4
 
 from portfolio.config import ALGO_FACTOR_SECTOR_BY_SYMBOL, get_algo_runtime_settings
@@ -23,10 +22,6 @@ from strategies.regime_features import NON_EQUITY_CONTEXT_SYMBOLS
 from strategies.registry import refresh_active_parameter_profile
 from market.data import data_tier, regular_feed
 
-from .pipeline.adaptive_pipeline import (
-    ADAPTIVE_PIPELINE_VERSION, ADAPTIVE_VERIFICATION_VERSION,
-    run_adaptive_discoveries, run_adaptive_verifications,
-)
 from .artifacts.artifact_cache import read_json, research_data_version, stable_hash
 from .data import (
     _latest_dates, _load_daily_history,
@@ -37,18 +32,9 @@ from .artifacts.files import _atomic_json, _json_safe, _research_lock
 from .artifacts.fitness_timeline import _attach_fitness_timeline
 from .artifacts.live_manifest import live_configuration_manifest
 from .artifacts.research_ledger import ResearchLedger
-from .weekly_review import REVIEW_DIR, REVIEW_PATH, build_review, write_review
 from .settings import (
     EQUITY_LOG_PATH,
-    RECENT_VERIFICATION_YEARS,
-    ADAPTIVE_DISCOVERY_CANDIDATES, ADAPTIVE_DISCOVERY_ITERATIONS,
-    ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
-    ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
-    ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
-    ADAPTIVE_MINIMUM_FOLDS, ADAPTIVE_PURGE_SESSIONS, ADAPTIVE_VERIFICATION_CANDIDATES,
-    ADAPTIVE_VERIFICATION_STEP_DAYS, ADAPTIVE_VERIFICATION_TEST_DAYS,
-    ADAPTIVE_WINDOW_DAYS, DISCOVERY_WINDOW_DAYS, MIN_COVERED_UNIVERSE, MULTI_FACTOR_MIN_UNIVERSE_VALUES,
-    REGIME_CONTEXT_WARMUP_DAYS, RESEARCH_START, RESEARCH_WARMUP_DAYS,
+    MIN_COVERED_UNIVERSE, RESEARCH_START, RESEARCH_WARMUP_DAYS,
     ADJUSTMENT, DEFAULT_OUTPUT_DIR, ET, FEED, RESEARCHABLE_STRATEGIES,
 )
 
@@ -65,29 +51,8 @@ def _refresh_incremental(store, *, selected_symbols, end_date, minimum_covered=M
     )
 
 
-def _verification_sessions_needed(strategies) -> int:
-    """Sessions one rolling verification needs: the longest fit window, the purge, and the folds that must exist."""
-    family = "swing" if any(name.startswith("swing_") for name in strategies) else "intraday"
-    return (
-        max(ADAPTIVE_WINDOW_DAYS[family]) + ADAPTIVE_PURGE_SESSIONS
-        + (ADAPTIVE_MINIMUM_FOLDS - 1) * ADAPTIVE_VERIFICATION_STEP_DAYS + 1
-    )
 
 
-def _discovery_only_reason(store, symbols, *, start: date, end: date, strategies) -> str | None:
-    """Why a lab run cannot be verified out of sample, or None. Uses the best-covered ticker's stored sessions."""
-    needed = _verification_sessions_needed(strategies)
-    counts = store.session_counts(
-        symbols, feed=FEED, adjustment=ADJUSTMENT, timeframe="5Min",
-        start=f"{start.isoformat()}T00:00:00", end=f"{end.isoformat()}T23:59:59",
-    )
-    best = max(counts.values(), default=0)
-    if best >= needed:
-        return None
-    return (
-        f"rolling verification needs {needed} trading sessions of stored SIP 5-minute bars; "
-        f"the best-covered ticker has {best} between {start.isoformat()} and {end.isoformat()}"
-    )
 
 
 def run_daily_research(args) -> dict:
@@ -130,7 +95,6 @@ def run_daily_research(args) -> dict:
 
     refresh_active_parameter_profile()
     runtime_settings = get_algo_runtime_settings()
-    total_started = perf_counter()
     if data_tier() != "algo_trader_plus" or regular_feed() != FEED:
         raise ValueError("Algo AutoResearch is restricted to Plus SIP data")
 
@@ -265,41 +229,6 @@ def run_daily_research(args) -> dict:
             "start": RESEARCH_START.isoformat(), "end": cohort_end.isoformat(),
             "indicator_warmup_start": warmup_start.isoformat(),
         },
-        "adaptive_pipeline": {
-            "discovery_version": ADAPTIVE_PIPELINE_VERSION,
-            "verification_version": ADAPTIVE_VERIFICATION_VERSION,
-            "window_days_by_flavor": {
-                flavor: list(values) for flavor, values in ADAPTIVE_WINDOW_DAYS.items()
-            },
-            "discovery_window_days_by_flavor": {
-                flavor: list(values) for flavor, values in DISCOVERY_WINDOW_DAYS.items()
-            },
-            "discovery_method": "bayes",
-            "discovery_candidates": ADAPTIVE_DISCOVERY_CANDIDATES,
-            "discovery_iterations": ADAPTIVE_DISCOVERY_ITERATIONS,
-            "discovery_saturation_policy": {
-                "minimum_novelty_fraction": ADAPTIVE_DISCOVERY_MIN_NOVELTY_FRACTION,
-                "maximum_domain_refinements": ADAPTIVE_DISCOVERY_MAX_DOMAIN_REFINEMENTS,
-                "minimum_rounds_before_early_stop": ADAPTIVE_DISCOVERY_MIN_ROUNDS_BEFORE_STOP,
-            },
-            "verification_training_start": RESEARCH_START.isoformat(),
-            "verification_end": cohort_end.isoformat(),
-            "verification_initial_training_sessions": max(
-                max(values) for values in ADAPTIVE_WINDOW_DAYS.values()
-            ),
-            "verification_candidates": ADAPTIVE_VERIFICATION_CANDIDATES,
-            "verification_test_days": ADAPTIVE_VERIFICATION_TEST_DAYS,
-            "verification_step_days": ADAPTIVE_VERIFICATION_STEP_DAYS,
-            "verification_purge_sessions": ADAPTIVE_PURGE_SESSIONS,
-            "multi_factor_min_universe_values": list(MULTI_FACTOR_MIN_UNIVERSE_VALUES),
-            "continuous_improvement": {
-                "version": "validated-champion-queue-v1",
-                "persistent_champion_seeding": True,
-                "persistent_challenger_validation_queue": True,
-                "live_setting_in_exact_validation_cohort": True,
-                "max_queued_challengers_per_strategy_per_full_run": 2,
-            },
-        },
         "strategies": list(RESEARCHABLE_STRATEGIES),
         "live_configuration_sha256": live_snapshot["sha256"],
         "portfolio_strategies": list(RESEARCHABLE_STRATEGIES),
@@ -333,7 +262,6 @@ def run_daily_research(args) -> dict:
 
     root = Path(args.output_dir) / "layers"
     cohort_dir = root / "runs" / run_id
-    report_path = cohort_dir / "report.json"
     cohort_dir.mkdir(parents=True, exist_ok=True)
     factor_started = perf_counter()
     factor_path = cohort_dir / "factor_model.json"
@@ -389,663 +317,44 @@ def run_daily_research(args) -> dict:
         "data_version": data_version,
     })
 
-    discovery_only_reason = None
-    if getattr(args, "underlying_list", None) and not args.factor_only:
-        discovery_only_reason = _discovery_only_reason(
-            store, covered_symbols, start=RESEARCH_START, end=cohort_end, strategies=RESEARCHABLE_STRATEGIES,
+    # The research is a replay now: the effective parameters over the chosen history. Nothing is searched,
+    # verified or promoted here; the nightly checks live settings and the lab tests profiles the user picks.
+    from .validation.portfolio_simulation import run_settings_replay
+
+    settings_report = run_settings_replay(
+        database=database, output_dir=output_dir, symbols=covered_symbols,
+        start=RESEARCH_START, end=cohort_end, strategies=list(RESEARCHABLE_STRATEGIES),
+    )
+    # A lab run also replays the live settings over the same window, so the chosen parameters can be compared with them.
+    if os.environ.get("ALGO_LAB_PARAMETER_OVERRIDES"):
+        from strategies.registry import live_parameters_snapshot
+
+        live = run_settings_replay(
+            database=database, output_dir=output_dir, symbols=covered_symbols,
+            start=RESEARCH_START, end=cohort_end, strategies=list(RESEARCHABLE_STRATEGIES),
+            parameters_by_strategy=live_parameters_snapshot(),
         )
-        if discovery_only_reason:
-            logger.info("Discovery only, not verified: %s", discovery_only_reason)
-    adaptive_root = Path(args.output_dir) / "adaptive"
-    adaptive_discovery_started = perf_counter()
-    logger.info(
-        "Adaptive discovery %s",
-        "skipped for factor-only run" if args.factor_only else f"starting ({len(RESEARCHABLE_STRATEGIES)} strategies)",
-    )
-    stage_progress("discovery", "running", {"status": "running", "strategies_total": len(RESEARCHABLE_STRATEGIES)})
-    adaptive_discovery = (
-        run_adaptive_discoveries(
-            database=database, symbols=covered_symbols, latest_end=cohort_end, data_version=data_version,
-            output_dir=adaptive_root, workers=args.workers,
-            factor_weight_timeline=factor_report.get("weight_timeline") or [],
-            invocation_id=getattr(args, "invocation_id", None),
-            on_strategy_complete=strategy_progress,
-        )
-        if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
-    )
-    ledger.record_discovery_stage(invocation_id, adaptive_discovery, data_version=data_version)
-    stage_progress("discovery", adaptive_discovery.get("status", "completed"), adaptive_discovery)
-    adaptive_discovery_seconds = round(perf_counter() - adaptive_discovery_started, 3)
-    logger.info(
-        "Adaptive discovery finished: %s in %.1fs",
-        adaptive_discovery.get("status"), adaptive_discovery_seconds,
-    )
-    multi_factor_discovery = (adaptive_discovery.get("strategies") or {}).get("swing_multi_factor", {})
-    if discovery_only_reason:
-        discovery_failed = adaptive_discovery.get("status") in {"error", "partial_error"}
-        report = {
-            "invocation_id": invocation_id,
-            "schema": "swarm_algo_nightly_research_v2",
-            "status": "partial_error" if discovery_failed else "discovery_only",
-            "discovery_only": True,
-            "discovery_only_reason": discovery_only_reason,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "run_date_et": datetime.now(ET).date().isoformat(),
-            "research_only": True,
-            "live_configuration_changed": False,
-            "trade_or_order_actions": 0,
-            "data": _data_summary(
-                history_start, latest_end, cohort_end, latest_age_days,
-                covered_symbols, symbols, missing, universe_meta, refresh_report,
-                research_start=RESEARCH_START, warmup_start=warmup_start,
-            ),
-            "factor_model": factor_report,
-            "adaptive_research": {
-                "discovery": adaptive_discovery,
-                "verification": {"status": "skipped", "reason": discovery_only_reason},
-            },
-            "adaptive_strategy_artifacts": {
-                strategy: {
-                    "status": "discovery_only",
-                    "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                    "verification": None,
-                    "coordinator_artifact": None,
-                    "verification_summary": None,
-                }
-                for strategy in RESEARCHABLE_STRATEGIES
-            },
-            "multi_factor_discovery": multi_factor_discovery,
-            "orchestration": {
-                **context,
-                "cohort_id": run_id,
-                "run_id": run_id,
-                "cycle_type": "discovery_only",
-                "cache_hit": False,
-            },
-            "stage_timings": {
-                "adaptive_discovery": {
-                    "seconds": adaptive_discovery_seconds,
-                    "status": adaptive_discovery.get("status"),
-                },
-                "total_seconds": round(perf_counter() - total_started, 3),
-            },
-            "limitations": [
-                discovery_only_reason,
-                "Discovery fitness is in-sample. Nothing here is verified out of sample, so nothing can be applied or promoted from it.",
-            ],
+        settings_report["live_comparison"] = {
+            "summary": live.get("summary"),
+            "strategy_breakdown": live.get("strategy_breakdown"),
+            "parameters": live.get("parameters"),
         }
-        stage_progress("report_assembly", "completed", {"status": report.get("status"), "discovery_only": True})
-        return report
-    if optimization_only:
-        discovery_failed = adaptive_discovery.get("status") in {"error", "partial_error"}
-        report = {
-            "invocation_id": invocation_id,
-            "schema": "swarm_algo_optimizer_cycle_v1",
-            "status": "partial_error" if discovery_failed else "completed",
-            "optimization_only": True,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "run_date_et": datetime.now(ET).date().isoformat(),
-            "research_only": True,
-            "live_configuration_changed": False,
-            "trade_or_order_actions": 0,
-            "data": _data_summary(
-                history_start, latest_end, cohort_end, latest_age_days,
-                covered_symbols, symbols, missing, universe_meta, refresh_report,
-                research_start=RESEARCH_START, warmup_start=warmup_start,
-            ),
-            "factor_model": factor_report,
-            "adaptive_research": {
-                "discovery": adaptive_discovery,
-                "verification": {
-                    "status": "deferred",
-                    "reason": "Optimizer cycles do not wait for rolling verification.",
-                },
-            },
-            "adaptive_strategy_artifacts": {
-                strategy: {
-                    "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                    "verification": None,
-                    "coordinator_artifact": None,
-                    "verification_summary": None,
-                }
-                for strategy in RESEARCHABLE_STRATEGIES
-            },
-            "multi_factor_discovery": multi_factor_discovery,
-            "orchestration": {
-                **context,
-                "cohort_id": run_id,
-                "run_id": optimization_cycle_id,
-                "optimization_cycle_id": optimization_cycle_id,
-                "cycle_type": "archive_backed_optimizer",
-                "cache_hit": False,
-            },
-            "stage_timings": {
-                "factor_model": factor_model_timing,
-                "data_refresh_seconds": refresh_seconds,
-                "adaptive_discovery": {
-                    "seconds": adaptive_discovery_seconds,
-                    "status": adaptive_discovery.get("status"),
-                },
-                "adaptive_verification": {"seconds": 0.0, "status": "deferred"},
-                "portfolio_replay": {"seconds": 0.0, "status": "deferred"},
-                "forward_validation": {"seconds": 0.0, "status": "deferred"},
-                "total_seconds": round(perf_counter() - total_started, 3),
-            },
-            "recommendation": {
-                "optimizer": "The optimizer seeds each strategy from its persistent exact-validated champion and top queued challengers, keeps exploring archive variants, and queues discovery winners for rolling verification.",
-                "verification": "The full cycle applies the same rolling gates to current live settings, champions, and up to two queued challengers per strategy before forward trials.",
-                "adaptive_parameter_promotion_requires_human_confirmation": False,
-            },
-            "limitations": [
-                "This cycle records discovery candidates in the persistent validation queue but does not run rolling verification, portfolio replay, or forward promotion checks.",
-                "Training fitness can vary across rolling windows and does not guarantee future performance.",
-            ],
-        }
-        stage_progress("report_assembly", "completed", {"status": report.get("status"), "optimization_only": True})
-        return report
-
-    adaptive_verification_started = perf_counter()
-    logger.info(
-        "Rolling verification %s",
-        "skipped for factor-only run" if args.factor_only else f"starting ({len(RESEARCHABLE_STRATEGIES)} strategies)",
-    )
-    stage_progress("verification", "running", {"status": "running", "strategies_total": len(RESEARCHABLE_STRATEGIES)})
-    full_history = _full_history_verification(args)
-    verification_start = RESEARCH_START if full_history else max(
-        RESEARCH_START, cohort_end - timedelta(days=round(365.25 * RECENT_VERIFICATION_YEARS)),
-    )
-    weekly_root = REVIEW_DIR / "verification"
-    adaptive_verification = (
-        run_adaptive_verifications(
-            database=database, symbols=covered_symbols,
-            start=verification_start, end=cohort_end,
-            data_version=data_version,
-            output_dir=weekly_root if full_history else adaptive_root,
-            workers=args.workers, force=args.force,
-            factor_weight_timeline=factor_report.get("weight_timeline") or [],
-            invocation_id=invocation_id,
-            on_strategy_complete=strategy_progress,
-            on_fold_progress=lambda strategy, event: stage_progress(
-                "verification", "running",
-                {**event, "fold_status": event.get("status"), "status": "running"},
-                strategy,
-            ),
-        )
-        if not args.factor_only else {"status": "skipped", "reason": "factor-only run", "strategies": {}}
-    )
-    if full_history and not args.factor_only:
-        review = build_review(
-            database=ledger_path, full_root=weekly_root, recent_root=adaptive_root, run_id=args.invocation_id,
-        )
-        write_review(review)
-        stage_progress("verification", adaptive_verification.get("status", "completed"), {"weekly_review": "written"})
-        logger.info("Weekly full-history review written: %d live profiles", len(review["entries"]))
-        return {
-            "schema": "swarm_algo_weekly_verification_v1",
-            "invocation_id": args.invocation_id,
-            "status": adaptive_verification.get("status"),
-            "run_date_et": datetime.now(ET).date().isoformat(),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "research_only": True,
-            "live_configuration_changed": False,
-            "trade_or_order_actions": 0,
-            "verification_start": verification_start.isoformat(),
-            "weekly_review": review,
-        }
-    candidate_validation_started = perf_counter()
-    stage_progress("candidate_validation", "running", {"status": "running", "strategies_total": len(RESEARCHABLE_STRATEGIES)})
-    if not args.factor_only:
-        from .pipeline.candidate_validation import run_candidate_validation
-
-        candidate_validation = run_candidate_validation(
-            database=database, symbols=covered_symbols,
-            start=RESEARCH_START, end=cohort_end,
-            data_version=data_version, output_dir=adaptive_root,
-            verification=adaptive_verification, discovery=adaptive_discovery,
-            workers=args.workers, force=args.force,
-            factor_weight_timeline=factor_report.get("weight_timeline") or [],
-            on_strategy_complete=strategy_progress,
-        )
-    else:
-        candidate_validation = {
-            "status": "skipped", "reason": "factor-only run", "strategies": {},
-        }
-    adaptive_verification["candidate_validation"] = candidate_validation
-    stage_progress("candidate_validation", candidate_validation.get("status", "completed"), candidate_validation)
-    candidate_validation_seconds = round(perf_counter() - candidate_validation_started, 3)
-    logger.info(
-        "Exact candidate validation finished: %s in %.1fs",
-        candidate_validation.get("status"), candidate_validation_seconds,
-    )
-    ledger.record_verification_stage(
-        invocation_id, adaptive_verification,
-        {strategy: {"verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact")}
-         for strategy in RESEARCHABLE_STRATEGIES},
-        data_version=data_version,
-    )
-    stage_progress("verification", adaptive_verification.get("status", "completed"), adaptive_verification)
-    adaptive_verification_seconds = round(perf_counter() - adaptive_verification_started, 3)
-    logger.info(
-        "Rolling verification finished: %s in %.1fs",
-        adaptive_verification.get("status"), adaptive_verification_seconds,
-    )
-    from .validation.drift_monitor import (
-        apply_drift_demotions, load_live_drift_feed, update_research_drift_monitor,
-    )
-    from .profile_versions import ProfileStore
-
-    # The daemon writes the live feed after each regular close; the nightly run
-    # only reads it. An absent feed means a backtest-only drift check.
-    live_feed = load_live_drift_feed(output_dir / "live-drift-feed.json")
-    drift_report = update_research_drift_monitor(
-        adaptive_verification, output_dir=output_dir, live_returns=live_feed,
-    )
-    drift_report["demotion"] = apply_drift_demotions(
-        drift_report, output_dir=output_dir, store=ProfileStore(ledger_path),
-    )
-    stage_progress("drift_monitor", "completed", drift_report)
-    promotion_pause_reasons = []
-    if drift_report.get("promotion_pause"):
-        promotion_pause_reasons.append("drift")
-    promotion_allowed = not promotion_pause_reasons
-    adaptive_coordinator_root = adaptive_root / "verification-coordinator"
-    verification_statuses = adaptive_verification.get("strategies") or {}
-    adaptive_portfolio_ready = all(
-        (verification_statuses.get(strategy) or {}).get("coordinator_artifact")
-        and Path((verification_statuses.get(strategy) or {})["coordinator_artifact"]).is_file()
-        for strategy in RESEARCHABLE_STRATEGIES
-    )
-    portfolio_source = "adaptive_short_window"
-    if adaptive_portfolio_ready and not args.force and not args.factor_only:
-        cached, _ = read_json(report_path)
-        if (
-            cached
-            and cached.get("orchestration", {}).get("fingerprint") == fingerprint
-            and (cached.get("portfolio_coordinator_replay") or {}).get("profile_selection_source") == portfolio_source
-        ):
-            stage_progress("portfolio_replay", "reused", {
-                "status": "completed", "reused": True,
-                "report_path": str((cohort_dir / "report.json").resolve()),
-            })
-            validation_started = perf_counter()
-            from .validation.forward_validation import run_forward_validation_cycle
-
-            forward_validation = run_forward_validation_cycle(
-                discovery=adaptive_discovery, verification=adaptive_verification,
-                store=store, database=database, symbols=covered_symbols,
-                end=cohort_end, data_version=data_version,
-                allow_stage=True,
-                allow_promotion=promotion_allowed,
-                promotion_pause_reasons=promotion_pause_reasons,
-                invocation_id=invocation_id, ledger_path=ledger_path,
-                factor_weight_timeline=factor_report.get("weight_timeline") or [],
-            )
-            stage_progress("forward_validation", forward_validation.get("status", "completed"), forward_validation)
-            if adaptive_portfolio_ready:
-                refresh_active_parameter_profile()
-            cached = {
-                **cached,
-                "invocation_id": invocation_id,
-                "status": (
-                    "partial_error"
-                    if forward_validation.get("status") in {"error", "partial_error"}
-                    else cached.get("status", "completed")
-                ),
-                "forward_validation": forward_validation,
-                "drift_monitor": drift_report,
-                "regime_inputs": {
-                    "macro_status": macro_diagnostics.get("status"),
-                    "macro_data_version": stable_hash(macro_series),
-                    "market_data_version": regime_data_version,
-                    "context_symbols": context_symbols,
-                    "context_warmup_days": REGIME_CONTEXT_WARMUP_DAYS,
-                    "spy_regime_warmup_days": ALGO_REGIME_WARMUP_CALENDAR_DAYS,
-                },
-                "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
-                "stage_timings": {
-                    **(cached.get("stage_timings") or {}),
-                    "adaptive_discovery": {
-                        "seconds": adaptive_discovery_seconds,
-                        "status": adaptive_discovery.get("status"),
-                    },
-                    "adaptive_verification": {
-                        "seconds": adaptive_verification_seconds,
-                        "status": adaptive_verification.get("status"),
-                    },
-                    "adaptive_candidate_validation": {
-                        "seconds": candidate_validation_seconds,
-                        "status": candidate_validation.get("status"),
-                    },
-                    "forward_validation": {
-                        "seconds": round(perf_counter() - validation_started, 3),
-                        "status": forward_validation.get("status"),
-                    },
-                    "total_seconds": round(perf_counter() - total_started, 3),
-                },
-                "adaptive_research": {
-                    "discovery": adaptive_discovery,
-                    "verification": adaptive_verification,
-                },
-                "adaptive_strategy_artifacts": {
-                    strategy: {
-                        "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                        "verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                        "coordinator_artifact": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
-                        "verification_summary": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("summary"),
-                    }
-                    for strategy in RESEARCHABLE_STRATEGIES
-                },
-                "multi_factor_discovery": multi_factor_discovery,
-            }
-            cached.setdefault("recommendation", {}).update({
-                "adaptive_parameter_promotion_requires_human_confirmation": False,
-                "forward_validation": (
-                    "Promotion follows rolling historical and versioned forward simulation gates; a detected drift warning pauses it."
-                ),
-            })
-            cached["orchestration"] = {
-                **(cached.get("orchestration") or {}),
-                "invocation_id": invocation_id,
-                "cache_hit": False,
-                "cohort_report_reused": True,
-                "portfolio_reused": True,
-            }
-            cached["cache_hit"] = False
-            cached["stage_timings"]["portfolio_replay"] = {
-                "seconds": 0.0,
-                "reused": True,
-            }
-            cached["run_date_et"] = datetime.now(ET).date().isoformat()
-            cached["created_at"] = datetime.now(timezone.utc).isoformat()
-            cached = _attach_fitness_timeline(cached, Path(args.output_dir))
-            _atomic_json(report_path, cached)
-            _atomic_json(root / "latest.json", cached)
-            stage_progress("report_assembly", "completed", {"status": cached.get("status"), "cohort_report_reused": True})
-            logger.info(
-                "Discovery advanced on the existing quote cohort; reused historical verification and portfolio replay"
-            )
-            return cached
-
-    timings: dict[str, object] = {
-        "factor_model": factor_model_timing,
-        "data_refresh_seconds": refresh_seconds,
-        "adaptive_discovery": {
-            "seconds": adaptive_discovery_seconds, "status": adaptive_discovery.get("status"),
-        },
-        "adaptive_verification": {
-            "seconds": adaptive_verification_seconds, "status": adaptive_verification.get("status"),
-        },
-        "adaptive_candidate_validation": {
-            "seconds": candidate_validation_seconds,
-            "status": candidate_validation.get("status"),
-        },
-    }
-    if args.factor_only:
-        validation_started = perf_counter()
-        stage_progress("forward_validation", "running", {"status": "running"})
-        from .validation.forward_validation import run_forward_validation_cycle
-
-        forward_validation = run_forward_validation_cycle(
-            discovery=adaptive_discovery, verification=adaptive_verification,
-            store=store, database=database, symbols=covered_symbols,
-            end=cohort_end, data_version=data_version, allow_stage=False,
-            allow_promotion=promotion_allowed,
-            promotion_pause_reasons=promotion_pause_reasons,
-            invocation_id=invocation_id, ledger_path=ledger_path,
-            factor_weight_timeline=factor_report.get("weight_timeline") or [],
-        )
-        stage_progress("forward_validation", forward_validation.get("status", "completed"), forward_validation)
-        timings["forward_validation"] = {
-            "seconds": round(perf_counter() - validation_started, 3),
-            "status": forward_validation.get("status"),
-        }
-        report = {
-            "invocation_id": invocation_id,
-            "schema": "swarm_algo_nightly_research_v2",
-            "status": (
-                "partial_error"
-                if forward_validation.get("status") in {"error", "partial_error"}
-                else "completed"
-            ),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "research_only": not bool(forward_validation.get("live_configuration_changed")),
-            "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
-            "trade_or_order_actions": 0, "factor_model": factor_report,
-            "factor_only": True,
-            "forward_validation": forward_validation,
-            "drift_monitor": drift_report,
-            "regime_inputs": {
-                "macro_status": macro_diagnostics.get("status"),
-                "macro_data_version": stable_hash(macro_series),
-                "market_data_version": regime_data_version,
-                "context_symbols": context_symbols,
-                "context_warmup_days": REGIME_CONTEXT_WARMUP_DAYS,
-                "spy_regime_warmup_days": ALGO_REGIME_WARMUP_CALENDAR_DAYS,
-            },
-            "data": _data_summary(
-                history_start, latest_end, cohort_end, latest_age_days,
-                covered_symbols, symbols, missing, universe_meta, refresh_report,
-                research_start=RESEARCH_START, warmup_start=warmup_start,
-            ),
-            "adaptive_research": {
-                "discovery": adaptive_discovery,
-                "verification": adaptive_verification,
-            },
-            "multi_factor_discovery": multi_factor_discovery,
-            "orchestration": {**context, "cache_hit": False},
-            "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
-            "limitations": [
-                "Factor fitting is research-only and does not update live weights.",
-                "No adaptive strategy discovery, verification, or portfolio replay was requested.",
-                "Existing forward simulation trials may continue or promote; this factor-only run does not stage new candidates.",
-            ],
-        }
-        report["run_date_et"] = datetime.now(ET).date().isoformat()
-        report = _attach_fitness_timeline(report, Path(args.output_dir))
-        _atomic_json(report_path, report)
-        _atomic_json(root / "latest.json", report)
-        stage_progress("report_assembly", "completed", {"status": report.get("status")})
-        return report
-
-    portfolio_path = cohort_dir / "portfolio"
-    portfolio_report = None
-    if adaptive_portfolio_ready:
-        portfolio_started = perf_counter()
-        stage_progress("portfolio_replay", "running", {"status": "running"})
-        cached_portfolio, _ = read_json(portfolio_path / "latest.json")
-        if (
-            not args.force and cached_portfolio
-            and cached_portfolio.get("orchestration", {}).get("fingerprint") == fingerprint
-            and cached_portfolio.get("profile_selection_source") == portfolio_source
-        ):
-            portfolio_report = cached_portfolio
-            portfolio_reused = True
-            logger.info("Portfolio replay: reusing cached result")
-        else:
-            logger.info("Portfolio replay starting for %d research strategies", len(RESEARCHABLE_STRATEGIES))
-            from .validation.portfolio_simulation import run_coordinated_portfolio
-
-            portfolio_args = SimpleNamespace(
-                strategies=",".join(RESEARCHABLE_STRATEGIES),
-                artifact_dir=str(adaptive_coordinator_root),
-                event_calendar=None,
-                factor_weight_timeline=factor_report.get("weight_timeline") or [],
-                workers=max(1, args.workers), output_dir=str(portfolio_path),
-            )
-            portfolio_report = run_coordinated_portfolio(portfolio_args)
-            portfolio_report["orchestration"] = {
-                "run_id": run_id, "fingerprint": fingerprint,
-            }
-            portfolio_report["profile_selection_source"] = portfolio_source
-            _atomic_json(portfolio_path / "latest.json", portfolio_report)
-            _atomic_json(
-                portfolio_path / f"{cohort_end.isoformat()}-portfolio.json",
-                portfolio_report,
-            )
-            portfolio_reused = False
-            logger.info("Portfolio replay finished in %.1fs", perf_counter() - portfolio_started)
-        timings["portfolio_replay"] = {
-            "seconds": 0.0 if portfolio_reused else round(perf_counter() - portfolio_started, 3),
-            "reused": portfolio_reused,
-        }
-        stage_progress("portfolio_replay", "reused" if portfolio_reused else "completed", {
-            "status": "completed", "reused": portfolio_reused,
-            "report_path": str((portfolio_path / "latest.json").resolve()),
-        })
-    else:
-        logger.warning("Portfolio replay skipped: verification artifacts are incomplete")
-        timings["portfolio_replay"] = {
-            "seconds": 0.0, "status": "skipped",
-            "reason": "Adaptive verification is incomplete; portfolio replay was skipped.",
-        }
-        stage_progress("portfolio_replay", "skipped", {
-            "status": "skipped", "reason": "Adaptive verification is incomplete; portfolio replay was skipped.",
-        })
-
-    factor_ic = (factor_report.get("adaptive_prequential_ic") or {}).get("mean_spearman_ic")
-    validation_started = perf_counter()
-    stage_progress("forward_validation", "running", {"status": "running"})
-    from .validation.forward_validation import run_forward_validation_cycle
-
-    forward_validation = run_forward_validation_cycle(
-        discovery=adaptive_discovery, verification=adaptive_verification,
-        store=store, database=database, symbols=covered_symbols,
-        end=cohort_end, data_version=data_version,
-        allow_stage=True,
-        allow_promotion=promotion_allowed,
-        promotion_pause_reasons=promotion_pause_reasons,
-        invocation_id=invocation_id, ledger_path=ledger_path,
-        factor_weight_timeline=factor_report.get("weight_timeline") or [],
-    )
-    stage_progress("forward_validation", forward_validation.get("status", "completed"), forward_validation)
-    if adaptive_portfolio_ready:
-        refresh_active_parameter_profile()
-    timings["forward_validation"] = {
-        "seconds": round(perf_counter() - validation_started, 3),
-        "status": forward_validation.get("status"),
-    }
-    report = {
-        "invocation_id": invocation_id,
-        "schema": "swarm_algo_nightly_research_v2",
-        "status": (
-            "partial_error"
-            if forward_validation.get("status") in {"error", "partial_error"}
-            else "completed" if adaptive_portfolio_ready else "partial"
-        ),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "research_only": not bool(forward_validation.get("live_configuration_changed")),
-        "live_configuration_changed": bool(forward_validation.get("live_configuration_changed")),
-        "trade_or_order_actions": 0,
-        "data": _data_summary(
-            history_start, latest_end, cohort_end, latest_age_days,
-            covered_symbols, symbols, missing, universe_meta, refresh_report,
-            research_start=RESEARCH_START, warmup_start=warmup_start,
-        ),
-        "factor_model": factor_report,
-        "adaptive_research": {
-            "discovery": adaptive_discovery,
-            "verification": adaptive_verification,
-        },
-        "adaptive_strategy_artifacts": {
-            strategy: {
-                "discovery": (adaptive_discovery.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                "verification": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("detail_artifact"),
-                "coordinator_artifact": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("coordinator_artifact"),
-                "verification_summary": (adaptive_verification.get("strategies") or {}).get(strategy, {}).get("summary"),
-            }
-            for strategy in RESEARCHABLE_STRATEGIES
-        },
-        "multi_factor_discovery": multi_factor_discovery,
-        "forward_validation": forward_validation,
-        "drift_monitor": drift_report,
-        "regime_inputs": {
-            "macro_status": macro_diagnostics.get("status"),
-            "macro_data_version": stable_hash(macro_series),
-            "market_data_version": regime_data_version,
-            "context_symbols": context_symbols,
-            "context_warmup_days": REGIME_CONTEXT_WARMUP_DAYS,
-            "spy_regime_warmup_days": ALGO_REGIME_WARMUP_CALENDAR_DAYS,
-        },
-        "portfolio_coordinator_replay": portfolio_report,
-        "portfolio_summary": (portfolio_report or {}).get("fold_summary"),
-        "recommendation": {
-            "adaptive_research": (
-                "Dynamic discovery and rolling out-of-sample verification cover the active strategy set."
-                if adaptive_portfolio_ready
-                else "Adaptive verification is incomplete; portfolio replay was skipped."
-            ),
-            "swing_multi_factor": (
-                "Multi Factor is active through the shared live coordinator; regime-specific candidates can update signal parameters after historical and forward simulation gates pass."
-                if factor_ic is not None and factor_ic > 0
-                else "Multi Factor is active through the shared live coordinator; latest factor diagnostics were not positive, and any regime-specific candidate still needs to pass historical and forward simulation gates."
-            ),
-            "adaptive_parameter_promotion_requires_human_confirmation": False,
-            "forward_validation": (
-                "Promotion follows rolling historical and versioned forward simulation gates; a detected drift warning pauses it."
-            ),
-        },
-        "orchestration": {**context, "cache_hit": False},
-        "stage_timings": {**timings, "total_seconds": round(perf_counter() - total_started, 3)},
-        "limitations": [
-            "Adaptive fitting, verification, and fold-aligned portfolio replay use 2020 onward; earlier bars are indicator warm-up only.",
-            "The latest live-eligible selector cohort defines the candidate scope; each historical replay applies point-in-time membership rules within that cohort, and symbols outside it are not searched.",
-            "The portfolio replay includes strategies enabled in live config with available historical data.",
-            "Each walk-forward fold begins with fresh capital; positions and risk state do not carry between folds.",
-            "Each immutable forward candidate version is scored only on sessions after its staging date and with modeled execution costs; results are not a performance forecast.",
-            "Historical walk-forward results are reused across research cycles; all candidate trials remain in the archive and promotion requires forward evidence.",
-            *([] if adaptive_portfolio_ready else [
-                "Adaptive verification did not produce coordinator artifacts for every active strategy; the portfolio replay was skipped.",
-            ]),
-        ],
-    }
-    report["run_date_et"] = datetime.now(ET).date().isoformat()
-    report = _attach_fitness_timeline(report, Path(args.output_dir))
-    _atomic_json(report_path, report)
-    _atomic_json(root / "latest.json", report)
-    stage_progress("report_assembly", "completed", {"status": report.get("status")})
-    return report
-
-
-def _data_summary(
-    history_start: date, latest_end: date, cohort_end: date, latest_age_days: int,
-    covered_symbols: list[str], requested_symbols: list[str], missing: list[str],
-    universe_meta: dict, refresh_report: dict | None, *, research_start: date,
-    warmup_start: date,
-) -> dict:
-    return {
-        "tier": data_tier(), "feed": FEED, "adjustment": ADJUSTMENT,
-        "range_start": research_start.isoformat(),
-        "stored_coverage": {
-            "start": history_start.isoformat(), "end": latest_end.isoformat(),
-        },
-        "strategy_research_range": {
-            "start": research_start.isoformat(), "end": cohort_end.isoformat(),
-            "indicator_warmup_start": warmup_start.isoformat(),
-        },
-        "latest_available_end": latest_end.isoformat(),
-        "research_data_end": cohort_end.isoformat(),
-        "latest_session_age_days": latest_age_days,
-        "freshness": "fresh" if latest_age_days <= 4 else "stale",
-        "universe_count": len(requested_symbols),
-        "covered_universe_count": len(covered_symbols),
-        "covered_symbols": covered_symbols,
-        "universe_symbols_without_history": missing,
-        **universe_meta,
-        "incremental_refresh": refresh_report,
-    }
+    settings_report["invocation_id"] = invocation_id
+    settings_report["run_date_et"] = datetime.now(ET).date().isoformat()
+    settings_report["created_at"] = datetime.now(timezone.utc).isoformat()
+    # The archive row reads the portfolio return from here.
+    summary = settings_report.get("summary") or {}
+    settings_report["fitness_timeline"] = {"current": {"portfolio": {
+        "status": "completed",
+        "compounded_fold_return_pct": summary.get("net_return_pct"),
+        "closed_trades": summary.get("closed_trade_count"),
+        "max_drawdown_pct": summary.get("max_drawdown_pct"),
+    }}}
+    return settings_report
 
 
 
 
-def _full_history_verification(args) -> bool:
-    # A lab run never writes the shared weekly review, so it never takes the full-history path.
-    if getattr(args, "lab_run", False):
-        return False
-    if args.verification_history == "full":
-        return True
-    if args.verification_history == "recent":
-        return False
-    return datetime.now(ET).weekday() == 6  # Sunday
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1101,8 +410,6 @@ def _apply_strategy_scope(args, parser) -> None:
         if unknown:
             parser.error(f"unknown strategies: {', '.join(unknown)}")
         RESEARCHABLE_STRATEGIES = tuple(name for name in RESEARCHABLE_STRATEGIES if name in requested)
-        from .pipeline import adaptive_pipeline
-        adaptive_pipeline.RESEARCHABLE_STRATEGIES = RESEARCHABLE_STRATEGIES
     if args.start:
         start = _parse_run_date(args.start, parser, "--start")
         if start < RESEARCH_START:
@@ -1175,10 +482,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.optimization_only and args.factor_only:
         parser.error("--optimization-only cannot be combined with --factor-only")
     output_dir = Path(args.output_dir)
-    optimizer_latest_path = output_dir / "optimizer" / "latest.json"
-    latest_report_path = optimizer_latest_path if args.optimization_only else output_dir / "latest.json"
-    if _full_history_verification(args) and not args.optimization_only and not args.factor_only:
-        latest_report_path = REVIEW_PATH
+    latest_report_path = output_dir / "latest.json"
     invocation_id = args.invocation_id or uuid4().hex
     ledger_path = output_dir / "research.sqlite3"
     ledger = None

@@ -66,3 +66,18 @@ test('the env parser reads only the two ThetaData key names', () => {
     assert.deepEqual(Object.keys(values).sort(), ['THETADATA_API_KEY', 'THETA_DATA_API_KEY']);
     assert.equal(values.THETADATA_API_KEY, 'abc');
 });
+
+test('job logs are red only for a recent real failure, not for narrative words or empty error fields', async t => {
+    const os = require('node:os');
+    const fsSync = require('node:fs');
+    const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'logs-'));
+    const logDir = path.join(root, 'data', 'algo', 'logs');
+    fsSync.mkdirSync(logDir, { recursive: true });
+    fsSync.writeFileSync(path.join(logDir, 'calm.log'), 'Summary: all stitched gates failed\n{"intraday_error": null, "quote_errors": []}\nrun completed (0 errors)\n');
+    fsSync.writeFileSync(path.join(logDir, 'broken.log'), 'ok start\n2026-11-09 10:00:00 ERROR [job] crashed\n');
+    const { buildDataStatus } = require('../server/algo-trader/data-status');
+    const status = await buildDataStatus({ root, envPath: path.join(root, 'missing.env') });
+    const byName = Object.fromEntries(status.logs.map(row => [row.name, row]));
+    assert.equal(byName['calm.log'].last_error, null);
+    assert.match(byName['broken.log'].last_error, /ERROR/);
+});
