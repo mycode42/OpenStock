@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 import math
 from typing import Mapping
@@ -30,7 +30,6 @@ class PortfolioCoordinatorConfig:
     max_daily_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_daily_entries"]
     max_intraday_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_intraday_entries"]
     max_swing_entries: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["max_swing_entries"]
-    intraday_close_cutoff_minutes: int = ALGO_PORTFOLIO_COORDINATOR_CONFIG["intraday_close_cutoff_minutes"]
     allow_opposite_netting: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["allow_opposite_netting"]
     regime_throttle_enabled: bool = ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_throttle_enabled"]
     regime_gross_caps: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["regime_gross_caps"]))
@@ -65,11 +64,6 @@ class PortfolioCoordinatorConfig:
             or not 0 <= self.max_swing_entries <= self.max_daily_entries
         ):
             raise ValueError("coordinator entry limits are invalid")
-        if (
-            isinstance(self.intraday_close_cutoff_minutes, bool) or not isinstance(self.intraday_close_cutoff_minutes, int)
-            or self.intraday_close_cutoff_minutes < 0
-        ):
-            raise ValueError("coordinator flatten cutoff must be a non-negative integer")
         if not isinstance(self.allow_opposite_netting, bool):
             raise ValueError("coordinator switches must be booleans")
         if not isinstance(self.regime_throttle_enabled, bool):

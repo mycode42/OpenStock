@@ -12,7 +12,6 @@ import statistics
 
 from .config import BAR_MINUTES, ET, MIN_REGIME_DAILY_BARS, STRATEGY_NAMES
 from .market_sessions import market_session
-from strategies.catalog import INTRADAY_STRATEGIES
 from strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from strategies.portfolio_coordinator import strategy_priority
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
@@ -167,17 +166,6 @@ class ReplayLoopMixin:
             if is_session_end:
                 self._record_holdings(trading_day)
                 self._charge_daily_borrow()
-                if self.risk.get("flatten_eod"):
-                    self._flatten_positions(
-                        bars, timestamp,
-                        strategies=set(self.risk.get("max_positions_per_strategy_by_strategy", {})),
-                        reason="portfolio_end_of_day_flatten",
-                    )
-                else:
-                    self._flatten_positions(
-                        bars, timestamp, strategies=set(INTRADAY_STRATEGIES),
-                        reason="coordinator_intraday_eod_flatten",
-                    )
                 if index + 1 == len(event_times) and self.force_close_at_end:
                     self._flatten_positions(bars, timestamp, reason="walk_forward_window_end")
                 self._record_daily_strategy_pnl(trading_day)
@@ -361,7 +349,6 @@ class ReplayLoopMixin:
                 "max_net_short_pct": self.coordinator.config.max_net_short_pct,
                 "max_daily_entries": self.coordinator.config.max_daily_entries,
                 "max_intraday_entries": self.coordinator.config.max_intraday_entries,
-                "intraday_close_cutoff_minutes": self.coordinator.config.intraday_close_cutoff_minutes,
                 "allow_opposite_netting": self.coordinator.config.allow_opposite_netting,
             },
             "regime_diagnostics": self._regime_report(),

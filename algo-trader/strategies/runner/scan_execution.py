@@ -375,8 +375,6 @@ def execute_scan_candidates(
                     pass
         if item.get("software_protection"):
             trade["software_protection"] = True
-        if item.get("coordinator_force_flatten"):
-            trade["coordinator_force_flatten"] = True
         trades.append(trade)
         record(item, "candidate_ready_for_submission", "proposal_ready", "candidate passed scan sizing and portfolio gates; this is not broker submission confirmation", qty=trade.get("qty"), order_type=trade.get("order_type"), limit_price=trade.get("limit_price"))
         if action in {"buy", "short"}:

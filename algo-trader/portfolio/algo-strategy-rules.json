@@ -37,7 +37,6 @@
     {"check": "integer", "path": "portfolio.max_positions_per_strategy", "min": 0, "message": "portfolio.max_positions_per_strategy must be a non-negative integer"},
     {"check": "integer", "path": "portfolio.max_short_positions", "min": 0, "message": "portfolio.max_short_positions must be a non-negative integer"},
     {"check": "integer", "path": "portfolio.max_tactical_positions", "min": 0, "message": "portfolio.max_tactical_positions must be a non-negative integer"},
-    {"check": "integer", "path": "portfolio.intraday_close_cutoff_minutes", "min": 0, "message": "portfolio.intraday_close_cutoff_minutes must be a non-negative integer"},
     {"check": "sum_le", "terms": ["portfolio.max_gross_pct", "portfolio.min_cash_pct"], "right": 1, "message": "portfolio.max_gross_pct cannot exceed the configured cash floor"},
     {"check": "compare", "left": "portfolio.max_position_pct", "op": "<=", "right": "portfolio.max_strategy_position_pct", "message": "portfolio position and net exposure limits must fit within the configured gross cap"},
     {"check": "compare", "left": "portfolio.max_net_long_pct", "op": "<=", "right": "portfolio.max_gross_pct", "message": "portfolio position and net exposure limits must fit within the configured gross cap"},

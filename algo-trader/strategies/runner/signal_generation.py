@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from portfolio.config import quote_stale_limit_seconds
-from strategies.catalog import CORE_STRATEGIES, INTRADAY_STRATEGIES, STRATEGY_CATALOG
+from strategies.catalog import CORE_STRATEGIES, STRATEGY_CATALOG
 from strategies.portfolio_coordinator import choose_priority
 from strategies.registry import (
     ALGO_RULE_MODULES,
@@ -33,9 +33,7 @@ class SignalGenerationContext:
     bars_by_symbol: dict[str, list[dict]]
     owner_map: dict[str, str]
     track_owners: bool
-    coordinator_config: Any
     now: datetime
-    regular_close: datetime | None
     session_name: str | None
     regime: dict
     multi_factor_target_signals: dict[str, Any]
@@ -81,18 +79,6 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
     symbol_bars = context.bars_by_symbol.get(ticker, [])
     owner = context.owner_map.get(ticker)
 
-    forced_exit = _intraday_flatten_signal(
-        context, ticker, owner, position_qty, symbol_bars,
-    )
-    if forced_exit is not None:
-        context.signal_diagnostics.append({
-            "ticker": ticker, "strategy": forced_exit.get("strategy"),
-            "reason_code": "forced_exit_signal_generated",
-            "reason": forced_exit.get("reason"), "action": forced_exit.get("action"),
-            "timeframe": "5Min", "bar_count": len(symbol_bars),
-            "last_bar_time": symbol_bars[-1].get("t") if symbol_bars else None,
-        })
-        return [forced_exit]
     if context.track_owners and position_qty != 0 and owner is None:
         # An unknown holding must not be taken over by an active strategy.
         context.signal_diagnostics.append({
@@ -176,44 +162,6 @@ def _generate_symbol_signals(context: SignalGenerationContext, ticker: str) -> l
         })
     output.append(chosen)
     return output
-
-
-def _intraday_flatten_signal(
-    context: SignalGenerationContext,
-    ticker: str,
-    owner: str | None,
-    position_qty: float,
-    symbol_bars: list[dict],
-) -> dict | None:
-    if context.mode != "algo" or owner is None or position_qty == 0:
-        return None
-    flatten_all_eod = bool(context.risk_config.get("flatten_eod", False))
-    flatten_intraday = owner in INTRADAY_STRATEGIES
-    if not (flatten_all_eod or flatten_intraday):
-        return None
-
-    close_cutoff = (
-        context.regular_close
-        or context.now.replace(hour=16, minute=0, second=0, microsecond=0)
-    ) - timedelta(minutes=context.coordinator_config.intraday_close_cutoff_minutes)
-    if context.session_name in {None, "regular"} and context.now < close_cutoff:
-        return None
-
-    return {
-        "ticker": ticker,
-        "action": "cover" if position_qty < 0 else "sell",
-        "strategy": owner,
-        "reason": (
-            "portfolio configuration end-of-day flatten"
-            if flatten_all_eod else "portfolio coordinator mandatory intraday session flatten"
-        ),
-        "strength": 1.0,
-        "rank_score": 1_000_000.0,
-        "signal_bar_time": symbol_bars[-1].get("t") if symbol_bars else None,
-        "timeframe": "5Min",
-        "software_protection": True,
-        "coordinator_force_flatten": True,
-    }
 
 
 def _strategy_candidates(
@@ -569,7 +517,7 @@ def _suppress_conflicting_orders(
     if (
         (chosen["action"] in {"buy", "short"} and ticker_orders)
         or pending_entry
-        or (pending_exit and not chosen.get("coordinator_force_flatten"))
+        or pending_exit
     ):
         chosen["suppressed_reason"] = "a conflicting Alpaca order is already open for this symbol"
         context.signal_diagnostics.append({

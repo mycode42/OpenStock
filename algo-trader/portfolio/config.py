@@ -196,7 +196,6 @@ ALGO_MODE_CONFIG = {
         "min_cash_pct": _PORTFOLIO_DEFAULTS["min_cash_pct"],
         "max_tactical_pct": _PORTFOLIO_DEFAULTS["max_tactical_pct"],
         "max_tactical_positions": _PORTFOLIO_DEFAULTS["max_tactical_positions"],
-        "flatten_eod": False,
     },
 }
 
@@ -211,7 +210,6 @@ ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
     "max_daily_entries": _PORTFOLIO_DEFAULTS["max_daily_entries"],
     "max_intraday_entries": _PORTFOLIO_DEFAULTS["max_intraday_entries"],
     "max_swing_entries": _PORTFOLIO_DEFAULTS["max_swing_entries"],
-    "intraday_close_cutoff_minutes": _PORTFOLIO_DEFAULTS["intraday_close_cutoff_minutes"],
     "allow_opposite_netting": _PORTFOLIO_DEFAULTS["allow_opposite_netting"],
     "regime_throttle_enabled": _PORTFOLIO_DEFAULTS["regime_throttle_enabled"],
     "regime_gross_caps": dict(_PORTFOLIO_DEFAULTS["regime_gross_caps"]),
@@ -362,7 +360,6 @@ def get_algo_portfolio_coordinator_config() -> dict:
         "max_daily_entries": portfolio["max_daily_entries"],
         "max_intraday_entries": portfolio["max_intraday_entries"],
         "max_swing_entries": portfolio["max_swing_entries"],
-        "intraday_close_cutoff_minutes": portfolio["intraday_close_cutoff_minutes"],
         "allow_opposite_netting": portfolio["allow_opposite_netting"],
         "regime_throttle_enabled": portfolio["regime_throttle_enabled"],
         "regime_gross_caps": dict(portfolio["regime_gross_caps"]),
@@ -423,7 +420,6 @@ def get_mode_config(mode: str | None = None) -> dict:
         "max_short_exposure_pct": portfolio["max_short_exposure_pct"],
         "max_tactical_pct": portfolio["max_tactical_pct"],
         "max_tactical_positions": portfolio["max_tactical_positions"],
-        "flatten_eod": portfolio["flatten_eod"],
         "range_regime_short_risk_multiplier": portfolio["range_regime_short_risk_multiplier"],
         "hard_to_borrow_short_risk_multiplier": portfolio["hard_to_borrow_short_risk_multiplier"],
         "min_cash_pct": portfolio["min_cash_pct"],

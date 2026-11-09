@@ -46,7 +46,6 @@ def prepare_strategy_exits(scope: ScanScope, generated: list[dict]) -> None:
                 "event_id": item.get("event_id"),
                 "client_order_id": client_order_id,
                 "software_protection": bool(item.get("software_protection")),
-                "coordinator_force_flatten": bool(item.get("coordinator_force_flatten")),
                 "retryable": True,
                 "status": "deferred_until_supported_session",
                 "created_at": now_utc.isoformat(),
@@ -105,7 +104,6 @@ def prepare_strategy_exits(scope: ScanScope, generated: list[dict]) -> None:
                     "signal_bar_time": intent.get("signal_bar_time"),
                     "event_id": intent.get("event_id"),
                     "software_protection": bool(intent.get("software_protection")),
-                    "coordinator_force_flatten": bool(intent.get("coordinator_force_flatten")),
                     "retry_client_order_id": intent.get("client_order_id"),
                     "deferred_exit_retry": True,
                 })

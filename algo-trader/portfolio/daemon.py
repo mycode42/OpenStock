@@ -316,7 +316,6 @@ def _restore_pre_submit_exit_intents(
             "event_id": None,
             "client_order_id": client_id,
             "software_protection": False,
-            "coordinator_force_flatten": False,
             "retryable": True,
             "status": "restored_pre_submission_failure",
             "created_at": event.get("detected_at"),

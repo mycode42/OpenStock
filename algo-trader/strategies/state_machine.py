@@ -517,7 +517,6 @@ class RuleStrategyStateMachine:
                 "event_id": trade.get("event_id"),
                 "client_order_id": trade.get("client_order_id"),
                 "software_protection": bool(trade.get("software_protection")),
-                "coordinator_force_flatten": bool(trade.get("coordinator_force_flatten")),
                 "retryable": False,
                 "status": "pending_submission",
             }
@@ -569,7 +568,6 @@ class RuleStrategyStateMachine:
                     "event_id": trade.get("event_id"),
                     "client_order_id": trade.get("client_order_id"),
                     "software_protection": bool(trade.get("software_protection")),
-                    "coordinator_force_flatten": bool(trade.get("coordinator_force_flatten")),
                 }
                 state["pending_exit_intent"] = intent
             intent["retryable"] = True
