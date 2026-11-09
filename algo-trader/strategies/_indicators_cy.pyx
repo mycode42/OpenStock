@@ -5,7 +5,7 @@ Sums use the same compensated (Neumaier) accumulation as CPython 3.12's ``sum``
 over floats, so results match the pure-Python functions bit for bit.
 """
 
-from libc.math cimport fabs, sqrt
+from libc.math cimport fabs, isfinite, sqrt
 
 
 cdef inline void _accumulate(double x, double *total, double *compensation) noexcept nogil:
@@ -64,3 +64,17 @@ def population_std(object values):
         deviation = float(values[i]) - mean
         _accumulate(deviation * deviation, &squares, &squares_c)
     return sqrt((squares + squares_c) / n)
+
+
+def closes(object bars):
+    """Positive finite closes of a bar list, skipping rows whose close is missing or invalid."""
+    cdef list values = []
+    cdef double value
+    for bar in bars:
+        try:
+            value = float(bar["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isfinite(value) and value > 0.0:
+            values.append(value)
+    return values

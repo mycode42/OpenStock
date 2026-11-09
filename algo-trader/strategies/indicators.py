@@ -11,6 +11,12 @@ except ImportError:  # pragma: no cover - pure-Python fallback when the extensio
 
 
 def closes(bars: list[dict]) -> list[float]:
+    if _cy is not None:
+        return _cy.closes(bars)
+    return _closes_py(bars)
+
+
+def _closes_py(bars: list[dict]) -> list[float]:
     values = []
     for bar in bars:
         try:

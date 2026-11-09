@@ -262,12 +262,8 @@ def _merge_configuration(base: dict, override: dict) -> dict:
 _CONFIGURATION_CACHE: dict = {}
 
 
-def get_algo_configuration() -> dict:
-    """The live configuration: the fixed, committed defaults file. There is no override layer.
-
-    The parsed and validated file is reused until the file's modification time or size changes.
-    Callers get their own copy, so they can change it freely.
-    """
+def _refreshed_configuration() -> dict:
+    """The cached configuration object, reloaded when the file changes. Shared: never mutate it."""
     stat = ALGO_STRATEGY_DEFAULTS_PATH.stat()
     key = (str(ALGO_STRATEGY_DEFAULTS_PATH), stat.st_mtime_ns, stat.st_size)
     if _CONFIGURATION_CACHE.get("key") != key:
@@ -276,7 +272,16 @@ def get_algo_configuration() -> dict:
             raise ValueError("Algo strategy defaults must be an object")
         validate_settings(defaults, defaults)
         _CONFIGURATION_CACHE.update(key=key, value=defaults)
-    return deepcopy(_CONFIGURATION_CACHE["value"])
+    return _CONFIGURATION_CACHE["value"]
+
+
+def get_algo_configuration() -> dict:
+    """The live configuration: the fixed, committed defaults file. There is no override layer.
+
+    Callers get their own copy, so they can change it freely. Hot paths use the
+    cached accessors below, which do not copy the whole file on every call.
+    """
+    return deepcopy(_refreshed_configuration())
 
 
 _POLICY_CACHE: dict = {}
@@ -314,10 +319,10 @@ def get_algo_strategy_settings(strategy: str) -> dict:
     from strategies.catalog import canonical_strategy_id
 
     strategy = canonical_strategy_id(strategy)
-    settings = get_algo_configuration()["strategies"].get(strategy)
+    settings = _refreshed_configuration()["strategies"].get(strategy)
     if settings is None:
         raise KeyError(f"Unknown Algo strategy: {strategy}")
-    return settings
+    return deepcopy(settings)
 
 
 def get_algo_regime_config() -> dict:
@@ -367,16 +372,24 @@ def get_algo_portfolio_coordinator_config() -> dict:
     }
 
 
+_RUNTIME_SETTINGS_CACHE: dict = {}
+
+
 def get_algo_runtime_settings() -> AlgoRuntimeSettings:
-    """Project common scan switches from the editable per-strategy configuration."""
-    config = get_algo_configuration()
-    strategies = config["strategies"]
-    return AlgoRuntimeSettings(
-        enable_intraday_trend_following=strategies["intraday_trend_following"]["enabled"],
-        enable_intraday_momentum=strategies["intraday_momentum"]["enabled"],
-        swing_multi_factor_enabled=strategies["swing_multi_factor"]["enabled"],
-        swing_llm_driven_enabled=strategies["swing_llm_driven"]["enabled"],
-    )
+    """Project common scan switches from the editable per-strategy configuration.
+
+    The result is immutable and is reused until the configuration object is reloaded.
+    """
+    config = _refreshed_configuration()
+    if _RUNTIME_SETTINGS_CACHE.get("config") is not config:
+        strategies = config["strategies"]
+        _RUNTIME_SETTINGS_CACHE.update(config=config, value=AlgoRuntimeSettings(
+            enable_intraday_trend_following=strategies["intraday_trend_following"]["enabled"],
+            enable_intraday_momentum=strategies["intraday_momentum"]["enabled"],
+            swing_multi_factor_enabled=strategies["swing_multi_factor"]["enabled"],
+            swing_llm_driven_enabled=strategies["swing_llm_driven"]["enabled"],
+        ))
+    return _RUNTIME_SETTINGS_CACHE["value"]
 
 
 def resolve_mode(cli_mode: str | None = None) -> str:
