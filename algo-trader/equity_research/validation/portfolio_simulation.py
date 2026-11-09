@@ -19,7 +19,7 @@ from equity_research.backtest.execution import build_replay_timeline
 from portfolio.config import get_algo_regime_config
 from market.store import SQLiteBarStore
 from equity_research.cpu import available_cpu_count
-from strategies.catalog import STRATEGY_CATALOG
+from strategies.catalog import STRATEGY_CATALOG, WEEKLY_STRATEGIES
 from strategies.llm_driven import EventCalendar
 from strategies.multi_factor.features import aggregate_intraday_bars
 from portfolio.config import get_algo_runtime_settings
@@ -757,7 +757,9 @@ def run_settings_replay(
         "controls": get_algo_research_controls(),
         "selected_profiles": {strategy: "effective" for strategy in strategies},
     }
-    job = (item, symbols, db, None, list(strategies), dict(SETTINGS_REPLAY_COST_MODEL), None, {}, 0, True, [])
+    # Weekly strategies are replayed for research even while they are switched off for live trading.
+    research_overrides = {name: True for name in strategies if name in WEEKLY_STRATEGIES}
+    job = (item, symbols, db, None, list(strategies), dict(SETTINGS_REPLAY_COST_MODEL), None, research_overrides, 0, True, [])
     _, summary = _run_coordinated_fold(job)
     summary.pop("daily_equity", None)
     breakdown = strategy_breakdown([summary], initial_capital=initial_capital)

@@ -58,12 +58,28 @@ def test_catalog_groups_preserve_risk_and_coordinator_membership():
     }
 
 
+
+def _fixed_defaults(monkeypatch, tmp_path, changes):
+    """Point the live configuration at a temp copy of the defaults with `changes` merged in."""
+    import portfolio.config as portfolio_config
+
+    def merge(base, extra):
+        for key, value in extra.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                merge(base[key], value)
+            else:
+                base[key] = value
+        return base
+
+    data = merge(json.loads(portfolio_config.ALGO_STRATEGY_DEFAULTS_PATH.read_text(encoding="utf-8")), changes)
+    path = tmp_path / "algo-strategy-config.default.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(portfolio_config, "ALGO_STRATEGY_DEFAULTS_PATH", path)
+    return path
+
+
 def test_runtime_settings_are_projected_from_strategy_configuration(monkeypatch, tmp_path):
-    config_path = tmp_path / "algo-strategy-config.json"
-    config_path.write_text(json.dumps({
-        "strategies": {"intraday_trend_following": {"enabled": True}},
-    }))
-    monkeypatch.setattr("portfolio.config.ALGO_STRATEGY_CONFIG_PATH", config_path)
+    _fixed_defaults(monkeypatch, tmp_path, {"strategies": {"intraday_trend_following": {"enabled": True}}})
 
     settings = get_algo_runtime_settings()
     assert settings.enable_intraday_trend_following is True

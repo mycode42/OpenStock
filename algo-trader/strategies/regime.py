@@ -8,6 +8,7 @@ import os
 import pickle
 from threading import RLock
 
+from strategies.catalog import WEEKLY_STRATEGIES
 from strategies.indicators import closes, moving_average
 from strategies.regime_features import (
     FEATURE_SETS, MODEL_CORE_FEATURES, MODEL_EXTENDED_FEATURES,
@@ -414,6 +415,8 @@ def _available_strategies(
     available = {"swing_trend_following", "swing_momentum", "intraday_mean_reversion"}
     if mode == "algo":
         available.update({"swing_multi_factor", "swing_mean_reversion"})
+        # Weekly weights come from settings; a disabled weekly strategy never gets a weight.
+        available.update(WEEKLY_STRATEGIES)
         if llm_enabled:
             available.add("swing_llm_driven")
         if intraday_trend_enabled:

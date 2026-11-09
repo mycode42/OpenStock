@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 
 from portfolio.settings_rules import validate_settings
-from runtime.paths import DATA_DIR, ROOT
+from runtime.paths import ROOT
 from strategies.catalog import strategy_ids_for_group
 
 
@@ -33,7 +33,6 @@ class AlgoRuntimeSettings:
         """Return the scan's resolved strategy and session switches."""
         return asdict(self)
 ALGO_STRATEGY_DEFAULTS_PATH = Path(__file__).with_name("algo-strategy-config.default.json")
-ALGO_STRATEGY_CONFIG_PATH = DATA_DIR / "algo-strategy-config.json"
 # Static defaults for module-level structures; get_mode_config() applies overrides.
 _PORTFOLIO_DEFAULTS = json.loads(ALGO_STRATEGY_DEFAULTS_PATH.read_text(encoding="utf-8"))["portfolio"]
 # Keep enough completed sessions to support rolling percentiles and monthly
@@ -214,6 +213,8 @@ ALGO_PORTFOLIO_COORDINATOR_CONFIG = {
     "regime_throttle_enabled": _PORTFOLIO_DEFAULTS["regime_throttle_enabled"],
     "regime_gross_caps": dict(_PORTFOLIO_DEFAULTS["regime_gross_caps"]),
     "sector_caps": dict(_PORTFOLIO_DEFAULTS["sector_caps"]),
+    # Aggregate allocation per time-range tier; a new entry is rejected once its tier is full.
+    "tier_budget_pct": {"intraday": 0.07, "weekly": 0.20, "swing": 0.30},
 }
 
 # Idle cash is parked in a cash-proxy ETF. The proxy is invisible to the risk
@@ -258,25 +259,24 @@ def _merge_configuration(base: dict, override: dict) -> dict:
     return result
 
 
+_CONFIGURATION_CACHE: dict = {}
+
+
 def get_algo_configuration() -> dict:
-    """Load the canonical editable live configuration, falling back to defaults."""
-    try:
+    """The live configuration: the fixed, committed defaults file. There is no override layer.
+
+    The parsed and validated file is reused until the file's modification time or size changes.
+    Callers get their own copy, so they can change it freely.
+    """
+    stat = ALGO_STRATEGY_DEFAULTS_PATH.stat()
+    key = (str(ALGO_STRATEGY_DEFAULTS_PATH), stat.st_mtime_ns, stat.st_size)
+    if _CONFIGURATION_CACHE.get("key") != key:
         defaults = json.loads(ALGO_STRATEGY_DEFAULTS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("Algo strategy defaults are unreadable") from exc
-    if not isinstance(defaults, dict):
-        raise ValueError("Algo strategy defaults must be an object")
-    if not ALGO_STRATEGY_CONFIG_PATH.exists():
-        return defaults
-    try:
-        overrides = json.loads(ALGO_STRATEGY_CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("Algo strategy configuration is unreadable") from exc
-    if not isinstance(overrides, dict):
-        raise ValueError("Algo strategy configuration must be an object")
-    merged = _merge_configuration(defaults, overrides)
-    validate_settings(merged, defaults)
-    return merged
+        if not isinstance(defaults, dict):
+            raise ValueError("Algo strategy defaults must be an object")
+        validate_settings(defaults, defaults)
+        _CONFIGURATION_CACHE.update(key=key, value=defaults)
+    return deepcopy(_CONFIGURATION_CACHE["value"])
 
 
 _POLICY_CACHE: dict = {}
@@ -286,7 +286,7 @@ def _effective_policy() -> dict:
     """Effective editable settings, re-read when the defaults or override file changes."""
     stamp = tuple(
         (str(path), path.stat().st_mtime_ns if path.exists() else None)
-        for path in (ALGO_STRATEGY_DEFAULTS_PATH, ALGO_STRATEGY_CONFIG_PATH)
+        for path in (ALGO_STRATEGY_DEFAULTS_PATH,)
     )
     if _POLICY_CACHE.get("stamp") != stamp:
         _POLICY_CACHE["value"] = get_algo_configuration()

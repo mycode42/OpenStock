@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from strategies.hourly_bars import HourlyAggregator, parse_bar_time
+from market.store import DEFAULT_DB, SQLiteBarStore
+from strategies.catalog import WEEKLY_STRATEGIES
+from portfolio.config import get_algo_configuration
 from datetime import date, datetime, timedelta, timezone
 from threading import RLock
 
@@ -27,6 +31,78 @@ from .scan_types import MarketSnapshot, ScanScope
 
 _DAILY_BAR_CACHE_LOCK = RLock()
 _DAILY_BAR_CACHE: dict[tuple, dict[str, list[dict]]] = {}
+
+
+# Hourly bars for the weekly tier. A cold start fetches 45 calendar days of
+# five-minute bars once per symbol; every later scan fetches only the bars
+# since the last one consumed, so steady-state cost is a few bars per symbol.
+_HOURLY_STATE: dict = {}
+_HOURLY_LAST: dict = {}
+_HOURLY_LOCK = RLock()
+WEEKLY_LOOKBACK_DAYS = 45
+
+
+def _ingest_five_minute(ticker: str, bars: list[dict], last):
+    """Feed unseen five-minute bars into the ticker's hourly aggregator; return the newest stamp."""
+    aggregator = _HOURLY_STATE.setdefault(ticker, HourlyAggregator())
+    for bar in sorted(bars, key=lambda item: parse_bar_time(item["t"])):
+        stamp = parse_bar_time(bar["t"])
+        if last is not None and stamp <= last:
+            continue
+        aggregator.add(bar)
+        last = stamp
+    return last
+
+
+def _weekly_hourly_bars(scope: ScanScope) -> dict[str, list[dict]]:
+    """Hourly bars per symbol, seeded from the local store and extended from Alpaca.
+
+    The store holds split-adjusted regular-session five-minute bars, so the live
+    fetch uses split adjustment too: the history and the new bars share one basis.
+    A symbol with no stored history is fetched from Alpaca over the full lookback.
+    """
+    symbols = list(dict.fromkeys(scope.strategy_symbols))
+    if not symbols:
+        return {}
+    lookback_start = (scope.now - timedelta(days=WEEKLY_LOOKBACK_DAYS)).isoformat()
+    with _HOURLY_LOCK:
+        unseeded = [symbol for symbol in symbols if symbol not in _HOURLY_LAST]
+        if unseeded:
+            stored = SQLiteBarStore(DEFAULT_DB).bars(
+                unseeded, feed=scope.data_feed, timeframe="5Min",
+                start=lookback_start, end=scope.now.isoformat(), adjustment="split",
+            )
+            for ticker in unseeded:
+                rows = stored.get(ticker, [])
+                if rows:
+                    last = _ingest_five_minute(ticker, rows, None)
+                    if last is not None:
+                        _HOURLY_LAST[ticker] = last
+        cold = [symbol for symbol in symbols if symbol not in _HOURLY_LAST]
+        warm = [symbol for symbol in symbols if symbol in _HOURLY_LAST]
+        requests_ = []
+        if cold:
+            requests_.append((cold, lookback_start))
+        if warm:
+            requests_.append((warm, min(_HOURLY_LAST[symbol] for symbol in warm).isoformat()))
+        for group, start in requests_:
+            fetched = _fetch_bars(
+                group, mode=scope.mode, timeframe="5Min", start=start,
+                end=scope.now.isoformat(), limit=10000, feed=scope.data_feed, adjustment="split",
+            )
+            for ticker in group:
+                last = _ingest_five_minute(ticker, fetched.get(ticker, []), _HOURLY_LAST.get(ticker))
+                if last is not None:
+                    _HOURLY_LAST[ticker] = last
+        return {
+            ticker: _HOURLY_STATE[ticker].recent(200)
+            for ticker in symbols if ticker in _HOURLY_STATE
+        }
+
+
+def _weekly_enabled() -> bool:
+    strategies = get_algo_configuration()["strategies"]
+    return any(strategies[name]["enabled"] for name in WEEKLY_STRATEGIES)
 
 
 def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
@@ -226,6 +302,26 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
             historical_status = "degraded"
     regime_name = str(regime.get("regime", "unknown"))
 
+    intraday_recent: dict = {}
+    if scope.session_name and scope.mode == "algo":
+        # Four days of five-minute bars, so the reversion reference exists from the first bar of the session.
+        try:
+            recent = _fetch_bars(
+                scope.strategy_symbols, mode=scope.mode, timeframe="5Min",
+                start=(scope.now - timedelta(days=4)).isoformat(), end=scope.now.isoformat(),
+                limit=10000, feed=scope.data_feed,
+            )
+            intraday_recent = {ticker: list(rows)[-40:] for ticker, rows in recent.items()}
+        except Exception as exc:
+            scope.scan_errors.append(f"recent intraday bars: {type(exc).__name__}: {exc}")
+
+    hourly_by_symbol: dict = {}
+    if scope.session_name and scope.mode == "algo" and _weekly_enabled():
+        try:
+            hourly_by_symbol = _weekly_hourly_bars(scope)
+        except Exception as exc:
+            scope.scan_errors.append(f"weekly hourly bars: {type(exc).__name__}: {exc}")
+
     multi_factor_parameters = parameters_for_regime("swing_multi_factor", regime_name)
     if regime_config["strategy_regime_weights"]["swing_multi_factor"].get("volatile", 0) > 0:
         multi_factor_parameters["disable_in_volatile"] = False
@@ -248,4 +344,6 @@ def load_market_snapshot(scope: ScanScope) -> MarketSnapshot:
         regime=regime,
         regime_name=regime_name,
         multi_factor_parameters=multi_factor_parameters,
+        intraday_recent_by_symbol=intraday_recent,
+        hourly_by_symbol=hourly_by_symbol,
     )

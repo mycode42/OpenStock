@@ -14,7 +14,7 @@ from strategies.multi_factor.config import MultiFactorConfig
 from strategies.multi_factor.signals import SignalGenerator
 from strategies.catalog import (
     CORE_STRATEGIES, INTRADAY_STRATEGIES, STRATEGY_CATALOG,
-    SWING_CORE_STRATEGIES,
+    SWING_CORE_STRATEGIES, WEEKLY_STRATEGIES,
 )
 from strategies.multi_factor.diagnostics import information_coefficient, turnover
 from strategies.portfolio_coordinator import throttle_signal
@@ -364,7 +364,10 @@ class ReplaySignalsMixin:
             model_training_window=int(config.get("model_training_window", 756)),
             model_min_confidence=float(config.get("min_model_confidence", 0.50)),
             strategy_regime_weights=config.get("strategy_regime_weights"),
-            strategy_enabled=config.get("strategy_enabled"),
+            # Research replays evaluate the forced-on (weekly) strategies even while they are off for live trading.
+            strategy_enabled={**(config.get("strategy_enabled") or {}), **{
+                name: value for name, value in self.research_runtime_overrides.items() if name in WEEKLY_STRATEGIES
+            }},
             volatile_policy_risk_multiplier=float(config.get("volatile_policy_risk_multiplier", 0.25)),
             volatility_risk_scales=config.get("volatility_risk_scales"),
             precomputed_features=feature_rows,
@@ -445,10 +448,16 @@ class ReplaySignalsMixin:
                         signal = replace(signal, strategy=strategy)
                 else:
                     daily_strategy = bool(strategy_spec and strategy_spec.bar_interval == "1Day")
-                    signal_bars = (
-                        self._completed_daily_history(ticker, self._trading_date(timestamp))
-                        if daily_strategy else history
-                    )
+                    if strategy == "intraday_mean_reversion":
+                        signal_bars = list(self.recent_intraday.get(ticker, ()))
+                    elif strategy_spec is not None and strategy_spec.bar_interval == "1Hour":
+                        aggregator = self.hourly_bars.get(ticker)
+                        signal_bars = aggregator.recent(200) if aggregator is not None else []
+                    else:
+                        signal_bars = (
+                            self._completed_daily_history(ticker, self._trading_date(timestamp))
+                            if daily_strategy else history
+                        )
                     signal_kwargs = {
                         "parameters": self.parameters_for_regime(
                             strategy, str((self._current_regime or {}).get("regime", "unknown")),

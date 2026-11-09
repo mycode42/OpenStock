@@ -23,6 +23,43 @@ from .scan_types import MarketSnapshot, QuoteSnapshot, ScanScope, SignalSnapshot
 LOG = logging.getLogger(__name__)
 
 
+def _ranked_momentum_signals(scope: ScanScope, market: MarketSnapshot, strategy: str) -> dict[str, object]:
+    """Cross-sectional momentum ranking for one ranked strategy; empty outside algo mode."""
+    if scope.mode != "algo":
+        return {}
+    label = "daily momentum ranking" if strategy == "swing_momentum" else f"{strategy} ranking"
+    try:
+        parameters = parameters_for_regime(strategy, market.regime_name)
+        parameters.update({
+            "hard_stop_pct": scope.risk_config["stop_loss_pct_by_strategy"][strategy],
+            "trailing_stop_pct": scope.risk_config["trailing_stop_pct_by_strategy"][strategy],
+            "trailing_activation_pct": scope.risk_config["trailing_activation_pct_by_strategy"][strategy],
+        })
+        held = {}
+        for ticker, owner in scope.owner_map.items():
+            if owner != strategy:
+                continue
+            state = (scope.strategy_states or {}).get(strategy, {}).get(ticker, {})
+            held[ticker] = {
+                "qty": float((scope.positions.get(ticker) or {}).get("qty", 0) or 0),
+                "entry_at": state.get("opened_at"),
+                "entry_price": (scope.positions.get(ticker) or {}).get("avg_entry_price"),
+            }
+        signals, _diagnostics = generate_swing_momentum_signals(
+            market.daily_bars,
+            symbols=scope.selected_symbols,
+            as_of=date.fromisoformat(scope.today) - timedelta(days=1),
+            regime=str(market.regime.get("regime", "unknown")),
+            held_positions=held,
+            parameters=parameters,
+        )
+        return signals
+    except Exception as exc:
+        scope.scan_errors.append(f"{label}: {type(exc).__name__}: {exc}")
+        scope.entry_pause_reasons.append(f"{label} failed")
+        return {}
+
+
 def _limit_entries_to_selected(generated: list[dict], selected_symbols) -> list[dict]:
     """Drop new buys and shorts outside the selected universe; exits always pass."""
     selected = {str(symbol).upper() for symbol in selected_symbols}
@@ -61,38 +98,7 @@ def generate_scan_signals(
         entry["strategy"]: entry.get("selection_score", entry["score"])
         for entry in market.regime.get("ranked", [])
     }
-    momentum_signals: dict[str, object] = {}
-    if scope.mode == "algo":
-        try:
-            momentum_parameters = parameters_for_regime("swing_momentum", market.regime_name)
-            momentum_parameters.update({
-                "hard_stop_pct": scope.risk_config["stop_loss_pct_by_strategy"]["swing_momentum"],
-                "trailing_stop_pct": scope.risk_config["trailing_stop_pct_by_strategy"]["swing_momentum"],
-                "trailing_activation_pct": scope.risk_config[
-                    "trailing_activation_pct_by_strategy"
-                ]["swing_momentum"],
-            })
-            held_momentum = {}
-            for ticker, owner in scope.owner_map.items():
-                if owner != "swing_momentum":
-                    continue
-                state = (scope.strategy_states or {}).get("swing_momentum", {}).get(ticker, {})
-                held_momentum[ticker] = {
-                    "qty": float((scope.positions.get(ticker) or {}).get("qty", 0) or 0),
-                    "entry_at": state.get("opened_at"),
-                    "entry_price": (scope.positions.get(ticker) or {}).get("avg_entry_price"),
-                }
-            momentum_signals, _momentum_diagnostics = generate_swing_momentum_signals(
-                market.daily_bars,
-                symbols=scope.selected_symbols,
-                as_of=date.fromisoformat(scope.today) - timedelta(days=1),
-                regime=str(market.regime.get("regime", "unknown")),
-                held_positions=held_momentum,
-                parameters=momentum_parameters,
-            )
-        except Exception as exc:
-            scope.scan_errors.append(f"daily momentum ranking: {type(exc).__name__}: {exc}")
-            scope.entry_pause_reasons.append("daily momentum ranking failed")
+    momentum_signals = _ranked_momentum_signals(scope, market, "swing_momentum")
 
     multi_factor_target_signals = (
         _multi_factor_current_targets(
@@ -133,6 +139,8 @@ def generate_scan_signals(
         scan_errors=scope.scan_errors,
         entry_pause_reasons=scope.entry_pause_reasons,
         signal_diagnostics=[],
+        intraday_recent=getattr(market, "intraday_recent_by_symbol", None) or {},
+        hourly_by_symbol=getattr(market, "hourly_by_symbol", None) or {},
     )
     generated = generate_strategy_signals(signal_context)
     # Names outside today's selected universe are exit-only: a held position

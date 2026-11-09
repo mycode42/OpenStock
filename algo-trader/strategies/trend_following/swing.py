@@ -62,7 +62,7 @@ class SwingTrendConfig:
         if self.fast_period >= self.slow_period:
             raise ValueError("trend_following fast_period must be less than slow_period")
         for name, low, high in (
-            ("fast_period", 5, 40), ("slow_period", 30, 100),
+            ("fast_period", 5, 40), ("slow_period", 10, 100),
             ("atr_period", 7, 28),
             ("slope_lookback_days", 3, 15), ("minimum_hold_sessions", 2, 5),
             ("maximum_holding_sessions", 10, 20),

@@ -92,6 +92,7 @@
     "shared daily entry budget is exhausted",
     "shared intraday entry slice is exhausted",
     "shared swing entry slice is exhausted",
+    "tier allocation budget is full",
     "shares required to cover this structure are not held in the options account",
     "signal regime risk weight disables this entry",
     "sleeve gamma limit would be exceeded",

@@ -1,3 +1,4 @@
+import pytest
 from dataclasses import replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -228,3 +229,40 @@ def test_non_finite_options_delta_notional_is_rejected():
             equity=100_000,
             options_delta_notional_by_underlying={"SPY": float("nan")},
         )
+
+
+def test_intraday_tier_budget_trims_to_its_seven_percent_then_rejects():
+    coordinator = PortfolioCoordinator(PortfolioCoordinatorConfig(max_intraday_entries=10))
+    book = coordinator.new_book(equity=100_000)
+    stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
+    first = book.review(_proposal(strategy="intraday_mean_reversion", ticker="NVDA", qty=50), session="regular", timestamp=stamp)
+    trimmed = book.review(_proposal(strategy="intraday_momentum", ticker="SPY", qty=30), session="regular", timestamp=stamp)
+    full = book.review(_proposal(strategy="intraday_trend_following", ticker="QQQ", qty=10), session="regular", timestamp=stamp)
+    assert first.approved and first.proposal["qty"] == 50
+    assert trimmed.approved and trimmed.proposal["qty"] == 20
+    assert trimmed.proposal["coordinator_tier"] == "intraday"
+    assert not full.approved
+    assert full.reason == "tier allocation budget is full"
+
+
+def test_swing_tier_has_its_own_budget_and_is_not_drawn_down_by_intraday():
+    coordinator = PortfolioCoordinator(PortfolioCoordinatorConfig(max_intraday_entries=10))
+    book = coordinator.new_book(equity=100_000)
+    stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
+    book.review(_proposal(strategy="intraday_mean_reversion", ticker="NVDA", qty=70), session="regular", timestamp=stamp)
+    swing = book.review(_proposal(strategy="swing_trend_following", ticker="AAPL", qty=100), session="regular", timestamp=stamp)
+    assert swing.approved and swing.proposal["qty"] == 100
+
+
+def test_unattributed_pending_entries_count_against_every_tier():
+    coordinator = PortfolioCoordinator(PortfolioCoordinatorConfig())
+    book = coordinator.new_book(equity=100_000, pending_buy_values={"AAPL": 7_000.0})
+    stamp = datetime(2026, 10, 9, 10, 0, tzinfo=ET)
+    blocked = book.review(_proposal(strategy="intraday_mean_reversion", ticker="NVDA", qty=10), session="regular", timestamp=stamp)
+    assert not blocked.approved
+    assert blocked.reason == "tier allocation budget is full"
+
+
+def test_tier_budgets_must_fit_under_the_gross_ceiling():
+    with pytest.raises(ValueError, match="tier budgets"):
+        PortfolioCoordinatorConfig(tier_budget_pct={"intraday": 0.5, "swing": 0.5})

@@ -7,14 +7,46 @@ from datetime import date, datetime, timedelta
 import hashlib
 import json
 import logging
+import os
+import time
 import math
 import statistics
 
 from .config import BAR_MINUTES, ET, MIN_REGIME_DAILY_BARS, STRATEGY_NAMES
 from .market_sessions import market_session
+from strategies.hourly_bars import HourlyAggregator
 from strategies.momentum.swing import generate_signals as generate_swing_momentum_signals
 from strategies.portfolio_coordinator import strategy_priority
 from strategies.registry import ALGO_DEFAULT_PARAMETERS
+
+
+logger = logging.getLogger("equity_research.replay")
+PROGRESS_EVERY_SESSIONS = 10
+# Lab runs set ALGO_LAB_PROGRESS=1: the replay then prints a LAB_EVENT line at most every half second,
+# so the lab's progress bar moves smoothly. The label tells parallel replays apart.
+PROGRESS_EVENT_PREFIX = "LAB_EVENT "
+PROGRESS_MIN_INTERVAL_SECONDS = 0.5
+
+
+def _lab_progress_enabled() -> bool:
+    return os.environ.get("ALGO_LAB_PROGRESS") == "1"
+
+
+def _emit_replay_progress(state: dict, *, done: int, total: int, through, elapsed: float, final: bool = False) -> None:
+    now = time.monotonic()
+    if not final and now - state.get("last", 0.0) < PROGRESS_MIN_INTERVAL_SECONDS:
+        return
+    state["last"] = now
+    rate = elapsed / done if done else 0.0
+    event = {
+        "event": "replay_progress", "label": os.environ.get("ALGO_REPLAY_LABEL", "replay"),
+        "sessions_done": done, "sessions_total": total,
+        "fraction": round(done / total, 4) if total else 1.0,
+        "through": through.isoformat() if through else None,
+        "elapsed_seconds": round(elapsed, 1),
+        "remaining_seconds": round(rate * (total - done), 1),
+    }
+    print(PROGRESS_EVENT_PREFIX + json.dumps(event, sort_keys=True), flush=True)
 
 
 class ReplayLoopMixin:
@@ -56,10 +88,30 @@ class ReplayLoopMixin:
                 for bar in bars.values():
                     source = str(bar.get("_source_feed") or self.feed)
                     sources[source] = sources.get(source, 0) + 1
+        session_total = len({self._trading_date(timestamp) for timestamp in event_times})
+        sessions_done = 0
+        replay_started = time.monotonic()
+        progress_state: dict = {}
+        lab_progress = _lab_progress_enabled()
         for index, timestamp in enumerate(event_times):
             bars = events[timestamp]
             trading_day = self._trading_date(timestamp)
             if last_day != trading_day:
+                if last_day is not None:
+                    sessions_done += 1
+                    if lab_progress:
+                        _emit_replay_progress(
+                            progress_state, done=sessions_done, total=session_total, through=last_day,
+                            elapsed=time.monotonic() - replay_started,
+                        )
+                    if sessions_done % PROGRESS_EVERY_SESSIONS == 0 or sessions_done == session_total - 1:
+                        elapsed = time.monotonic() - replay_started
+                        remaining = elapsed / sessions_done * (session_total - sessions_done)
+                        logger.info(
+                            "replay: %d of %d sessions (%.0f%%), through %s, %.0fs elapsed, about %.0fs left",
+                            sessions_done, session_total, 100 * sessions_done / session_total,
+                            last_day.isoformat(), elapsed, remaining,
+                        )
                 self._current_regime = self._regime(trading_day)
                 factor_signals_for_day, factor_diagnostics = self._multi_factor_rebalance(trading_day)
                 factor_signals_date = trading_day if factor_diagnostics and factor_diagnostics.get("minimum_universe_met") else None
@@ -111,6 +163,11 @@ class ReplayLoopMixin:
                 self.last_prices[ticker] = float(bar["c"])
                 history = self.histories[(ticker, trading_day)]
                 history.append(bar)
+                self.recent_intraday[ticker].append(bar)
+                aggregator = self.hourly_bars.get(ticker)
+                if aggregator is None:
+                    aggregator = self.hourly_bars[ticker] = HourlyAggregator()
+                aggregator.add(bar)
             self._record_holdings(trading_day)
             regime = self._current_regime
             ranked = {

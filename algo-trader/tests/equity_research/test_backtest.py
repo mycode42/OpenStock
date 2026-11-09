@@ -38,8 +38,8 @@ def test_profile_can_change_rule_parameters_but_not_portfolio_risk():
     momentum = validate_parameter_profile({"swing_momentum": {"lookbacks": [5, 10]}})
     assert momentum["swing_momentum"]["lookbacks"] == [5, 10]
     assert validate_parameter_profile({
-        "intraday_mean_reversion": {"signal_model": "opening_dip", "minimum_dip_pct": 0.01},
-    })["intraday_mean_reversion"]["signal_model"] == "opening_dip"
+        "intraday_mean_reversion": {"signal_model": "average_24h", "minimum_dip_pct": 0.01},
+    })["intraday_mean_reversion"]["signal_model"] == "average_24h"
     with pytest.raises(ValueError, match="Unknown or malformed strategy"):
         validate_parameter_profile({"risk": {"risk_per_trade_pct": 0.5}})
     with pytest.raises(ValueError, match="fast_period"):
@@ -187,31 +187,6 @@ def test_portfolio_replay_models_short_entry_cover_and_entry_relative_return(mon
     )
 
 
-def test_opening_dip_research_rule_requires_window_dip_bounce_and_volume():
-    day = date(2026, 10, 5)
-    bars = [
-        {"t": _utc(day, 9, 30), "o": 100, "h": 100.1, "l": 99.8, "c": 100, "v": 100},
-        {"t": _utc(day, 9, 35), "o": 99.0, "h": 99.1, "l": 98.7, "c": 98.8, "v": 100},
-        {"t": _utc(day, 9, 40), "o": 98.9, "h": 99.2, "l": 98.9, "c": 99.0, "v": 150},
-    ]
-    parameters = {
-        "signal_model": "opening_dip", "minimum_dip_pct": 0.01,
-        "minimum_volume_ratio": 1.2, "entry_window_minutes": 45,
-        "minimum_bounce_pct": 0.001, "higher_low_bars": 1,
-    }
-
-    signal = evaluate_rule_signal("intraday_mean_reversion", "AAPL", bars, parameters)
-
-    assert signal is not None
-    assert signal.action == "buy"
-    assert evaluate_rule_signal(
-        "intraday_mean_reversion", "AAPL", bars,
-        {**parameters, "minimum_dip_pct": 0.02},
-    ) is None
-    assert evaluate_rule_signal(
-        "intraday_mean_reversion", "AAPL", bars,
-        {**parameters, "entry_window_minutes": 5},
-    ) is None
 
 
 def test_research_controls_cannot_exceed_live_algo_ceilings():

@@ -42,6 +42,9 @@ def _finite_number(value: object, field: str, *, minimum: float | None = None) -
     return number
 
 
+_COVERAGE_CACHE: dict[str, tuple] = {}
+
+
 class SQLiteBarStore:
     """Append/replace bars by feed, symbol, interval, adjustment, and time."""
 
@@ -222,18 +225,37 @@ class SQLiteBarStore:
         counts.update({symbol: int(count) for symbol, count in rows})
         return counts
 
+    def _file_stamp(self) -> tuple:
+        """Modification time and size of the database and its WAL: changes on every write."""
+        stamp = []
+        for path in (self.path, Path(f"{self.path}-wal")):
+            try:
+                info = path.stat()
+                stamp.append((info.st_mtime_ns, info.st_size))
+            except OSError:
+                stamp.append(None)
+        return tuple(stamp)
+
     def coverage(self) -> list[dict]:
+        """Per-series coverage. The full scan takes minutes on a large store, so the result is reused
+        until the database file changes."""
+        stamp = self._file_stamp()
+        cached = _COVERAGE_CACHE.get(str(self.path))
+        if cached is not None and cached[0] == stamp:
+            return [dict(row) for row in cached[1]]
         with closing(self._connect()) as connection:
             rows = connection.execute("""
                 SELECT feed, adjustment, timeframe, symbol, COUNT(*), MIN(timestamp), MAX(timestamp)
                 FROM market_bar GROUP BY feed, adjustment, timeframe, symbol
                 ORDER BY feed, timeframe, symbol
             """).fetchall()
-        return [
+        result = [
             {"feed": feed, "adjustment": adjustment, "timeframe": timeframe,
              "symbol": symbol, "rows": count, "first": first, "last": last}
             for feed, adjustment, timeframe, symbol, count, first, last in rows
         ]
+        _COVERAGE_CACHE[str(self.path)] = (stamp, result)
+        return [dict(row) for row in result]
 
     def write_macro_observations(self, observations: dict[str, dict[str, float]], *, provider: str) -> int:
         """Upsert dated macro observations without rewriting market-bar history."""

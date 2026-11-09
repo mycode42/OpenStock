@@ -73,6 +73,9 @@ class MarketSnapshot:
     regime: dict
     regime_name: str
     multi_factor_parameters: dict
+    # Recent five-minute bars per symbol across sessions, for the intraday reversion reference.
+    intraday_recent_by_symbol: dict = field(default_factory=dict)
+    hourly_by_symbol: dict = field(default_factory=dict)
 
 
 @dataclass

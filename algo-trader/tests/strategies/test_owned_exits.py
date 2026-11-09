@@ -14,7 +14,8 @@ from strategies.runner.llm_context import load_llm_context
 
 @pytest.fixture
 def default_config(monkeypatch, tmp_path):
-    monkeypatch.setattr(portfolio_config, "ALGO_STRATEGY_CONFIG_PATH", tmp_path / "absent.json")
+    # The shipped defaults are the only configuration; there is no override file to ignore.
+    return None
 
 
 def _bars(count: int = 30) -> list[dict]:

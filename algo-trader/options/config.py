@@ -8,11 +8,8 @@ import math
 import os
 from pathlib import Path
 
-from runtime.paths import DATA_DIR
-
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("config.default.json")
-USER_CONFIG_PATH = DATA_DIR / "options" / "config.json"
 
 
 def _merge(base: dict, override: dict) -> dict:
@@ -28,9 +25,8 @@ def _merge(base: dict, override: dict) -> dict:
 def load_options_config(path: str | Path | None = None) -> dict:
     """Load packaged defaults, then a user JSON file and supported env overrides."""
     config = json.loads(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
-    override_path = Path(path) if path else Path(os.getenv("ALPACA_OPTIONS_CONFIG", USER_CONFIG_PATH))
-    if override_path.exists():
-        override = json.loads(override_path.read_text(encoding="utf-8"))
+    if path and Path(path).exists():
+        override = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(override, dict):
             raise ValueError("options config must be a JSON object")
         config = _merge(config, override)
@@ -246,4 +242,4 @@ def load_options_config(path: str | Path | None = None) -> dict:
     return config
 
 
-__all__ = ["DEFAULT_CONFIG_PATH", "USER_CONFIG_PATH", "load_options_config"]
+__all__ = ["DEFAULT_CONFIG_PATH", "load_options_config"]

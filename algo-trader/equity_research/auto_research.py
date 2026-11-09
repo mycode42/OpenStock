@@ -55,6 +55,26 @@ def _refresh_incremental(store, *, selected_symbols, end_date, minimum_covered=M
 
 
 
+def _settings_replay_job(kwargs: dict) -> dict:
+    """One settings replay, runnable in a worker process. `label` names it in progress events."""
+    from .validation.portfolio_simulation import run_settings_replay
+
+    kwargs = dict(kwargs)
+    label = kwargs.pop("label", "replay")
+    os.environ["ALGO_REPLAY_LABEL"] = label
+    return run_settings_replay(**kwargs)
+
+
+def _run_replays_in_parallel(jobs: dict[str, dict]) -> dict[str, dict]:
+    """Run independent settings replays in separate processes; results keyed by job name."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    with ProcessPoolExecutor(max_workers=len(jobs), mp_context=mp.get_context("spawn")) as pool:
+        futures = {name: pool.submit(_settings_replay_job, kwargs) for name, kwargs in jobs.items()}
+        return {name: future.result() for name, future in futures.items()}
+
+
 def run_daily_research(args) -> dict:
     """Run one full research cohort or archive-backed optimizer cycle."""
     output_dir = Path(args.output_dir)
@@ -319,26 +339,28 @@ def run_daily_research(args) -> dict:
 
     # The research is a replay now: the effective parameters over the chosen history. Nothing is searched,
     # verified or promoted here; the nightly checks live settings and the lab tests profiles the user picks.
-    from .validation.portfolio_simulation import run_settings_replay
-
-    settings_report = run_settings_replay(
+    replay_kwargs = dict(
         database=database, output_dir=output_dir, symbols=covered_symbols,
         start=RESEARCH_START, end=cohort_end, strategies=list(RESEARCHABLE_STRATEGIES),
     )
-    # A lab run also replays the live settings over the same window, so the chosen parameters can be compared with them.
+    # A lab run also replays the live settings over the same window, so the chosen parameters can be compared
+    # with them. The two replays are independent, so they run in separate processes.
     if os.environ.get("ALGO_LAB_PARAMETER_OVERRIDES"):
         from strategies.registry import live_parameters_snapshot
 
-        live = run_settings_replay(
-            database=database, output_dir=output_dir, symbols=covered_symbols,
-            start=RESEARCH_START, end=cohort_end, strategies=list(RESEARCHABLE_STRATEGIES),
-            parameters_by_strategy=live_parameters_snapshot(),
-        )
+        replays = _run_replays_in_parallel({
+            "chosen": {**replay_kwargs, "label": "chosen"},
+            "live": {**replay_kwargs, "label": "live", "parameters_by_strategy": live_parameters_snapshot()},
+        })
+        settings_report = replays["chosen"]
+        live = replays["live"]
         settings_report["live_comparison"] = {
             "summary": live.get("summary"),
             "strategy_breakdown": live.get("strategy_breakdown"),
             "parameters": live.get("parameters"),
         }
+    else:
+        settings_report = _settings_replay_job({**replay_kwargs, "label": "chosen" if os.environ.get("ALGO_LAB_PROGRESS") == "1" else "nightly"})
     settings_report["invocation_id"] = invocation_id
     settings_report["run_date_et"] = datetime.now(ET).date().isoformat()
     settings_report["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -560,6 +582,8 @@ def main(argv: list[str] | None = None) -> int:
         })
 
     if getattr(args, "lab_run", False):
+        # Replays inside a lab run print progress events; worker processes inherit the switch.
+        os.environ["ALGO_LAB_PROGRESS"] = "1"
         # Lab runs report each strategy as an underlying, so the lab's progress and results read the same way as options.
         started_strategies = set()
 

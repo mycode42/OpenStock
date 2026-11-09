@@ -30,7 +30,6 @@ def _spy_bars(count: int = 160, drift: float = 0.6) -> list[dict]:
 @pytest.fixture
 def default_regime_config(monkeypatch, tmp_path):
     """The shipped defaults, with the live override file ignored."""
-    monkeypatch.setattr(portfolio_config, "ALGO_STRATEGY_CONFIG_PATH", tmp_path / "absent.json")
     return portfolio_config.get_algo_regime_config()
 
 

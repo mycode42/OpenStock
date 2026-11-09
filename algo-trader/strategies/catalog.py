@@ -59,6 +59,20 @@ _STRATEGIES = {
         "swing_llm_driven", "1Day", "swing", "core", "swing", "swing_core", "llm",
         research_workflows=("llm_research",),
     ),
+    # Weekly tier: the same three families on daily bars with 10-20 session
+    # lookbacks and 3-10 session holds. Lives between intraday and swing.
+    "weekly_trend_following": StrategySpec(
+        "weekly_trend_following", "1Hour", "weekly", "core", "weekly", "weekly",
+        research_workflows=("nightly_weekly",),
+    ),
+    "weekly_momentum": StrategySpec(
+        "weekly_momentum", "1Hour", "weekly", "core", "weekly", "weekly",
+        research_workflows=("nightly_weekly",),
+    ),
+    "weekly_mean_reversion": StrategySpec(
+        "weekly_mean_reversion", "1Hour", "weekly", "core", "weekly", "weekly",
+        research_workflows=("nightly_weekly",),
+    ),
 }
 
 # Strategy IDs are persisted in portfolio ownership, trade journals, and old
@@ -86,6 +100,9 @@ CORE_STRATEGIES = frozenset(
 )
 INTRADAY_STRATEGIES = frozenset(
     name for name, spec in STRATEGY_CATALOG.items() if spec.coordinator_group == "intraday"
+)
+WEEKLY_STRATEGIES = frozenset(
+    name for name, spec in STRATEGY_CATALOG.items() if spec.coordinator_group == "weekly"
 )
 SWING_STRATEGIES = frozenset(
     name for name, spec in STRATEGY_CATALOG.items()
@@ -115,7 +132,7 @@ def strategy_ids_for_research_workflow(workflow: str) -> tuple[str, ...]:
 __all__ = [
     "CORE_STRATEGIES", "INTRADAY_STRATEGIES",
     "STRATEGY_CATALOG", "STRATEGY_ID_ALIASES", "STRATEGY_IDS",
-    "SWING_CORE_STRATEGIES", "SWING_STRATEGIES", "StrategySpec",
+    "SWING_CORE_STRATEGIES", "SWING_STRATEGIES", "StrategySpec", "WEEKLY_STRATEGIES",
     "canonical_strategy_id", "strategy_ids_for_group",
     "strategy_ids_for_research_workflow",
 ]

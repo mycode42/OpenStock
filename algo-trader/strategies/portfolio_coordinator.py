@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from portfolio.config import ALGO_PORTFOLIO_COORDINATOR_CONFIG
 from strategies.catalog import (
     CORE_STRATEGIES, INTRADAY_STRATEGIES, SWING_CORE_STRATEGIES, SWING_STRATEGIES,
+    WEEKLY_STRATEGIES,
 )
 from portfolio.config import get_algo_runtime_settings, get_mode_config
 
@@ -38,6 +39,19 @@ class PortfolioCoordinatorConfig:
     swing_strategy_ids: tuple[str, ...] = tuple(SWING_STRATEGIES)
     swing_core_strategy_ids: tuple[str, ...] = tuple(SWING_CORE_STRATEGIES)
     swing_trend_strategy_ids: tuple[str, ...] = ("swing_trend_following",)
+    weekly_strategy_ids: tuple[str, ...] = tuple(sorted(WEEKLY_STRATEGIES))
+    # Aggregate allocation ceilings per time-range tier, as fractions of equity.
+    tier_budget_pct: Mapping[str, float] = field(default_factory=lambda: dict(ALGO_PORTFOLIO_COORDINATOR_CONFIG["tier_budget_pct"]))
+
+    def tier_of(self, strategy: str) -> str | None:
+        """Return the tier budget a strategy draws from, or None when untiered."""
+        if strategy in self.intraday_strategy_ids:
+            return "intraday"
+        if strategy in self.weekly_strategy_ids:
+            return "weekly"
+        if strategy in self.swing_strategy_ids:
+            return "swing"
+        return None
 
     @classmethod
     def from_dict(cls, values: Mapping | None = None) -> "PortfolioCoordinatorConfig":
@@ -81,9 +95,21 @@ class PortfolioCoordinatorConfig:
             for key, value in self.regime_gross_caps.items()
         ):
             raise ValueError("regime gross caps must be named finite fractions within the portfolio ceiling")
+        if (
+            not isinstance(self.tier_budget_pct, Mapping)
+            or not set(self.tier_budget_pct) <= {"intraday", "weekly", "swing"}
+            or any(
+                isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or not 0 < value <= 1
+                for value in self.tier_budget_pct.values()
+            )
+            or sum(self.tier_budget_pct.values()) > self.max_gross_pct
+        ):
+            raise ValueError("tier budgets must name intraday, weekly, or swing fractions within the gross ceiling")
         strategy_sets = (
             self.intraday_strategy_ids, self.swing_strategy_ids,
             self.swing_core_strategy_ids, self.swing_trend_strategy_ids,
+            self.weekly_strategy_ids,
         )
         if any(
             not isinstance(names, tuple)
@@ -196,6 +222,8 @@ class CoordinatorBook:
         self.entries_today = int(entries_today)
         self.intraday_entries_today = int(intraday_entries_today)
         self.swing_entries_today = int(swing_entries_today)
+        self.tier_used: dict[str, float] = {tier: 0.0 for tier in config.tier_budget_pct}
+        unattributed_pending = 0.0
         for ticker, position in (positions or {}).items():
             qty = float(position.get("qty", 0) or 0)
             market_value = float(position.get("market_value") or 0)
@@ -206,6 +234,9 @@ class CoordinatorBook:
             value = raw_value if qty >= 0 else -raw_value
             self.name_signed[ticker.upper()] = value
             self._add_group_value(ticker.upper(), abs(value))
+            tier = self.config.tier_of(self.name_owners.get(ticker.upper(), ""))
+            if tier in self.tier_used:
+                self.tier_used[tier] += raw_value
         for source, sign in ((pending_buy_values or {}, 1), (pending_short_values or {}, -1)):
             for ticker, value in source.items():
                 amount = max(0.0, float(value))
@@ -215,6 +246,11 @@ class CoordinatorBook:
                 self.name_signed[key] = self.name_signed.get(key, 0.0) + sign * amount
                 self._add_group_value(key, amount)
                 self.pending_names.add(key)
+                # Open orders carry no strategy, so a pending entry cannot be
+                # attributed to a tier. It counts against every tier (fail-closed).
+                unattributed_pending += amount
+        for tier in self.tier_used:
+            self.tier_used[tier] += unattributed_pending
         # The options account is separate at the broker, but delta-equivalent
         # notional participates in the shared equity coordinator's gross/net
         # book. Gamma, vega, margin, and assignment are checked by its options
@@ -305,6 +341,14 @@ class CoordinatorBook:
             self.equity * self.config.max_net_short_pct + min(0.0, sum(self.name_signed.values())) if direction < 0 else math.inf,
             self.equity * self.config.sector_caps.get(group, 0.25) - self.group_gross.get(group, 0.0) + offset,
         ]
+        tier = self.config.tier_of(strategy)
+        if tier not in self.config.tier_budget_pct:
+            tier = None
+        if tier is not None:
+            tier_room = self.equity * float(self.config.tier_budget_pct[tier]) - self.tier_used.get(tier, 0.0)
+            if tier_room < price:
+                return self._reject(proposal, "tier allocation budget is full")
+            limits.append(tier_room)
         room = max(0.0, min(limits))
         allowed_qty = min(qty, int(room / price))
         if allowed_qty <= 0:
@@ -314,6 +358,8 @@ class CoordinatorBook:
         approved["qty"] = allowed_qty
         approved["coordinator_regime_gross_cap_pct"] = effective_gross_pct
         approved["coordinator_regime_volatility_state"] = volatility_state
+        if tier is not None:
+            approved["coordinator_tier"] = tier
         if allowed_qty < qty:
             LOG.info("Portfolio coordinator reduced %s %s %s quantity %d -> %d",
                      strategy, action, ticker, qty, allowed_qty)
@@ -330,6 +376,8 @@ class CoordinatorBook:
             0.0, self.group_gross.get(group, 0.0) + abs(updated) - abs(current),
         )
         self.pending_names.add(ticker)
+        if tier is not None:
+            self.tier_used[tier] = self.tier_used.get(tier, 0.0) + amount
         self.entries_today += 1
         if is_intraday:
             self.intraday_entries_today += 1

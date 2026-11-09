@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 from equity_research.costs import EQUITY_COMMISSION_PER_SHARE
+from strategies.catalog import WEEKLY_STRATEGIES
+from strategies.hourly_bars import HourlyAggregator
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from copy import deepcopy
 from datetime import date, datetime
 import math
@@ -172,12 +174,12 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.risk = deepcopy(get_mode_config("algo")["risk"])
         self.research_runtime_overrides = dict(research_runtime_overrides or {})
         unknown_runtime_overrides = set(self.research_runtime_overrides) - {
-            "intraday_trend_following", "intraday_momentum",
+            "intraday_trend_following", "intraday_momentum", *WEEKLY_STRATEGIES,
         }
         if unknown_runtime_overrides or any(
             not isinstance(value, bool) for value in self.research_runtime_overrides.values()
         ):
-            raise ValueError("research runtime overrides must be boolean intraday strategy enable flags")
+            raise ValueError("research runtime overrides must be boolean intraday or weekly strategy enable flags")
         runtime_settings = get_algo_runtime_settings()
         self.runtime_settings = runtime_settings
         self.research_controls = validate_research_controls(research_controls)
@@ -258,6 +260,10 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.pending_exits: dict[str, dict] = {}
         self.last_prices: dict[str, float] = {}
         self.histories: dict[tuple[str, date], list[dict]] = defaultdict(list)
+        # Recent five-minute bars per ticker across days, for the intraday reversion reference.
+        self.recent_intraday: dict[str, deque] = defaultdict(lambda: deque(maxlen=40))
+        # Causal hourly bars per ticker, built from the five-minute stream (weekly strategies).
+        self.hourly_bars: dict[str, HourlyAggregator] = {}
         self.closed_trades: list[dict] = []
         self.rejections: Counter[str] = Counter()
         self.entry_counts: Counter[str] = Counter()

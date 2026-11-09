@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -58,6 +58,8 @@ class SignalGenerationContext:
     scan_errors: list[str]
     entry_pause_reasons: list[str]
     signal_diagnostics: list[dict]
+    intraday_recent: dict = field(default_factory=dict)
+    hourly_by_symbol: dict = field(default_factory=dict)
 
 
 def generate_strategy_signals(
@@ -302,6 +304,10 @@ def _strategy_option(
 
     strategy_spec = STRATEGY_CATALOG.get(strategy_name)
     signal_bars = symbol_bars
+    if strategy_name == "intraday_mean_reversion":
+        signal_bars = context.intraday_recent.get(ticker) or symbol_bars
+    if strategy_spec is not None and strategy_spec.bar_interval == "1Hour":
+        signal_bars = context.hourly_by_symbol.get(ticker) or []
     signal_bar_time = symbol_bars[-1].get("t") if symbol_bars else None
     daily_strategy = bool(strategy_spec and strategy_spec.bar_interval == "1Day")
     if daily_strategy:

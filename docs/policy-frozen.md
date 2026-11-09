@@ -26,7 +26,7 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 1. **Data freshness.** Stale or missing quotes and signal bars. Trading on stale prices is not allowed in any session.
 2. **Fail-closed infrastructure.** Risk validator unavailable, portfolio fetch failed, entry count unavailable, reconciliation uncertain. Entries pause rather than guess.
 3. **Position and ownership.** Opposite direction conflicts with an open position or pending order. One strategy owns a ticker. A ticker with a pending entry cannot take another.
-4. **Entry budgets.** Shared daily, intraday, and swing entry slices. Per-strategy daily entries and open positions. Maximum trades per day and maximum open positions.
+4. **Entry budgets.** Shared daily, intraday, and swing entry slices; tier allocation budgets (intraday, weekly, swing). Per-strategy daily entries and open positions. Maximum trades per day and maximum open positions.
 5. **Exposure and sizing.** Name, sector, gross, and net caps. Tactical caps. Minimum cash reserve. Maximum short positions and short exposure. Zero shares after sizing.
 6. **Loss limits.** Daily and weekly circuit breakers. No buying into a drawdown beyond the configured percentage. The options daily loss limit.
 7. **Order protocol.** Entries need a stop and a take-profit. Stop and target levels must match the trade direction. Protective and exit orders may not carry broker-side brackets.
@@ -34,6 +34,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 9. **Order-level checks.** Alert level must be active and untriggered. A BUY needs a budget. A SELL needs an open position. One live order per alert level, enforced by a database index.
 
 ## Approved changes
+
+- **2026-11-09, tier allocation budgets.** At Andreas's explicit request, entries are budgeted by time-range tier as aggregate allocation ceilings of equity: intraday 7%, weekly 20%, swing 30% (57% in total, under the 90% gross cap). Tier membership comes from the strategy catalog; weekly has no strategies yet. A new entry is trimmed to fit the tier's remaining room, and is rejected with `tier allocation budget is full` when less than one share fits. Pending entries cannot be attributed to a tier, so they count against every tier until they fill or cancel (fail-closed). Exits are not affected. Per-position caps (`max_position_pct`, `max_strategy_position_pct` 0.10) and regime gross caps are unchanged. Approved by Andreas in chat ("reject the signal when full. go ahead"). Adds one gate message to `frozen_gates.json`.
 
 - **2026-11-08, LLM confidence floor 80 for options too.** At Andreas's explicit request, `llm_driven.min_llm_confidence` is 0.80 (was 0.70), matching the Algo LLM floor. The LLM strategies trade only when very confident. Approved by Andreas in chat.
 

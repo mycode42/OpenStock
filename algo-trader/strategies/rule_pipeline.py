@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
 
@@ -13,7 +13,7 @@ from strategies.indicators import adx, closes, efficiency_ratio, moving_average
 from strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
 from strategies.signals import Signal
 from portfolio.config import (
-    ALGO_STRATEGY_CONFIG_PATH, ALGO_STRATEGY_DEFAULTS_PATH, get_algo_runtime_settings,
+    ALGO_STRATEGY_DEFAULTS_PATH, get_algo_runtime_settings,
     get_algo_strategy_settings, get_mode_config,
 )
 from strategies.swing_common import SwingSignal
@@ -100,40 +100,79 @@ def _intraday_strategy_signal(signal: Signal | None, name: str) -> SwingSignal |
     )
 
 
-def _opening_dip(
+WEEKLY_RULE_NAMES = frozenset({"weekly_trend_following", "weekly_momentum", "weekly_mean_reversion"})
+INTRADAY_TREND_MOMENTUM_AND_WEEKLY = frozenset({"intraday_trend_following", "intraday_momentum", "weekly_momentum", "weekly_trend_following"})
+for _weekly in WEEKLY_RULE_NAMES:
+    RULE_PARAMETERS[_weekly] = set(ALGO_DEFAULT_PARAMETERS[_weekly]) | {"maximum_holding_sessions"}
+
+
+def _weekly_strategy_signal(signal: Signal | None, name: str, params: dict) -> SwingSignal | None:
+    """Relabel a weekly signal: its own group, and the configured hard stop."""
+    if signal is None:
+        return None
+    settings = get_algo_strategy_settings(name)
+    return SwingSignal(
+        signal.ticker, signal.action, name, signal.reason, signal.strength,
+        stop_pct=float(params.get("hard_stop_pct", 0.04)), strategy_group="weekly_core",
+        target_weight=settings["max_position_pct"],
+        risk_multiplier=settings["risk_multiplier"],
+    )
+
+
+# The reversion reference is the average close of the last 21 five-minute bars.
+REVERSION_REFERENCE_BARS = 21
+REVERSION_SLOPE_LOOKBACK_BARS = 5
+
+
+def _bar_time(bar: dict) -> datetime:
+    parsed = datetime.fromisoformat(str(bar["t"]).replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=ET) if parsed.tzinfo is None else parsed
+
+
+def _average_reversion(
     ticker: str, bars: list[dict], parameters: dict, *, position_qty: float = 0,
+    strategy: str = "intraday_mean_reversion",
 ) -> Signal | None:
+    """Dips below and spikes above the reference average close, with a slope filter.
+
+    The intraday rule uses the 21-bar average of five-minute closes. The weekly
+    rule passes its own `reference_bars` and `slope_lookback_bars` (hourly bars).
+    """
     if len(bars) < 3:
         return None
+    reference_bars = int(parameters.get("reference_bars", REVERSION_REFERENCE_BARS))
+    slope_bars = int(parameters.get("slope_lookback_bars", REVERSION_SLOPE_LOOKBACK_BARS))
+    needed = reference_bars + slope_bars + 1
+    if len(bars) < needed:
+        return None
     try:
-        opened = float(bars[0]["o"])
-        close = float(bars[-1]["c"])
-        previous_close = float(bars[-2]["c"])
+        closes_all = [float(bar["c"]) for bar in bars]
+        close = closes_all[-1]
+        previous_close = closes_all[-2]
         lows = [float(bar["l"]) for bar in bars]
-        current_time = datetime.fromisoformat(str(bars[-1]["t"]).replace("Z", "+00:00"))
-        first_time = datetime.fromisoformat(str(bars[0]["t"]).replace("Z", "+00:00"))
+        highs = [float(bar["h"]) for bar in bars]
     except (KeyError, TypeError, ValueError):
         return None
-    if current_time.tzinfo is None:
-        current_time = current_time.replace(tzinfo=ET)
-    if first_time.tzinfo is None:
-        first_time = first_time.replace(tzinfo=ET)
-    elapsed_minutes = (current_time - first_time).total_seconds() / 60
-    if elapsed_minutes < 0 or elapsed_minutes > parameters.get("entry_window_minutes", 90):
+    # Reference: mean of the closes before the current bar. Slope: the same mean `slope_bars` bars earlier.
+    reference = sum(closes_all[-1 - reference_bars:-1]) / reference_bars
+    earlier = sum(closes_all[-1 - slope_bars - reference_bars:-1 - slope_bars]) / reference_bars
+    if reference <= 0 or close <= 0 or earlier <= 0:
         return None
-    if opened <= 0 or close <= 0:
+    # Slope filter, as the swing mean reversion has it: a steep move of the reference is a trend, not a stretch to fade.
+    reference_slope = reference / earlier - 1
+    if abs(reference_slope) > float(parameters.get("max_reference_slope_pct", 0.005)):
         return None
 
-    if position_qty > 0 and close >= opened:
-        return Signal(ticker, "sell", "intraday_mean_reversion", "opening dip recovered to the session open", 0.7)
-    if position_qty < 0 and close <= opened:
-        return Signal(ticker, "cover", "intraday_mean_reversion", "opening rip faded to the session open", 0.7)
+    if position_qty > 0 and close >= reference:
+        return Signal(ticker, "sell", strategy, f"price back at the {reference_bars}-bar average", 0.7)
+    if position_qty < 0 and close <= reference:
+        return Signal(ticker, "cover", strategy, f"price back at the {reference_bars}-bar average", 0.7)
     if position_qty != 0:
         return None
 
     action = None
     if parameters.get("allow_long", True):
-        dip_pct = 1 - close / opened
+        dip_pct = 1 - close / reference
         higher_low_bars = int(parameters.get("higher_low_bars", 1))
         recent_lows = lows[-(higher_low_bars + 1):] if higher_low_bars else []
         higher_lows = not higher_low_bars or (
@@ -150,8 +189,7 @@ def _opening_dip(
             action = ("buy", dip_pct, bounce_pct, "higher low")
 
     if action is None and parameters.get("allow_short", False):
-        highs = [float(bar["h"]) for bar in bars]
-        rip_pct = close / opened - 1
+        rip_pct = close / reference - 1
         lower_high_bars = int(parameters.get("lower_high_bars", parameters.get("higher_low_bars", 1)))
         recent_highs = highs[-(lower_high_bars + 1):] if lower_high_bars else []
         lower_highs = not lower_high_bars or (
@@ -169,7 +207,7 @@ def _opening_dip(
     if action is None:
         return None
 
-    prior_volumes = [float(bar.get("v", 0) or 0) for bar in bars[-21:-1]]
+    prior_volumes = [float(bar.get("v", 0) or 0) for bar in bars[-(reference_bars + 1):-1]]
     current_volume = float(bars[-1].get("v", 0) or 0)
     average_volume = sum(prior_volumes) / len(prior_volumes) if prior_volumes else 0
     volume_ratio = current_volume / average_volume if average_volume > 0 else 0
@@ -177,8 +215,8 @@ def _opening_dip(
         return None
     direction, move_pct, reaction_pct, confirmation = action
     return Signal(
-        ticker, direction, "intraday_mean_reversion",
-        f"opening {'dip' if direction == 'buy' else 'rip'} {move_pct:.1%}; "
+        ticker, direction, strategy,
+        f"{'dip' if direction == 'buy' else 'spike'} {move_pct:.1%} from the {reference_bars}-bar average; "
         f"{confirmation} confirmation {reaction_pct:.1%}; volume {volume_ratio:.2f}x",
         min(0.95, 0.6 + move_pct),
     )
@@ -244,7 +282,7 @@ def _algo_stop_settings() -> dict:
     if now - _stop_settings_checked[0] >= _STOP_SETTINGS_CHECK_SECONDS or _stop_settings_checked[1] is None:
         key = tuple(
             (path.stat().st_mtime_ns if path.exists() else None)
-            for path in (ALGO_STRATEGY_DEFAULTS_PATH, ALGO_STRATEGY_CONFIG_PATH)
+            for path in (ALGO_STRATEGY_DEFAULTS_PATH,)
         )
         _stop_settings_checked[0] = now
         _stop_settings_checked[1] = key
@@ -283,13 +321,19 @@ def evaluate_rule_signal(
     if name not in RULE_PARAMETERS:
         return None
     # Intraday holdings are closed after a fixed number of sessions, like the swing exits. There is no end-of-day flatten.
-    if name.startswith("intraday_") and position_qty and entry_at and bars:
+    # Weekly holdings use their own maximum_holding_sessions.
+    holding_limit = None
+    if name.startswith("intraday_"):
+        holding_limit = INTRADAY_MAX_HOLDING_SESSIONS
+    elif name in WEEKLY_RULE_NAMES:
+        holding_limit = int((parameters or ALGO_DEFAULT_PARAMETERS.get(name, {})).get("maximum_holding_sessions", 10))
+    if holding_limit is not None and position_qty and entry_at and bars:
         held = _sessions_after_entry(entry_at, bars[-1].get("t"))
-        if held is not None and held >= INTRADAY_MAX_HOLDING_SESSIONS:
+        if held is not None and held >= holding_limit:
             action = "sell" if position_qty > 0 else "cover"
             return Signal(
                 ticker, action, name,
-                f"held {INTRADAY_MAX_HOLDING_SESSIONS} sessions after entry; maximum holding reached",
+                f"held {holding_limit} sessions after entry; maximum holding reached",
                 0.9,
             )
     runtime_enabled = None
@@ -342,7 +386,7 @@ def evaluate_rule_signal(
         # The swing momentum implementation ranks the full universe in one pass.
         return None
 
-    if name == "intraday_mean_reversion" and params.get("signal_model", "bollinger") == "opening_dip":
+    if name in {"intraday_mean_reversion", "weekly_mean_reversion"} and params.get("signal_model", "bollinger") == "average_24h":
         if not position_qty:
             regime_filter = params.get("regime_filter", "none")
             values = closes(bars)
@@ -354,7 +398,7 @@ def evaluate_rule_signal(
                 trend_strength = adx(bars, int(params.get("adx_period", 14)))
                 if trend_strength is None or trend_strength > float(params.get("adx_max", 20.0)):
                     return None
-        return _opening_dip(ticker, bars, params, position_qty=position_qty)
+        return _average_reversion(ticker, bars, params, position_qty=position_qty, strategy=name)
 
     if name == "intraday_trend_following":
         confirmation = int(params.get("confirmation_bars", 1))
@@ -371,15 +415,21 @@ def evaluate_rule_signal(
     if runtime_enabled is not None:
         evaluation_kwargs["runtime_enabled_override"] = runtime_enabled
     signal = evaluate_strategy(name, "algo", ticker, bars, position_qty, **evaluation_kwargs)
-    if signal is None or name not in {"intraday_trend_following", "intraday_momentum"}:
+    if signal is None or name not in INTRADAY_TREND_MOMENTUM_AND_WEEKLY:
         return signal
-    if not position_qty and not params.get("enabled", False):
+    if name in WEEKLY_RULE_NAMES:
+        enabled = runtime_enabled_override if runtime_enabled_override is not None else params.get("enabled", False)
+    else:
+        enabled = params.get("enabled", False)
+    if not position_qty and not enabled:
         return None
-    max_extension = float(params.get("max_extension_pct", 0)) if name == "intraday_momentum" else 0
+    max_extension = float(params.get("max_extension_pct", 0)) if name in {"intraday_momentum", "weekly_momentum"} else 0
     if max_extension > 0:
         values = closes(bars)
         average = moving_average(values, 20)
         extension = values[-1] / average - 1 if average else None
         if extension is None or abs(extension) > max_extension:
             return None
+    if name in WEEKLY_RULE_NAMES:
+        return _weekly_strategy_signal(signal, name, params)
     return _intraday_strategy_signal(signal, name)

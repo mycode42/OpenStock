@@ -11,7 +11,7 @@
     "volatility_risk_scales": {
       "calm": 1,
       "elevated": 0.75,
-      "extreme": 0.5,
+      "extreme": 0.6,
       "unknown": 0.5
     }
   },
@@ -255,6 +255,75 @@
       "cooldown_minutes": 7200,
       "horizon": "swing",
       "bar_interval": "1Day"
+    },
+    "weekly_trend_following": {
+      "enabled": true,
+      "regime_weights": {
+        "trending_up": 0.9,
+        "trending_down": 0.9,
+        "range_bound": 0.9,
+        "volatile": 0.2,
+        "ambiguous": 0,
+        "unknown": 0
+      },
+      "max_position_pct": 0.04,
+      "risk_multiplier": 0.5,
+      "risk_scale": 0.9,
+      "hard_stop_pct": 0.06,
+      "trailing_stop_pct": 0.045,
+      "trailing_activation_pct": 0.02,
+      "max_entries_per_day": 2,
+      "max_positions": 7,
+      "minimum_hold_minutes": 0,
+      "cooldown_minutes": 7200,
+      "horizon": "weekly",
+      "bar_interval": "1Hour"
+    },
+    "weekly_momentum": {
+      "enabled": true,
+      "regime_weights": {
+        "trending_up": 0.9,
+        "trending_down": 0.9,
+        "range_bound": 0.9,
+        "volatile": 0.2,
+        "ambiguous": 0,
+        "unknown": 0
+      },
+      "max_position_pct": 0.04,
+      "risk_multiplier": 0.5,
+      "risk_scale": 0.9,
+      "hard_stop_pct": 0.06,
+      "trailing_stop_pct": 0.045,
+      "trailing_activation_pct": 0.02,
+      "max_entries_per_day": 2,
+      "max_positions": 7,
+      "minimum_hold_minutes": 0,
+      "cooldown_minutes": 7200,
+      "horizon": "weekly",
+      "bar_interval": "1Hour"
+    },
+    "weekly_mean_reversion": {
+      "enabled": true,
+      "regime_weights": {
+        "trending_up": 0.9,
+        "trending_down": 0.9,
+        "range_bound": 0.9,
+        "volatile": 0.2,
+        "ambiguous": 0,
+        "unknown": 0
+      },
+      "max_position_pct": 0.04,
+      "risk_multiplier": 0.5,
+      "risk_scale": 0.9,
+      "hard_stop_pct": 0.06,
+      "trailing_stop_pct": 0.045,
+      "trailing_activation_pct": 0.02,
+      "max_entries_per_day": 2,
+      "max_positions": 7,
+      "minimum_hold_minutes": 0,
+      "cooldown_minutes": 7200,
+      "horizon": "weekly",
+      "bar_interval": "1Hour"
     }
   },
   "execution": {

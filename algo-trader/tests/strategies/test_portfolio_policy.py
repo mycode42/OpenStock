@@ -341,28 +341,6 @@ def test_core_rules_emit_mirrored_short_entries():
     assert mean_signal is not None and mean_signal.action == "short"
 
 
-def test_algo_opening_rip_short_uses_mirrored_patient_filters():
-    from strategies.rule_pipeline import evaluate_rule_signal
-
-    bars = [
-        {"t": f"2026-10-07T13:{minute:02d}:00Z", "o": opening, "h": high,
-         "l": low, "c": close, "v": volume}
-        for minute, opening, high, low, close, volume in (
-            (30, 100, 100.5, 99.8, 100, 100),
-            (35, 100, 102, 99.9, 101, 100),
-            (40, 101, 103, 100.8, 102.1, 100),
-            (45, 102, 102.7, 101.8, 102.1, 100),
-            (50, 102.1, 102.4, 101.7, 102, 200),
-        )
-    ]
-
-    signal = evaluate_rule_signal(
-        "intraday_mean_reversion", "AAPL", bars,
-    )
-
-    assert signal is not None
-    assert signal.action == "short"
-    assert "opening rip" in signal.reason
 
 
 def test_momentum_requires_return_and_volume_confirmation():
@@ -394,18 +372,35 @@ def test_regime_filter_prefers_trend_strategies_in_a_rising_market():
     assert regime["active"][0] == "swing_trend_following"
 
 
+def _fixed_defaults(monkeypatch, tmp_path, changes):
+    """Point the live configuration at a temp copy of the defaults with `changes` merged in."""
+    import portfolio.config as portfolio_config
+
+    def merge(base, extra):
+        for key, value in extra.items():
+            if isinstance(value, dict) and isinstance(base.get(key), dict):
+                merge(base[key], value)
+            else:
+                base[key] = value
+        return base
+
+    data = merge(json.loads(portfolio_config.ALGO_STRATEGY_DEFAULTS_PATH.read_text(encoding="utf-8")), changes)
+    path = tmp_path / "algo-strategy-config.default.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(portfolio_config, "ALGO_STRATEGY_DEFAULTS_PATH", path)
+    return path
+
+
 @pytest.mark.parametrize("name", ["intraday_trend_following", "intraday_momentum"])
 def test_intraday_strategies_use_configured_enable_and_risk_limits(name, monkeypatch, tmp_path):
-    config_path = tmp_path / "algo-strategy-config.json"
-    monkeypatch.setattr(portfolio_config, "ALGO_STRATEGY_CONFIG_PATH", config_path)
-    config_path.write_text(json.dumps({"strategies": {name: {"enabled": False}}}))
+    config_path = _fixed_defaults(monkeypatch, tmp_path, {"strategies": {name: {"enabled": False}}})
     monkeypatch.setattr(
         rule_pipeline, "evaluate_strategy",
         lambda strategy, *_args, **_kwargs: Signal("AAPL", "buy", strategy, "test"),
     )
     assert rule_pipeline.evaluate_rule_signal(name, "AAPL", [], {"enabled": True}) is None
 
-    config_path.write_text(json.dumps({"strategies": {name: {"enabled": True}}}))
+    config_path = _fixed_defaults(monkeypatch, tmp_path, {"strategies": {name: {"enabled": True}}})
     signal = rule_pipeline.evaluate_rule_signal(name, "AAPL", [], {"enabled": True})
 
     assert signal is not None

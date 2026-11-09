@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+from functools import lru_cache
 import json
 import logging
 import os
@@ -33,12 +34,16 @@ RULE_MODULES = {
     "swing_trend_following": trend_following,
     "swing_momentum": momentum,
     "swing_mean_reversion": swing_mean_reversion,
+    "weekly_momentum": momentum,
+    "weekly_mean_reversion": mean_reversion,
 }
 ALGO_RULE_MODULES = {
     "swing_trend_following": swing_trend_following,
     "swing_mean_reversion": swing_mean_reversion,
     "intraday_trend_following": trend_following,
     "intraday_momentum": momentum,
+    "weekly_trend_following": trend_following,
+    "weekly_momentum": momentum,
 }
 # Enable the LLM-signal strategy in Algo mode. The config class itself remains
 # disabled by default for standalone use.
@@ -53,7 +58,8 @@ ALGO_DEFAULT_PARAMETERS = {
     "swing_trend_following": SwingTrendConfig().to_dict(),
     "swing_momentum": SwingMomentumConfig().to_dict(),
     "intraday_mean_reversion": {
-        "signal_model": "opening_dip",
+        "signal_model": "average_24h",
+        "max_reference_slope_pct": 0.005,
         "window": 20,
         "band_width": 2.0,
         "entry_rsi": 32.0,
@@ -85,6 +91,22 @@ ALGO_DEFAULT_PARAMETERS = {
     "intraday_trend_following": {"enabled": True, **DAY_DEFAULT_PARAMETERS["trend_following"]},
     "intraday_momentum": {"enabled": True, **DAY_DEFAULT_PARAMETERS["momentum"]},
 }
+# Weekly tier: the three families on hourly bars (7 per session). Lookbacks are
+# 10-20 sessions (70-140 hourly bars); holds are 3-10 sessions.
+ALGO_DEFAULT_PARAMETERS["weekly_trend_following"] = {
+    "enabled": True, "fast_period": 35, "slow_period": 140,
+    "allow_long": True, "allow_short": True, "maximum_holding_sessions": 10,
+}
+ALGO_DEFAULT_PARAMETERS["weekly_momentum"] = {
+    "enabled": True, "lookback": 70, "minimum_return": 0.03, "minimum_volume_ratio": 1.2,
+    "allow_long": True, "allow_short": True, "maximum_holding_sessions": 10,
+}
+ALGO_DEFAULT_PARAMETERS["weekly_mean_reversion"] = {
+    **deepcopy(ALGO_DEFAULT_PARAMETERS["intraday_mean_reversion"]),
+    "enabled": True, "reference_bars": 70, "slope_lookback_bars": 35,
+    "max_reference_slope_pct": 0.02, "minimum_dip_pct": 0.03, "minimum_rip_pct": 0.03,
+    "minimum_bounce_pct": 0.003, "minimum_fade_pct": 0.003, "maximum_holding_sessions": 10,
+}
 BASE_ALGO_DEFAULT_PARAMETERS = deepcopy(ALGO_DEFAULT_PARAMETERS)
 REGIME_PARAMETER_PROFILES: dict[str, dict[str, dict]] = {}
 ACTIVE_PROFILE_METADATA: dict = {}
@@ -102,7 +124,7 @@ PARAMETER_KEYS = {
     "swing_momentum": set(SwingMomentumConfig.__dataclass_fields__),
     "intraday_mean_reversion": {
         "window", "band_width", "entry_rsi", "exit_rsi", "signal_model",
-        "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes",
+        "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes", "max_reference_slope_pct",
         "minimum_bounce_pct", "higher_low_bars", "short_entry_rsi", "short_exit_rsi",
         "minimum_rip_pct", "minimum_fade_pct", "lower_high_bars", "allow_long", "allow_short",
         "regime_filter", "efficiency_ratio_period", "efficiency_ratio_max",
@@ -110,6 +132,8 @@ PARAMETER_KEYS = {
         "high_volatility_ratio",
     },
     "swing_multi_factor": set(MULTI_FACTOR_DEFAULT_CONFIG.to_dict()),
+    # Weekly: the same rule parameters on hourly bars, plus the session-based holding limit.
+
     "swing_llm_driven": set(LLM_DEFAULT_CONFIG),
     "swing_mean_reversion": set(SWING_MEAN_REVERSION_DEFAULT_CONFIG),
     "intraday_trend_following": {
@@ -120,6 +144,8 @@ PARAMETER_KEYS = {
         "minimum_short_return", "minimum_short_volume_ratio", "allow_long", "allow_short",
     },
 }
+for _weekly in ("weekly_trend_following", "weekly_momentum", "weekly_mean_reversion"):
+    PARAMETER_KEYS[_weekly] = set(ALGO_DEFAULT_PARAMETERS[_weekly])
 
 
 def validate_parameter_profile(profile: dict) -> dict:
@@ -188,6 +214,7 @@ def validate_parameter_profile(profile: dict) -> dict:
             if key in normalized.get(strategy, {}) and not isinstance(normalized[strategy][key], bool):
                 raise ValueError(f"{strategy} {key} must be a boolean")
     number("intraday_mean_reversion", "window", 20, 5, 200, integer=True)
+    number("intraday_mean_reversion", "max_reference_slope_pct", 0.005, 0.0005, 0.05)
     number("intraday_mean_reversion", "band_width", 2.0, 0.1, 10)
     entry_rsi = number("intraday_mean_reversion", "entry_rsi", 30, 0, 100)
     exit_rsi = number("intraday_mean_reversion", "exit_rsi", 58, 0, 100)
@@ -198,8 +225,8 @@ def validate_parameter_profile(profile: dict) -> dict:
     if short_exit_rsi > short_entry_rsi:
         raise ValueError("mean_reversion RSI values must satisfy short_exit_rsi <= short_entry_rsi")
     model = normalized.get("intraday_mean_reversion", {}).get("signal_model", "bollinger")
-    if not isinstance(model, str) or model not in {"bollinger", "opening_dip"}:
-        raise ValueError("mean_reversion signal_model must be bollinger or opening_dip")
+    if not isinstance(model, str) or model not in {"bollinger", "average_24h"}:
+        raise ValueError("mean_reversion signal_model must be bollinger or average_24h")
     number("intraday_mean_reversion", "minimum_dip_pct", 0, 0, 0.5)
     number("intraday_mean_reversion", "minimum_volume_ratio", 1.2, 0, 20)
     number("intraday_mean_reversion", "entry_window_minutes", 300, 5, 390, integer=True)
@@ -230,6 +257,19 @@ _DROPPED_PROFILE_KEYS_LOGGED: set[tuple[str, str]] = set()
 _SIGNAL_RESERVED_ARGUMENTS = {"ticker", "bars", "position_qty"}
 
 
+@lru_cache(maxsize=None)
+def _signature_names(func) -> tuple[bool, frozenset]:
+    """Whether a signal function takes **kwargs, and the keyword names it accepts. Computed once per function."""
+    parameters = list(inspect.signature(func).parameters.values())
+    if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters):
+        return True, frozenset()
+    names = {
+        param.name for param in parameters
+        if param.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+    } - _SIGNAL_RESERVED_ARGUMENTS
+    return False, frozenset(names)
+
+
 def _accepted_signal_kwargs(func, values: dict, strategy: str) -> dict:
     """Keep only the profile keys that a signal function accepts as keywords.
 
@@ -237,13 +277,9 @@ def _accepted_signal_kwargs(func, values: dict, strategy: str) -> dict:
     Such keys are dropped, and each is logged once per scan (the dedupe set is
     cleared by refresh_active_parameter_profile, which runs at scan start).
     """
-    parameters = inspect.signature(func).parameters.values()
-    if any(param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters):
+    accepts_any, accepted_names = _signature_names(func)
+    if accepts_any:
         return dict(values)
-    accepted_names = {
-        param.name for param in parameters
-        if param.kind in {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
-    } - _SIGNAL_RESERVED_ARGUMENTS
     accepted = {key: value for key, value in values.items() if key in accepted_names}
     for key in sorted(set(values) - set(accepted)):
         marker = (strategy, key)
@@ -372,19 +408,25 @@ def evaluate(
         module = ALGO_RULE_MODULES[name]
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
         return module.signal(ticker, bars, position_qty=position_qty, parameters=values)
-    if mode == "algo" and name in {"intraday_trend_following", "intraday_momentum"}:
-        flag = STRATEGY_CATALOG[name].runtime_setting
-        runtime_enabled = runtime_enabled_override
-        if runtime_enabled is None and flag:
-            runtime_enabled = getattr(get_algo_runtime_settings(), flag)
-        # Holdings keep their own exit rules when entries are switched off.
-        if not runtime_enabled and not position_qty:
-            return None
+    if mode == "algo" and name in {"intraday_trend_following", "intraday_momentum", "weekly_trend_following", "weekly_momentum"}:
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
-        if not position_qty and not values.get("enabled", False):
-            return None
+        if name.startswith("weekly_"):
+            # Weekly entries follow their own enabled flag (or a research override); holdings keep their exits.
+            enabled = runtime_enabled_override if runtime_enabled_override is not None else values.get("enabled", False)
+            if not position_qty and not enabled:
+                return None
+        else:
+            flag = STRATEGY_CATALOG[name].runtime_setting
+            runtime_enabled = runtime_enabled_override
+            if runtime_enabled is None and flag:
+                runtime_enabled = getattr(get_algo_runtime_settings(), flag)
+            # Holdings keep their own exit rules when entries are switched off.
+            if not runtime_enabled and not position_qty:
+                return None
+            if not position_qty and not values.get("enabled", False):
+                return None
         module = ALGO_RULE_MODULES[name]
-        call_values = {key: value for key, value in values.items() if key != "enabled"}
+        call_values = {key: value for key, value in values.items() if key not in {"enabled", "maximum_holding_sessions"}}
         call_values = _accepted_signal_kwargs(module.signal, call_values, name)
         signal = module.signal(ticker, bars, position_qty=position_qty, **call_values)
         return replace(signal, strategy=name) if signal is not None else None

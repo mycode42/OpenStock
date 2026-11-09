@@ -44,7 +44,8 @@ REGIME_CONTEXT_WARMUP_DAYS = 450
 # Keep the scheduled research catalog derived from workflow metadata.
 INTRADAY_STRATEGIES = strategy_ids_for_research_workflow("nightly_intraday")
 SWING_STRATEGIES = strategy_ids_for_research_workflow("nightly_swing")
-RESEARCHABLE_STRATEGIES = (*SWING_STRATEGIES, *INTRADAY_STRATEGIES)
+WEEKLY_STRATEGIES = strategy_ids_for_research_workflow("nightly_weekly")
+RESEARCHABLE_STRATEGIES = (*SWING_STRATEGIES, *INTRADAY_STRATEGIES, *WEEKLY_STRATEGIES)
 LLM_RESEARCH_STRATEGIES = strategy_ids_for_research_workflow("llm_research")
 LIVE_RESEARCH_STRATEGIES = tuple(
     strategy for strategy in RESEARCHABLE_STRATEGIES

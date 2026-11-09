@@ -63,7 +63,7 @@ def test_missing_bars_produce_a_structured_strategy_symbol_rejection(monkeypatch
     assert diagnostic["regime"] == "range_bound"
     assert diagnostic["position_qty"] == 0.0
     assert diagnostic["last_close"] is None
-    assert diagnostic["effective_parameters"]["signal_model"] == "opening_dip"
+    assert diagnostic["effective_parameters"]["signal_model"] == "average_24h"
 
 
 def test_evaluator_no_signal_is_distinguished_from_missing_data(monkeypatch):
