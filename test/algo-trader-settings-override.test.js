@@ -1,30 +1,34 @@
-const test = require('node:test');
 const assert = require('node:assert/strict');
-const { minimalOverride, mergeConfig } = require('../server/algo-trader/settings');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
 
-const DEFAULTS = {
-    vrp: { min_iv_minus_rv: 0.04, allowed_regimes: ['range_bound'], enabled: true },
-    risk: { max_contracts_per_trade: 5, max_vega: 0.015 },
-};
+const { loadSettings, writeSettings } = require('../server/algo-trader/settings');
 
-test('minimalOverride keeps only the leaves that differ from the defaults', () => {
-    const settings = {
-        vrp: { min_iv_minus_rv: 0.03, allowed_regimes: ['range_bound'], enabled: true },
-        risk: { max_contracts_per_trade: 5, max_vega: 0.02 },
-    };
-    assert.deepEqual(minimalOverride(settings, DEFAULTS), { vrp: { min_iv_minus_rv: 0.03 }, risk: { max_vega: 0.02 } });
-});
+const REPO = path.resolve(__dirname, '..', 'algo-trader');
 
-test('a value equal to the default is not stored, so later default changes still apply', () => {
-    assert.deepEqual(minimalOverride({ vrp: { enabled: true } }, DEFAULTS), {});
-});
+async function fixtureRoot(t) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'algo-settings-'));
+    t.after(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, 'portfolio'), { recursive: true });
+    for (const name of ['algo-strategy-config.default.json', 'algo-strategy-rules.json']) {
+        await fs.copyFile(path.join(REPO, 'portfolio', name), path.join(root, 'portfolio', name)).catch(() => {});
+    }
+    return root;
+}
 
-test('defaults merged with the minimal override reproduce the full settings exactly', () => {
-    const settings = {
-        vrp: { min_iv_minus_rv: 0.03, allowed_regimes: ['trending_up'], enabled: true },
-        risk: { max_contracts_per_trade: 1, max_vega: 0.015 },
-        new_block: { flag: false },
-    };
-    const override = minimalOverride(settings, DEFAULTS);
-    assert.deepEqual(mergeConfig(DEFAULTS, override), mergeConfig(DEFAULTS, settings));
+test('the live settings are the fixed defaults file, and a write replaces it in full', async t => {
+    const root = await fixtureRoot(t);
+    const defaults = JSON.parse(await fs.readFile(path.join(root, 'portfolio', 'algo-strategy-config.default.json'), 'utf8'));
+    const loaded = await loadSettings(root);
+    assert.deepEqual(loaded, defaults);
+
+    const changed = structuredClone(loaded);
+    changed.strategies.swing_llm_driven.minimum_confidence = 81;
+    await writeSettings(root, changed);
+
+    const onDisk = JSON.parse(await fs.readFile(path.join(root, 'portfolio', 'algo-strategy-config.default.json'), 'utf8'));
+    assert.deepEqual(onDisk, changed);
+    await assert.rejects(fs.access(path.join(root, 'data', 'algo-strategy-config.json')));
 });

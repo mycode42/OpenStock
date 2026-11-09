@@ -1,7 +1,7 @@
 const path = require('node:path');
 const { readCoordinatorState, readJson, safeObject } = require('../algo-trader/io');
 const { attachEuroAmounts, equityStrategyPerformance, optionsStrategyPerformance } = require('../algo-trader/performance');
-const { loadOptionsSettings, loadSettings, mergeConfig, validateSettings, writeOptionsSettings, writeSettings } = require('../algo-trader/settings');
+const { loadOptionsSettings, loadSettings } = require('../algo-trader/settings');
 const { loadRules } = require('../algo-trader/settings-rules');
 const { buildPayload } = require('../algo-trader/equity');
 const { UNIVERSE_HISTORY_RANGES, buildUniversePayload, fetchAlpacaUniverseHistory } = require('../algo-trader/universe');
@@ -52,31 +52,6 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
         catch (error) {
             console.error(`Algo Trader dashboard unavailable: ${error.message}`);
             res.status(503).json({ error: 'Algo Trader data is unavailable' });
-        }
-    });
-
-    app.put('/api/algo-trader/config', async (req, res) => {
-        if (app.locals?.demoMode) return res.status(409).json({ error: 'Algo Trader settings are read-only in demo mode. Complete setup to edit live settings.' });
-        const account = req.query?.account || req.body?.account || 'equity';
-        if (!['equity', 'options'].includes(account)) return res.status(400).json({ error: 'Unsupported Algo Trader account' });
-        try {
-            if (account === 'options') {
-                if (!req.body || !req.body.settings || typeof req.body.settings !== 'object' || Array.isArray(req.body.settings)) throw new Error('settings must be an object');
-                await writeOptionsSettings(root, req.body.settings);
-                res.json({ settings: await loadOptionsSettings(root), applied: 'next options paper scan' });
-                return;
-            }
-            const current = await loadSettings(root);
-            const body = safeObject(req.body);
-            if (!req.body || !req.body.settings || typeof req.body.settings !== 'object' || Array.isArray(req.body.settings)) throw new Error('settings must be an object');
-            const defaults = await readJson(path.join(root, 'portfolio', 'algo-strategy-config.default.json'));
-            const settings = validateSettings(mergeConfig(current, body.settings), defaults, await loadRules(root));
-            await writeSettings(root, settings);
-            res.json({ settings, applied: 'next portfolio scan' });
-        } catch (error) {
-            const isValidationError = /must be|Unsupported setting|Unsupported Algo Trader account|inverted|positive|between/.test(error.message);
-            if (!isValidationError) console.error(`Unable to save Algo Trader settings: ${error.message}`);
-            res.status(isValidationError ? 400 : 503).json({ error: isValidationError ? error.message : 'Algo Trader settings could not be saved' });
         }
     });
 
@@ -163,11 +138,6 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
             res.status(503).json({ error: `Research control is unavailable: ${error.message}` });
         }
     });
-    app.post('/api/algo-trader/research/control/nightly/:name', labWrite(async req => {
-        const enabled = req.body?.enabled;
-        if (typeof enabled !== 'boolean') throw Object.assign(new Error('enabled must be true or false'), { status: 400 });
-        return research.setNightlyEnabled(req.params.name, enabled);
-    }));
     app.post('/api/algo-trader/research/control/kill', labWrite(() => research.killRunningResearch()));
 };
 

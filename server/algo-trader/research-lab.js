@@ -13,6 +13,8 @@ const { loadRules } = require('./settings-rules');
 const { validateSettings, writeSettings } = require('./settings');
 
 const LIMITS = Object.freeze({
+    // Equity lab runs are independent processes, so several can run at once. Options runs stay one at a time.
+    maxParallelEquityRuns: 3,
     maxUnderlyings: 20,
     minFreeMemoryMb: 6144,
     earliestStart: '2020-01-01',
@@ -27,6 +29,7 @@ const EQUITY_STAGES = Object.freeze([
 const EQUITY_STRATEGIES = Object.freeze([
     'swing_trend_following', 'swing_momentum', 'swing_mean_reversion', 'swing_multi_factor',
     'intraday_mean_reversion', 'intraday_trend_following', 'intraday_momentum',
+    'weekly_trend_following', 'weekly_momentum', 'weekly_mean_reversion',
 ]);
 const EVENT_PREFIX = 'LAB_EVENT ';
 const LOG_CHUNK_BYTES = 64 * 1024;
@@ -262,6 +265,15 @@ function parseLabEvents(logText) {
     return events;
 }
 
+// The latest replay progress per replay label (chosen, live, nightly). Each parallel replay keeps its own line.
+function replayProgress(events) {
+    const latest = {};
+    for (const item of events) {
+        if (item.event === 'replay_progress') latest[item.label] = item;
+    }
+    return latest;
+}
+
 function summarizeProgress(events) {
     const done = events.filter(item => item.event === 'underlying_done' || item.event === 'underlying_error');
     const started = events.filter(item => item.event === 'underlying_started').pop();
@@ -348,6 +360,7 @@ class ResearchLab {
         this.spawnImpl = spawnImpl;
         this.meminfoPath = meminfoPath;
         this.children = new Map();
+        this.jobAccounts = new Map();
     }
 
     // Same layering as options/research/runner.py: research defaults, then the portfolio override.
@@ -388,8 +401,15 @@ class ResearchLab {
 
     async startJob(body) {
         const request = validateJobRequest(body, { today: this.now().toISOString().slice(0, 10) });
+        if (request.account === 'equity') {
+            const running = [...this.jobAccounts.values()];
+            if (running.includes('options')) throw new LabError(`research job ${this.activeJob()} is already running`, 409);
+            if (running.length >= LIMITS.maxParallelEquityRuns) {
+                throw new LabError(`${LIMITS.maxParallelEquityRuns} equity lab runs are already running; start another when one finishes`, 409);
+            }
+            return this.startEquityJob(request);
+        }
         if (this.activeJob()) throw new LabError(`research job ${this.activeJob()} is already running`, 409);
-        if (request.account === 'equity') return this.startEquityJob(request);
         // Queued strategies run one after another, each with its own profile, once the job before has finished.
         const queued = request.strategies.slice(1).map(strategy => ({
             account: 'options', strategies: [strategy], underlyings: request.underlyings,
@@ -434,6 +454,7 @@ class ResearchLab {
         };
         await writeJsonAtomic(path.join(dir, 'job.json'), job);
         this.children.set(id, child);
+        this.jobAccounts.set(id, 'options');
         this.queue = queued;
         child.on('error', error => this.finishJob(id, { state: 'failed', error: error.message }));
         child.on('exit', (code, signal) => {
@@ -513,6 +534,7 @@ class ResearchLab {
         };
         await writeJsonAtomic(path.join(dir, 'job.json'), job);
         this.children.set(id, child);
+        this.jobAccounts.set(id, 'equity');
         child.on('error', error => this.finishJob(id, { state: 'failed', error: error.message }));
         child.on('exit', (code, signal) => {
             const state = job.cancel_requested ? 'cancelled' : (code === 0 ? 'finished' : 'failed');
@@ -527,6 +549,7 @@ class ResearchLab {
 
     async finishJob(id, patch) {
         this.children.delete(id);
+        this.jobAccounts.delete(id);
         let job = null;
         try {
             job = await readJsonFile(path.join(this.jobDir(id), 'job.json'), null);
@@ -561,12 +584,13 @@ class ResearchLab {
         const job = await this.readJob(id);
         const log = await this.readLogText(id);
         const events = parseLabEvents(log.text);
-        const stages = job.account === 'equity' ? await this.equityStages(job) : null;
-        return { ...job, progress: summarizeProgress(events), stages, log_bytes: log.size };
+        const replay = replayProgress(events);
+        const stages = job.account === 'equity' ? await this.equityStages(job, replay) : null;
+        return { ...job, progress: summarizeProgress(events), replay, stages, log_bytes: log.size };
     }
 
     // One row per pipeline stage, from the run's stage file. A stage that never ran reads "not run" once the run has finished.
-    async equityStages(job) {
+    async equityStages(job, replay = {}) {
         const progress = await readJsonFile(path.join(this.jobDir(job.id), 'output', 'latest-progress.json'), null) || {};
         const stages = progress.stages || {};
         const perStrategy = progress.strategies || {};
@@ -584,7 +608,14 @@ class ResearchLab {
         });
         const settledCount = rows.filter(row => settled.has(row.status)).length;
         const running = rows.filter(row => row.status === 'running').length;
-        const percent = job.state === 'finished' ? 100 : Math.round(((settledCount + 0.5 * running) / rows.length) * 100);
+        // A running replay stage counts by how far its sessions have got, so the bar moves continuously.
+        const replayFractions = Object.values(replay).map(item => item.fraction);
+        const replayFraction = replayFractions.length ? Math.min(...replayFractions) : null;
+        const runningShare = rows.reduce((sum, row) => {
+            if (row.status !== 'running') return sum;
+            return sum + (row.key === 'portfolio_replay' && replayFraction !== null ? replayFraction : 0.5);
+        }, 0);
+        const percent = job.state === 'finished' ? 100 : Math.round(((settledCount + runningShare) / rows.length) * 100);
         return { rows, percent, current_stage: progress.current_stage ?? null, updated_at: progress.updated_at ?? null };
     }
 
@@ -920,7 +951,7 @@ class ResearchLab {
         await this.checkProfileRanges(Object.fromEntries(preview.strategies.map(item => [item.strategy, item.parameters])));
         const settings = await loadSettings(this.root);
         const defaults = await readJson(path.join(this.root, 'portfolio', 'algo-strategy-config.default.json'));
-        const overridePath = path.join(this.root, 'data', 'algo-strategy-config.json');
+        const overridePath = path.join(this.root, 'portfolio', 'algo-strategy-config.default.json');
         const previousOverride = await readJsonFile(overridePath, null);
         const next = structuredClone(settings);
         for (const item of preview.strategies) next.strategies[item.strategy] = { ...next.strategies[item.strategy], ...item.parameters };
@@ -944,7 +975,7 @@ class ResearchLab {
         const data = await readJsonFile(file, { entries: [] });
         const target = [...data.entries].reverse().find(item => item.action === 'apply_plan' && !item.rolled_back_at);
         if (!target) throw new LabError('there is no applied equity plan to roll back', 409);
-        const overridePath = path.join(this.root, 'data', 'algo-strategy-config.json');
+        const overridePath = path.join(this.root, 'portfolio', 'algo-strategy-config.default.json');
         // Rolling back restores the whole file, so any edit made after the apply would be lost. Refuse unless forced.
         if (!force) {
             if (target.applied_override === undefined) {
@@ -955,11 +986,8 @@ class ResearchLab {
                 throw new LabError(`the settings changed after this apply: ${changed.join(', ')}. Undo those edits first, or roll back anyway with force.`, 409);
             }
         }
-        if (target.previous_override === null) {
-            await fsp.rm(overridePath, { force: true });
-        } else {
-            await writeJsonAtomic(overridePath, target.previous_override);
-        }
+        if (target.previous_override === null) throw new LabError('no earlier settings snapshot was kept for this apply, so it cannot be rolled back', 409);
+        await writeJsonAtomic(overridePath, target.previous_override);
         target.rolled_back_at = this.now().toISOString();
         await writeJsonAtomic(file, data);
         return { rolled_back: target.id, restored_previous: target.previous_override !== null };
@@ -1009,11 +1037,8 @@ class ResearchLab {
         const target = [...data.entries].reverse().find(item => item.action === 'apply_plan' && !item.rolled_back_at);
         if (!target) throw new LabError('there is no applied options plan to roll back', 409);
         const overridePath = optionsConfigPath(this.root);
-        if (target.previous_override === null) {
-            await fsp.rm(overridePath, { force: true });
-        } else {
-            await writeJsonAtomic(overridePath, target.previous_override);
-        }
+        if (target.previous_override === null) throw new LabError('no earlier settings snapshot was kept for this apply, so it cannot be rolled back', 409);
+        await writeJsonAtomic(overridePath, target.previous_override);
         target.rolled_back_at = this.now().toISOString();
         await writeJsonAtomic(file, data);
         return { rolled_back: target.id, restored_previous: target.previous_override !== null };
@@ -1084,8 +1109,17 @@ class ResearchLab {
     }
 
     async overview(account = 'options') {
-        const limits = { maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart, concurrentJobs: 1 };
-        const base = { account, limits, active_job: this.activeJob() };
+        const limits = {
+            maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart,
+            concurrentJobs: account === 'equity' ? LIMITS.maxParallelEquityRuns : 1,
+        };
+        const runningIds = [...this.children.keys()];
+        // Every running job with its own progress, so the page can show parallel runs side by side.
+        const active_jobs = await Promise.all(runningIds.map(async id => {
+            const status = await this.jobStatus(id);
+            return { id, account: status.account, percent: status.stages?.percent ?? null, strategy: status.strategy ?? null };
+        }));
+        const base = { account, limits, active_job: this.activeJob(), active_jobs };
         if (account === 'equity') {
             // Equity panels show the live parameters; equity runs start from the lab in a later step.
             const settings = await loadSettings(this.root);
@@ -1124,14 +1158,13 @@ class ResearchLab {
 module.exports = {
     equityPresetParameters, equityProfileKeys, EQUITY_PRESET_NAMES,
     EQUITY_STRATEGIES,
-    LIMITS,
+    LIMITS, parseLabEvents, replayProgress,
     LabError,
     OPTIONS_STRATEGIES,
     ResearchLab,
     buildJobConfig,
     diffParameters,
     parseFreeMemoryMb,
-    parseLabEvents,
     summarizeProgress,
     tunableKeys,
     validateJobRequest,

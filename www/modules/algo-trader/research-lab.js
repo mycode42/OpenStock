@@ -4,7 +4,7 @@ import { renderSystemGauge, startSystemGauge } from '../system-gauge.js?system-g
 
 // Interactive research: start a run, follow its log, read results, and promote a profile with rollback.
 // The lab keeps its DOM node across the archive refresh, and re-renders only when its own state changes.
-const POLL_MS = 2000;
+const POLL_MS = 1000;
 const LOG_TAIL_LINES = 200;
 
 const state = {
@@ -97,16 +97,31 @@ function renderEquityLive(job) {
         <p class="lab-live-state"><strong>${headline}</strong></p>
         <div class="lab-progress" role="progressbar" aria-label="Run progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${stages.percent}"><div style="width:${stages.percent}%"></div></div>
         <p class="lab-muted">${stages.percent}%${stages.current_stage ? ` · stage ${escapeHtml(stages.current_stage.replaceAll('_', ' '))}` : ''}</p>
+        ${renderReplayDetail(job)}
         <ol class="lab-stages">${rows}</ol>
         ${running ? '<button type="button" class="btn btn-secondary" data-lab-action="cancel">Cancel run</button>' : ''}
         ${renderLogToggle()}
     </div>`;
 }
 
+// The other equity runs going at the same time, each with its own bar.
+function renderOtherRuns() {
+    const others = (state.overview?.active_jobs || []).filter(item => item.id !== state.job?.id && item.account === state.account);
+    if (!others.length) return '';
+    const rows = others.map(item => `<li><span>${escapeHtml(item.id)}</span><div class="lab-progress"><div style="width:${item.percent ?? 0}%"></div></div><span class="lab-muted">${item.percent ?? 0}%</span></li>`).join('');
+    return `<div class="lab-other-runs"><p class="lab-muted">Also running</p><ul>${rows}</ul></div>`;
+}
+
+function renderReplayDetail(job) {
+    const replays = Object.values(job.replay || {});
+    if (!replays.length || !isRunning(job)) return '';
+    return replays.map(item => `<p class="lab-muted">${escapeHtml(item.label)}: ${item.sessions_done} of ${item.sessions_total} sessions${item.through ? `, through ${escapeHtml(item.through)}` : ''} · about ${Math.max(0, Math.round(item.remaining_seconds))}s left</p>`).join('');
+}
+
 function renderLive() {
     const job = state.job;
     if (!job || job.account !== state.account) return '<p class="lab-muted">No run in this session yet.</p>';
-    if (job.account === 'equity' && job.stages) return renderEquityLive(job);
+    if (job.account === 'equity' && job.stages) return renderEquityLive(job) + renderOtherRuns();
     const progress = job.progress || {};
     const extras = [
         progress.current ? `now ${escapeHtml(progress.current)}` : '',
@@ -163,7 +178,7 @@ function renderRunTable() {
 }
 
 function renderEquityStart() {
-    const busy = Boolean(state.overview.active_job);
+    const busy = (state.overview.active_jobs || []).length >= (state.overview.limits?.concurrentJobs || 1);
     const picked = state.picks.equity.length;
     return `<form class="lab-form" data-lab-form="start-equity">
         ${renderRunTable()}
@@ -342,7 +357,7 @@ function renderResults() {
 }
 
 function renderStartForm() {
-    const busy = Boolean(state.overview.active_job);
+    const busy = (state.overview.active_jobs || []).length >= (state.overview.limits?.concurrentJobs || 1);
     const picked = state.picks.options.length;
     const queued = (state.overview.queued || []);
     return `<form class="lab-form" data-lab-form="start">
@@ -455,6 +470,11 @@ async function pollJob() {
         state.results = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(id)}/results`);
         state.message = `Run ${job.state}.`;
         return refreshOverview();
+    }
+    state.pollTick = (state.pollTick || 0) + 1;
+    if (state.pollTick % 3 === 0) {
+        const overview = await apiRequest(`/algo-trader/research/lab?account=${encodeURIComponent(state.account)}`);
+        if (overview && overview.account === state.account) state.overview = overview;
     }
     // Only the live panel updates while a run is going, so the form and any typing are untouched.
     renderLiveOnly();

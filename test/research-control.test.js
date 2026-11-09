@@ -33,20 +33,6 @@ test('state reports each nightly timer as enabled and each service as running', 
     assert.equal(state.running, true);
 });
 
-test('pausing and enabling a nightly job enables or disables its timer now', async () => {
-    const fake = fakeRunner({ enabled: {}, active: {}, pids: [], commands: [] });
-    await control.setNightlyEnabled('equity', true, { runner: fake.runner });
-    await control.setNightlyEnabled('equity', false, { runner: fake.runner });
-    assert.ok(fake.calls.includes('systemctl --user enable --now equity-research.timer'));
-    assert.ok(fake.calls.includes('systemctl --user disable --now equity-research.timer'));
-});
-
-test('an unknown nightly job is refused before any systemctl call', async () => {
-    const fake = fakeRunner({ enabled: {}, active: {}, pids: [], commands: [] });
-    await assert.rejects(control.setNightlyEnabled('llm', true, { runner: fake.runner }), error => error.status === 400);
-    assert.equal(fake.calls.length, 0);
-});
-
 test('kill stops running nightly services and terminates matching research processes', async () => {
     const fake = fakeRunner({ enabled: {}, active: { 'equity-research.service': true }, pids: [4242, 4343], commands: [[4242, 'python3'], [4343, 'bash']] });
     const signals = [];

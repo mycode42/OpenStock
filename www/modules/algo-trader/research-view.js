@@ -42,12 +42,7 @@ function renderResearchControl(control) {
     const note = control.available === false
         ? '<p class="research-control-note">Research control runs on the server, not in the demo.</p>'
         : '';
-    const switches = (control.nightly || []).map(job => `<label class="research-switch">
-            <input type="checkbox" role="switch" data-research-nightly="${escapeHtml(job.key)}" ${job.enabled ? 'checked' : ''} ${control.available === false ? 'disabled' : ''}>
-            <span><strong>${escapeHtml(job.label)}</strong><small>${escapeHtml(job.when)} · ${job.enabled ? 'on' : 'paused'}${job.running ? ' · running now' : ''}</small></span>
-        </label>`).join('');
     return `<section class="card algo-panel research-control" aria-label="Research control">
-        <div class="research-control-switches">${switches}</div>
         <div class="research-control-actions">
             <span class="research-control-status">${control.running ? 'Research is running now.' : 'No research is running.'}</span>
             <button type="button" class="btn btn-secondary" data-research-control="kill" ${control.running && control.available !== false ? '' : 'disabled'}>Kill running research</button>

@@ -35,7 +35,10 @@
     "entry_rsi",
     "exit_rsi",
     "minimum_dip_pct",
-    "minimum_bounce_pct"
+    "minimum_bounce_pct",
+    "max_reference_slope_pct",
+    "regime_filter",
+    "efficiency_ratio_max"
   ],
   "intraday_trend_following": [
     "fast_period",
@@ -45,5 +48,21 @@
     "lookback",
     "minimum_return",
     "minimum_volume_ratio"
+  ],
+  "weekly_trend_following": [
+    "fast_period",
+    "slow_period"
+  ],
+  "weekly_momentum": [
+    "lookback",
+    "minimum_return"
+  ],
+  "weekly_mean_reversion": [
+    "reference_bars",
+    "minimum_dip_pct",
+    "minimum_bounce_pct",
+    "max_reference_slope_pct",
+    "regime_filter",
+    "efficiency_ratio_max"
   ]
 }

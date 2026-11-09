@@ -219,76 +219,10 @@ test('equity payload reports entries paused while the market is closed, even if 
   assert.deepEqual(res.body.account.entry_pause_reasons, ['Equity market is closed']);
 });
 
-test('options settings save to their own config without changing equity overrides', async t => {
-  const originalEnv = {
-    account: process.env.ALPACA_OPTIONS_ACCOUNT_ID,
-    config: process.env.ALPACA_OPTIONS_CONFIG,
-    feed: process.env.ALPACA_OPTIONS_FEED,
-  };
-  delete process.env.ALPACA_OPTIONS_ACCOUNT_ID;
-  delete process.env.ALPACA_OPTIONS_CONFIG;
-  delete process.env.ALPACA_OPTIONS_FEED;
-  t.after(() => {
-    for (const [key, value] of Object.entries({
-      ALPACA_OPTIONS_ACCOUNT_ID: originalEnv.account,
-      ALPACA_OPTIONS_CONFIG: originalEnv.config,
-      ALPACA_OPTIONS_FEED: originalEnv.feed,
-    })) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  });
-
+test('the dashboard has no settings write route; settings change only through the research lab', async t => {
   const root = await fixture(t);
   const handlers = routeHandlers(root);
-  const res = response();
-  await handlers['PUT /api/algo-trader/config']({
-    query: { account: 'options' }, body: { settings: { ...optionsDefaults, enabled: false } },
-  }, res);
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.settings.enabled, false);
-  const savedOptions = JSON.parse(await fs.readFile(path.join(root, 'data', 'options', 'config.json'), 'utf8'));
-  // Only the changed value is stored; defaults such as max_iv_to_realized_ratio stay in the defaults file.
-  assert.deepEqual(savedOptions, { enabled: false });
-  await assert.rejects(fs.access(path.join(root, 'data', 'dashboard-runtime-overrides.json')));
-});
-
-test('options settings accept a positive nullable IV ratio and reject zero', async t => {
-  const originalEnv = {
-    account: process.env.ALPACA_OPTIONS_ACCOUNT_ID,
-    config: process.env.ALPACA_OPTIONS_CONFIG,
-    feed: process.env.ALPACA_OPTIONS_FEED,
-  };
-  delete process.env.ALPACA_OPTIONS_ACCOUNT_ID;
-  delete process.env.ALPACA_OPTIONS_CONFIG;
-  delete process.env.ALPACA_OPTIONS_FEED;
-  t.after(() => {
-    for (const [key, value] of Object.entries({
-      ALPACA_OPTIONS_ACCOUNT_ID: originalEnv.account,
-      ALPACA_OPTIONS_CONFIG: originalEnv.config,
-      ALPACA_OPTIONS_FEED: originalEnv.feed,
-    })) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  });
-
-  const root = await fixture(t);
-  const handlers = routeHandlers(root);
-  const positive = response();
-  await handlers['PUT /api/algo-trader/config']({
-    query: { account: 'options' }, body: { settings: { ...optionsDefaults, long_volatility: { max_iv_to_realized_ratio: 1.5 } } },
-  }, positive);
-  assert.equal(positive.statusCode, 200);
-  assert.equal(positive.body.settings.long_volatility.max_iv_to_realized_ratio, 1.5);
-
-  const zero = response();
-  await handlers['PUT /api/algo-trader/config']({
-    query: { account: 'options' }, body: { settings: { ...optionsDefaults, long_volatility: { max_iv_to_realized_ratio: 0 } } },
-  }, zero);
-  assert.equal(zero.statusCode, 400);
-  assert.match(zero.body.error, /must be null or positive/);
+  assert.equal(handlers['PUT /api/algo-trader/config'], undefined);
 });
 
 test('equity strategy performance combines realized and open P/L and keeps unpriced activity partial', () => {

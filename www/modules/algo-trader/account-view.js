@@ -18,7 +18,7 @@ export function renderAccountLoading({ mode, loading, error }) {
     return `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountModeSwitch(mode)}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(error || 'Loading the paper-account snapshot and coordinator data.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
 }
 
-export function renderAccountPage({ mode, snapshot, settings, range, activityPage, charts, renderConfig }) {
+export function renderAccountPage({ mode, snapshot, settings, range, activityPage, charts }) {
     const isOptions = mode === 'options';
     const account = snapshot.account || {};
     const demoMode = snapshot.demo_mode === true;
@@ -97,7 +97,6 @@ export function renderAccountPage({ mode, snapshot, settings, range, activityPag
                 <div class="algo-strategy-score"><div class="algo-score-ring"><span>${account.active_strategies?.length ?? 0}</span><small>/strats</small></div><div><strong>${escapeHtml(strategyListLabel)}</strong><span>${isOptions ? escapeHtml(strategyScope) : strategyScope}</span></div></div>
                 <div class="algo-active-strategy-list">${(account.active_strategies || []).map(strategy => `<span>${escapeHtml(strategy)}</span>`).join('') || `<span class="algo-muted-text">${escapeHtml(noStrategiesMessage)}</span>`}</div>
                 <div class="algo-strategy-list"><div><span>Last scan</span><strong>${escapeHtml(dateTime(account.last_scan_at))}</strong></div><div><span>Account mode</span><strong>${demoMode ? 'Simulated demo' : `Alpaca ${isOptions ? 'options ' : ''}paper`}</strong></div><div><span>Sharpe ratio</span><strong>${metrics.sharpe_ratio === null ? '—' : metrics.sharpe_ratio.toFixed(2)} <small>${demoMode ? 'sample series' : 'snapshot based'}</small></strong></div></div>
-                ${demoMode ? '' : `<button type="button" class="algo-text-link" data-action="open-config">Manage ${isOptions ? 'options' : 'runtime'} settings <span>↗</span></button>`}
             </article>
         </section>
 

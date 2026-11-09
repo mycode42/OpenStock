@@ -19,6 +19,9 @@ const EQUITY_STRATEGY_LABELS = Object.freeze({
     intraday_momentum: 'Intraday Momentum',
     swing_multi_factor: 'Swing Multi-Factor',
     swing_llm_driven: 'Swing LLM-Driven',
+    weekly_trend_following: 'Weekly Trend Following',
+    weekly_momentum: 'Weekly Momentum',
+    weekly_mean_reversion: 'Weekly Mean Reversion',
 });
 const OPTIONS_STRATEGY_ALIASES = Object.freeze({
     vrp: 'options_vrp',

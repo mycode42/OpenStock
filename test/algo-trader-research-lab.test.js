@@ -149,32 +149,36 @@ test('profiles accept only tunable grid keys and refuse duplicates', async t => 
     await assert.rejects(lab.saveProfile({ strategy: 'vrp', name: 'bad name', parameters: { min_iv_minus_rv: 0.03 } }), /letters/);
 });
 
-test('promote writes only the changed keys and rollback restores the previous state', async t => {
+test('promote writes the changed value into the fixed options file and rollback restores the previous state', async t => {
     const { root, meminfo } = fixtureRoot(t);
+    const { optionsConfigPath } = require('../server/algo-trader/settings');
     const lab = new ResearchLab({ root, meminfoPath: meminfo });
     await lab.saveProfile({ strategy: 'vrp', name: 'tight', parameters: { min_iv_minus_rv: 0.03 } });
     const preview = await lab.promotePreview('vrp', 'tight');
     assert.equal(preview.changes, 1);
+    const defaults = JSON.parse(fs.readFileSync(path.join(root, 'options', 'config.default.json'), 'utf8'));
 
     await lab.promote('vrp', 'tight');
-    const override = JSON.parse(fs.readFileSync(path.join(root, 'data', 'options', 'config.json'), 'utf8'));
-    assert.deepEqual(Object.keys(override), ['vrp']);
-    assert.deepEqual(override.vrp, { min_iv_minus_rv: 0.03 });
+    const applied = JSON.parse(fs.readFileSync(optionsConfigPath(root), 'utf8'));
+    assert.equal(applied.vrp.min_iv_minus_rv, 0.03);
+    assert.deepEqual({ ...applied, vrp: null }, { ...defaults, vrp: null });
 
     await lab.rollback('vrp');
-    const restored = JSON.parse(fs.readFileSync(path.join(root, 'data', 'options', 'config.json'), 'utf8'));
-    assert.deepEqual(restored.vrp, {});
+    assert.deepEqual(JSON.parse(fs.readFileSync(optionsConfigPath(root), 'utf8')), defaults);
     await assert.rejects(lab.rollback('vrp'), /nothing to roll back/);
 });
 
-test('promote keeps existing override values and rollback puts them back', async t => {
+test('promote keeps existing values and rollback puts them back', async t => {
     const { root, meminfo } = fixtureRoot(t);
-    fs.writeFileSync(path.join(root, 'data', 'options', 'config.json'), JSON.stringify({ vrp: { min_iv_minus_rv: 0.05 } }));
+    const { optionsConfigPath } = require('../server/algo-trader/settings');
+    const current = JSON.parse(fs.readFileSync(optionsConfigPath(root), 'utf8'));
+    current.vrp.min_iv_minus_rv = 0.05;
+    fs.writeFileSync(optionsConfigPath(root), JSON.stringify(current));
     const lab = new ResearchLab({ root, meminfoPath: meminfo });
     await lab.saveProfile({ strategy: 'vrp', name: 'tight', parameters: { min_iv_minus_rv: 0.03 } });
     await lab.promote('vrp', 'tight');
     await lab.rollback('vrp');
-    const restored = JSON.parse(fs.readFileSync(path.join(root, 'data', 'options', 'config.json'), 'utf8'));
+    const restored = JSON.parse(fs.readFileSync(optionsConfigPath(root), 'utf8'));
     assert.equal(restored.vrp.min_iv_minus_rv, 0.05);
 });
 
@@ -215,7 +219,7 @@ test('the demo lab shows the sample profiles of every equity strategy and refuse
     const overview = demo.labOverview('equity');
     assert.equal(overview.read_only, true);
     assert.equal(overview.start_available, false);
-    assert.equal(overview.strategies.length, 7);
+    assert.equal(overview.strategies.length, 10);
     for (const strategy of overview.strategies) {
         assert.deepEqual(strategy.profiles.map(profile => profile.name), ['standard', 'conservative', 'high-risk'], strategy.id);
         assert.ok(strategy.tunable.length > 0, strategy.id);
@@ -265,7 +269,7 @@ test('overview returns one strategies list per account; every equity strategy li
     assert.equal(options.limits.maxUnderlyings, 20);
     const equity = await lab.overview('equity');
     assert.equal(equity.start_available, false);
-    assert.equal(equity.strategies.length, 7);
+    assert.equal(equity.strategies.length, 10);
     assert.ok(equity.strategies.every(item => item.account === 'equity' && item.profiles.map(profile => profile.name).join(',') === 'standard,conservative,high-risk'));
     await assert.rejects(lab.overview('crypto'), /account must be/);
 });
@@ -413,8 +417,8 @@ test('rolling back an equity plan refuses when settings were edited after the ap
     const before = (await loadSettings(root)).strategies.swing_momentum.max_position_pct;
     await lab.setPlan('equity', { swing_momentum: 'conservative' });
     await lab.equityPlanApply();
-    // A later hand edit to a stop-loss, written to the same override file the apply wrote.
-    const overridePath = path.join(root, 'data', 'algo-strategy-config.json');
+    // A later hand edit to a stop-loss, written to the same fixed file the apply wrote.
+    const overridePath = path.join(root, 'portfolio', 'algo-strategy-config.default.json');
     const edited = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
     edited.strategies.swing_momentum.hard_stop_pct = 0.05;
     fs.writeFileSync(overridePath, JSON.stringify(edited));
@@ -424,11 +428,12 @@ test('rolling back an equity plan refuses when settings were edited after the ap
     assert.equal((await loadSettings(root)).strategies.swing_momentum.max_position_pct, before);
 });
 
-test('an options plan applies as one change to the options override and rolls back to the previous file', async t => {
+test('an options plan applies as one change to the fixed options file and rolls back to the previous file', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const { optionsConfigPath } = require('../server/algo-trader/settings');
     const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
     const overridePath = optionsConfigPath(root);
+    const before = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
     await lab.setPlan('options', { vrp: 'conservative' });
     const preview = await lab.planPreview('options');
     assert.ok(preview.changes > 0);
@@ -437,7 +442,7 @@ test('an options plan applies as one change to the options override and rolls ba
     const applied = JSON.parse(fs.readFileSync(overridePath, 'utf8'));
     assert.equal(applied.vrp.min_iv_minus_rv, preview.strategies[0].parameters.min_iv_minus_rv);
     await lab.planRollback('options');
-    assert.equal(fs.existsSync(overridePath), false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(overridePath, 'utf8')), before);
     await assert.rejects(lab.planRollback('options'), /no applied options plan/);
 });
 
@@ -461,4 +466,32 @@ test('several options strategies run one after another, each with its own profil
     assert.equal(children.length, 2);
     assert.equal(children[1].args[children[1].args.indexOf('--strategy') + 1], 'long_volatility');
     assert.deepEqual((await lab.overview('options')).queued, []);
+});
+
+test('up to three equity lab runs go in parallel; a fourth waits, and options runs stay exclusive', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const { spawnImpl, calls } = stubSpawn();
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', spawnImpl, meminfoPath: meminfo, nightlyRunning: async () => false });
+    const request = { account: 'equity', strategies: ['swing_momentum'], underlyings: ['SPCX'], start: '2023-01-01', end: '2026-06-30' };
+    await lab.startJob(request);
+    await lab.startJob(request);
+    await lab.startJob(request);
+    await assert.rejects(lab.startJob(request), err => err.status === 409 && /3 equity lab runs are already running/.test(err.message));
+    assert.equal(calls.length, 3);
+    const overview = await lab.overview('equity');
+    assert.equal(overview.active_jobs.length, 3);
+    assert.equal(overview.limits.concurrentJobs, 3);
+    await assert.rejects(lab.startJob({ ...request, account: 'options', strategies: ['vrp'] }), err => err.status === 409);
+});
+
+test('a parallel lab run reports replay progress for each replay it runs', () => {
+    const log = [
+        'LAB_EVENT {"event":"replay_progress","label":"chosen","sessions_done":10,"sessions_total":40,"fraction":0.25,"through":"2025-02-14","remaining_seconds":30}',
+        'LAB_EVENT {"event":"replay_progress","label":"live","sessions_done":12,"sessions_total":40,"fraction":0.3,"through":"2025-02-18","remaining_seconds":28}',
+        'LAB_EVENT {"event":"replay_progress","label":"chosen","sessions_done":20,"sessions_total":40,"fraction":0.5,"through":"2025-03-14","remaining_seconds":20}',
+    ].join('\n');
+    const { replayProgress, parseLabEvents } = require('../server/algo-trader/research-lab');
+    const latest = replayProgress(parseLabEvents(log));
+    assert.equal(latest.chosen.sessions_done, 20);
+    assert.equal(latest.live.sessions_done, 12);
 });

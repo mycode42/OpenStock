@@ -68,13 +68,6 @@ async function researchState({ runner = defaultRunner } = {}) {
     }
 }
 
-async function setNightlyEnabled(key, enabled, { runner = defaultRunner } = {}) {
-    const job = NIGHTLY[nightlyKey(key)];
-    // Disabling the timer stops only future runs. A run already in progress is left to finish or be killed.
-    await systemctl(runner, [enabled ? 'enable' : 'disable', '--now', job.timer]);
-    return nightlyState(runner, key);
-}
-
 async function researchPythonPids(runner, pids) {
     if (!pids.length) return [];
     const listed = String(await runner('ps', ['-o', 'pid=,comm=', '-p', pids.join(',')]));
@@ -110,4 +103,4 @@ function demoState() {
     return { available: false, nightly, running: false };
 }
 
-module.exports = { hasNoUserSession, NIGHTLY, RESEARCH_PROCESS, researchState, setNightlyEnabled, killRunningResearch, nightlyKey, demoState };
+module.exports = { hasNoUserSession, NIGHTLY, RESEARCH_PROCESS, researchState, killRunningResearch, nightlyKey, demoState };

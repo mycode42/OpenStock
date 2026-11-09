@@ -138,19 +138,85 @@
         "entry_rsi": 32,
         "exit_rsi": 58,
         "minimum_dip_pct": 0.014,
-        "minimum_bounce_pct": 0.002
+        "minimum_bounce_pct": 0.002,
+        "max_reference_slope_pct": 0.005,
+        "regime_filter": "none",
+        "efficiency_ratio_max": 0.35
       },
       "conservative": {
         "entry_rsi": 25,
         "exit_rsi": 55,
         "minimum_dip_pct": 0.02,
-        "minimum_bounce_pct": 0.003
+        "minimum_bounce_pct": 0.003,
+        "max_reference_slope_pct": 0.003,
+        "regime_filter": "er",
+        "efficiency_ratio_max": 0.3
       },
       "high-risk": {
         "entry_rsi": 38,
         "exit_rsi": 62,
         "minimum_dip_pct": 0.008,
-        "minimum_bounce_pct": 0.001
+        "minimum_bounce_pct": 0.001,
+        "max_reference_slope_pct": 0.008,
+        "regime_filter": "none",
+        "efficiency_ratio_max": 0.35
+      }
+    },
+    "weekly_trend_following": {
+      "standard": {
+        "fast_period": 35,
+        "slow_period": 140
+      },
+      "conservative": {
+        "fast_period": 45,
+        "slow_period": 140
+      },
+      "high-risk": {
+        "fast_period": 25,
+        "slow_period": 100
+      }
+    },
+    "weekly_momentum": {
+      "standard": {
+        "lookback": 70,
+        "minimum_return": 0.03,
+        "minimum_volume_ratio": 1.2
+      },
+      "conservative": {
+        "lookback": 70,
+        "minimum_return": 0.05,
+        "minimum_volume_ratio": 1.5
+      },
+      "high-risk": {
+        "lookback": 35,
+        "minimum_return": 0.02,
+        "minimum_volume_ratio": 1.0
+      }
+    },
+    "weekly_mean_reversion": {
+      "standard": {
+        "reference_bars": 70,
+        "minimum_dip_pct": 0.03,
+        "minimum_bounce_pct": 0.003,
+        "max_reference_slope_pct": 0.02,
+        "regime_filter": "none",
+        "efficiency_ratio_max": 0.35
+      },
+      "conservative": {
+        "reference_bars": 70,
+        "minimum_dip_pct": 0.04,
+        "minimum_bounce_pct": 0.004,
+        "max_reference_slope_pct": 0.012,
+        "regime_filter": "er",
+        "efficiency_ratio_max": 0.3
+      },
+      "high-risk": {
+        "reference_bars": 35,
+        "minimum_dip_pct": 0.02,
+        "minimum_bounce_pct": 0.002,
+        "max_reference_slope_pct": 0.03,
+        "regime_filter": "none",
+        "efficiency_ratio_max": 0.35
       }
     }
   },

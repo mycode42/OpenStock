@@ -68,12 +68,13 @@
   },
   "intraday_mean_reversion": {
     "entry": [
-      "Within {entry_window_minutes} minutes of the open, the price is at least {minimum_dip_pct} below the open.",
-      "The bar closes above the previous close, after a higher low, with a bounce of at least {minimum_bounce_pct} off the low (short: a lower high after a rip).",
-      "Entries are capped per day by the strategy's daily entry limit, so a stock can dip several times in one session."
+      "Continuously, on 5-minute bars: the reference is the average close of the last 21 bars.",
+      "Slope filter: the reference may move at most {max_reference_slope_pct} over the last 5 bars, so a steep trend is not faded.",
+      "Dip: the price is at least {minimum_dip_pct} below the reference, closing above the previous close after a higher low, with a bounce of at least {minimum_bounce_pct} off the low. Spike: the mirror image, at least {minimum_rip_pct} above it.",
+      "Efficiency-ratio filter (when set to er): smooth trends are skipped. Volume is at least {minimum_volume_ratio} times its average, and entries are capped per day."
     ],
     "exit": [
-      "The price recovers to the session open, a stop, or a forced exit three sessions after entry."
+      "The price is back at the 21-bar average, a stop, or a forced exit three sessions after entry."
     ]
   }
 }
