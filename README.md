@@ -3,7 +3,7 @@
 **A self-hosted stock dashboard, trading journal, and algo trading built on Alpaca.**
 
 
-> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.3.0.
+> **Changelog:** [CHANGELOG.md](CHANGELOG.md) lists every release, the dashboard and the Algo Trader together. Latest: 3.4.0.
 
 > **Public demo:** https://demo.openstock-trading.com/ runs the same interface on simulated data. No broker is contacted. Settings are read-only and research runs are disabled there.
 

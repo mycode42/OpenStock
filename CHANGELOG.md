@@ -2,10 +2,22 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
-## Unreleased
+## 3.4.0 - 2026-11-09
+
+### Added
+
+- Weekly tier: trend, momentum and mean reversion on hourly bars, built from regular-session five-minute bars anchored at the 09:30 ET open. Lookbacks are 10 to 20 sessions and holds 3 to 10 sessions. Enabled for live trading. Live hourly bars are seeded from the local market store and extended from Alpaca incrementally (cold start about 5 seconds).
+- Tier allocation budgets: intraday 7%, weekly 20% and swing 30% of equity. A new entry is trimmed to the tier's remaining room, and rejected with "tier allocation budget is full" when less than one share fits. Approved in docs/policy-frozen.md.
+- Intraday mean reversion: a 21-bar reference with a slope filter and an efficiency-ratio filter, both available as profile keys.
+- Research lab: per-session replay progress for lab runs, up to three equity runs at once, and the chosen-profile and live-settings replays run in parallel.
 
 ### Changed
 
+- Settings are one fixed file per account. The override layers are removed, and lab Apply writes the fixed files. The runtime settings panel is removed from the equity and options views, so strategies are changed in the research lab.
+- Nightly research is replay-only. Its on/off switches are removed, and the nightly timers stay on.
+- Intraday holdings are closed after three sessions.
+- Replay speed: the market-store coverage summary is cached, the configuration is shared rather than copied on each call, and closes() is compiled with a Python fallback.
+- The configure page and its cards use the standard theme colours. The hover glow and lime tint are removed.
 - One data folder: `data/` at the repository root holds the Algo Trader's data, and `algo-trader/data` is a symlink to it. The four stale root files (`auth.json`, `preferences.json`, `server.log`, `server.pid`) moved to `data/root-legacy/` and were not read by any code. `data/demo/` stays where it was.
 - The Algo Trader's README and `.env.example` are removed. Their setup is in `algo-trader/docs/setup.md`, its credits are in the root README, and the Theta and LLM settings are in the root `.env.example`. The subtree's MIT `LICENSE` stays, because the MIT terms require it.
 
