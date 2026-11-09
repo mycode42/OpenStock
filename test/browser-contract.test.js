@@ -72,7 +72,9 @@ test('Configure page manages Alpaca alert levels without a broker configuration 
     assert.match(index, /id="page-config"/);
     assert.match(app, /modules\/config\.js/);
     assert.doesNotMatch(app, /broker-profile|trade_republic/);
-    assert.doesNotMatch(config, /trade_republic|\/stocks|instruments\/resolve/);
+    assert.doesNotMatch(config, /trade_republic|instruments\/resolve/);
+    // Adding a stock posts to the endpoint that checks the symbol against Alpaca's asset list.
+    assert.match(config, /mutate\('\/stocks', \{\s*method: 'POST'/);
     assert.match(config, /\/alpaca\/alert-levels\/\$\{encodeURIComponent\(levelId\)\}\/order/);
 });
 

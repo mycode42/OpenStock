@@ -4,6 +4,7 @@ const { timingSafeEqual } = require('node:crypto');
 const { rawDatabase, alpacaJournalData } = require('../alpaca-profile');
 const orders = require('../../lib/alpaca-orders');
 const levels = require('../../lib/alpaca-alert-levels');
+const watchlist = require('../../lib/alpaca-watchlist');
 
 function orderFailure(res, error) {
     const status = error.status || 502;
@@ -72,6 +73,18 @@ module.exports = function registerAlpacaRoutes({ app }) {
         }
     });
 
+    // Watchlist symbols: retire (stop monitoring, keep history), restore, or delete when there is no history.
+    const watchlistWrite = action => (req, res) => {
+        if (req.app.locals?.demoMode) return res.status(409).json({ error: 'Watchlist changes are read-only in the demo.' });
+        try {
+            res.json({ result: action(req.app.locals.db, Number(req.params.id)) });
+        } catch (error) {
+            orderFailure(res, error);
+        }
+    };
+    app.post('/api/alpaca/watchlist/:id/retire', watchlistWrite((db, id) => watchlist.retireSymbol(db, id)));
+    app.post('/api/alpaca/watchlist/:id/restore', watchlistWrite((db, id) => watchlist.restoreSymbol(db, id)));
+    app.delete('/api/alpaca/watchlist/:id', watchlistWrite((db, id) => watchlist.deleteSymbol(db, id)));
     app.post('/api/alpaca/watchlist/:id/alert-levels', (req, res) => {
         try {
             res.status(201).json({ alert_level: levels.addPriceLevel(req.app.locals.db, Number(req.params.id), req.body || {}) });

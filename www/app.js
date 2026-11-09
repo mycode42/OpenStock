@@ -77,7 +77,7 @@ async function loadPage(page, journalPage=state.journalPage) {
         if(!data){document.getElementById('page-config').innerHTML='<header><h1>Configure</h1></header><div class="alert-box error">Alpaca alert levels are unavailable.</div>';return;}
         const query=new URLSearchParams(window.location.hash.split('?')[1]||'');
         if(query.get('stock')&&window.location.hash!==lastConfigFocusHash){ lastConfigFocusHash=window.location.hash; config.focus(query.get('stock'), query.get('level')); }
-        config.render(data.stocks, orders?.orders);
+        config.render(data.stocks, orders?.orders, data.retired_symbols);
         return;
     }
     if(page==='journal'){

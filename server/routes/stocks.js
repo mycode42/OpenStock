@@ -1,6 +1,8 @@
 'use strict';
 
 const { rawDatabase } = require('../alpaca-profile');
+const watchlist = require('../../lib/alpaca-watchlist');
+require('../alpaca-profile');
 
 module.exports = function registerStocksRoutes({ app, serializeConfiguredStock, serializeAlertLevel, alertLevelInput, numberField, booleanField, now, berlinTradingDayStart, berlinTradingDayEnd, evenlySample, toISODateTime }) {
 // /api/stocks speaks USD: stored *_eur field names are returned as *_usd. Values are unchanged.
@@ -160,22 +162,20 @@ app.delete('/api/alert-levels/:id', (req, res) => {
 });
 
 app.post('/api/stocks', async (req, res) => {
+    if (req.app.locals?.demoMode) return res.status(409).json({ error: 'Watchlist changes are read-only in the demo.' });
     try {
         const symbol = String(req.body?.symbol || '').trim().toUpperCase();
         const name = String(req.body?.name || '').trim();
         const buyThreshold = Number(req.body?.buy_threshold_usd), sellThreshold = Number(req.body?.sell_threshold_usd);
         if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol)) return res.status(400).json({ error: 'A valid US equity symbol is required' });
-        if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and BUY must be below SELL' });
+        if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and the buy threshold must be below the sell threshold' });
         const db = req.app.locals.db;
-        const existing = db.getStockBySymbol(symbol);
-        if (existing) return res.status(409).json({ error: existing.archived ? 'Symbol belongs to an archived stock; restore it explicitly' : 'Stock already exists', stock_id: existing.id });
         const asset = await req.app.locals.alpacaClient.getAsset(symbol);
         if (asset?.class !== 'us_equity' || asset?.tradable === false || asset?.status === 'inactive') {
             return res.status(422).json({ error: 'Alpaca does not list this symbol as a tradable US equity' });
         }
-        const result = db.addStock(symbol, name || asset.name || symbol, 'USD', buyThreshold, sellThreshold);
-        const stock = db.getStockById(result.lastInsertRowid);
-        res.status(201).json({ message: 'Stock added from the Alpaca asset list', stock: serializeConfiguredStock(stock) });
+        const added = watchlist.addSymbol(db, { symbol, name: name || asset.name || symbol, buy_threshold_usd: buyThreshold, sell_threshold_usd: sellThreshold });
+        res.status(201).json({ message: 'Stock added to the watchlist', stock: { id: added.source_stock_id, watchlist_id: added.id, symbol: added.symbol, name: added.name } });
     } catch (e) {
         if (e.status === 404) return res.status(422).json({ error: 'Alpaca does not list this symbol as a tradable US equity' });
         if (e.status) return res.status(e.status).json({ error: e.message });
@@ -257,6 +257,8 @@ app.delete('/api/stocks/:id', (req, res) => {
         }
         res.json({ message: result.archived ? 'Stock archived; journal history retained' : 'Stock deleted successfully', deleted_id: Number(req.params.id), archived: result.archived });
     } catch (e) {
+        // A symbol on the Alpaca watchlist keeps its legacy row (source_stock_id), so it is changed through the watchlist routes.
+        if (String(e.message).includes('FOREIGN KEY')) return res.status(409).json({ error: 'This symbol is on the Alpaca watchlist. Retire or delete it from the watchlist.' });
         console.error('Error deleting stock:', e.message);
         res.status(500).json({ error: 'Failed to delete stock' });
     }

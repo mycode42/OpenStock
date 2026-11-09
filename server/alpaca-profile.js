@@ -66,6 +66,7 @@ async function alpacaDashboardData(app) {
     });
     return {
         stocks,
+        retired_symbols: require('../lib/alpaca-watchlist').retiredSymbols(db),
         analytics: { broker: 'alpaca', currency: 'USD', quote_feed: quotePayload.feed }
     };
 }

@@ -30,7 +30,10 @@ async function fixture({ now } = {}) {
     return { app, db, dir, server, request };
 }
 
+// Adding a stock through the API already creates its watchlist row; older tests insert it by hand.
 function addAlpacaStock(fixture, stock) {
+    const existing = fixture.db.db.prepare('SELECT id FROM alpaca_watchlist WHERE source_stock_id = ?').get(stock.id);
+    if (existing) return Number(existing.id);
     const result = fixture.db.db.prepare(`INSERT INTO alpaca_watchlist (symbol, name, source_stock_id, copied_fx_rate)
         VALUES (?, ?, ?, 1)`).run(stock.symbol, stock.name, stock.id);
     return Number(result.lastInsertRowid);
@@ -275,9 +278,9 @@ test('stock routes validate, update authoritatively, hard-delete, and archive jo
     const f = await fixture();
     t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
     assert.equal((await f.request('/api/stocks/999')).status, 404);
-    let response = await bodyRequest(f, '/api/stocks', { symbol: 'HOST', name: '<img src=x onerror=alert(1)>', buy_threshold_usd: 1, sell_threshold_usd: 2 });
-    const created = (await response.json()).stock;
-    response = await bodyRequest(f, `/api/stocks/${created.id}`, { name: 'Updated', enabled: 0 }, 'PUT');
+    // Legacy rows only: a symbol on the Alpaca watchlist is changed through its own routes.
+    const created = { id: Number(f.db.addStock('HOST', '<img src=x onerror=alert(1)>', 'USD', 1, 2).lastInsertRowid) };
+    let response = await bodyRequest(f, `/api/stocks/${created.id}`, { name: 'Updated', enabled: 0 }, 'PUT');
     assert.equal(response.status, 200);
     assert.equal((await response.json()).stock.name, 'Updated');
     assert.equal((await f.request(`/api/stocks/${created.id}`)).status, 200);
@@ -285,8 +288,10 @@ test('stock routes validate, update authoritatively, hard-delete, and archive jo
     assert.equal((await response.json()).archived, false);
     assert.equal((await f.request(`/api/stocks/${created.id}`)).status, 404);
 
-    response = await bodyRequest(f, '/api/stocks', { symbol: 'ARCH', name: 'Archive me', buy_threshold_usd: 1, sell_threshold_usd: 2 });
-    const archived = (await response.json()).stock;
+    const archived = { id: Number(f.db.addStock('ARCH', 'Archive me', 'USD', 1, 2).lastInsertRowid) };
+    // A symbol on the Alpaca watchlist cannot be hard-deleted through the legacy route.
+    const onWatchlist = await (await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'WATCH', buy_threshold_usd: 1, sell_threshold_usd: 2 }) })).json();
+    assert.equal((await f.request(`/api/stocks/${onWatchlist.stock.id}`, { method: 'DELETE' })).status, 409);
     await bodyRequest(f, '/api/trades', { stock_id: archived.id, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'EUR', entry_price: 1, entry_fx_rate: 1, entry_fee_eur: 0 });
     response = await f.request(`/api/stocks/${archived.id}`, { method: 'DELETE' });
     assert.equal((await response.json()).archived, true);
@@ -395,4 +400,52 @@ test('journal records a partial sale while preserving the remaining open positio
     });
     assert.equal(oversell.status, 400);
     assert.equal(f.db.getPositionSummary(stock.id).quantity, 6);
+});
+
+test('the configure page can add a stock: thresholds, symbol format and duplicates are checked before a row is written', async t => {
+    const f = await fixture();
+    t.after(() => f.server.close());
+    const post = body => f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await post({ symbol: 'BAD SYMBOL', buy_threshold_usd: 1, sell_threshold_usd: 2 })).status, 400);
+    assert.equal((await post({ symbol: 'HIGH', buy_threshold_usd: 5, sell_threshold_usd: 2 })).status, 400);
+    const added = await post({ symbol: 'ADDED', name: 'Added', buy_threshold_usd: 90, sell_threshold_usd: 110 });
+    assert.equal(added.status, 201);
+    assert.equal((await added.json()).stock.symbol, 'ADDED');
+    assert.equal((await post({ symbol: 'ADDED', buy_threshold_usd: 90, sell_threshold_usd: 110 })).status, 409);
+});
+
+test('watchlist symbols can be added, retired, restored and deleted; history blocks delete and a leftover row is adopted', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const { configuredWatchlist } = require('../server/alpaca-profile');
+    const post = body => f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const symbols = () => configuredWatchlist(f.db).map(row => row.symbol);
+
+    const added = await post({ symbol: 'LIFE', name: 'Lifecycle', buy_threshold_usd: 10, sell_threshold_usd: 20 });
+    assert.equal(added.status, 201);
+    const { stock } = await added.json();
+    assert.ok(symbols().includes('LIFE'));
+    assert.equal((await post({ symbol: 'LIFE', buy_threshold_usd: 10, sell_threshold_usd: 20 })).status, 409);
+
+    assert.equal((await f.request(`/api/alpaca/watchlist/${stock.watchlist_id}/retire`, { method: 'POST' })).status, 200);
+    assert.equal(symbols().includes('LIFE'), false);
+    assert.equal((await post({ symbol: 'LIFE', buy_threshold_usd: 10, sell_threshold_usd: 20 })).status, 409);
+    assert.equal((await f.request(`/api/alpaca/watchlist/${stock.watchlist_id}/restore`, { method: 'POST' })).status, 200);
+    assert.ok(symbols().includes('LIFE'));
+
+    // A leftover legacy row (from an earlier failed add) is adopted with the requested thresholds.
+    f.db.addStock('LEFT', 'Leftover', 'USD', 1, 2);
+    const adopted = await post({ symbol: 'LEFT', name: 'Leftover', buy_threshold_usd: 3, sell_threshold_usd: 4 });
+    assert.equal(adopted.status, 201);
+    const buy = f.db.db.prepare("SELECT price_eur FROM alert_levels WHERE stock_id = (SELECT id FROM stocks WHERE symbol = 'LEFT') AND side = 'BUY'").get();
+    assert.equal(buy.price_eur, 3);
+
+    // Delete is refused once a symbol has trades; a clean symbol deletes.
+    const trade = f.db.db.prepare('SELECT id FROM stocks WHERE symbol = ?').get('LEFT');
+    await bodyRequest(f, '/api/trades', { stock_id: trade.id, opened_at: '2026-01-01T00:00:00Z', quantity: 1, currency: 'USD', entry_price: 1, entry_fx_rate: 1, entry_fee_eur: 0 });
+    const leftId = f.db.db.prepare('SELECT id FROM alpaca_watchlist WHERE symbol = ?').get('LEFT').id;
+    assert.equal((await f.request(`/api/alpaca/watchlist/${leftId}`, { method: 'DELETE' })).status, 409);
+    assert.equal((await f.request(`/api/alpaca/watchlist/${stock.watchlist_id}`, { method: 'DELETE' })).status, 200);
+    assert.equal(symbols().includes('LIFE'), false);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM stocks WHERE symbol = ?').get('LIFE').n, 0);
 });
