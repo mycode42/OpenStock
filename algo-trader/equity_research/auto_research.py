@@ -1371,7 +1371,10 @@ def main(argv: list[str] | None = None) -> int:
         ledger.record_completed_report(
             invocation_id, report, report_path=str(invocation_report_path.resolve()),
         )
-    if report.get("status") == "error":
+    if report.get("schema") == "swarm_algo_weekly_verification_v1":
+        # The weekly full-history review has no nightly sections. It gets its own folder, so the day's archive row is not replaced.
+        _atomic_json(output_dir / "weekly" / f"{today}.json", report)
+    elif report.get("status") == "error":
         _record_failure(report, output_dir=output_dir, latest_path=latest_report_path, today=today, optimization_only=args.optimization_only)
     else:
         if not args.optimization_only:

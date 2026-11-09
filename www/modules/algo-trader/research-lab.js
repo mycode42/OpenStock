@@ -292,9 +292,12 @@ function renderResults() {
         }
         const sharpe = item.oos_metrics?.annualized_sharpe;
         const params = Object.fromEntries(tunable.filter(key => key in (item.final_parameters || {})).map(key => [key, item.final_parameters[key]]));
+        const ex = item.exploratory;
+        const money = value => `$${Math.round(value).toLocaleString('en-US')}`;
+        const exploratoryRow = ex ? `<tr class="lab-exploratory"><td></td><td colspan="4">Exploratory replay, not validated out of sample: ${typeof ex.trades === 'number' ? `${ex.trades} trades` : '—'}, Sharpe ${typeof ex.annualized_sharpe === 'number' ? escapeHtml(ex.annualized_sharpe.toFixed(2)) : '—'}, average trade ${typeof ex.average_trade_pnl === 'number' ? escapeHtml(money(ex.average_trade_pnl)) : '—'}, equity ${typeof ex.start_equity === 'number' && typeof ex.end_equity === 'number' ? `${escapeHtml(money(ex.start_equity))} to ${escapeHtml(money(ex.end_equity))}` : '—'}.</td></tr>` : '';
         return `<tr><td>${escapeHtml(item.underlying)}</td><td>${escapeHtml(item.status)}${item.approved ? ' · approved' : ''}</td>
             <td>${typeof sharpe === 'number' ? escapeHtml(sharpe.toFixed(2)) : '—'}</td><td>${item.observed_oos_trades ?? '—'}</td>
-            <td><code>${escapeHtml(JSON.stringify(params))}</code></td></tr>`;
+            <td><code>${escapeHtml(JSON.stringify(params))}</code></td></tr>${exploratoryRow}`;
     }).join('');
     return `<table class="lab-table lab-results"><thead><tr><th>Underlying</th><th>Status</th><th>OOS Sharpe</th><th>OOS trades</th><th>Final tunable parameters</th></tr></thead><tbody>${rows}</tbody></table>
         <div class="lab-save"><input type="text" data-lab-input="saveName" placeholder="profile name" value="${escapeHtml(state.saveName)}" maxlength="40">

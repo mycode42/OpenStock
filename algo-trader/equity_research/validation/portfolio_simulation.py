@@ -367,6 +367,7 @@ def run_coordinated_portfolio(args) -> dict:
                 "sensitivity_policy": "slippage, spread, per-share commission, short-borrow rate, and unknown-borrow penalty are scaled together",
             },
         },
+        "strategy_breakdown": strategy_breakdown(results, initial_capital=initial_capital),
         "folds": results,
         "limitations": [
             "Each baseline fold starts with fresh capital and no positions or risk state carry over between folds; the shadow weight state carries across the stitched dates.",
@@ -500,6 +501,15 @@ def _run_coordinated_fold(
     summary["closed_trade_pnls"] = [
         float(trade.get("pnl") or 0.0) for trade in report.get("closed_trades", [])
     ]
+    # Kept for every fold, so the report can break P&L down by strategy and by entry regime.
+    summary["closed_trade_records"] = [
+        {
+            "strategy": str(trade.get("strategy") or "unknown"),
+            "entry_regime": str(trade.get("entry_regime") or "unknown"),
+            "pnl": round(float(trade.get("pnl") or 0.0), 2),
+        }
+        for trade in report.get("closed_trades", [])
+    ]
     summary.pop("closed_trades", None)
     summary["execution_delay_bars"] = execution_delay_bars
     if not include_curves:
@@ -563,6 +573,48 @@ def _execute_fold_job_groups(groups: list[tuple], *, worker_count: int) -> dict[
                 file=sys.stderr, flush=True,
             )
     return results_by_index
+
+
+def _group_pnl(records: list[dict], key: str, initial_capital: float) -> dict:
+    groups: dict[str, dict] = {}
+    for record in records:
+        name = record[key]
+        group = groups.setdefault(name, {"closed_trades": 0, "wins": 0, "gross_profit": 0.0, "gross_loss": 0.0, "pnl": 0.0})
+        pnl = float(record["pnl"])
+        group["closed_trades"] += 1
+        group["pnl"] += pnl
+        if pnl > 0:
+            group["wins"] += 1
+            group["gross_profit"] += pnl
+        elif pnl < 0:
+            group["gross_loss"] += -pnl
+    out = {}
+    for name, group in sorted(groups.items(), key=lambda item: item[1]["pnl"]):
+        trades = group["closed_trades"]
+        out[name] = {
+            "closed_trades": trades,
+            "pnl_usd": round(group["pnl"], 2),
+            "pnl_pct_of_initial_capital": round(100.0 * group["pnl"] / initial_capital, 4) if initial_capital else None,
+            "average_trade_usd": round(group["pnl"] / trades, 2) if trades else None,
+            "win_rate_pct": round(100.0 * group["wins"] / trades, 2) if trades else None,
+            "profit_factor": round(group["gross_profit"] / group["gross_loss"], 3) if group["gross_loss"] > 0 else None,
+        }
+    return out
+
+
+def strategy_breakdown(folds: list[dict], *, initial_capital: float) -> dict:
+    """Closed-trade P&L and entries per strategy and per entry regime, summed over the folds."""
+    records = [record for fold in folds for record in fold.get("closed_trade_records", [])]
+    entries: dict[str, int] = {}
+    for fold in folds:
+        for strategy, count in (fold.get("entry_count_by_strategy") or {}).items():
+            entries[strategy] = entries.get(strategy, 0) + int(count or 0)
+    return {
+        "scope": "Closed trades across the out-of-sample folds, net of modelled costs. Entries count every entry each strategy made.",
+        "entries_by_strategy": dict(sorted(entries.items())),
+        "by_strategy": _group_pnl(records, "strategy", initial_capital),
+        "by_entry_regime": _group_pnl(records, "entry_regime", initial_capital),
+    }
 
 
 def _summarize_cost_sensitivity(folds: list[dict]) -> dict:

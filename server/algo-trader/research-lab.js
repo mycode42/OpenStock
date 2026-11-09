@@ -278,6 +278,23 @@ function summarizeProgress(events) {
     };
 }
 
+// A short-history run has no out-of-sample folds, so it reports a descriptive replay instead. Shown as such, never as validated.
+function exploratoryOf(report) {
+    const replay = report?.exploratory_replay;
+    if (!isPlainObject(replay)) return null;
+    const curve = Array.isArray(replay.equity_curve) ? replay.equity_curve : [];
+    const first = curve.find(point => Number.isFinite(point?.equity));
+    const last = [...curve].reverse().find(point => Number.isFinite(point?.equity));
+    return {
+        ...pickNumericMetrics(replay.metrics),
+        trades: Array.isArray(replay.trades) ? replay.trades.length : null,
+        start_equity: first ? first.equity : null,
+        end_equity: last ? last.equity : null,
+        period_start: replay.period_start ?? null,
+        period_end: replay.period_end ?? null,
+    };
+}
+
 function pickNumericMetrics(source) {
     if (!isPlainObject(source)) return {};
     const out = {};
@@ -620,6 +637,7 @@ class ResearchLab {
                 observed_oos_trades: report?.validation?.observed_oos_trades ?? null,
                 minimum_oos_trades_met: report?.validation?.minimum_oos_trades_met ?? null,
                 parameter_stability_score: report?.validation?.parameter_stability_score ?? null,
+                exploratory: exploratoryOf(report),
             });
         }
         return { job: job.id, strategy: job.strategy, state: job.state, results };
@@ -629,7 +647,11 @@ class ResearchLab {
     // Only artifacts inside this job's folder are read.
     async equityDiscoveryMetrics(job, artifact) {
         const file = artifact?.discovery;
-        if (!file || !String(file).startsWith(this.jobDir(job.id) + path.sep)) return null;
+        if (!file) return null;
+        // The report stores resolved paths (the data folder is a symlink), so compare real paths.
+        const realFile = (() => { try { return fs.realpathSync(file); } catch { return null; } })();
+        const realJob = (() => { try { return fs.realpathSync(this.jobDir(job.id)); } catch { return null; } })();
+        if (!realFile || !realJob || !realFile.startsWith(realJob + path.sep)) return null;
         const detail = await readJsonFile(file, null);
         if (!detail) return null;
         const pick = candidate => {
@@ -661,7 +683,7 @@ class ResearchLab {
         const artifacts = report?.adaptive_strategy_artifacts && typeof report.adaptive_strategy_artifacts === 'object'
             ? report.adaptive_strategy_artifacts : {};
         const strategies = await Promise.all(Object.entries(artifacts).map(async ([name, artifact]) => ({
-            strategy: name, status: artifact?.status ?? null,
+            strategy: name, status: artifact?.status ?? (artifact?.discovery ? 'discovered' : null),
             metrics: await this.equityDiscoveryMetrics(job, artifact),
         })));
         return {
