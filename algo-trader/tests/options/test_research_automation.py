@@ -63,3 +63,39 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
     assert report["status"] == "completed"
     assert report["strategies"]["llm_driven"]["walk_forward"]["trade_count"] == 10
     assert report["strategies"]["llm_driven"]["approved"] is False
+
+
+def test_options_simulation_counts_only_underlyings_with_trades_and_sums_their_pnl():
+    from options.research.automation import _render_markdown, _simulation_summary
+
+    def replay(pnls, total_return, sharpe, drawdown):
+        return {
+            "trades": [{"pnl": value} for value in pnls],
+            "period_start": "2020-01-02T22:15:00+00:00", "period_end": "2026-11-09T20:45:00+00:00",
+            "metrics": {"trade_count": len(pnls), "total_return": total_return, "annualized_sharpe": sharpe,
+                        "max_drawdown": drawdown},
+        }
+
+    report = {
+        "run_date_et": "2026-11-09", "status": "partial_data", "dataset_available": True, "dataset_path": "x",
+        "strategies": {
+            "vrp": {"underlyings": {
+                "AAPL": {"exploratory_replay": replay([100.0, -40.0, 30.0], 0.09, 0.5, 0.05)},
+                "MSFT": {"exploratory_replay": replay([-20.0], -0.02, -0.1, 0.02)},
+                "XLI": {"exploratory_replay": replay([], 0.0, 0.0, 0.0)},
+            }},
+            "llm_driven": {"underlyings": {"AAPL": {"exploratory_replay": replay([500.0], 0.5, 1.0, 0.0)}}},
+        },
+    }
+    summary = _simulation_summary(report)
+    assert set(summary) == {"vrp"}
+    vrp = summary["vrp"]
+    assert vrp["underlyings"] == 2
+    assert vrp["trades"] == 4
+    assert vrp["net_pnl_usd"] == 70.0
+    assert vrp["win_rate"] == 0.5
+    assert vrp["profit_factor"] == round(130.0 / 60.0, 3)
+    assert vrp["worst_drawdown"] == 0.05
+    markdown = _render_markdown(report)
+    assert "## Options simulation" in markdown
+    assert "| Volatility risk premium | 2 | 4 | +70 |" in markdown

@@ -173,21 +173,90 @@ def _return_improvement(baseline: object, tuned: object) -> str:
     return f"n/a (baseline {base:.2%}; {(new - base) * 100:+.2f} pts)"
 
 
+SIMULATION_LABELS = {"vrp": "Volatility risk premium", "long_volatility": "Long volatility"}
+
+
+def _simulation_summary(report: dict) -> dict:
+    """Per-sleeve P/L and KPIs over the full replay history, from the underlyings that have it.
+
+    Every underlying is replayed from its own starting equity, so P/L adds up across underlyings.
+    Underlyings without trades have no usable history, so they are left out, not counted as losses.
+    """
+    sleeves = {}
+    for strategy, item in (report.get("strategies") or {}).items():
+        if strategy not in SIMULATION_LABELS:
+            continue
+        replays = []
+        for underlying in (item.get("underlyings") or {}).values():
+            replay = underlying.get("exploratory_replay") or {}
+            # No trades means the underlying has no usable chain history in the dataset; it is not counted.
+            if replay.get("metrics") and replay.get("trades"):
+                replays.append(replay)
+        if not replays:
+            sleeves[strategy] = {"label": SIMULATION_LABELS[strategy], "underlyings": 0}
+            continue
+        pnls = [float(trade.get("pnl", 0.0)) for replay in replays for trade in replay["trades"]]
+        wins = [value for value in pnls if value > 0]
+        losses = [value for value in pnls if value < 0]
+        returns = sorted(float(replay["metrics"].get("total_return", 0.0)) for replay in replays)
+        sharpes = sorted(float(replay["metrics"].get("annualized_sharpe", 0.0)) for replay in replays)
+        starts = [str(replay.get("period_start"))[:10] for replay in replays if replay.get("period_start")]
+        ends = [str(replay.get("period_end"))[:10] for replay in replays if replay.get("period_end")]
+        sleeves[strategy] = {
+            "label": SIMULATION_LABELS[strategy],
+            "underlyings": len(replays),
+            "trades": len(pnls),
+            "net_pnl_usd": round(sum(pnls), 2),
+            "win_rate": round(len(wins) / len(pnls), 4) if pnls else None,
+            "profit_factor": round(sum(wins) / abs(sum(losses)), 3) if losses else None,
+            "average_return": round(sum(returns) / len(returns), 6),
+            "median_return": round(returns[len(returns) // 2], 6),
+            "median_sharpe": round(sharpes[len(sharpes) // 2], 3),
+            "worst_drawdown": round(max(float(replay["metrics"].get("max_drawdown", 0.0)) for replay in replays), 6),
+            "period_start": min(starts) if starts else None,
+            "period_end": max(ends) if ends else None,
+        }
+    return sleeves
+
+
+def _simulation_markdown(summary: dict) -> list[str]:
+    lines = ["## Options simulation", ""]
+    rows = []
+    for item in summary.values():
+        if not item.get("trades"):
+            rows.append(f"| {item['label']} | {item['underlyings']} | — | — | — | — | — | — | — |")
+            continue
+        pf = "—" if item["profit_factor"] is None else f"{item['profit_factor']:.2f}"
+        rows.append(
+            f"| {item['label']} | {item['underlyings']} | {item['trades']} | {item['net_pnl_usd']:+,.0f} | "
+            f"{item['win_rate']:.1%} | {pf} | {item['average_return']:+.2%} | {item['median_sharpe']:.2f} | {item['worst_drawdown']:.1%} |"
+        )
+    periods = [item for item in summary.values() if item.get("period_start")]
+    if periods:
+        lines.append(f"History: {periods[0]['period_start']} to {periods[0]['period_end']}. Each underlying starts at 100,000 USD.")
+        lines.append("")
+    lines.extend([
+        "| Sleeve | Underlyings | Trades | Net P/L (USD) | Win rate | Profit factor | Avg return | Median Sharpe | Worst drawdown |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        *rows,
+        "",
+    ])
+    return lines
+
+
 def _render_markdown(report: dict) -> str:
     dataset_label = (
         f"`{report['dataset_path']}`" if report.get("dataset_path")
         else "; ".join(f"{symbol}: `{path}`" for symbol, path in report.get("dataset_paths", {}).items())
     )
     lines = [
-        f"# Nightly options research ({report['run_date_et']})",
+        f"# Options simulation ({report['run_date_et']})",
         "",
-        f"Status: **{report['status']}**  ",
         f"Dataset: {dataset_label or 'none'} ({'available' if report['dataset_available'] else 'not available'})  ",
         f"Data mode: `{report.get('data_mode', 'n/a')}`  ",
         "",
-        "This report is a separate research sleeve alongside equity AutoResearch. Options candidates remain research-only; exported parameters are not applied to paper or live settings.",
-        "",
     ]
+    lines.extend(_simulation_markdown(_simulation_summary(report)))
     eligibility = report.get("eligible_universe")
     if eligibility:
         lines.extend([
