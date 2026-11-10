@@ -785,9 +785,10 @@ html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-s
 
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch button.active,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-switch button.active {
-  border-color: var(--os-border);
+  border-color: var(--os-accent);
   background: var(--os-raised);
-  color: var(--os-text);
+  color: var(--os-accent);
+  box-shadow: none;
 }
 
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-active-strategy-list span,
@@ -983,6 +984,14 @@ html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-leg
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) i {
   background: var(--os-accent);
   color: var(--os-accent);
+}
+
+/* The active status pill uses the same surface and muted text as the label pills (Alpaca paper, Refreshing). */
+html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown),
+html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown) {
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-muted);
 }
 
 /* The loading arrow is a text glyph: colour only. A background would paint a box behind it in the non-default themes. */
