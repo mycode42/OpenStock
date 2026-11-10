@@ -22,7 +22,7 @@ class SwingTrendConfig:
     slow_period: int = 50
     slope_lookback_days: int = 5
     minimum_slope_pct: float = 0.002
-    direction_mode: str = "both"
+    direction_mode: str = "long_only"  # Long only since 2026-11-10: shorts lost over 2020-2026.
     minimum_hold_sessions: int = 3
     maximum_holding_sessions: int = 15
     hard_stop_pct: float = 0.08

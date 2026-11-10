@@ -24,6 +24,7 @@ try:
         _multi_factor_ic = _PythonSignalsMixin._multi_factor_ic
         _regime = _PythonSignalsMixin._regime
         _queue_signal = _PythonSignalsMixin._queue_signal
+        _short_entry_rejection = _PythonSignalsMixin._short_entry_rejection
 except ImportError:
     from .signals import ReplaySignalsMixin
 from .reporting import ReplayReportingMixin

@@ -32,7 +32,7 @@ def test_spike_above_the_average_is_a_short_when_allowed():
     bars = _flat_history(100.0)
     bars.append(_bar(26, 103.0, low=102.8, high=103.2))
     bars.append(_bar(27, 102.5, low=102.2, high=103.0, volume=3000))  # rip, lower high, close below previous
-    signal = evaluate_rule_signal("intraday_mean_reversion", "AAPL", bars, parameters=PARAMS)
+    signal = evaluate_rule_signal("intraday_mean_reversion", "AAPL", bars, parameters={**PARAMS, "direction_mode": "both"})
     assert signal is not None
     assert signal.action == "short"
 

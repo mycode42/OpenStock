@@ -358,6 +358,7 @@ def run_daily_research(args) -> dict:
             "summary": live.get("summary"),
             "strategy_breakdown": live.get("strategy_breakdown"),
             "parameters": live.get("parameters"),
+            "closed_trade_details": live.get("closed_trade_details") or [],
         }
     else:
         settings_report = _settings_replay_job({**replay_kwargs, "label": "chosen" if os.environ.get("ALGO_LAB_PROGRESS") == "1" else "nightly"})

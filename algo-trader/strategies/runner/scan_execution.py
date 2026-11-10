@@ -294,9 +294,23 @@ def execute_scan_candidates(
                 "session_name": scope.session_name,
             })
         elif scope.mode == "algo" and action in {"buy", "short"}:
-            # Regular-session entries use a limit band so a fill never chases the signal.
-            limit = entry_limit_price(action, float(trade.get("entry_price") or execution_price),
-                                      get_algo_execution_settings()["entry_limit_band_bps"])
+            bid, ask = float(quote.get("bid") or 0), float(quote.get("ask") or 0)
+            entry_quote = {"bid": bid, "ask": ask, "mid": round((bid + ask) / 2, 4) if bid and ask else None,
+                           "quote_at": quote_time.isoformat()}
+            if get_algo_execution_settings().get("entry_pricing") == "passive":
+                # Passive entries rest on our side of the book: a buy at the bid, a short at the ask. They do not
+                # cross the spread, so a fill is not guaranteed; an unfilled entry expires with the day.
+                if bid <= 0 or ask <= 0 or ask < bid:
+                    item["suppressed_reason"] = "no two-sided quote for a passive entry"
+                    record(item, "entry_quote_unavailable", "suppressed", item["suppressed_reason"], entry_quote=entry_quote)
+                    continue
+                limit = bid if action == "buy" else ask
+            else:
+                # Regular-session entries use a limit band so a fill never chases the signal.
+                limit = entry_limit_price(action, float(trade.get("entry_price") or execution_price),
+                                          get_algo_execution_settings()["entry_limit_band_bps"])
+            trade["entry_quote"] = entry_quote
+            trade["entry_pricing"] = get_algo_execution_settings().get("entry_pricing", "band")
             if limit is not None:
                 trade.update({"order_type": "limit", "limit_price": limit})
         elif scope.mode == "algo" and action in {"sell", "cover"}:
@@ -376,7 +390,7 @@ def execute_scan_candidates(
         if item.get("software_protection"):
             trade["software_protection"] = True
         trades.append(trade)
-        record(item, "candidate_ready_for_submission", "proposal_ready", "candidate passed scan sizing and portfolio gates; this is not broker submission confirmation", qty=trade.get("qty"), order_type=trade.get("order_type"), limit_price=trade.get("limit_price"))
+        record(item, "candidate_ready_for_submission", "proposal_ready", "candidate passed scan sizing and portfolio gates; this is not broker submission confirmation", entry_quote=trade.get("entry_quote"), entry_pricing=trade.get("entry_pricing"), client_order_id=trade.get("client_order_id"), qty=trade.get("qty"), order_type=trade.get("order_type"), limit_price=trade.get("limit_price"))
         if action in {"buy", "short"}:
             batch_entry_counts[strategy] = batch_entry_counts.get(strategy, 0) + 1
             batch_open_counts[strategy] = batch_open_counts.get(strategy, 0) + 1

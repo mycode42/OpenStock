@@ -21,3 +21,11 @@ class Position:
     entry_commission: float = 0.0
     borrow_cost: float = 0.0
     entry_regime: str = "unknown"
+    # Price before spread and slippage, so the cost split can be reported.
+    entry_raw_price: float | None = None
+    # Best and worst prices reached while held, for excursion analysis.
+    max_high_price: float | None = None
+    min_low_price: float | None = None
+    # Signal strength and the measurements taken at the signal bar, for the trade records.
+    entry_strength: float | None = None
+    entry_features: tuple = ()

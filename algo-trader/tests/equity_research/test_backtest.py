@@ -135,6 +135,11 @@ def test_portfolio_replay_fills_next_bar_and_resolves_same_bar_bracket_conservat
     assert report["average_holding_minutes"] == 5
     assert report["candidate_setup_count"] == 1
     assert report["candidate_ticker_day_count"] == 1
+    # Gross P/L at raw prices, less spread and slippage, commissions and borrow, is the net P/L.
+    assert trade["spread_slippage_cost"] > 0
+    assert trade["gross_pnl"] > trade["pnl"]
+    costs = trade["spread_slippage_cost"] + trade["entry_commission"] + trade["exit_commission"] + trade["borrow_cost"]
+    assert trade["pnl"] == pytest.approx(trade["gross_pnl"] - costs, abs=0.02)
 
 
 def test_portfolio_replay_models_short_entry_cover_and_entry_relative_return(monkeypatch):

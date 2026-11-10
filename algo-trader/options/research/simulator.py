@@ -22,7 +22,8 @@ from options.research.execution import (
 from options.research.search import Candidate
 from options.structures import OptionStructure
 from strategies.options.base import OptionsStrategyContext
-from strategies.options.long_volatility import historical_iv_percentile
+from strategies.options.long_volatility import atm_implied_volatility, historical_iv_percentile
+from strategies.options.vrp import vrp_exit_reason
 from options.research.strategy_factory import make_strategy
 
 
@@ -48,6 +49,7 @@ class _OpenTrade:
     entry_regime: str
     entry_spot: float
     entry_debit: float = 0.0
+    entry_credit: float = 0.0
     cashflow: float = 0.0
     shares: int = 0
     legs: dict[str, _LegPosition] = field(default_factory=dict)
@@ -192,8 +194,10 @@ def simulate_options_strategy(
     )
     date_to_index = {row.as_of: index for index, row in enumerate(dataset.observations)}
     iv_history_by_underlying: dict[str, tuple[list[datetime], list[float]]] = {}
-    if strategy_name == "long_volatility":
-        from strategies.options.long_volatility import atm_implied_volatility
+    needs_iv_history = strategy_name == "long_volatility" or (
+        strategy_name == "vrp" and strategy_section.get("min_iv_percentile") is not None
+    )
+    if needs_iv_history:
         iv_settings = tuple(
             (key, strategy_section.get(key))
             for key in (
@@ -499,6 +503,23 @@ def simulate_options_strategy(
             trade.greek_path.append(greek_row)
         return equity_value, daily_attribution, exposures
 
+    def _pnl_if_closed(trade: _OpenTrade, chain_by_symbol: dict[str, ChainQuote]) -> float | None:
+        """Cash the trade would return if every open leg were closed now at its exit fill."""
+        cash = trade.cashflow
+        for symbol, state in trade.legs.items():
+            if state.signed_contracts == 0:
+                continue
+            quote = chain_by_symbol.get(symbol) or state.last_quote
+            if quote is None:
+                return None
+            try:
+                price = execution.exit_fill(quote, state.signed_contracts)
+            except ValueError:
+                # No two-sided quote to close against: the value is unknown, so no stop is triggered on it.
+                return None
+            cash += state.signed_contracts * price * state.contract.multiplier
+        return cash
+
     def close_at_window_end(
         trade: _OpenTrade,
         observation: ResearchObservation,
@@ -569,6 +590,14 @@ def simulate_options_strategy(
                 realized_cash = sum(float(item["pnl"]) for item in closed_trades)
             else:
                 exit_reason = None
+                if strategy_name == "vrp":
+                    held_days = max(0, (observation.as_of.date() - trade.entry_at.date()).days)
+                    exit_reason = vrp_exit_reason(
+                        entry_credit=trade.entry_credit,
+                        pnl_if_closed=_pnl_if_closed(trade, chain_by_symbol),
+                        held_days=held_days,
+                        config=strategy_section,
+                    )
                 if strategy_name == "long_volatility":
                     held_days = max(0, (observation.as_of.date() - trade.entry_at.date()).days)
                     open_dtes = [
@@ -631,8 +660,8 @@ def simulate_options_strategy(
                     equity_signals=observation.equity_signals,
                     as_of=observation.as_of,
                 )
-                if strategy_name == "long_volatility":
-                    atm_iv = strategy.atm_implied_volatility(chain, strategy_section)
+                if needs_iv_history:
+                    atm_iv = atm_implied_volatility(chain, strategy_section)
                     prior_stamps, prior_values = iv_history_by_underlying.get(
                         observation.underlying.upper(), ([], []),
                     )
@@ -768,6 +797,7 @@ def simulate_options_strategy(
                                     entry_regime=observation.regime,
                                     entry_spot=observation.spot,
                                     entry_debit=max(0.0, -gross_entry_cashflow),
+                                    entry_credit=max(0.0, gross_entry_cashflow),
                                     cashflow=entry_cashflow,
                                     legs=states,
                                     entry_costs=entry_cost_total,

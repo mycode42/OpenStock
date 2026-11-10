@@ -507,6 +507,25 @@ def _run_coordinated_fold(
             "strategy": str(trade.get("strategy") or "unknown"),
             "entry_regime": str(trade.get("entry_regime") or "unknown"),
             "pnl": round(float(trade.get("pnl") or 0.0), 2),
+            **{
+                key: trade[key] for key in (
+                    "gross_pnl", "spread_slippage_cost", "entry_commission", "exit_commission", "borrow_cost",
+                ) if trade.get(key) is not None
+            },
+        }
+        for trade in report.get("closed_trades", [])
+    ]
+    # Full records of each closed trade, so entries and exits can be analysed after the run.
+    summary["closed_trade_details"] = [
+        {
+            key: trade.get(key)
+            for key in (
+                "ticker", "strategy", "entry_regime", "direction", "qty", "signal_at", "entry_at", "entry_price",
+                "exit_at", "exit_price", "exit_reason", "holding_minutes", "return_pct", "mfe_pct", "mae_pct",
+                "entry_strength", "entry_features",
+                "pnl", "gross_pnl",
+                "spread_slippage_cost", "entry_commission", "exit_commission", "borrow_cost",
+            )
         }
         for trade in report.get("closed_trades", [])
     ]
@@ -579,10 +598,20 @@ def _group_pnl(records: list[dict], key: str, initial_capital: float) -> dict:
     groups: dict[str, dict] = {}
     for record in records:
         name = record[key]
-        group = groups.setdefault(name, {"closed_trades": 0, "wins": 0, "gross_profit": 0.0, "gross_loss": 0.0, "pnl": 0.0})
+        group = groups.setdefault(name, {
+            "closed_trades": 0, "wins": 0, "gross_profit": 0.0, "gross_loss": 0.0, "pnl": 0.0,
+            "gross_pnl": 0.0, "spread_slippage": 0.0, "commission": 0.0, "borrow_cost": 0.0,
+        })
         pnl = float(record["pnl"])
         group["closed_trades"] += 1
         group["pnl"] += pnl
+        # Records from before the cost split carry no gross figure; their gross is the net plus the costs they did record.
+        commission = float(record.get("entry_commission") or 0) + float(record.get("exit_commission") or 0)
+        borrow = float(record.get("borrow_cost") or 0)
+        group["gross_pnl"] += float(record["gross_pnl"]) if "gross_pnl" in record else pnl + commission + borrow
+        group["spread_slippage"] += float(record.get("spread_slippage_cost") or 0)
+        group["commission"] += commission
+        group["borrow_cost"] += borrow
         if pnl > 0:
             group["wins"] += 1
             group["gross_profit"] += pnl
@@ -598,6 +627,11 @@ def _group_pnl(records: list[dict], key: str, initial_capital: float) -> dict:
             "average_trade_usd": round(group["pnl"] / trades, 2) if trades else None,
             "win_rate_pct": round(100.0 * group["wins"] / trades, 2) if trades else None,
             "profit_factor": round(group["gross_profit"] / group["gross_loss"], 3) if group["gross_loss"] > 0 else None,
+            # Net P/L is gross P/L less the spread and slippage, commissions and borrow costs.
+            "gross_pnl_usd": round(group["gross_pnl"], 2),
+            "spread_slippage_usd": round(group["spread_slippage"], 2),
+            "commission_usd": round(group["commission"], 2),
+            "borrow_cost_usd": round(group["borrow_cost"], 2),
         }
     return out
 
@@ -782,5 +816,7 @@ def run_settings_replay(
         },
         "strategy_breakdown": breakdown,
         "daily_equity": summary.get("daily_equity"),
+        # One row per closed trade, for timing analysis: entries, exits, holding time, gross and costs.
+        "closed_trade_details": summary.get("closed_trade_details") or [],
         "output_dir": str(output_dir),
     }

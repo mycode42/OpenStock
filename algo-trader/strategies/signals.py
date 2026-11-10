@@ -16,6 +16,8 @@ class Signal:
     strategy_group: str | None = None
     target_weight: float | None = None
     event_id: str | None = None
+    # Measurements taken at the signal bar, as (name, value) pairs. Empty unless the rule pipeline set them.
+    features: tuple[tuple[str, float], ...] = ()
 
     def to_dict(self) -> dict:
         return asdict(self)

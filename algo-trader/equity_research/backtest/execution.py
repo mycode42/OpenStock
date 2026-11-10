@@ -113,7 +113,7 @@ class ReplayExecutionMixin:
                 self.rejections[f"coordinator_flatten:{result.rule or 'risk_rejected'}"] += 1
                 continue
             fill = self._fill_price(float(bar["c"]), action)
-            self._close_position(ticker, fill, timestamp, reason)
+            self._close_position(ticker, fill, timestamp, reason, raw_price=float(bar["c"]))
     def _strategy_total_pnl(self) -> dict[str, float]:
         totals: dict[str, float] = defaultdict(float)
         for trade in self.closed_trades:
@@ -204,7 +204,9 @@ class ReplayExecutionMixin:
             "open_position_count": len(positions) + len(pending_new),
         }
 
-    def _close_position(self, ticker: str, price: float, timestamp: datetime, reason: str) -> None:
+    def _close_position(
+        self, ticker: str, price: float, timestamp: datetime, reason: str, *, raw_price: float | None = None,
+    ) -> None:
         position = self.positions.pop(ticker)
         self.last_exit_at[ticker] = timestamp
         self.last_exit_at_by_strategy[(ticker, position.strategy)] = timestamp
@@ -213,7 +215,22 @@ class ReplayExecutionMixin:
         exit_commission = abs(position.qty) * self.commission_per_share
         self.cash -= exit_commission
         self.commission_total += exit_commission
+        # Excursions from the entry fill, before costs: how far the trade went for and against us while held.
+        if position.max_high_price is not None and position.min_low_price is not None and position.entry_price:
+            if position.qty > 0:
+                mfe = position.max_high_price / position.entry_price - 1
+                mae = position.min_low_price / position.entry_price - 1
+            else:
+                mfe = 1 - position.min_low_price / position.entry_price
+                mae = 1 - position.max_high_price / position.entry_price
+        else:
+            mfe = mae = None
         pnl = position.qty * (price - position.entry_price) - position.entry_commission - exit_commission - position.borrow_cost
+        # Gross P/L at the raw prices; the rest of the move is spread and slippage, booked in the fill prices.
+        entry_raw = position.entry_raw_price if position.entry_raw_price is not None else position.entry_price
+        exit_raw = raw_price if raw_price is not None else price
+        gross_pnl = position.qty * (exit_raw - entry_raw)
+        spread_slippage = gross_pnl - position.qty * (price - position.entry_price)
         self.closed_trades.append({
             "ticker": ticker,
             "strategy": position.strategy,
@@ -227,6 +244,8 @@ class ReplayExecutionMixin:
             "exit_price": round(price, 6),
             "exit_reason": reason,
             "pnl": round(pnl, 2),
+            "gross_pnl": round(gross_pnl, 2),
+            "spread_slippage_cost": round(spread_slippage, 2),
             "entry_commission": round(position.entry_commission, 4),
             "exit_commission": round(exit_commission, 4),
             "borrow_cost": round(position.borrow_cost, 4),
@@ -236,6 +255,10 @@ class ReplayExecutionMixin:
                 6,
             ),
             "holding_minutes": max(BAR_MINUTES, position.bars_held * BAR_MINUTES),
+            "mfe_pct": round(mfe, 6) if mfe is not None else None,
+            "mae_pct": round(mae, 6) if mae is not None else None,
+            "entry_strength": position.entry_strength,
+            "entry_features": dict(position.entry_features),
         })
 
     def _check_brackets(self, ticker: str, bar: dict, timestamp: datetime) -> None:
@@ -243,6 +266,8 @@ class ReplayExecutionMixin:
         if position is None:
             return
         opening, high, low = (float(bar[key]) for key in ("o", "h", "l"))
+        position.max_high_price = high if position.max_high_price is None else max(position.max_high_price, high)
+        position.min_low_price = low if position.min_low_price is None else min(position.min_low_price, low)
         is_short = position.qty < 0
         stop_hit = high >= position.stop_price if is_short else low <= position.stop_price
         target_hit = low <= position.take_profit if is_short else high >= position.take_profit
@@ -278,7 +303,7 @@ class ReplayExecutionMixin:
             return
         exit_action = "cover" if is_short else "sell"
         adverse_fill = self._fill_price(raw_fill, exit_action)
-        self._close_position(ticker, adverse_fill, timestamp, reason)
+        self._close_position(ticker, adverse_fill, timestamp, reason, raw_price=raw_fill)
 
     def _fill_pending_entries(self, bars: dict[str, dict], timestamp: datetime) -> None:
         for ticker in list(self.pending_entries):
@@ -297,7 +322,8 @@ class ReplayExecutionMixin:
                 self.rejections["hard_to_borrow_at_fill"] += 1
                 continue
             extra_bps = self.unknown_borrow_penalty_bps if action == "short" and borrow_status is None else 0.0
-            fill_price = self._fill_price(float(bar["o"]), action, extra_bps=extra_bps)
+            raw_entry = float(bar["o"])
+            fill_price = self._fill_price(raw_entry, action, extra_bps=extra_bps)
             signed_qty = int(order["qty"]) if action == "buy" else -int(order["qty"])
             required_cash = fill_price * abs(signed_qty)
             if action == "buy" and required_cash > self.cash - self._equity() * float(self.risk["min_cash_pct"]):
@@ -317,6 +343,9 @@ class ReplayExecutionMixin:
                 favorable_extreme=fill_price,
                 entry_commission=commission,
                 entry_regime=str((self._current_regime or {}).get("regime", "unknown")),
+                entry_raw_price=raw_entry,
+                entry_strength=order.get("strength"),
+                entry_features=tuple((str(key), float(value)) for key, value in (order.get("features") or [])),
             )
 
     def _fill_pending_exits(self, bars: dict[str, dict], timestamp: datetime) -> None:
@@ -337,7 +366,7 @@ class ReplayExecutionMixin:
                 is_short = self.positions[ticker].qty < 0
                 action = "cover" if is_short else "sell"
                 fill_price = self._fill_price(float(bar["o"]), action)
-                self._close_position(ticker, fill_price, timestamp, order["reason"])
+                self._close_position(ticker, fill_price, timestamp, order["reason"], raw_price=float(bar["o"]))
 
     def _queue_exit_signal(self, ticker: str, signal: dict, bar: dict, timestamp: datetime) -> None:
         position = self.positions.get(ticker)

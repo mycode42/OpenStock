@@ -33,6 +33,20 @@ def _et_date(value):
     return parsed.astimezone(ET).date()
 
 
+def _held_too_short_to_exit(signal, params: dict, position_qty: float, entry_at, bars) -> bool:
+    """A discretionary exit signal is ignored until the position has been held minimum_hold_sessions sessions.
+
+    Stops are not signals: the price stop still applies from the first session.
+    """
+    minimum_hold = int(params.get("minimum_hold_sessions", 0) or 0)
+    if minimum_hold <= 0 or not position_qty or entry_at is None or not bars:
+        return False
+    if signal is None or signal.action not in {"sell", "cover"}:
+        return False
+    held = _sessions_after_entry(entry_at, bars[-1].get("t"))
+    return held is not None and held < minimum_hold
+
+
 def _sessions_after_entry(entry_at, now_at) -> int | None:
     """Weekdays after the entry session up to and including the current session. Holidays count as sessions."""
     from datetime import timedelta
@@ -311,7 +325,35 @@ def _merged_rule_parameters(name: str, parameters: dict | None, algo_risk: dict)
     return params, _parameters(name, params)
 
 
-def evaluate_rule_signal(
+def entry_features(bars: list[dict]) -> tuple[tuple[str, float], ...]:
+    """Measurements at the signal bar that the short-side gates and the trade records use.
+
+    Each value is a fraction (or a ratio for volume). A feature is left out when the history is too short for it.
+    """
+    values = closes(bars)
+    if not values or values[-1] <= 0:
+        return ()
+    last = values[-1]
+    found: dict[str, float] = {}
+    if len(values) >= 21:
+        found["ret_20"] = last / values[-21] - 1
+    if len(values) >= 71:
+        found["ret_70"] = last / values[-71] - 1
+        average_70 = sum(values[-70:]) / 70
+        if average_70 > 0:
+            found["stretch_70"] = last / average_70 - 1
+    if len(values) >= 106:
+        average_70 = sum(values[-70:]) / 70
+        earlier = sum(values[-105:-35]) / 70
+        if average_70 > 0 and earlier > 0:
+            found["slope_35"] = average_70 / earlier - 1
+    volumes = [float(bar.get("v", 0) or 0) for bar in bars[-20:]]
+    if len(volumes) == 20 and sum(volumes[:-1]) > 0:
+        found["volume_ratio"] = volumes[-1] / (sum(volumes[:-1]) / 19)
+    return tuple(sorted(found.items()))
+
+
+def _evaluate_rule_signal_core(
     name: str, ticker: str, bars: list[dict], parameters: dict | None = None,
     *, position_qty: float = 0, entry_at: str | None = None,
     entry_price: float | None = None, position_target: float | None = None,
@@ -432,5 +474,26 @@ def evaluate_rule_signal(
         if extension is None or abs(extension) > max_extension:
             return None
     if name in WEEKLY_RULE_NAMES:
+        if _held_too_short_to_exit(signal, params, position_qty, entry_at, bars):
+            return None
         return _weekly_strategy_signal(signal, name, params)
     return _intraday_strategy_signal(signal, name)
+
+
+def evaluate_rule_signal(
+    name: str, ticker: str, bars: list[dict], parameters: dict | None = None,
+    *, position_qty: float = 0, entry_at: str | None = None,
+    entry_price: float | None = None, position_target: float | None = None,
+    runtime_enabled_override: bool | None = None,
+) -> Signal | None:
+    """Evaluate one strategy and attach the entry measurements to a new entry signal."""
+    signal = _evaluate_rule_signal_core(
+        name, ticker, bars, parameters, position_qty=position_qty, entry_at=entry_at,
+        entry_price=entry_price, position_target=position_target,
+        runtime_enabled_override=runtime_enabled_override,
+    )
+    if signal is not None and not position_qty and signal.action in {"buy", "short"}:
+        # Signals are frozen; the measurements are set once, before anything reads the signal.
+        object.__setattr__(signal, "features", entry_features(bars))
+    return signal
+

@@ -78,7 +78,7 @@ ALGO_DEFAULT_PARAMETERS = {
     "swing_trend_following": SwingTrendConfig().to_dict(),
     "swing_momentum": SwingMomentumConfig().to_dict(),
     "intraday_mean_reversion": {
-        "direction_mode": "both",
+        "direction_mode": "long_only",
         "max_reference_slope_pct": 0.005,
         "regime_filter": "none",
         "efficiency_ratio_period": 20,
@@ -96,18 +96,22 @@ ALGO_DEFAULT_PARAMETERS = {
     "swing_multi_factor": MULTI_FACTOR_DEFAULT_CONFIG.to_dict(),
     "swing_llm_driven": LLM_DEFAULT_CONFIG,
     "swing_mean_reversion": SWING_MEAN_REVERSION_DEFAULT_CONFIG,
-    "intraday_trend_following": {"enabled": True, "fast_period": 9, "slow_period": 21, "direction_mode": "both"},
-    "intraday_momentum": {"enabled": True, "lookback": 12, "minimum_return": 0.015, "minimum_volume_ratio": 1.2, "direction_mode": "both"},
+    "intraday_trend_following": {"enabled": True, "fast_period": 9, "slow_period": 21, "direction_mode": "long_only"},
+    "intraday_momentum": {"enabled": True, "lookback": 12, "minimum_return": 0.015, "minimum_volume_ratio": 1.2, "direction_mode": "long_only"},
 }
 # Weekly tier: the three families on hourly bars (7 per session). Lookbacks are
 # 10-20 sessions (70-140 hourly bars); holds are 3-10 sessions.
 ALGO_DEFAULT_PARAMETERS["weekly_trend_following"] = {
     "enabled": True, "fast_period": 35, "slow_period": 140,
-    "direction_mode": "both", "maximum_holding_sessions": 10,
+    "direction_mode": "long_only", "maximum_holding_sessions": 10,
 }
 ALGO_DEFAULT_PARAMETERS["weekly_momentum"] = {
     "enabled": True, "lookback": 70, "minimum_return": 0.03, "minimum_volume_ratio": 1.2,
-    "direction_mode": "both", "maximum_holding_sessions": 10,
+    # Long only since 2026-11-10: over 2020-2026 the shorts lost in every regime (about -$20k), longs made +$3k.
+    "direction_mode": "long_only", "maximum_holding_sessions": 10,
+    # Sessions a position is held before a momentum-reversal exit may close it. Set to 3 on 2026-11-10 after the
+    # replay: 3 sessions turned weekly momentum from -$20.0k to +$3.3k over 2020-2026. Stops still apply from entry.
+    "minimum_hold_sessions": 3,
 }
 ALGO_DEFAULT_PARAMETERS["weekly_mean_reversion"] = {
     **deepcopy(ALGO_DEFAULT_PARAMETERS["intraday_mean_reversion"]),
@@ -153,11 +157,47 @@ for _weekly in ("weekly_trend_following", "weekly_momentum", "weekly_mean_revers
     PARAMETER_KEYS[_weekly] = set(ALGO_DEFAULT_PARAMETERS[_weekly])
 
 
+SHORT_GATE_KEYS = {
+    "min_strength": (0.0, 1.0),
+    "min_ret_70": (-1.0, 0.0),
+    "min_stretch_70": (0.0, 1.0),
+}
+
+
+def validate_short_entry_gates(strategy: str, gates) -> dict:
+    """Conditions a short entry must meet at its signal bar. Each gate is off when absent.
+
+    min_strength: the signal's strength must be at least this.
+    min_ret_70: the 70-bar return must be at or below this (a negative number: a real decline before shorting).
+    min_stretch_70: the close must be at least this far above its 70-bar average (fading a rally).
+    allowed_regimes: the short is taken only in these regimes.
+    """
+    if not isinstance(gates, dict):
+        raise ValueError(f"{strategy} short_entry_gates must be an object")
+    unknown = set(gates) - set(SHORT_GATE_KEYS) - {"allowed_regimes"}
+    if unknown:
+        raise ValueError(f"{strategy} short_entry_gates has unsupported key(s): {', '.join(sorted(unknown))}")
+    out: dict = {}
+    for key, (low, high) in SHORT_GATE_KEYS.items():
+        if key in gates:
+            value = gates[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+                raise ValueError(f"{strategy} short_entry_gates.{key} must be between {low} and {high}")
+            out[key] = float(value)
+    if "allowed_regimes" in gates:
+        regimes = gates["allowed_regimes"]
+        if not isinstance(regimes, list) or not all(isinstance(item, str) for item in regimes):
+            raise ValueError(f"{strategy} short_entry_gates.allowed_regimes must be a list of regime names")
+        out["allowed_regimes"] = sorted(set(regimes))
+    return out
+
+
 def validate_parameter_profile(profile: dict) -> dict:
     """Validate research-only signal parameters; portfolio risk stays fixed."""
     if not isinstance(profile, dict):
         raise ValueError("Strategy profile must be a JSON object")
     normalized = {}
+    gate_settings: dict[str, dict] = {}
     for supplied_strategy, values in profile.items():
         # Old profiles carried confirmation overlay knobs. Ignore that retired
         # section while preserving the strategy parameters beside it.
@@ -170,6 +210,9 @@ def validate_parameter_profile(profile: dict) -> dict:
             raise ValueError(f"Profile contains both legacy and canonical IDs for {strategy}")
         if strategy not in PARAMETER_KEYS or not isinstance(values, dict):
             raise ValueError(f"Unknown or malformed strategy profile: {supplied_strategy}")
+        values = dict(values)
+        if "short_entry_gates" in values:
+            gate_settings[strategy] = validate_short_entry_gates(strategy, values.pop("short_entry_gates"))
         values = drop_retired_profile_keys(strategy, values)
         values = drop_retired_mean_reversion_keys(strategy, values)
         unknown = set(values) - PARAMETER_KEYS[strategy]
@@ -242,6 +285,9 @@ def validate_parameter_profile(profile: dict) -> dict:
     number("intraday_mean_reversion", "adx_max", 20, 5, 50)
     number("intraday_mean_reversion", "volatility_lookback", 20, 5, 100, integer=True)
     number("intraday_mean_reversion", "high_volatility_ratio", 1.25, 1.0, 3.0)
+    for strategy, gates in gate_settings.items():
+        if gates:
+            normalized[strategy]["short_entry_gates"] = gates
     return normalized
 
 

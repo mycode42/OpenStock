@@ -168,7 +168,7 @@
       "regime_weights": {
         "trending_up": 0.6,
         "trending_down": 0.6,
-        "range_bound": 0.6,
+        "range_bound": 0,
         "volatile": 0.2,
         "ambiguous": 0,
         "unknown": 0
@@ -336,7 +336,8 @@
     "intraday_stop_vol_multiple": 3.0,
     "intraday_stop_vol_lookback_bars": 36,
     "marketable_limit_band_bps": 25,
-    "protective_limit_band_bps": 50
+    "protective_limit_band_bps": 50,
+    "entry_pricing": "passive"
   },
   "signal_data": {
     "signal_bar_max_age_minutes": 20,

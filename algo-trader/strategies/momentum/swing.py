@@ -14,7 +14,7 @@ from strategies.swing_common import SwingSignal, clean_daily_bars, held_sessions
 @dataclass(frozen=True)
 class SwingMomentumConfig:
     enabled: bool = True
-    direction_mode: str = "both"
+    direction_mode: str = "long_only"  # Long only since 2026-11-10: shorts lost over 2020-2026.
     momentum_mode: str = "cross_sectional"
     lookbacks: tuple[int, ...] = (5, 10, 20)
     top_n: int = 3

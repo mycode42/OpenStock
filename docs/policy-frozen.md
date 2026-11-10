@@ -35,6 +35,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 
 ## Approved changes
 
+- **2026-11-10, passive entries.** At Andreas's explicit request, regular-session entries no longer pay the spread: a buy rests at the bid and a short at the ask (`execution.entry_pricing` = `passive`). Exits and protective stops keep their marketable bands. A passive entry is not guaranteed to fill; an unfilled entry expires with the day. A missing two-sided quote suppresses the entry (`no two-sided quote for a passive entry`), which adds one gate message to `frozen_gates.json`. Each entry decision records the quote, mid and limit so fills can be measured against it.
+
 - **2026-11-09, tier allocation budgets.** At Andreas's explicit request, entries are budgeted by time-range tier as aggregate allocation ceilings of equity: intraday 7%, weekly 20%, swing 30% (57% in total, under the 90% gross cap). Tier membership comes from the strategy catalog; weekly has no strategies yet. A new entry is trimmed to fit the tier's remaining room, and is rejected with `tier allocation budget is full` when less than one share fits. Pending entries cannot be attributed to a tier, so they count against every tier until they fill or cancel (fail-closed). Exits are not affected. Per-position caps (`max_position_pct`, `max_strategy_position_pct` 0.10) and regime gross caps are unchanged. Approved by Andreas in chat ("reject the signal when full. go ahead"). Adds one gate message to `frozen_gates.json`.
 
 - **2026-11-08, LLM confidence floor 80 for options too.** At Andreas's explicit request, `llm_driven.min_llm_confidence` is 0.80 (was 0.70), matching the Algo LLM floor. The LLM strategies trade only when very confident. Approved by Andreas in chat.

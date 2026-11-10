@@ -22,7 +22,7 @@ from strategies.swing_common import SwingSignal, clean_daily_bars, entry_session
 @dataclass(frozen=True)
 class SwingMeanReversionConfig:
     enabled: bool = True
-    direction_mode: str = "both"
+    direction_mode: str = "long_only"  # Long only since 2026-11-10: shorts lost in every regime over 2020-2026.
     lookback_days: int = 15
     lookback_mode: str = "fixed"
     stretch_pct: float = 0.06

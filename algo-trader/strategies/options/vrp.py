@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from options.data import realized_volatility
 from options.models import OptionSignal
 from options.structures import iron_condor
@@ -9,6 +11,31 @@ from strategies.options.base import (
     OptionsStrategyContext, choose_expiration, nearest_delta,
     regime_risk_multiplier, valid_quote,
 )
+
+
+def iv_rank_allows(iv_percentile: float | None, minimum: float | None) -> bool:
+    """Entry gate on the point-in-time IV percentile. No minimum configured means no gate; a missing percentile fails closed."""
+    if minimum is None:
+        return True
+    return iv_percentile is not None and float(iv_percentile) >= float(minimum)
+
+
+def vrp_exit_reason(
+    *, entry_credit: float, pnl_if_closed: float | None, held_days: int, config: dict,
+) -> str | None:
+    """Close a short-premium structure once its loss reaches the configured multiple of the credit received.
+
+    Unset settings keep the strategy's behaviour: no stop and no holding limit.
+    """
+    if not math.isfinite(entry_credit) or entry_credit <= 0 or pnl_if_closed is None or not math.isfinite(pnl_if_closed):
+        return None
+    maximum_days = config.get("max_holding_days")
+    if maximum_days is not None and held_days >= int(maximum_days):
+        return "maximum_holding_period"
+    multiple = config.get("stop_loss_credit_multiple")
+    if multiple is not None and pnl_if_closed <= -float(multiple) * entry_credit:
+        return "structure_stop_loss"
+    return None
 
 
 class VolatilityRiskPremiumStrategy:
@@ -25,6 +52,8 @@ class VolatilityRiskPremiumStrategy:
             return None
         regime_weight = regime_risk_multiplier(self.config, regime)
         if regime_weight <= 0:
+            return None
+        if not iv_rank_allows(context.iv_percentile, self.config.get("min_iv_percentile")):
             return None
         closes = list(context.underlying_closes)
         lookback = int(self.config.get("realized_lookback_sessions", 20))

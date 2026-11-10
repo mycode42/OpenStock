@@ -562,6 +562,23 @@ class ReplaySignalsMixin:
         chosen = max(options, key=lambda item: (item["rank_score"], item["strength"]))
         return chosen
 
+    def _short_entry_rejection(self, strategy: str, signal: dict) -> str | None:
+        """The short-side gates from the strategy profile. Returns the rejection reason, or None to allow the short."""
+        regime = str((self._current_regime or {}).get("regime", "unknown"))
+        gates = self.parameters_for_regime(strategy, regime).get("short_entry_gates") or {}
+        if not gates:
+            return None
+        features = {str(key): float(value) for key, value in (signal.get("features") or [])}
+        if "min_strength" in gates and float(signal.get("strength") or 0) < gates["min_strength"]:
+            return "short_below_minimum_strength"
+        if "min_ret_70" in gates and ("ret_70" not in features or features["ret_70"] > gates["min_ret_70"]):
+            return "short_insufficient_decline"
+        if "min_stretch_70" in gates and ("stretch_70" not in features or features["stretch_70"] < gates["min_stretch_70"]):
+            return "short_insufficient_stretch"
+        if "allowed_regimes" in gates and regime not in gates["allowed_regimes"]:
+            return "short_regime_not_allowed"
+        return None
+
     def _queue_signal(self, ticker: str, signal: dict, bar: dict, timestamp: datetime) -> None:
         if ticker in self.positions or ticker in self.pending_entries:
             return
@@ -571,6 +588,11 @@ class ReplaySignalsMixin:
             return
         action = str(signal["action"])
         strategy = str(signal["strategy"])
+        if action == "short":
+            rejection = self._short_entry_rejection(strategy, signal)
+            if rejection:
+                self.rejections[rejection] += 1
+                return
         controls = self.research_controls
         entries_today = self.entry_counts[self.day_key]
         if entries_today >= controls.get("max_entries_per_day", self.risk["max_trades_per_day"]):
@@ -720,6 +742,7 @@ class ReplaySignalsMixin:
         signal_at = (timestamp + timedelta(minutes=BAR_MINUTES)).isoformat()
         self.pending_entries[ticker] = {
             "ticker": ticker, "strategy": signal["strategy"],
+            "strength": signal.get("strength"), "features": signal.get("features") or [],
             "qty": int(sized["qty"]), "reference_price": close,
             "action": action,
             "stop_price": float(sized["stop_price"]),
