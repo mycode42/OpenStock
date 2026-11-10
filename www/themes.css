@@ -406,7 +406,6 @@ html[data-theme]:not([data-theme="openstock"]) .btn-primary,
 html[data-theme]:not([data-theme="openstock"]) .algo-save-button,
 html[data-theme]:not([data-theme="openstock"]) .history-range.active,
 html[data-theme]:not([data-theme="openstock"]) .algo-range-btn.active,
-html[data-theme]:not([data-theme="openstock"]) .algo-account-switch button.active,
 html[data-theme]:not([data-theme="openstock"]) .badge.enabled {
   border-color: var(--os-accent);
   background: var(--os-accent);
@@ -640,7 +639,6 @@ html[data-theme-mode="light"] .btn-primary,
 html[data-theme-mode="light"] .algo-save-button,
 html[data-theme-mode="light"] .history-range.active,
 html[data-theme-mode="light"] .algo-range-btn.active,
-html[data-theme-mode="light"] .algo-account-switch button.active,
 html[data-theme-mode="light"] .badge.enabled {
   border-color: var(--os-accent);
   background: var(--os-accent);
@@ -787,9 +785,9 @@ html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-s
 
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-account-switch button.active,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-account-switch button.active {
-  border-color: var(--os-accent);
-  background: var(--os-soft-accent);
-  color: var(--os-accent);
+  border-color: var(--os-border);
+  background: var(--os-raised);
+  color: var(--os-text);
 }
 
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-active-strategy-list span,
@@ -951,7 +949,6 @@ html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-eyebrow,
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-text-link,
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-view-more span,
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-open-history span,
-html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown),
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-kpi-featured > strong,
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-chart-summary strong,
 html[data-theme]:not([data-theme="openstock"]) .algo-page .algo-history-filters button.active,
@@ -963,7 +960,6 @@ html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-eyebrow,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-text-link,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-view-more span,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-open-history span,
-html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-state-pill:not(.paused):not(.market-closed):not(.unknown),
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-kpi-featured > strong,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-chart-summary strong,
 html[data-theme="openstock"][data-theme-mode="light"] .algo-page .algo-history-filters button.active,
