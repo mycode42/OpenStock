@@ -19,6 +19,11 @@ const state = {
     planInfo: null,
     job: null,
     results: null,
+    // Which run the results panel shows. Chosen by the user; follows the newest run until then.
+    resultsJobId: null,
+    resultsFor: null,
+    // The entry and exit rules stay open or closed across strategy changes.
+    rulesOpen: false,
     logText: '',
     logOffset: 0,
     logOpen: false,
@@ -85,7 +90,7 @@ function renderEquityLive(job) {
     let headline;
     const next = stages.rows.find(row => row.status === 'pending');
     if (running) headline = `Running${current ? ` · ${escapeHtml(current.label)}${current.strategies ? ` (${current.strategies.done} of ${current.strategies.total} strategies)` : ''}` : next ? ` · next: ${escapeHtml(next.label)}` : ' · starting'}`;
-    else if (done) headline = `Finished · report ${escapeHtml(state.results?.report?.status ?? 'unknown')}`;
+    else if (done) headline = `Finished · report ${escapeHtml(state.resultsFor === job.id ? state.results?.report?.status ?? 'unknown' : 'unknown')}`;
     else headline = `${escapeHtml(job.state)}: open the log below for the error`;
     const rows = stages.rows.map(row => {
         const label = STAGE_STATUS_LABELS[row.status] || row.status;
@@ -297,7 +302,7 @@ function renderRules(strategy) {
     const rules = strategy?.rules;
     if (!rules || (!rules.entry?.length && !rules.exit?.length)) return '';
     const list = items => `<ul class="lab-rule-list">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
-    return `<details class="lab-rules"><summary>Entry and exit rules: ${escapeHtml(strategy.id.replaceAll('_', ' '))}</summary>
+    return `<details class="lab-rules" data-lab-rules ${state.rulesOpen ? 'open' : ''}><summary>Entry and exit rules: ${escapeHtml(strategy.id.replaceAll('_', ' '))}</summary>
         <div class="lab-rules-grid"><div><strong>Entry</strong>${list(rules.entry)}</div><div><strong>Exit</strong>${list(rules.exit)}</div></div>
     </details>`;
 }
@@ -332,7 +337,36 @@ function renderProfilePanel(strategy) {
         </details>`;
 }
 
+// Every run the results can come from: the one in the live panel, the running ones, then the recent finished ones.
+function resultRuns() {
+    const seen = new Set();
+    const runs = [];
+    const add = (id, runState) => {
+        if (!id || seen.has(id)) return;
+        seen.add(id);
+        runs.push({ id, state: runState });
+    };
+    if (state.job?.account === state.account) add(state.job.id, state.job.state);
+    for (const job of state.overview?.active_jobs || []) if (job.account === state.account) add(job.id, 'running');
+    for (const job of state.overview?.recent_jobs || []) add(job.id, job.state);
+    return runs;
+}
+
 function renderResults() {
+    const runs = resultRuns();
+    const selected = state.resultsJobId || state.job?.id || null;
+    const picker = runs.length > 1
+        ? `<label class="lab-results-pick">Run <select data-lab-results-run>${runs.map(run => `<option value="${escapeHtml(run.id)}" ${run.id === selected ? 'selected' : ''}>${escapeHtml(run.id)} · ${escapeHtml(run.state)}</option>`).join('')}</select></label>`
+        : '';
+    return `${picker}<div id="lab-results-body">${renderResultsBody()}</div>`;
+}
+
+function renderResultsOnly() {
+    const body = document.getElementById('lab-results-body');
+    if (body) body.innerHTML = renderResultsBody();
+}
+
+function renderResultsBody() {
     const data = state.results;
     if (data?.account === 'equity') return renderEquityResults(data);
     if (!data?.results?.length) return '<p class="lab-muted">Results appear here as each underlying finishes.</p>';
@@ -390,17 +424,15 @@ function renderLab() {
         : '<p>Pick the strategies, profiles and dates for a run. Every run uses the latest data and writes to its own folder, never the nightly report.</p>';
     const body = isOptions
         ? `<div class="lab-grid">
-            <div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div></div>
+            <div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div><h3>Results</h3><div id="lab-results">${renderResults()}</div></div>
             <div><h3>Start a run</h3>${renderStartForm()}</div>
           </div>
-          <div class="lab-fullwidth"><h3>Results</h3>${renderResults()}</div>
           <div class="lab-fullwidth">${renderStrategyTabs()}</div>
           <div class="lab-fullwidth">${renderRules(strategy)}</div>
           <div class="lab-fullwidth">${renderProfilePanel(strategy)}</div>
           <div class="lab-fullwidth">${renderPlanPanel()}</div>
           `
-        : `<div class="lab-grid"><div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div></div><div><h3>Start a run</h3>${renderEquityStart()}</div></div>
-          <div class="lab-fullwidth"><h3>Results</h3>${renderResults()}</div>
+        : `<div class="lab-grid"><div><h3>Progress and log</h3><div id="lab-live">${renderLive()}</div><h3>Results</h3><div id="lab-results">${renderResults()}</div></div><div><h3>Start a run</h3>${renderEquityStart()}</div></div>
           <div class="lab-fullwidth">${renderStrategyTabs()}</div>
           <div class="lab-fullwidth">${renderRules(strategy)}</div>
           <div class="lab-fullwidth">${renderProfilePanel(strategy)}</div>
@@ -454,6 +486,19 @@ async function refreshOverview() {
     render();
 }
 
+// Show the results of the run picked in the list. Results of a run still going are read again while it runs.
+async function selectResults(id) {
+    state.resultsJobId = id;
+    state.results = null;
+    state.resultsFor = null;
+    renderResultsOnly();
+    const results = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(id)}/results`, {}, message => { state.error = message; });
+    if (state.resultsJobId !== id) return;
+    state.results = results;
+    state.resultsFor = id;
+    renderResultsOnly();
+}
+
 async function pollJob() {
     const id = state.job?.id;
     if (!id) return stopPolling();
@@ -468,6 +513,8 @@ async function pollJob() {
     if (!isRunning(job)) {
         stopPolling();
         state.results = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(id)}/results`);
+        state.resultsJobId = id;
+        state.resultsFor = id;
         state.message = `Run ${job.state}.`;
         return refreshOverview();
     }
@@ -475,6 +522,15 @@ async function pollJob() {
     if (state.pollTick % 3 === 0) {
         const overview = await apiRequest(`/algo-trader/research/lab?account=${encodeURIComponent(state.account)}`);
         if (overview && overview.account === state.account) state.overview = overview;
+        const selected = state.resultsJobId;
+        if (selected && selected !== id && (state.overview?.active_jobs || []).some(item => item.id === selected)) {
+            const results = await apiRequest(`/algo-trader/research/jobs/${encodeURIComponent(selected)}/results`);
+            if (state.resultsJobId === selected && results) {
+                state.results = results;
+                state.resultsFor = selected;
+                renderResultsOnly();
+            }
+        }
     }
     // Only the live panel updates while a run is going, so the form and any typing are untouched.
     renderLiveOnly();
@@ -505,6 +561,8 @@ async function startEquityRun() {
     if (job) {
         state.job = job;
         state.results = null;
+        state.resultsJobId = job.id;
+        state.resultsFor = null;
         state.logText = '';
         state.logOffset = 0;
         state.message = `Started ${job.id}.`;
@@ -527,6 +585,8 @@ async function startRun() {
     if (job) {
         state.job = job;
         state.results = null;
+        state.resultsJobId = job.id;
+        state.resultsFor = null;
         state.logText = '';
         state.logOffset = 0;
         state.message = `Started ${job.id}.`;
@@ -630,6 +690,10 @@ export function mountResearchLab(element, account = 'options') {
         // Keep what the user typed in state, so a re-render never clears it.
         const capture = event => {
             const target = event.target;
+            if (target.matches('[data-lab-results-run]')) {
+                selectResults(target.value);
+                return;
+            }
             if (target.matches('[data-lab-field]')) state.form[target.name] = target.value;
             if (target.matches('[data-lab-pick]')) {
                 const id = target.dataset.labPick;
@@ -654,11 +718,18 @@ export function mountResearchLab(element, account = 'options') {
         };
         element.addEventListener('input', capture);
         element.addEventListener('change', capture);
+        // Native details elements do not bubble toggle events, so listen in the capture phase.
+        element.addEventListener('toggle', event => {
+            if (event.target.matches?.('[data-lab-rules]')) state.rulesOpen = event.target.open;
+        }, true);
     }
     if (element.dataset.account === account && state.overview) return;
     element.dataset.account = account;
     state.account = account;
     state.overview = null;
+    state.results = null;
+    state.resultsJobId = null;
+    state.resultsFor = null;
     state.planPreview = null;
     state.message = '';
     state.error = '';

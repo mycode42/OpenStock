@@ -20,11 +20,10 @@ const LIMITS = Object.freeze({
     earliestStart: '2020-01-01',
 });
 const OPTIONS_STRATEGIES = Object.freeze(['vrp', 'long_volatility']);
-// Equity pipeline stages in the order the research runs them, as the stage file names them.
+// Equity pipeline stages in the order the research runs them. Research is replay only: the stage file records the
+// first two, and the portfolio replay reports through its LAB_EVENT progress lines instead.
 const EQUITY_STAGES = Object.freeze([
-    ['data_refresh', 'Data refresh'], ['factor_model', 'Factor model'], ['discovery', 'Discovery search'],
-    ['verification', 'Rolling verification'], ['candidate_validation', 'Candidate validation'],
-    ['portfolio_replay', 'Portfolio replay'], ['forward_validation', 'Forward validation'], ['report_assembly', 'Report'],
+    ['data_refresh', 'Data refresh'], ['factor_model', 'Factor model'], ['portfolio_replay', 'Portfolio replay'],
 ]);
 const EQUITY_STRATEGIES = Object.freeze([
     'swing_trend_following', 'swing_momentum', 'swing_mean_reversion', 'swing_multi_factor',
@@ -599,6 +598,8 @@ class ResearchLab {
         const settled = new Set(['completed', 'reused', 'skipped', 'error', 'failed', 'not_run']);
         const rows = EQUITY_STAGES.map(([key, label]) => {
             let status = stages[key]?.status || 'pending';
+            // The replay has no stage-file entry; its progress lines show it started, and the job's end shows it finished.
+            if (status === 'pending' && key === 'portfolio_replay' && Object.keys(replay).length) status = finished ? 'completed' : 'running';
             if (status === 'pending' && finished) status = 'not_run';
             const strategyStatuses = perStrategy[key] ? Object.values(perStrategy[key]).map(item => item.status) : [];
             return {
@@ -1108,6 +1109,19 @@ class ResearchLab {
         return { strategy, restored: target.id, applied: 'next options paper cycle' };
     }
 
+    // The latest runs of one account, newest first, so the results can be chosen from several runs.
+    async recentJobs(account, limit = 12) {
+        let names = [];
+        try { names = await fsp.readdir(path.join(this.labDir, 'jobs')); }
+        catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+        const jobs = await Promise.all(names.map(name => readJsonFile(path.join(this.labDir, 'jobs', name, 'job.json'), null)));
+        return jobs
+            .filter(job => job && job.account === account)
+            .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+            .slice(0, limit)
+            .map(job => ({ id: job.id, account: job.account, state: job.state, created_at: job.created_at ?? null, strategies: job.strategies || [] }));
+    }
+
     async overview(account = 'options') {
         const limits = {
             maxUnderlyings: LIMITS.maxUnderlyings, minFreeMemoryMb: LIMITS.minFreeMemoryMb, earliestStart: LIMITS.earliestStart,
@@ -1119,7 +1133,8 @@ class ResearchLab {
             const status = await this.jobStatus(id);
             return { id, account: status.account, percent: status.stages?.percent ?? null, strategy: status.strategy ?? null };
         }));
-        const base = { account, limits, active_job: this.activeJob(), active_jobs };
+        const recent_jobs = await this.recentJobs(account);
+        const base = { account, limits, active_job: this.activeJob(), active_jobs, recent_jobs };
         if (account === 'equity') {
             // Equity panels show the live parameters; equity runs start from the lab in a later step.
             const settings = await loadSettings(this.root);

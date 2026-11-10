@@ -39,6 +39,8 @@ async function thetaStatus(root, envValues) {
     const eod = await countArchives(researchDir, 'manifest.json');
     const opening = await countArchives(researchDir, 'opening_manifest.json');
     const keyPresent = Boolean(envValues.THETA_DATA_API_KEY || envValues.THETADATA_API_KEY);
+    // A finished backfill whose key has been removed is done: the block is hidden. Missing or incomplete history still shows.
+    if (pipeline?.phase === 'complete' && !keyPresent) return null;
     return {
         phase: pipeline?.phase || 'not_started',
         end_date: pipeline?.end_date || null,
@@ -86,9 +88,12 @@ async function readTail(filePath, size) {
     }
 }
 
-async function logStatus(logDir) {
+// ThetaData job logs are named theta-*.log. They are hidden once the history backfill is complete.
+const THETA_LOG = /^theta-/;
+
+async function logStatus(logDir, { hideThetaLogs = false } = {}) {
     let names = [];
-    try { names = (await fs.readdir(logDir)).filter(name => name.endsWith('.log')).sort(); }
+    try { names = (await fs.readdir(logDir)).filter(name => name.endsWith('.log') && !(hideThetaLogs && THETA_LOG.test(name))).sort(); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
     const rows = [];
     for (const name of names) {
@@ -113,10 +118,11 @@ async function logStatus(logDir) {
 
 async function buildDataStatus({ root, envPath, now = new Date() }) {
     const envValues = await readEnvValues(envPath);
+    const pipeline = await readJson(path.join(root, 'data', 'options', 'research', 'theta', 'pipeline_status.json'), { optional: true }).catch(() => null);
     return {
         generated_at: now.toISOString(),
         theta: await thetaStatus(root, envValues),
-        logs: await logStatus(path.join(root, 'data', 'algo', 'logs')),
+        logs: await logStatus(path.join(root, 'data', 'algo', 'logs'), { hideThetaLogs: pipeline?.phase === 'complete' }),
     };
 }
 

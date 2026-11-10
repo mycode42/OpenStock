@@ -54,6 +54,24 @@ function summarizeOptionsResearch(report) {
     };
 }
 
+// Each research archive is parsed once per change. Parsing the full simulation folder on every request took seconds,
+// because latest.json alone is hundreds of megabytes. Entries are keyed by path and stamped with size and mtime.
+const researchSummaryCache = new Map();
+
+function cachedResearchSummary(filePath) {
+    return fs.stat(filePath).then(stat => {
+        const stamp = `${stat.size}:${stat.mtimeMs}`;
+        const cached = researchSummaryCache.get(filePath);
+        if (cached && cached.stamp === stamp) return cached.summary;
+        const pending = readJson(filePath).then(summarizeOptionsResearch);
+        const entry = { stamp, summary: pending };
+        researchSummaryCache.set(filePath, entry);
+        // A failed read must not stay cached, so the next request tries the file again.
+        pending.catch(() => { if (researchSummaryCache.get(filePath) === entry) researchSummaryCache.delete(filePath); });
+        return pending;
+    });
+}
+
 async function readOptionsResearch(dataDir) {
     const directory = path.join(dataDir, 'options', 'research', 'simulation');
     let names;
@@ -62,12 +80,17 @@ async function readOptionsResearch(dataDir) {
     const dated = names.filter(name => /^\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort().slice(-90);
     const history = [];
     for (const name of dated) {
-        try { history.push(summarizeOptionsResearch(await readJson(path.join(directory, name)))); }
+        try { history.push(await cachedResearchSummary(path.join(directory, name))); }
         catch { /* One malformed research archive does not hide the rest. */ }
     }
     let latest = null;
-    try { latest = summarizeOptionsResearch(await readJson(path.join(directory, 'latest.json'))); }
+    try { latest = await cachedResearchSummary(path.join(directory, 'latest.json')); }
     catch { /* The latest report is optional until options research runs. */ }
+    // Drop entries for reports that were removed from the folder.
+    const current = new Set([...dated, 'latest.json'].map(name => path.join(directory, name)));
+    for (const key of researchSummaryCache.keys()) {
+        if (key.startsWith(directory + path.sep) && !current.has(key)) researchSummaryCache.delete(key);
+    }
     if (!latest && history.length) latest = history[history.length - 1];
     if (latest && !history.some(item => item?.date === latest.date)) history.push(latest);
     return { latest, history: history.filter(Boolean).sort((a, b) => b.date.localeCompare(a.date)) };

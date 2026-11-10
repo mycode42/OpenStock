@@ -192,7 +192,7 @@ test('intraday profiles run in lab tests but plan apply refuses them until they 
     await assert.rejects(() => lab.equityPlanApply(), err => err.status === 409 && /not applied yet/.test(err.message));
 });
 
-test('an equity run reports every pipeline stage, and stages that never ran read not run once it finishes', async t => {
+test('an equity run shows only the replay-only pipeline stages; a replay with progress lines reads completed once the run finishes', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
     const id = '2026-01-01T00-00-00-000Z-stages';
@@ -203,14 +203,14 @@ test('an equity run reports every pipeline stage, and stages that never ran read
         underlyings: ['AAPL'], state: 'finished', created_at: '2026-01-01T00:00:00.000Z',
     }));
     fs.writeFileSync(path.join(dir, 'output', 'latest-progress.json'), JSON.stringify({
-        stages: { data_refresh: { status: 'completed' }, discovery: { status: 'completed' } },
-        strategies: { discovery: { intraday_momentum: { status: 'completed' } } },
+        stages: { data_refresh: { status: 'completed' }, factor_model: { status: 'completed' } },
     }));
+    fs.writeFileSync(path.join(dir, 'log.txt'), 'LAB_EVENT ' + JSON.stringify({ event: 'replay_progress', label: 'chosen', fraction: 1 }) + '\n');
     const job = await lab.jobStatus(id);
+    assert.deepEqual(job.stages.rows.map(row => row.key), ['data_refresh', 'factor_model', 'portfolio_replay']);
     const byKey = Object.fromEntries(job.stages.rows.map(row => [row.key, row]));
     assert.equal(byKey.data_refresh.status, 'completed');
-    assert.deepEqual(byKey.discovery.strategies, { done: 1, total: 1 });
-    assert.equal(byKey.verification.status, 'not_run');
+    assert.equal(byKey.portfolio_replay.status, 'completed');
     assert.equal(job.stages.percent, 100);
 });
 
@@ -494,4 +494,25 @@ test('a parallel lab run reports replay progress for each replay it runs', () =>
     const latest = replayProgress(parseLabEvents(log));
     assert.equal(latest.chosen.sessions_done, 20);
     assert.equal(latest.live.sessions_done, 12);
+});
+
+test('the overview lists the recent runs of one account, newest first, so their results can be chosen', async t => {
+    const { root, meminfo } = fixtureRoot(t);
+    const lab = new ResearchLab({ root, python: '/venv/bin/python', meminfoPath: meminfo });
+    const jobs = [
+        ['2026-01-01T00-00-00-000Z-a', 'equity', '2026-01-01T00:00:00.000Z', 'finished'],
+        ['2026-01-03T00-00-00-000Z-b', 'equity', '2026-01-03T00:00:00.000Z', 'running'],
+        ['2026-01-02T00-00-00-000Z-c', 'options', '2026-01-02T00:00:00.000Z', 'finished'],
+        ['2026-01-02T12-00-00-000Z-d', 'equity', '2026-01-02T12:00:00.000Z', 'finished'],
+    ];
+    for (const [id, account, created_at, state] of jobs) {
+        const dir = path.join(root, 'data', 'research-lab', 'jobs', id);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify({ id, account, state, created_at, strategies: ['intraday_momentum'] }));
+    }
+    const overview = await lab.overview('equity');
+    assert.deepEqual(overview.recent_jobs.map(job => job.id), [
+        '2026-01-03T00-00-00-000Z-b', '2026-01-02T12-00-00-000Z-d', '2026-01-01T00-00-00-000Z-a',
+    ]);
+    assert.equal(overview.recent_jobs[0].state, 'running');
 });

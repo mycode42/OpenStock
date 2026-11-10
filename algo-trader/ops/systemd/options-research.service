@@ -12,8 +12,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 ExecStart={PYTHON} -m research.options
 ExecStart={PYTHON} scripts/llm_report.py --prompt ops/prompts/options-research.md --context data/options/research/simulation/latest.md --telegram
-StandardOutput=truncate:{ROOT}/data/algo/logs/options-research.log
-StandardError=append:{ROOT}/data/algo/logs/options-research.log
+StandardOutput=truncate:{ROOT}/data/algo/logs/options-simulation.log
+StandardError=append:{ROOT}/data/algo/logs/options-simulation.log
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

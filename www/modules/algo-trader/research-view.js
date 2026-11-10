@@ -36,22 +36,7 @@ function renderRunPager(page, pageCount, total) {
     return `<nav class="algo-run-pager" aria-label="Research history pages"><span>${total} runs · Page ${page} of ${pageCount}</span><div class="algo-run-pager-actions"><button type="button" class="btn btn-sm btn-secondary" data-research-page="${page - 1}" aria-label="Previous page" ${page <= 1 ? 'disabled' : ''}>Previous</button><button type="button" class="btn btn-sm btn-secondary" data-research-page="${page + 1}" aria-label="Next page" ${page >= pageCount ? 'disabled' : ''}>Next</button></div></nav>`;
 }
 
-// Nightly research switches and the kill switch. Available only where the server runs the timers (not in demo mode).
-function renderResearchControl(control) {
-    if (!control) return '';
-    const note = control.available === false
-        ? '<p class="research-control-note">Research control runs on the server, not in the demo.</p>'
-        : '';
-    return `<section class="card algo-panel research-control" aria-label="Research control">
-        <div class="research-control-actions">
-            <span class="research-control-status">${control.running ? 'Research is running now.' : 'No research is running.'}</span>
-            <button type="button" class="btn btn-secondary" data-research-control="kill" ${control.running && control.available !== false ? '' : 'disabled'}>Kill running research</button>
-        </div>
-        ${note}
-    </section>`;
-}
-
-export function renderResearchPage({ mode, snapshot, filter, selectedDate, page, loading, error, control = null }) {
+export function renderResearchPage({ mode, snapshot, filter, selectedDate, page, loading, error }) {
     const isOptions = mode === 'options';
     const modeLabel = isOptions ? 'Options' : 'Equity';
     if (!snapshot) {
@@ -76,7 +61,6 @@ export function renderResearchPage({ mode, snapshot, filter, selectedDate, page,
             <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> RESEARCH ARCHIVE</div><h1>Research</h1>${renderAccountSwitch({ active: mode, ariaLabel: 'Research account', attribute: 'data-research-mode', options: [['equity', 'Equity'], ['options', 'Options']] })}</div>
             <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${demoMode ? 'DEMO RESEARCH' : `${modeLabel.toUpperCase()} RESEARCH`}</span></div>
         </header>
-        ${renderResearchControl(control)}
         <section id="research-data-status" class="card data-status-panel"></section>
         <div id="research-lab-slot"></div>
         <section class="card algo-panel algo-history-panel" id="algo-history">

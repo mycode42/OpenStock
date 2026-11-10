@@ -254,7 +254,7 @@ function dataStatusPayload(nowValue = new Date()) {
         demo_mode: true,
         theta: null,
         logs: [
-            { name: 'equity-research.log', size_bytes: 38_200, modified_at: minutesAgo(14 * 60), last_line: 'AutoResearch finished: status=completed', last_error: null },
+            { name: 'equity-simulation.log', size_bytes: 38_200, modified_at: minutesAgo(14 * 60), last_line: 'AutoResearch finished: status=completed', last_error: null },
             { name: 'health.log', size_bytes: 210_400, modified_at: minutesAgo(12), last_line: '{"ok": true, "equity_ok": true}', last_error: null },
             { name: 'llm-silent-run.log', size_bytes: 88_100, modified_at: minutesAgo(95), last_line: 'Signal snapshot published', last_error: null },
             { name: 'options-history-capture.log', size_bytes: 2_310, modified_at: minutesAgo(26 * 60), last_line: 'Alpaca options close capture ok: captured 117 of 117, failed 0.', last_error: null },

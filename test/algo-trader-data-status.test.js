@@ -45,11 +45,16 @@ test('the status reports progress, the cancel action while the key is present, a
     assert.equal(health.last_error, 'RuntimeError: cannot value holdings');
 });
 
-test('once the key is removed the action says so', async t => {
+test('a finished backfill with the key removed is hidden; missing or incomplete history still shows', async t => {
     const { root, envPath } = makeRoot(t, { envLine: 'THETA_DATA_API_KEY=' });
-    const status = await buildDataStatus({ root, envPath, now: new Date() });
-    assert.equal(status.theta.key_present, false);
-    assert.match(status.theta.action, /removed from \.env/);
+    const done = await buildDataStatus({ root, envPath, now: new Date() });
+    assert.equal(done.theta, null);
+
+    const incomplete = makeRoot(t, { envLine: 'THETA_DATA_API_KEY=' });
+    fs.writeFileSync(path.join(incomplete.root, 'data', 'options', 'research', 'theta', 'pipeline_status.json'), JSON.stringify({ phase: 'eod', end_date: '2026-10-29', symbols: 2 }));
+    const partial = await buildDataStatus({ root: incomplete.root, envPath: incomplete.envPath, now: new Date() });
+    assert.equal(partial.theta.phase, 'eod');
+    assert.equal(partial.theta.key_present, false);
 });
 
 test('a missing pipeline reports not started with no logs and no failure', async t => {
@@ -80,4 +85,24 @@ test('job logs are red only for a recent real failure, not for narrative words o
     const byName = Object.fromEntries(status.logs.map(row => [row.name, row]));
     assert.equal(byName['calm.log'].last_error, null);
     assert.match(byName['broken.log'].last_error, /ERROR/);
+});
+
+test('ThetaData job logs are listed until the history is complete, then hidden', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-theta-logs-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const logs = path.join(root, 'data', 'algo', 'logs');
+    fs.mkdirSync(logs, { recursive: true });
+    for (const name of ['health.log', 'theta-pipeline.log', 'theta-recovery-2026-11-05.log']) fs.writeFileSync(path.join(logs, name), 'line\n');
+    const theta = path.join(root, 'data', 'options', 'research', 'theta');
+    fs.mkdirSync(theta, { recursive: true });
+    const envPath = path.join(root, '.env');
+    fs.writeFileSync(envPath, 'THETA_DATA_API_KEY=\n');
+
+    fs.writeFileSync(path.join(theta, 'pipeline_status.json'), JSON.stringify({ phase: 'eod', end_date: '2026-10-29', symbols: 2 }));
+    const running = await buildDataStatus({ root, envPath, now: new Date() });
+    assert.deepEqual(running.logs.map(log => log.name), ['health.log', 'theta-pipeline.log', 'theta-recovery-2026-11-05.log']);
+
+    fs.writeFileSync(path.join(theta, 'pipeline_status.json'), JSON.stringify({ phase: 'complete', end_date: '2026-10-29', symbols: 2 }));
+    const done = await buildDataStatus({ root, envPath, now: new Date() });
+    assert.deepEqual(done.logs.map(log => log.name), ['health.log']);
 });

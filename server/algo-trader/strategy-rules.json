@@ -54,7 +54,10 @@
       "On 5-minute bars the {fast_period}-bar average crosses above the {slow_period}-bar average (short: below)."
     ],
     "exit": [
-      "Trend reversal, a stop, or a forced exit three sessions after entry."
+      "Trend reversal: the {fast_period}-bar average crosses back below the {slow_period}-bar average (short: above).",
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "Forced exit after 3 sessions."
     ]
   },
   "intraday_momentum": {
@@ -63,7 +66,10 @@
       "Volume is at least {minimum_volume_ratio} times its average."
     ],
     "exit": [
-      "Momentum turns negative, a stop, or a forced exit three sessions after entry."
+      "Momentum turns negative: the price falls below its session average or the {lookback}-bar return turns below zero (short: the reverse).",
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "Forced exit after 3 sessions."
     ]
   },
   "intraday_mean_reversion": {
@@ -74,7 +80,46 @@
       "Efficiency-ratio filter (when set to er): smooth trends are skipped. Volume is at least {minimum_volume_ratio} times its average, and entries are capped per day."
     ],
     "exit": [
-      "The price is back at the 21-bar average, a stop, or a forced exit three sessions after entry."
+      "The price is back at the 21-bar average (short: the same).",
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "Forced exit after 3 sessions."
+    ]
+  },
+  "weekly_trend_following": {
+    "entry": [
+      "Hourly: the {fast_period}-bar average crosses above the {slow_period}-bar average (short: crosses below)."
+    ],
+    "exit": [
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "The fast average crosses back below the slow average (short: above).",
+      "Forced exit after {maximum_holding_sessions} sessions."
+    ]
+  },
+  "weekly_momentum": {
+    "entry": [
+      "Hourly: the price is above its 20-bar average, and the {lookback}-bar return is at least {minimum_return}. Short: the price is below the average, and the return is at or below minus {minimum_return}.",
+      "Volume on the latest bar is at least {minimum_volume_ratio} times the average of the 19 bars before it."
+    ],
+    "exit": [
+      "Momentum turns negative: the price falls below its 20-bar average or the {lookback}-bar return turns below zero (short: the reverse).",
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "Forced exit after {maximum_holding_sessions} sessions."
+    ]
+  },
+  "weekly_mean_reversion": {
+    "entry": [
+      "Hourly: the close is at least {minimum_dip_pct} below its {reference_bars}-bar average (short: at least {minimum_rip_pct} above it).",
+      "The {reference_bars}-bar average has moved no more than {max_reference_slope_pct} over the last {slope_lookback_bars} bars.",
+      "A higher low over {higher_low_bars} bar(s), the close is above the previous close, and the bounce off the low is at least {minimum_bounce_pct} (short: a lower high, fade of at least {minimum_fade_pct})."
+    ],
+    "exit": [
+      "The price returns to the {reference_bars}-bar average (short: the same).",
+      "Hard stop {hard_stop_pct} from entry.",
+      "Trailing stop {trailing_stop_pct} once the trade is {trailing_activation_pct} in profit.",
+      "Forced exit after {maximum_holding_sessions} sessions."
     ]
   }
 }

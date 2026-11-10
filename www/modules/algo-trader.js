@@ -1,8 +1,7 @@
-import { apiRequest } from './api.js';
-import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js';
-import { renderResearchPage } from './algo-trader/research-view.js?v=3.4.0&research-control=1';
-import { mountResearchLab } from './algo-trader/research-lab.js?v=3.4.0&equity-runs=28';
-import { mountDataStatus } from './algo-trader/data-status.js?v=3.4.0&demo-samples=1';
+import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js?v=3.4.0&config-removed=1';
+import { renderResearchPage } from './algo-trader/research-view.js?v=3.4.0&research-control=2';
+import { mountResearchLab } from './algo-trader/research-lab.js?v=3.4.0&equity-runs=30';
+import { mountDataStatus } from './algo-trader/data-status.js?v=3.4.0&demo-samples=3';
 
 export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');
@@ -17,7 +16,7 @@ export function createAlgoTrader({ request, charts }) {
     const researchFilters = { equity: 'all', options: 'all' };
     const selectedRunDates = { equity: null, options: null };
     const researchPages = { equity: 1, options: 1 };
-    let researchControl = null;
+    const ACCOUNT_TIMEOUT_MS = 45_000;
     let activityPage = 0;
     let pollTimer = null;
 
@@ -51,7 +50,6 @@ export function createAlgoTrader({ request, charts }) {
             filter: researchFilters[researchMode],
             selectedDate: selectedRunDates[researchMode],
             page: researchPages[researchMode],
-            control: researchControl,
             loading: loadingAccounts.has(researchMode),
             error: errors[researchMode],
         });
@@ -84,7 +82,8 @@ export function createAlgoTrader({ request, charts }) {
         if (!snapshots[mode] && !silent) loadingAccounts.add(mode);
         if (loadingAccounts.has(mode) && mode === accountMode) render();
         if (loadingAccounts.has(mode) && mode === researchMode) renderResearch();
-        const data = await request(`/algo-trader?account=${mode}`, {}, () => {});
+        // A stalled response must not hold the in-flight guard forever: the timeout ends the request and clears the loading state.
+        const data = await request(`/algo-trader?account=${mode}`, { signal: AbortSignal.timeout(ACCOUNT_TIMEOUT_MS) }, () => {});
         requestInFlight.delete(mode);
         loadingAccounts.delete(mode);
         if (!data) {
@@ -115,23 +114,8 @@ export function createAlgoTrader({ request, charts }) {
         return loadAccount(accountMode, { silent });
     }
 
-    async function loadResearchControl() {
-        const control = await apiRequest('/algo-trader/research/control');
-        if (control) researchControl = control;
-        renderResearch();
-    }
-
     async function loadResearch({ silent = false } = {}) {
         await loadAccount(researchMode, { silent });
-        await loadResearchControl();
-    }
-
-    async function postResearchControl(path, body) {
-        const result = await apiRequest(`/algo-trader/research/control${path}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
-        }, message => { errors[researchMode] = message; });
-        await loadResearchControl();
-        return result;
     }
 
     let pollLoad = null;
@@ -181,11 +165,6 @@ export function createAlgoTrader({ request, charts }) {
     researchHost?.addEventListener('click', event => {
         const button = event.target.closest('button');
         if (!button || !researchHost.contains(button)) return;
-        if (button.dataset.researchControl === 'kill') {
-            if (!window.confirm('Stop the research that is running now? Nothing is promoted by stopping it.')) return;
-            postResearchControl('/kill');
-            return;
-        }
         if (button.dataset.researchMode) {
             const mode = button.dataset.researchMode;
             if (!['equity', 'options'].includes(mode) || mode === researchMode) return;
