@@ -1108,6 +1108,100 @@ class OptionsHistoryStore:
             raise ValueError(f"no {phase} options history for {symbol} in {self.path}")
         return digest.hexdigest()
 
+    def iter_effective_headers(self, underlying: str, *, phase: str = "daily_close") -> Iterator[dict]:
+        """Effective snapshots without their contracts, in session order.
+
+        Each row carries ``snapshot_id`` and ``row_sha256``, which together identify its contracts for the
+        prepared-chain store. Contracts are read separately, only for snapshots whose chains are not stored.
+        """
+        symbol = str(underlying).strip().upper()
+        connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+        try:
+            query = """
+                WITH ranked AS (
+                    SELECT s.snapshot_id, s.underlying, s.session_date, s.as_of,
+                           s.phase, s.feed, s.spot, s.underlying_close, s.regime,
+                           s.volatility_state, s.events_json, s.equity_signals_json,
+                           s.event_recommendations_json, s.dividends_json,
+                           s.iv_surface_json, s.expirations_json, s.row_sha256, src.source_kind,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY s.session_date, s.phase
+                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 4 WHEN 'theta_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                                        s.as_of DESC
+                           ) AS source_rank
+                    FROM options_history_snapshot AS s
+                    JOIN options_history_active_source AS a ON a.source_id=s.source_id
+                    JOIN options_history_source AS src ON src.source_id=s.source_id
+                    WHERE s.underlying=? AND s.phase=?
+                )
+                SELECT snapshot_id, underlying, as_of, feed, spot, underlying_close, regime, volatility_state,
+                       events_json, equity_signals_json, event_recommendations_json, dividends_json,
+                       iv_surface_json, expirations_json, row_sha256
+                FROM ranked WHERE source_rank=1
+                ORDER BY session_date, as_of
+            """
+            cursor = connection.execute(query, (symbol, phase))
+            source_line = 0
+            while batch := cursor.fetchmany(4096):
+                for row in batch:
+                    source_line += 1
+                    yield {
+                        "snapshot_id": row[0], "row_sha256": row[14],
+                        "underlying": row[1], "as_of": row[2], "feed": row[3],
+                        "spot": float(row[4]), "underlying_close": row[5],
+                        "regime": row[6], "volatility_state": row[7],
+                        "events": json.loads(row[8] or "[]"),
+                        "equity_signals": json.loads(row[9] or "[]"),
+                        "event_recommendations": json.loads(row[10] or "[]"),
+                        "dividends": json.loads(row[11] or "{}"),
+                        "iv_surface": json.loads(row[12]) if row[12] else None,
+                        "expirations": json.loads(row[13]) if row[13] else None,
+                        "source_line": source_line,
+                    }
+        finally:
+            connection.close()
+
+    def contracts_for_snapshots(self, snapshot_ids, *, batch_size: int = 400) -> dict[int, list[dict]]:
+        """Contract rows for the given snapshots, shaped like the rows of ``iter_effective_snapshots``."""
+        ids = sorted({int(item) for item in snapshot_ids})
+        result: dict[int, list[dict]] = {item: [] for item in ids}
+        if not ids:
+            return result
+        connection = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+        try:
+            for start in range(0, len(ids), batch_size):
+                chunk = ids[start:start + batch_size]
+                placeholders = ",".join("?" * len(chunk))
+                rows = connection.execute(
+                    f"""
+                    SELECT snapshot_id, contract_symbol, underlying_symbol, expiration_date, right, strike, multiplier,
+                           exercise_style, tradable, open_interest, bid, ask, quote_at, iv, greeks_json
+                    FROM options_history_contract
+                    WHERE snapshot_id IN ({placeholders})
+                    ORDER BY snapshot_id, expiration_date, right, strike
+                    """,
+                    chunk,
+                )
+                for row in rows:
+                    result[row[0]].append({
+                        "symbol": row[1], "underlying_symbol": row[2],
+                        "expiration_date": row[3], "type": row[4],
+                        "strike_price": float(row[5]), "size": int(row[6]),
+                        "style": row[7], "tradable": bool(row[8]),
+                        "status": "active" if row[8] else "inactive",
+                        "open_interest": row[9],
+                        "bid": float(row[10]), "ask": float(row[11]),
+                        "quote_at": row[12], "iv": row[13],
+                        "greeks": (
+                            json.loads(row[14])
+                            if row[13] is None and row[14] not in (None, "", "{}", "null")
+                            else None
+                        ),
+                    })
+        finally:
+            connection.close()
+        return result
+
     def iter_effective_snapshots(
         self, underlying: str, *, phase: str = "daily_close",
     ) -> Iterator[dict]:

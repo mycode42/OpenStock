@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import hashlib
 import json
@@ -368,7 +368,7 @@ def _events(raw: Any, *, as_of: datetime) -> tuple[ScheduledEvent, ...]:
     return tuple(output)
 
 
-CHAIN_CACHE_VERSION = "options-chains-v1"
+CHAIN_STORE_VERSION = "options-chain-store-v2"
 CHAIN_CACHE_DIR = ROOT / ".cache" / "options-chains"
 
 
@@ -382,86 +382,233 @@ def load_options_research_dataset(
     model_surface_config: dict | None = None,
     workers: int = 1,
 ) -> OptionsResearchDataset:
-    """Load a prepared dataset, reusing a disk copy when the source data has not changed.
+    """Load a prepared dataset. Prepared chains are kept per snapshot, so a load only prepares new or changed days.
 
-    Preparing point-in-time chains is the most expensive part of a load, and every
-    strategy on the same underlying needs the same chains. The cache key covers the
-    database identity, its latest-session marks, the rates, and the requested mode.
-    Model-surface datasets are not cached because their provider holds closures.
+    A chain depends only on its own session's snapshot and the rate inputs. The store is keyed by snapshot id and
+    row hash, so a snapshot that changes is prepared again and nothing else is. Model-surface datasets are not
+    stored because their provider holds closures.
     """
     source = Path(path)
     target = underlying.upper()
     requested_mode = str(data_mode or "auto").lower()
-    if source.suffix.lower() not in {".sqlite", ".sqlite3", ".db"} or requested_mode in {"model", "model_surface"}:
-        return _load_options_research_dataset_uncached(
-            path, underlying=underlying, rate=rate, dividend_yield=dividend_yield,
-            data_mode=data_mode, model_surface_config=model_surface_config, workers=workers,
+    if source.suffix.lower() in {".sqlite", ".sqlite3", ".db"} and requested_mode not in {"model", "model_surface"}:
+        dataset = _load_historical_database(
+            source, target=target, rate=rate, dividend_yield=dividend_yield,
+            requested_mode=requested_mode, workers=workers,
         )
-    from options.research.history_store import OptionsHistoryStore
-
-    store = OptionsHistoryStore(source, initialize=False)
-    store.ensure_change_tracking()
-    marks = store.latest_marks(target)
-    key = json.dumps({
-        "version": CHAIN_CACHE_VERSION, "source": str(source.resolve()), "underlying": target,
-        "marks": marks, "writes": store.data_version(target), "rate": rate, "dividend_yield": dividend_yield,
-        "data_mode": requested_mode, "model_surface_config": model_surface_config or {},
-    }, sort_keys=True, default=str)
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
-    cache_path = CHAIN_CACHE_DIR / f"{target}-{digest}.pkl"
-    if cache_path.is_file():
-        started = perf_counter()
-        try:
-            with cache_path.open("rb") as handle:
-                cached = pickle.load(handle)
-        except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ImportError):
-            cached = None
-        if cached is not None:
-            print(f"Options dataset {target}: loaded prepared chains from cache in {perf_counter() - started:.1f}s", flush=True)
-            cached.loading_parallelism["cache"] = "hit"
-            return cached
-    dataset = _load_options_research_dataset_uncached(
+        if dataset is not None:
+            return dataset
+    return _load_options_research_dataset_uncached(
         path, underlying=underlying, rate=rate, dividend_yield=dividend_yield,
         data_mode=data_mode, model_surface_config=model_surface_config, workers=workers,
     )
-    dataset.loading_parallelism["cache"] = "miss"
-    _write_chain_cache(dataset, cache_path)
-    return dataset
 
 
-class _ClosesOnlyProvider:
-    """What research needs from a prepared dataset: underlying closes. Chains are already attached."""
+def _chain_store_path(source: Path, target: str, rate: float, dividend_yield: float, requested_mode: str) -> Path:
+    key = json.dumps({
+        "version": CHAIN_STORE_VERSION, "source": str(source.resolve()), "underlying": target,
+        "rate": rate, "dividend_yield": dividend_yield, "data_mode": requested_mode,
+    }, sort_keys=True, default=str)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return CHAIN_CACHE_DIR / f"{target}-chains-{digest}.pkl"
 
-    def __init__(self, underlying_history):
-        self._history = {key: tuple(values) for key, values in underlying_history.items()}
 
-    def underlying_closes(self, underlying: str, *, as_of: datetime, sessions: int) -> list[tuple[date, float]]:
-        return [row for row in self._history.get(underlying.upper(), ()) if row[0] < as_of.date()][-sessions:]
+def _read_chain_store(path: Path) -> dict:
+    """Prepared chains by (snapshot_id, row_sha256). Missing or unreadable stores are empty."""
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("rb") as handle:
+            payload = pickle.load(handle)
+    except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ImportError, ValueError):
+        return {}
+    if not isinstance(payload, dict) or payload.get("version") != CHAIN_STORE_VERSION:
+        return {}
+    chains = payload.get("chains")
+    return chains if isinstance(chains, dict) else {}
 
 
-def _write_chain_cache(dataset: "OptionsResearchDataset", cache_path: Path) -> None:
-    """Write the cache in a forked child so the parent starts research immediately.
-
-    The child inherits the dataset copy-on-write and exits without running the
-    parent's cleanup. A failed write only means the next load is a miss.
-    """
+def _write_chain_store(entries: dict, path: Path) -> None:
+    """Write the store in a forked child so the parent continues. A failed write only means the next load prepares again."""
     if not hasattr(os, "fork"):
+        _write_chain_store_now(entries, path)
         return
     pid = os.fork()
     if pid:
         return
     status = 0
     try:
-        CHAIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        slim = replace(dataset, provider=_ClosesOnlyProvider(dataset.underlying_history))
-        temp = cache_path.with_suffix(f".{os.getpid()}.tmp")
-        with temp.open("wb") as handle:
-            pickle.dump(slim, handle, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(temp, cache_path)
-    except Exception:  # noqa: BLE001 - a missing cache entry is not an error
+        _write_chain_store_now(entries, path)
+    except Exception:  # noqa: BLE001 - a missing store entry is not an error
         status = 1
     finally:
         os._exit(status)
+
+
+def _write_chain_store_now(entries: dict, path: Path) -> None:
+    CHAIN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(f".{os.getpid()}.tmp")
+    with temp.open("wb") as handle:
+        pickle.dump({"version": CHAIN_STORE_VERSION, "chains": entries}, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(temp, path)
+    prune_stale_chain_caches(CHAIN_CACHE_DIR, path)
+
+
+def prune_stale_chain_caches(cache_dir: Path, keep: Path) -> int:
+    """Delete older prepared-chain files for the same underlying; the store is replaced whenever its snapshots change."""
+    underlying = keep.name.rsplit("-", 1)[0]
+    removed = 0
+    for path in cache_dir.glob(f"{underlying}-*.pkl"):
+        if path == keep:
+            continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def _load_historical_database(
+    source: Path, *, target: str, rate: float, dividend_yield: float, requested_mode: str, workers: int,
+) -> OptionsResearchDataset | None:
+    """Historical chains from SQLite, with prepared chains reused from the store. Returns None for model-surface data."""
+    from options.research.history_store import OptionsHistoryStore
+
+    load_started = perf_counter()
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("dataset loading workers must be a positive integer")
+    if requested_mode not in {"auto", "historical", "historical_chains"}:
+        raise ValueError("data_mode must be auto, historical_chains, or model_surface")
+    store = OptionsHistoryStore(source, initialize=False)
+    if not store.has_underlying(target):
+        raise ValueError(f"no daily_close options history for {target} in {source}")
+    if requested_mode == "auto" and store.has_model_surface(target):
+        return None
+    source_sha256 = store.dataset_fingerprint(target)
+    pairs: list[tuple[ResearchObservation, tuple[int, str]]] = []
+    history: dict[str, list[tuple[date, float]]] = {}
+    for row in store.iter_effective_headers(target, phase="daily_close"):
+        as_of = _timestamp(row.get("as_of"), field=f"snapshot[{row['source_line']}].as_of")
+        spot = float(row.get("spot", 0))
+        if spot <= 0 or not math.isfinite(spot):
+            raise ValueError(f"database snapshot {row['source_line']} needs a positive finite spot")
+        close = row.get("underlying_close")
+        if close is not None:
+            history.setdefault(target, []).append((as_of.date(), float(close)))
+        observation = ResearchObservation(
+            as_of=as_of,
+            underlying=target,
+            spot=spot,
+            regime=str(row.get("regime", "unknown")).lower(),
+            volatility_state=str(row.get("volatility_state", "unknown")).lower(),
+            feed=str(row.get("feed", "historical")),
+            events=_events(row.get("events", []), as_of=as_of),
+            equity_signals=_signals(row.get("equity_signals", []), as_of=as_of),
+            event_recommendations=_signals(row.get("event_recommendations", []), as_of=as_of),
+            dividends={str(k).upper(): float(v) for k, v in (row.get("dividends") or {}).items()},
+            source_line=int(row["source_line"]),
+        )
+        pairs.append((observation, (int(row["snapshot_id"]), str(row["row_sha256"]))))
+    database_elapsed_seconds = perf_counter() - load_started
+    if len(pairs) < 2:
+        raise ValueError(f"dataset has fewer than two {target} research observations")
+    pairs.sort(key=lambda item: item[0].as_of)
+    if len({item[0].as_of for item in pairs}) != len(pairs):
+        raise ValueError("duplicate as_of timestamps are not allowed")
+    history[target] = sorted(set(history.get(target, [])))
+    if not history.get(target):
+        history[target] = [(item.as_of.date(), item.spot) for item, _ in pairs]
+        close_proxy = True
+    else:
+        close_proxy = False
+
+    store_path = _chain_store_path(source, target, rate, dividend_yield, requested_mode)
+    stored = _read_chain_store(store_path)
+    current_keys = {reference for _, reference in pairs}
+    missing = [(index, observation) for index, (observation, reference) in enumerate(pairs) if reference not in stored]
+    contracts = store.contracts_for_snapshots([pairs[index][1][0] for index, _ in missing])
+    normalized_snapshots = [
+        {
+            "underlying": target,
+            "spot": observation.spot,
+            "as_of": observation.as_of.isoformat(),
+            "feed": observation.feed,
+            "contracts": [
+                _normalize_contract(contract, as_of=observation.as_of, underlying=target)
+                for contract in contracts.get(pairs[index][1][0], [])
+            ],
+        }
+        for index, observation in missing
+    ]
+    provider = HistoricalChainSnapshotProvider(normalized_snapshots, history, rate=rate, dividend_yield=dividend_yield)
+    print(
+        f"Options dataset {target}: reusing {len(pairs) - len(missing)} stored chains, "
+        f"preparing {len(missing)} new or changed sessions",
+        flush=True,
+    )
+    chain_started = perf_counter()
+    prepared: dict[int, tuple[OptionChain | None, str | None]] = {}
+    fork_available = "fork" in mp.get_all_start_methods()
+    requested_loader_workers = min(workers, available_cpu_count())
+    chain_worker_count = min(requested_loader_workers, len(missing)) if fork_available else 1
+    if chain_worker_count > 1:
+        _CHAIN_PREPARATION_CONTEXT.update({
+            "observations": [observation for _, observation in missing],
+            "provider": provider,
+            "underlying": target,
+        })
+        try:
+            context = mp.get_context("fork")
+            with ProcessPoolExecutor(max_workers=chain_worker_count, mp_context=context) as executor:
+                results = executor.map(_prepare_chain_index, range(len(missing)), chunksize=1)
+                for (index, _), result in zip(missing, results):
+                    prepared[index] = result
+        finally:
+            _CHAIN_PREPARATION_CONTEXT.clear()
+    else:
+        for index, observation in missing:
+            try:
+                chain = provider.get_chain(target, as_of=observation.as_of, min_dte=0, max_dte=730)
+                prepared[index] = (chain, None)
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                prepared[index] = (None, f"{type(exc).__name__}: {exc}")
+    observations: list[ResearchObservation] = []
+    entries: dict = {}
+    for index, (observation, reference) in enumerate(pairs):
+        if reference in stored:
+            chain, error = stored[reference], None
+        else:
+            chain, error = prepared[index]
+        if chain is not None and error is None:
+            entries[reference] = chain
+        observations.append(_with_chain(observation, chain, error))
+    stale = set(stored) - current_keys
+    if missing or stale:
+        _write_chain_store(entries, store_path)
+    data_mode_name = "historical_chains_spot_close_proxy" if close_proxy else "historical_chains"
+    return OptionsResearchDataset(
+        observations=tuple(observations),
+        provider=provider,
+        source_path=source.resolve(),
+        source_sha256=source_sha256,
+        data_mode=("model_or_synthetic_chain_rows" if any(item.feed in {"model", "synthetic"} for item in observations) else data_mode_name),
+        underlying_history={key: tuple(values) for key, values in history.items()},
+        loading_parallelism={
+            "cache": "chain_store",
+            "chains_reused": len(pairs) - len(missing),
+            "chains_prepared": len(missing),
+            "chains_stored": len(entries),
+            "workers_requested": requested_loader_workers,
+            "workers_used": requested_loader_workers,
+            "chain_workers_used": chain_worker_count,
+            "source_format": "sqlite_batches",
+            "database_read_elapsed_seconds": round(database_elapsed_seconds, 3),
+            "jsonl_parse_and_normalize_elapsed_seconds": 0.0,
+            "chain_preparation_elapsed_seconds": round(perf_counter() - chain_started, 3),
+            "elapsed_seconds": round(perf_counter() - load_started, 3),
+        },
+    )
 
 
 def _load_options_research_dataset_uncached(
