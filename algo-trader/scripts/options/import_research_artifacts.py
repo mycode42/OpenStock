@@ -33,7 +33,7 @@ def main() -> int:
         store.store_run(run_dir, report)
         imported_runs += 1
 
-    automation_dir = root / "automation"
+    automation_dir = root / "simulation"
     imported_documents = 0
     for path in sorted(automation_dir.glob("*")):
         if not path.is_file() or path.suffix.lower() not in {".json", ".md", ".jsonl"}:

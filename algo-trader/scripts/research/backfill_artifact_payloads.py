@@ -15,7 +15,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--database",
-        default=str(DATA_DIR / "research" / "algo-auto" / "research.sqlite3"),
+        default=str(DATA_DIR / "research" / "simulation" / "research.sqlite3"),
     )
     args = parser.parse_args()
     ledger = ResearchLedger(Path(args.database))

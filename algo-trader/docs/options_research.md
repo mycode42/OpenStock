@@ -64,7 +64,7 @@ datasets continue through research. Edit `automation.strategies` in
 config (8 by default), capped by the CPUs available to the process. Options
 research runs at lower process priority and writes a separate dated
 JSON/Markdown report plus `latest.json` and `latest.md` under
-`data/options/research/automation/`. The report records the requested and used
+`data/options/research/simulation/`. The report records the requested and used
 worker counts. Candidates remain research-only and are never applied
 automatically.
 

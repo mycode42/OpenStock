@@ -8,7 +8,7 @@ import research.cycle as research
 def test_research_runs_research_pipelines_sequentially_and_attaches_options_report(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(research, "ROOT", tmp_path)
     output_dir = tmp_path / "equity-report"
-    options_path = tmp_path / "data/options/research/automation/latest.json"
+    options_path = tmp_path / "data/options/research/simulation/latest.json"
     launched = []
 
     class FakeProcess:

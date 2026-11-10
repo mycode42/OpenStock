@@ -338,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     args.output_dir = str(output_dir)
     lock_path = output_dir / "locks" / "nightly-cycle.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    options_path = ROOT / "data/options/research/automation/latest.json"
+    options_path = ROOT / "data/options/research/simulation/latest.json"
 
     # Cron can retry a timed-out agent run while its old command is still
     # unwinding. Serialize the cycle so retries wait for the checkpoint owner.

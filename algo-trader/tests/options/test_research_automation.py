@@ -26,7 +26,7 @@ def test_missing_chain_dataset_generates_separate_waiting_report(tmp_path):
     assert report["dataset_available"] is False
     assert set(report["strategies"]) == {"vrp", "llm_driven"}
     assert all(item["status"] == "skipped_missing_dataset" for item in report["strategies"].values())
-    report_dir = tmp_path / "automation"
+    report_dir = tmp_path / "simulation"
     assert json.loads((report_dir / "latest.json").read_text(encoding="utf-8"))["status"] == "waiting_for_data"
     assert "historical chain snapshots" in (report_dir / "latest.md").read_text(encoding="utf-8").lower()
     run = json.loads((report_dir / "runs.jsonl").read_text(encoding="utf-8").splitlines()[-1])

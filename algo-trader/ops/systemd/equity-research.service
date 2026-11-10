@@ -12,8 +12,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 ExecStart={PYTHON} -m research.equity
 ExecStart={PYTHON} scripts/prune_bar_cache.py --db data/algo_market.sqlite3 --cache-root data/research/bar-cache
-ExecStart={PYTHON} scripts/compact_equity_report.py --source data/research/algo-auto/latest.json --output data/research/algo-auto/latest-prompt.json
-ExecStart={PYTHON} scripts/llm_report.py --prompt ops/prompts/equity-research.md --context data/research/algo-auto/latest-prompt.json --telegram
+ExecStart={PYTHON} scripts/llm_report.py --prompt ops/prompts/equity-research.md --context data/research/simulation/latest-prompt.json --telegram
 StandardOutput=truncate:{ROOT}/data/algo/logs/equity-research.log
 StandardError=append:{ROOT}/data/algo/logs/equity-research.log
 UMask=0077

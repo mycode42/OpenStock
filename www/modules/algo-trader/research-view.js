@@ -3,7 +3,7 @@ import { signedPercent, signedScore, dateTime, timeOnly, classForReturn, statusC
 import { renderAccountSwitch } from './account-view.js';
 
 function renderRunDetail(run) {
-    if (!run) return '<div class="algo-empty">No autoresearch reports are available yet.</div>';
+    if (!run) return '<div class="algo-empty">No simulation reports are available yet.</div>';
     if (Array.isArray(run.options_strategies)) {
         const approved = run.options_strategies.filter(strategy => strategy.approved).length;
         const completed = run.options_strategies.filter(strategy => strategy.status === 'completed').length;
@@ -68,8 +68,8 @@ export function renderResearchPage({ mode, snapshot, filter, selectedDate, page,
     const pageCount = Math.max(1, Math.ceil(runs.length / RUNS_PER_PAGE));
     const currentPage = Math.min(Math.max(1, Number(page) || 1), pageCount);
     const pageRuns = runs.slice((currentPage - 1) * RUNS_PER_PAGE, currentPage * RUNS_PER_PAGE);
-    const title = isOptions ? 'Options research history' : 'Equity autoresearch history';
-    const description = demoMode ? 'Example strategy research reports for preview only.' : isOptions ? 'Daily options strategy research reports.' : 'Daily saved research reports from the Algo Trader research archive.';
+    const title = isOptions ? 'Options simulation history' : 'Equity simulation history';
+    const description = demoMode ? 'Example strategy research reports for preview only.' : isOptions ? 'Daily options simulation reports.' : 'Daily saved equity simulation reports from the Algo Trader archive.';
 
     const html = `<main class="algo-page algo-research-page">
         <header class="algo-page-header">

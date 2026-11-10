@@ -120,7 +120,7 @@ test('options paper account payload reads its own account journal and research',
   const root = await fixture(t);
   const accountDigest = createHash('sha256').update('test-options-account').digest('hex').slice(0, 16);
   const accountDir = path.join(root, 'data', 'options', 'accounts', accountDigest);
-  const researchDir = path.join(root, 'data', 'options', 'research', 'automation');
+  const researchDir = path.join(root, 'data', 'options', 'research', 'simulation');
   await fs.mkdir(accountDir, { recursive: true });
   await fs.mkdir(researchDir, { recursive: true });
   await fs.writeFile(path.join(accountDir, 'risk_daily.jsonl'), [
@@ -163,7 +163,7 @@ test('options paper account payload reads its own account journal and research',
 test('equity research payload includes the latest optimizer cycle and strategy discovery results', async t => {
   const root = await fixture(t);
   const dataDir = path.join(root, 'data');
-  const researchDir = path.join(dataDir, 'research', 'algo-auto', 'optimizer');
+  const researchDir = path.join(dataDir, 'research', 'simulation', 'optimizer');
   await fs.mkdir(researchDir, { recursive: true });
   await writeCoordinatorState(root, 'REGULAR', {
     account_id: 'test-account', universe: { tickers: [] },

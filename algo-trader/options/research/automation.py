@@ -503,7 +503,7 @@ def run_automated_options_research(
         )
     worker_count = max(workers_used_by_strategy.values(), default=0)
     output_root = _project_path(config.get("output_dir", "data/options/research/runs"))
-    automation_dir = output_root.parent / "automation"
+    automation_dir = output_root.parent / "simulation"
     automation_dir.mkdir(parents=True, exist_ok=True)
     created_at = datetime.now(timezone.utc)
     run_log = output_root / "research_runs.jsonl"
@@ -952,7 +952,7 @@ def main() -> int:
         config_path=args.config, workers=args.workers, run_id=args.run_id,
     )
     print(json.dumps({
-        "status": report["status"], "report": str((ROOT / "data/options/research/automation/latest.json").resolve()),
+        "status": report["status"], "report": str((ROOT / "data/options/research/simulation/latest.json").resolve()),
         "strategies": {name: result.get("status") for name, result in report["strategies"].items()},
         "dataset_available": report["dataset_available"],
         "workers_used": report["workers_used"],

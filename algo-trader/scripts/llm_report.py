@@ -8,7 +8,7 @@ A stale or missing snapshot produces a notice and no model call.
 Examples:
   poetry run python scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --telegram
   poetry run python scripts/llm_report.py --prompt ops/prompts/equity-research.md \
-      --context data/research/algo-auto/latest.json --telegram
+      --context data/research/simulation/latest.json --telegram
   poetry run python scripts/llm_report.py --prompt ops/prompts/llm-digest.md --snapshot --dry-run
 """
 

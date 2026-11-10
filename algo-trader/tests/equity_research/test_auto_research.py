@@ -5,6 +5,7 @@ import math
 import pytest
 
 from equity_research import auto_research
+from equity_research.auto_research import equity_simulation_context
 from equity_research.factor_research import FACTOR_RESEARCH_START, _feature_panel, train_factor_model
 from equity_research.settings import INITIAL_HISTORY_DATE
 
@@ -298,3 +299,23 @@ def test_run_scope_takes_dates_and_tickers_and_refuses_bad_ones(monkeypatch):
         auto_research._apply_strategy_scope(parser.parse_args(["--start", "2019-12-31"]), parser)
     with pytest.raises(SystemExit):
         auto_research._apply_strategy_scope(parser.parse_args(["--start", "2024-02-30"]), parser)
+
+
+def test_equity_simulation_context_carries_the_replay_kpis_and_active_strategies_only():
+    report = {
+        "schema": "swarm_algo_settings_replay_v1", "status": "completed", "run_date_et": "2026-11-09",
+        "window": {"start": "2025-06-02", "end": "2025-09-30"}, "universe": {"symbol_count": 4},
+        "summary": {"net_return_pct": 1.5, "benchmark_net_return_pct": 3.0, "excess_return_vs_buy_hold_pct_points": -1.5,
+                    "max_drawdown_pct": 2.0, "closed_trade_count": 3, "entry_count": 3,
+                    "average_entries_per_session": 0.1, "open_position_count": 0, "unrelated": "dropped"},
+        "strategy_breakdown": {"by_strategy": {
+            "weekly_momentum": {"closed_trades": 2, "pnl_usd": 40.0, "win_rate_pct": 50.0, "profit_factor": 1.2, "average_trade_usd": 20.0},
+            "swing_momentum": {"closed_trades": 0, "pnl_usd": 0.0, "win_rate_pct": None, "profit_factor": None, "average_trade_usd": None},
+        }},
+    }
+    context = equity_simulation_context(report)
+    assert context["title"] == "Equity simulation"
+    assert context["summary"]["net_return_pct"] == 1.5
+    assert "unrelated" not in context["summary"]
+    assert [item["strategy"] for item in context["by_strategy"]] == ["weekly_momentum"]
+    assert "live_comparison" not in context

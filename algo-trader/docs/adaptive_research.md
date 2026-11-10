@@ -39,7 +39,7 @@ The timers run options and equity research separately; see
 5. **Promotion.** At most one promotion per cycle and one per strategy. Winners
    need a deflated Sharpe ratio of at least 0.95, where the trial count covers
    all distinct evaluations. The chosen profile becomes the active version in
-   `data/research/algo-auto/promoted-profile.json`. Only the nightly run can
+   `data/research/simulation/promoted-profile.json`. Only the nightly run can
    promote.
 
 **History promotion (current path).** A candidate that passes exact rolling
@@ -59,10 +59,10 @@ promote. It is not scheduled.
 
 ## Outputs
 
-- `data/research/algo-auto/latest.json` and `layers/fitness-history.json`: the nightly report and fitness trend.
-- `data/research/algo-auto/optimizer/`: reports from manual optimization-only runs.
-- `data/research/algo-auto/forward-validation.json`: trial history.
-- `data/research/algo-auto/research.sqlite3`: ledger, archive, profile versions, and trial counts.
+- `data/research/simulation/latest.json` and `layers/fitness-history.json`: the nightly report and fitness trend.
+- `data/research/simulation/optimizer/`: reports from manual optimization-only runs.
+- `data/research/simulation/forward-validation.json`: trial history.
+- `data/research/simulation/research.sqlite3`: ledger, archive, profile versions, and trial counts.
 - `data/research/logs/equity.log` (equity) and `data/research/logs/options.log` (options): stage timings (UTC).
 
 Profile history and revert:

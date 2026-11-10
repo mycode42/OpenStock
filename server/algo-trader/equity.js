@@ -203,7 +203,7 @@ function summarizeOptimizer(report, fallbackId = '') {
 }
 
 async function readOptimizer(dataDir) {
-    const optimizerDir = path.join(dataDir, 'research', 'algo-auto', 'optimizer');
+    const optimizerDir = path.join(dataDir, 'research', 'simulation', 'optimizer');
     const cyclesDir = path.join(optimizerDir, 'cycles');
     const entries = [];
     try {
@@ -253,7 +253,7 @@ async function readOptimizer(dataDir) {
 }
 
 async function readResearch(dataDir) {
-    const directory = path.join(dataDir, 'research', 'algo-auto');
+    const directory = path.join(dataDir, 'research', 'simulation');
     let names = [];
     try { names = await fs.readdir(directory); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -352,7 +352,7 @@ function activityView(state, journal, research) {
     if (research?.latest?.created_at) activities.push({
         at: research.latest.created_at,
         kind: 'research',
-        title: 'Autoresearch completed',
+        title: 'Equity simulation completed',
         detail: `${research.latest.result} · ${research.latest.status}`,
         status: research.latest.status,
     });

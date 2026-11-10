@@ -497,6 +497,42 @@ def _record_failure(report: dict, *, output_dir: Path, latest_path: Path, today,
         _atomic_json(day_path, report)
 
 
+def equity_simulation_context(report: dict) -> dict:
+    """The compact equity simulation the Telegram summary reads: KPIs and per-strategy results of the replay."""
+    summary = report.get("summary") or {}
+    breakdown = (report.get("strategy_breakdown") or {}).get("by_strategy") or {}
+    by_strategy = [
+        {
+            "strategy": name, "closed_trades": item.get("closed_trades"), "pnl_usd": item.get("pnl_usd"),
+            "win_rate_pct": item.get("win_rate_pct"), "profit_factor": item.get("profit_factor"),
+            "average_trade_usd": item.get("average_trade_usd"),
+        }
+        for name, item in sorted(breakdown.items())
+    ]
+    window = report.get("window") or {}
+    universe = report.get("universe") or {}
+    context = {
+        "schema": "swarm_algo_equity_simulation_v1",
+        "title": "Equity simulation",
+        "run_date_et": report.get("run_date_et"),
+        "status": report.get("status"),
+        "window": {"start": window.get("start"), "end": window.get("end")},
+        "universe_symbols": universe.get("symbol_count"),
+        "summary": {key: summary.get(key) for key in (
+            "net_return_pct", "benchmark_net_return_pct", "excess_return_vs_buy_hold_pct_points",
+            "max_drawdown_pct", "closed_trade_count", "entry_count", "average_entries_per_session", "open_position_count",
+        )},
+        "by_strategy": [item for item in by_strategy if item.get("closed_trades")],
+        "research_only": True,
+    }
+    live = report.get("live_comparison")
+    if live:
+        context["live_comparison"] = {
+            key: (live.get("summary") or {}).get(key) for key in ("net_return_pct", "closed_trade_count", "max_drawdown_pct")
+        }
+    return context
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -708,6 +744,9 @@ def main(argv: list[str] | None = None) -> int:
         if not args.optimization_only:
             _atomic_json(output_dir / f"{today}.json", report)
         _atomic_json(latest_report_path, report)
+        if not args.lab_run and report.get("schema") == "swarm_algo_settings_replay_v1":
+            # The Telegram equity summary reads this file (see ops/systemd/equity-research.service).
+            _atomic_json(output_dir / "latest-prompt.json", equity_simulation_context(report))
     progress_state.update({
         "status": "completed" if report.get("status") not in {"error", "partial_error"} else "partial_error",
         "completed_at": datetime.now(timezone.utc).isoformat(),

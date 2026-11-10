@@ -16,7 +16,7 @@ from runtime.paths import DATA_DIR, ROOT
 
 ET = ZoneInfo("America/New_York")
 
-DEFAULT_OUTPUT_DIR = DATA_DIR / "research" / "algo-auto"
+DEFAULT_OUTPUT_DIR = DATA_DIR / "research" / "simulation"
 
 LOCK_FILE = DATA_DIR / "locks" / "algo-research.lock"
 

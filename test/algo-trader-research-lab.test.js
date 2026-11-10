@@ -311,7 +311,7 @@ test('an equity run goes into its own output folder with the chosen strategies a
     assert.ok(!args.includes('--no-refresh'), 'equity runs always use the latest data');
     const outputDir = args[args.indexOf('--output-dir') + 1];
     assert.equal(outputDir, path.join(lab.jobDir(job.id), 'output'));
-    assert.ok(!outputDir.includes(path.join(root, 'data', 'research', 'algo-auto')));
+    assert.ok(!outputDir.includes(path.join(root, 'data', 'research', 'simulation')));
 });
 
 

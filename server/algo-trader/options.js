@@ -55,7 +55,7 @@ function summarizeOptionsResearch(report) {
 }
 
 async function readOptionsResearch(dataDir) {
-    const directory = path.join(dataDir, 'options', 'research', 'automation');
+    const directory = path.join(dataDir, 'options', 'research', 'simulation');
     let names;
     try { names = await fs.readdir(directory); }
     catch (error) { if (error.code === 'ENOENT') return { latest: null, history: [] }; throw error; }

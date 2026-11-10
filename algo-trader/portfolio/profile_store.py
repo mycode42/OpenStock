@@ -8,7 +8,7 @@ from pathlib import Path
 
 from runtime.paths import DATA_DIR
 from runtime.atomic import atomic_write_json
-RESEARCH_ROOT = DATA_DIR / "research" / "algo-auto"
+RESEARCH_ROOT = DATA_DIR / "research" / "simulation"
 PROMOTED_PROFILE_PATH = RESEARCH_ROOT / "promoted-profile.json"
 FORWARD_VALIDATION_PATH = RESEARCH_ROOT / "forward-validation.json"
 
