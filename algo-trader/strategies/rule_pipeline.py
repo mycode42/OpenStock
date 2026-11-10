@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from strategies.catalog import STRATEGY_CATALOG, canonical_strategy_id
 from strategies.indicators import adx, closes, efficiency_ratio, moving_average
-from strategies.registry import ALGO_DEFAULT_PARAMETERS, evaluate as evaluate_strategy
+from strategies.registry import ALGO_DEFAULT_PARAMETERS, direction_flags, evaluate as evaluate_strategy
 from strategies.signals import Signal
 from portfolio.config import (
     ALGO_STRATEGY_DEFAULTS_PATH, get_algo_runtime_settings,
@@ -56,10 +56,8 @@ RULE_PARAMETERS = {
     "intraday_momentum": {"enabled", "lookback", "minimum_return", "minimum_volume_ratio", "minimum_short_return",
                            "minimum_short_volume_ratio", "max_extension_pct", "allow_long", "allow_short"},
     "intraday_mean_reversion": {
-        "window", "band_width", "entry_rsi", "exit_rsi", "short_entry_rsi",
-        "short_exit_rsi", "allow_long", "allow_short", "regime_filter",
+        "allow_long", "allow_short", "regime_filter",
         "efficiency_ratio_period", "efficiency_ratio_max", "adx_period", "adx_max",
-        "threshold_mode", "volatility_lookback", "high_volatility_ratio",
     },
     "swing_mean_reversion": set(SwingMeanReversionConfig.__dataclass_fields__),
 }
@@ -103,7 +101,7 @@ def _intraday_strategy_signal(signal: Signal | None, name: str) -> SwingSignal |
 WEEKLY_RULE_NAMES = frozenset({"weekly_trend_following", "weekly_momentum", "weekly_mean_reversion"})
 INTRADAY_TREND_MOMENTUM_AND_WEEKLY = frozenset({"intraday_trend_following", "intraday_momentum", "weekly_momentum", "weekly_trend_following"})
 for _weekly in WEEKLY_RULE_NAMES:
-    RULE_PARAMETERS[_weekly] = set(ALGO_DEFAULT_PARAMETERS[_weekly]) | {"maximum_holding_sessions"}
+    RULE_PARAMETERS[_weekly] = set(ALGO_DEFAULT_PARAMETERS[_weekly]) | {"maximum_holding_sessions", "allow_long", "allow_short"}
 
 
 def _weekly_strategy_signal(signal: Signal | None, name: str, params: dict) -> SwingSignal | None:
@@ -299,6 +297,9 @@ _RULE_PARAMETER_MEMO: dict = {}
 
 def _merged_rule_parameters(name: str, parameters: dict | None, algo_risk: dict) -> tuple[dict, dict]:
     params = {**ALGO_DEFAULT_PARAMETERS.get(name, {}), **(parameters or {})}
+    # Swing reads direction_mode itself; the intraday and weekly signal functions take the two flags.
+    if not name.startswith("swing_"):
+        params = direction_flags(params)
     # Stop distances are live risk settings, not research-tunable signal
     # parameters. Apply the horizon-specific Algo values after profile merge.
     if name in algo_risk.get("stop_loss_pct_by_strategy", {}):
@@ -386,7 +387,7 @@ def evaluate_rule_signal(
         # The swing momentum implementation ranks the full universe in one pass.
         return None
 
-    if name in {"intraday_mean_reversion", "weekly_mean_reversion"} and params.get("signal_model", "bollinger") == "average_24h":
+    if name in {"intraday_mean_reversion", "weekly_mean_reversion"}:
         if not position_qty:
             regime_filter = params.get("regime_filter", "none")
             values = closes(bars)

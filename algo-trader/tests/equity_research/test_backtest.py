@@ -38,14 +38,14 @@ def test_profile_can_change_rule_parameters_but_not_portfolio_risk():
     momentum = validate_parameter_profile({"swing_momentum": {"lookbacks": [5, 10]}})
     assert momentum["swing_momentum"]["lookbacks"] == [5, 10]
     assert validate_parameter_profile({
-        "intraday_mean_reversion": {"signal_model": "average_24h", "minimum_dip_pct": 0.01},
-    })["intraday_mean_reversion"]["signal_model"] == "average_24h"
+        "intraday_mean_reversion": {"direction_mode": "long_only", "minimum_dip_pct": 0.01},
+    })["intraday_mean_reversion"]["direction_mode"] == "long_only"
     with pytest.raises(ValueError, match="Unknown or malformed strategy"):
         validate_parameter_profile({"risk": {"risk_per_trade_pct": 0.5}})
     with pytest.raises(ValueError, match="fast_period"):
         validate_parameter_profile({"swing_trend_following": {"fast_period": 21, "slow_period": 9}})
-    with pytest.raises(ValueError, match="signal_model"):
-        validate_parameter_profile({"intraday_mean_reversion": {"signal_model": "llm"}})
+    with pytest.raises(ValueError, match="direction_mode"):
+        validate_parameter_profile({"intraday_mean_reversion": {"direction_mode": "sideways"}})
 
 
 

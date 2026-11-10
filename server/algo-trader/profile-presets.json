@@ -135,8 +135,6 @@
     },
     "intraday_mean_reversion": {
       "standard": {
-        "entry_rsi": 32,
-        "exit_rsi": 58,
         "minimum_dip_pct": 0.014,
         "minimum_bounce_pct": 0.002,
         "max_reference_slope_pct": 0.005,
@@ -144,8 +142,6 @@
         "efficiency_ratio_max": 0.35
       },
       "conservative": {
-        "entry_rsi": 25,
-        "exit_rsi": 55,
         "minimum_dip_pct": 0.02,
         "minimum_bounce_pct": 0.003,
         "max_reference_slope_pct": 0.003,
@@ -153,8 +149,6 @@
         "efficiency_ratio_max": 0.3
       },
       "high-risk": {
-        "entry_rsi": 38,
-        "exit_rsi": 62,
         "minimum_dip_pct": 0.008,
         "minimum_bounce_pct": 0.001,
         "max_reference_slope_pct": 0.008,

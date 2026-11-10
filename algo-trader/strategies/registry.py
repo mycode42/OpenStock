@@ -18,7 +18,7 @@ from strategies.momentum import swing as swing_momentum
 from strategies.trend_following import swing as swing_trend_following
 from strategies.llm_driven.config import LLMStrategyConfig
 from strategies.multi_factor.config import DEFAULT_CONFIG as MULTI_FACTOR_DEFAULT_CONFIG
-from strategies.retired_profile_keys import drop_retired_profile_keys
+from strategies.retired_profile_keys import drop_retired_mean_reversion_keys, drop_retired_profile_keys
 from strategies.mean_reversion.swing import SwingMeanReversionConfig
 from strategies.momentum.swing import SwingMomentumConfig
 from strategies.trend_following.swing import SwingTrendConfig
@@ -49,6 +49,26 @@ ALGO_RULE_MODULES = {
 # disabled by default for standalone use.
 LLM_DEFAULT_CONFIG = LLMStrategyConfig(enabled=True).to_dict()
 SWING_MEAN_REVERSION_DEFAULT_CONFIG = SwingMeanReversionConfig().to_dict()
+# Intraday and weekly strategies use swing's direction_mode. The signal functions take two flags, so
+# the mode is translated just before a call. Legacy profiles that carry the flags are still accepted.
+DIRECTION_MODES = frozenset({"both", "long_only", "short_only"})
+
+
+def direction_flags(values: dict) -> dict:
+    """Return values with direction_mode turned into allow_long and allow_short."""
+    if "direction_mode" not in values and "allow_long" not in values and "allow_short" not in values:
+        return values
+    rest = {key: value for key, value in values.items() if key not in ("direction_mode", "allow_long", "allow_short")}
+    if "direction_mode" in values:
+        mode = values["direction_mode"]
+        if mode not in DIRECTION_MODES:
+            raise ValueError(f"direction_mode must be both, long_only, or short_only, not {mode!r}")
+    else:
+        mode = ("both" if values.get("allow_long", True) and values.get("allow_short", True)
+                else "long_only" if values.get("allow_long", True) else "short_only" if values.get("allow_short", False) else None)
+    return {**rest, "allow_long": mode in ("both", "long_only"), "allow_short": mode in ("both", "short_only")}
+
+
 DAY_DEFAULT_PARAMETERS = {
     "trend_following": {"fast_period": 9, "slow_period": 21, "allow_long": True, "allow_short": True},
     "momentum": {"lookback": 12, "minimum_return": 0.015, "minimum_volume_ratio": 1.2, "allow_long": True, "allow_short": True},
@@ -58,48 +78,36 @@ ALGO_DEFAULT_PARAMETERS = {
     "swing_trend_following": SwingTrendConfig().to_dict(),
     "swing_momentum": SwingMomentumConfig().to_dict(),
     "intraday_mean_reversion": {
-        "signal_model": "average_24h",
+        "direction_mode": "both",
         "max_reference_slope_pct": 0.005,
-        "window": 20,
-        "band_width": 2.0,
-        "entry_rsi": 32.0,
-        "exit_rsi": 58.0,
-        "short_entry_rsi": 68.0,
-        "short_exit_rsi": 42.0,
         "regime_filter": "none",
         "efficiency_ratio_period": 20,
         "efficiency_ratio_max": 0.35,
         "adx_period": 14,
         "adx_max": 20.0,
-        "threshold_mode": "fixed",
-        "volatility_lookback": 20,
-        "high_volatility_ratio": 1.25,
         "minimum_dip_pct": 0.014,
         "minimum_bounce_pct": 0.002,
         "minimum_volume_ratio": 1.3,
-        "entry_window_minutes": 300,
         "higher_low_bars": 1,
         "minimum_rip_pct": 0.014,
         "minimum_fade_pct": 0.002,
         "lower_high_bars": 1,
-        "allow_long": True,
-        "allow_short": True,
     },
     "swing_multi_factor": MULTI_FACTOR_DEFAULT_CONFIG.to_dict(),
     "swing_llm_driven": LLM_DEFAULT_CONFIG,
     "swing_mean_reversion": SWING_MEAN_REVERSION_DEFAULT_CONFIG,
-    "intraday_trend_following": {"enabled": True, **DAY_DEFAULT_PARAMETERS["trend_following"]},
-    "intraday_momentum": {"enabled": True, **DAY_DEFAULT_PARAMETERS["momentum"]},
+    "intraday_trend_following": {"enabled": True, "fast_period": 9, "slow_period": 21, "direction_mode": "both"},
+    "intraday_momentum": {"enabled": True, "lookback": 12, "minimum_return": 0.015, "minimum_volume_ratio": 1.2, "direction_mode": "both"},
 }
 # Weekly tier: the three families on hourly bars (7 per session). Lookbacks are
 # 10-20 sessions (70-140 hourly bars); holds are 3-10 sessions.
 ALGO_DEFAULT_PARAMETERS["weekly_trend_following"] = {
     "enabled": True, "fast_period": 35, "slow_period": 140,
-    "allow_long": True, "allow_short": True, "maximum_holding_sessions": 10,
+    "direction_mode": "both", "maximum_holding_sessions": 10,
 }
 ALGO_DEFAULT_PARAMETERS["weekly_momentum"] = {
     "enabled": True, "lookback": 70, "minimum_return": 0.03, "minimum_volume_ratio": 1.2,
-    "allow_long": True, "allow_short": True, "maximum_holding_sessions": 10,
+    "direction_mode": "both", "maximum_holding_sessions": 10,
 }
 ALGO_DEFAULT_PARAMETERS["weekly_mean_reversion"] = {
     **deepcopy(ALGO_DEFAULT_PARAMETERS["intraday_mean_reversion"]),
@@ -123,13 +131,10 @@ PARAMETER_KEYS = {
     "swing_trend_following": set(SwingTrendConfig.__dataclass_fields__),
     "swing_momentum": set(SwingMomentumConfig.__dataclass_fields__),
     "intraday_mean_reversion": {
-        "window", "band_width", "entry_rsi", "exit_rsi", "signal_model",
-        "minimum_dip_pct", "minimum_volume_ratio", "entry_window_minutes", "max_reference_slope_pct",
-        "minimum_bounce_pct", "higher_low_bars", "short_entry_rsi", "short_exit_rsi",
-        "minimum_rip_pct", "minimum_fade_pct", "lower_high_bars", "allow_long", "allow_short",
-        "regime_filter", "efficiency_ratio_period", "efficiency_ratio_max",
-        "adx_period", "adx_max", "threshold_mode", "volatility_lookback",
-        "high_volatility_ratio",
+        "direction_mode", "allow_long", "allow_short", "max_reference_slope_pct", "regime_filter",
+        "efficiency_ratio_period", "efficiency_ratio_max", "adx_period", "adx_max",
+        "minimum_dip_pct", "minimum_bounce_pct", "minimum_volume_ratio", "higher_low_bars",
+        "minimum_rip_pct", "minimum_fade_pct", "lower_high_bars",
     },
     "swing_multi_factor": set(MULTI_FACTOR_DEFAULT_CONFIG.to_dict()),
     # Weekly: the same rule parameters on hourly bars, plus the session-based holding limit.
@@ -137,11 +142,11 @@ PARAMETER_KEYS = {
     "swing_llm_driven": set(LLM_DEFAULT_CONFIG),
     "swing_mean_reversion": set(SWING_MEAN_REVERSION_DEFAULT_CONFIG),
     "intraday_trend_following": {
-        "enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "allow_long", "allow_short",
+        "enabled", "fast_period", "slow_period", "confirmation_bars", "minimum_slope_pct", "direction_mode", "allow_long", "allow_short",
     },
     "intraday_momentum": {
         "enabled", "lookback", "minimum_return", "minimum_volume_ratio", "max_extension_pct",
-        "minimum_short_return", "minimum_short_volume_ratio", "allow_long", "allow_short",
+        "minimum_short_return", "minimum_short_volume_ratio", "direction_mode", "allow_long", "allow_short",
     },
 }
 for _weekly in ("weekly_trend_following", "weekly_momentum", "weekly_mean_reversion"):
@@ -166,6 +171,7 @@ def validate_parameter_profile(profile: dict) -> dict:
         if strategy not in PARAMETER_KEYS or not isinstance(values, dict):
             raise ValueError(f"Unknown or malformed strategy profile: {supplied_strategy}")
         values = drop_retired_profile_keys(strategy, values)
+        values = drop_retired_mean_reversion_keys(strategy, values)
         unknown = set(values) - PARAMETER_KEYS[strategy]
         if unknown:
             raise ValueError(f"Unsupported {strategy} parameter(s): {', '.join(sorted(unknown))}")
@@ -213,23 +219,9 @@ def validate_parameter_profile(profile: dict) -> dict:
         for strategy in ("intraday_trend_following", "intraday_momentum"):
             if key in normalized.get(strategy, {}) and not isinstance(normalized[strategy][key], bool):
                 raise ValueError(f"{strategy} {key} must be a boolean")
-    number("intraday_mean_reversion", "window", 20, 5, 200, integer=True)
     number("intraday_mean_reversion", "max_reference_slope_pct", 0.005, 0.0005, 0.05)
-    number("intraday_mean_reversion", "band_width", 2.0, 0.1, 10)
-    entry_rsi = number("intraday_mean_reversion", "entry_rsi", 30, 0, 100)
-    exit_rsi = number("intraday_mean_reversion", "exit_rsi", 58, 0, 100)
-    if entry_rsi > exit_rsi:
-        raise ValueError("mean_reversion RSI values must satisfy 0 <= entry_rsi <= exit_rsi <= 100")
-    short_entry_rsi = number("intraday_mean_reversion", "short_entry_rsi", 68, 0, 100)
-    short_exit_rsi = number("intraday_mean_reversion", "short_exit_rsi", 42, 0, 100)
-    if short_exit_rsi > short_entry_rsi:
-        raise ValueError("mean_reversion RSI values must satisfy short_exit_rsi <= short_entry_rsi")
-    model = normalized.get("intraday_mean_reversion", {}).get("signal_model", "bollinger")
-    if not isinstance(model, str) or model not in {"bollinger", "average_24h"}:
-        raise ValueError("mean_reversion signal_model must be bollinger or average_24h")
     number("intraday_mean_reversion", "minimum_dip_pct", 0, 0, 0.5)
     number("intraday_mean_reversion", "minimum_volume_ratio", 1.2, 0, 20)
-    number("intraday_mean_reversion", "entry_window_minutes", 300, 5, 390, integer=True)
     number("intraday_mean_reversion", "minimum_bounce_pct", 0.001, 0, 0.1)
     number("intraday_mean_reversion", "higher_low_bars", 1, 0, 10, integer=True)
     number("intraday_mean_reversion", "minimum_rip_pct", normalized.get("intraday_mean_reversion", {}).get("minimum_dip_pct", 0), 0, 0.5)
@@ -238,11 +230,12 @@ def validate_parameter_profile(profile: dict) -> dict:
     for key in ("allow_long", "allow_short"):
         if key in normalized.get("intraday_mean_reversion", {}) and not isinstance(normalized["intraday_mean_reversion"][key], bool):
             raise ValueError(f"mean_reversion {key} must be a boolean")
+    for strategy in ("intraday_mean_reversion", "intraday_trend_following", "intraday_momentum", "weekly_mean_reversion", "weekly_trend_following", "weekly_momentum"):
+        if "direction_mode" in normalized.get(strategy, {}) and normalized[strategy]["direction_mode"] not in DIRECTION_MODES:
+            raise ValueError(f"{strategy} direction_mode must be both, long_only, or short_only")
     mean_reversion_values = normalized.get("intraday_mean_reversion", {})
     if mean_reversion_values.get("regime_filter", "none") not in {"none", "er", "adx", "combined"}:
         raise ValueError("mean_reversion regime_filter must be none, er, adx, or combined")
-    if mean_reversion_values.get("threshold_mode", "fixed") not in {"fixed", "volatility_regime_adjusted"}:
-        raise ValueError("mean_reversion threshold_mode must be fixed or volatility_regime_adjusted")
     number("intraday_mean_reversion", "efficiency_ratio_period", 20, 5, 100, integer=True)
     number("intraday_mean_reversion", "efficiency_ratio_max", 0.35, 0.05, 0.8)
     number("intraday_mean_reversion", "adx_period", 14, 5, 50, integer=True)
@@ -409,7 +402,7 @@ def evaluate(
         values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
         return module.signal(ticker, bars, position_qty=position_qty, parameters=values)
     if mode == "algo" and name in {"intraday_trend_following", "intraday_momentum", "weekly_trend_following", "weekly_momentum"}:
-        values = {**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})}
+        values = direction_flags({**ALGO_DEFAULT_PARAMETERS[name], **(parameters or {})})
         if name.startswith("weekly_"):
             # Weekly entries follow their own enabled flag (or a research override); holdings keep their exits.
             enabled = runtime_enabled_override if runtime_enabled_override is not None else values.get("enabled", False)
