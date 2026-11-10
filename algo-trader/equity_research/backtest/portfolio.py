@@ -167,6 +167,8 @@ class PortfolioBacktest(ReplayExecutionMixin, ReplaySignalsMixin, ReplayReportin
         self.borrow_coverage: Counter[str] = Counter()
         self.borrow_cost_total = 0.0
         self.commission_total = 0.0
+        self.cash_yield_enabled = True
+        self.cash_yield_total = 0.0
         coordinator_config = coordinator_config or PortfolioCoordinatorConfig.from_dict(
             get_algo_portfolio_coordinator_config(),
         )

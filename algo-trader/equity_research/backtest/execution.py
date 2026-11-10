@@ -10,6 +10,7 @@ from .config import BAR_MINUTES, ET, STRATEGY_NAMES
 from .models import Position
 from .market_sessions import market_session, trading_date
 from strategies.catalog import INTRADAY_STRATEGIES
+from .cash_yield import SGOV_EXPENSE_RATIO_PCT, cash_yield_on
 
 try:
     from ._execution_cy import build_timeline as _build_timeline_cy
@@ -75,6 +76,21 @@ class ReplayExecutionMixin:
         for ticker, position in self.positions.items():
             direction = "short" if position.qty < 0 else "long"
             self.holdings_by_day[day_key][position.strategy].add((ticker, direction))
+
+    def _accrue_cash_yield(self, trading_day: date) -> None:
+        """Idle cash earns the SGOV proxy: the three-month Treasury bill rate less SGOV's expense ratio.
+
+        The live system keeps idle cash in SGOV (cash_reserve), so this credits what that cash would have earned.
+        """
+        if not self.cash_yield_enabled or self.cash <= 0:
+            return
+        rate = cash_yield_on(trading_day)
+        if rate is None:
+            return
+        net = max(0.0, rate - SGOV_EXPENSE_RATIO_PCT) / 100.0
+        interest = self.cash * net / 252
+        self.cash += interest
+        self.cash_yield_total += interest
 
     def _charge_daily_borrow(self) -> None:
         if self.short_borrow_annual_pct <= 0:

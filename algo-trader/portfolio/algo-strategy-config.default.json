@@ -67,7 +67,7 @@
   },
   "strategies": {
     "intraday_mean_reversion": {
-      "enabled": true,
+      "enabled": false,
       "regime_weights": {
         "trending_up": 0,
         "trending_down": 0,

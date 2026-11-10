@@ -10,6 +10,7 @@ import multiprocessing as mp
 from pathlib import Path
 import sys
 
+from equity_research.costs import EQUITY_COMMISSION_PER_SHARE, EQUITY_SLIPPAGE_BPS, EQUITY_SPREAD_BPS
 from equity_research.backtest import (
     DAILY_WARMUP_DAYS, AlgoPortfolioBacktest, multi_factor_warmup_days,
     read_borrow_availability, strategy_warmup_days,
@@ -491,7 +492,8 @@ def _run_coordinated_fold(
     keys = (
         "start", "end", "net_return_pct", "max_drawdown_pct", "closed_trade_count",
         "open_position_count", "entry_count", "average_entries_per_session",
-        "benchmark_net_return_pct", "excess_return_vs_buy_hold_pct_points",
+        "benchmark_net_return_pct", "excess_return_vs_buy_hold_pct_points", "spy_buy_hold_return_pct",
+        "cash_yield_earned",
         "entry_count_by_strategy", "signal_event_count_by_strategy",
         "portfolio_coordinator", "strategy_correlation_report",
         "daily_equity", "daily_strategy_pnl",
@@ -756,9 +758,9 @@ def _parse_strategies(value: str | None) -> list[str]:
 
 
 SETTINGS_REPLAY_COST_MODEL = {
-    "slippage_bps_each_side": 5,
-    "spread_bps": 3,
-    "commission_per_share_each_side": 0.005,
+    "slippage_bps_each_side": EQUITY_SLIPPAGE_BPS,
+    "spread_bps": EQUITY_SPREAD_BPS,
+    "commission_per_share_each_side": EQUITY_COMMISSION_PER_SHARE,
     "short_borrow_annual_pct": 3,
     "unknown_borrow_adverse_fill_penalty_bps": 25,
 }
@@ -811,7 +813,7 @@ def run_settings_replay(
             key: summary.get(key) for key in (
                 "net_return_pct", "benchmark_net_return_pct", "excess_return_vs_buy_hold_pct_points",
                 "max_drawdown_pct", "closed_trade_count", "entry_count", "average_entries_per_session",
-                "entry_count_by_strategy", "open_position_count",
+                "entry_count_by_strategy", "open_position_count", "spy_buy_hold_return_pct", "cash_yield_earned",
             )
         },
         "strategy_breakdown": breakdown,

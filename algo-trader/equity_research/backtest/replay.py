@@ -59,6 +59,21 @@ class ReplayLoopMixin:
         finally:
             logger.setLevel(previous_level)
 
+    def _spy_buy_hold_return_pct(self, first_day, last_day) -> float | None:
+        """SPY price return from the first to the last replay session: the market, not the research basket.
+
+        Daily SPY closes; distributions are not added back, so this is a price return.
+        """
+        closes = sorted(
+            (self._timestamp(bar).astimezone(ET).date(), float(bar["c"]))
+            for bar in self.spy_daily_bars
+            if bar.get("c") is not None
+        )
+        inside = [close for day, close in closes if first_day <= day <= last_day and close > 0]
+        if len(inside) < 2:
+            return None
+        return round((inside[-1] / inside[0] - 1) * 100, 4)
+
     def _run(self) -> dict:
         events = self._timeline()
         if not events:
@@ -223,6 +238,7 @@ class ReplayLoopMixin:
             if is_session_end:
                 self._record_holdings(trading_day)
                 self._charge_daily_borrow()
+                self._accrue_cash_yield(trading_day)
                 if index + 1 == len(event_times) and self.force_close_at_end:
                     self._flatten_positions(bars, timestamp, reason="walk_forward_window_end")
                 self._record_daily_strategy_pnl(trading_day)
@@ -366,6 +382,11 @@ class ReplayLoopMixin:
             "net_return_pct": round((final_equity / self.initial_capital - 1) * 100, 4),
             "buy_and_hold": benchmark,
             "benchmark_net_return_pct": benchmark_return,
+            "cash_yield_earned": round(self.cash_yield_total, 2),
+            "spy_buy_hold_return_pct": self._spy_buy_hold_return_pct(
+                min(self._trading_date(timestamp) for timestamp in events),
+                max(self._trading_date(timestamp) for timestamp in events),
+            ),
             "excess_return_vs_buy_hold_pct_points": round(
                 (final_equity / self.initial_capital - 1) * 100 - benchmark_return, 4,
             ),
