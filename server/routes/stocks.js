@@ -166,9 +166,12 @@ app.post('/api/stocks', async (req, res) => {
     try {
         const symbol = String(req.body?.symbol || '').trim().toUpperCase();
         const name = String(req.body?.name || '').trim();
-        const buyThreshold = Number(req.body?.buy_threshold_usd), sellThreshold = Number(req.body?.sell_threshold_usd);
+        const givenBuy = req.body?.buy_threshold_usd, givenSell = req.body?.sell_threshold_usd;
+        const given = value => value !== undefined && value !== null && value !== '';
+        const hasThresholds = given(givenBuy) || given(givenSell);
+        const buyThreshold = hasThresholds ? Number(givenBuy) : null, sellThreshold = hasThresholds ? Number(givenSell) : null;
         if (!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(symbol)) return res.status(400).json({ error: 'A valid US equity symbol is required' });
-        if (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and the buy threshold must be below the sell threshold' });
+        if (hasThresholds && (!(buyThreshold > 0) || !(sellThreshold > 0) || buyThreshold >= sellThreshold)) return res.status(400).json({ error: 'Buy and sell thresholds must be positive and the buy threshold must be below the sell threshold' });
         const db = req.app.locals.db;
         const asset = await req.app.locals.alpacaClient.getAsset(symbol);
         if (asset?.class !== 'us_equity' || asset?.tradable === false || asset?.status === 'inactive') {

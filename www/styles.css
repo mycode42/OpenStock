@@ -858,3 +858,22 @@ html[data-demo="1"] .config-real-word,html[data-demo="1"] .config-real-count{dis
 .config-retired-item { display: flex; justify-content: space-between; align-items: center; gap: 0.8rem; padding: 0.35rem 0; border-top: 1px solid var(--os-border, #202126); }
 .config-retired-item small { color: var(--ui-muted, #94a3b8); }
 .config-retired-actions { display: flex; gap: 0.4rem; }
+#page-config .config-retired-button { width: auto; min-width: 6rem; height: 2.1rem; padding: 0 0.8rem; }
+/* Add a stock: padding, inputs and button share the alert rows' control height and surface */
+#page-config .config-stock-add { padding: 0.9rem 1rem; gap: 0.7rem; }
+#page-config .config-stock-add-fields { grid-template-columns: minmax(140px, 200px) minmax(0, 1fr) auto; align-items: end; gap: 0.7rem; }
+#page-config .config-stock-add-fields label { font-size: 0.74rem; }
+#page-config .config-stock-add input { width: 100%; height: var(--ctl-h, 2.25rem); box-sizing: border-box; padding: 0 0.65rem; border: 1px solid var(--os-border, #34353b); border-radius: 0.5rem; background: var(--os-surface, #0a0a0a); color: var(--os-text, #f7f7fa); font-size: 0.8rem; }
+#page-config .config-stock-add input:focus { outline: none; border-color: var(--os-accent, #c8ff00); }
+#page-config .config-stock-add .btn { height: var(--ctl-h, 2.25rem); }
+@media (max-width: 640px) { #page-config .config-stock-add-fields { grid-template-columns: 1fr; } }
+/* One button size everywhere: the Manage alerts size, with its height and auto width */
+#page-config .config-stock-add .config-action,
+#page-config .config-retired-actions .config-action { width: auto; min-width: 6.5rem; height: var(--ctl-h, 2.25rem); }
+#page-config .config-stock-add { margin: 1rem 0 0; }
+#page-config .config-stock-add-fields { grid-template-columns: minmax(120px, 170px) minmax(160px, 240px) auto; justify-content: start; }
+@media (max-width: 640px) { #page-config .config-stock-add-fields { grid-template-columns: 1fr; } }
+/* Add a stock: one row of controls, no captions, so the button lines up with the inputs. Retired list spaced from the card above. */
+#page-config .config-stock-add-fields { align-items: center; }
+#page-config .config-stock-add-fields input { margin: 0; }
+#page-config .config-retired-list { margin: 1rem 0; }

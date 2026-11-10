@@ -58,13 +58,11 @@ export function createConfig({ request: af, reload, notify }) {
     function addStockForm() {
         if (document.documentElement.dataset.demo === '1') return '';
         return `<form class="config-stock-add" aria-label="Add a stock">
-            <div class="config-stock-add-head"><strong>Add a stock</strong><span class="config-stock-add-note">A tradable US equity on Alpaca. The buy threshold must be below the sell threshold.</span></div>
+            <div class="config-stock-add-head"><strong>Add a stock</strong><span class="config-stock-add-note">A tradable US equity on Alpaca. Add its alerts afterwards with Manage alerts.</span></div>
             <div class="config-stock-add-fields">
-                <label>Symbol<input name="symbol" required maxlength="10" autocomplete="off" placeholder="AAPL" data-stock-symbol></label>
-                <label>Name<input name="name" maxlength="80" autocomplete="off" placeholder="optional" data-stock-name></label>
-                <label>Buy threshold, USD<input name="buy" type="number" min="0.01" step="0.01" required data-stock-buy></label>
-                <label>Sell threshold, USD<input name="sell" type="number" min="0.01" step="0.01" required data-stock-sell></label>
-                <button type="submit" class="btn btn-primary">Add stock</button>
+                <input name="symbol" required maxlength="10" autocomplete="off" placeholder="Symbol, e.g. AAPL" aria-label="Symbol" data-stock-symbol>
+                <input name="name" maxlength="80" autocomplete="off" placeholder="Name (optional)" aria-label="Name" data-stock-name>
+                <button type="submit" class="btn btn-secondary config-action">Add stock</button>
             </div>
         </form>`;
     }
@@ -182,11 +180,10 @@ export function createConfig({ request: af, reload, notify }) {
         </article>`;
     }
 
-    // Retire stops monitoring and keeps history; delete removes the symbol when it has no history. Not in the demo.
+    // Retire stops monitoring and keeps the symbol's history. Delete lives in the retired list. Not in the demo.
     function watchlistActions(stock) {
         if (document.documentElement.dataset.demo === '1') return '';
-        return `<button type="button" class="btn btn-secondary config-action" data-stock-action="retire" data-stock-id="${escapeHtml(stock.id)}" data-stock-symbol="${escapeHtml(stock.symbol)}">Retire</button>`
-            + `<button type="button" class="btn btn-secondary config-action" data-stock-action="delete" data-stock-id="${escapeHtml(stock.id)}" data-stock-symbol="${escapeHtml(stock.symbol)}">Delete</button>`;
+        return `<button type="button" class="btn btn-secondary config-action" data-stock-action="retire" data-stock-id="${escapeHtml(stock.id)}" data-stock-symbol="${escapeHtml(stock.symbol)}">Retire</button>`;
     }
 
     // Retired symbols: restore to monitor again, or delete when they have no history.
@@ -221,8 +218,8 @@ export function createConfig({ request: af, reload, notify }) {
         const heldCount = stocks.filter(stock => Number(stock.position?.quantity) > 0).length;
         const realCount = stocks.reduce((total, stock) => total + (stock.alert_levels || []).filter(level => level.auto_order).length, 0);
         body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, <span class="config-real-word">real-order switches and </span>one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span class="config-real-count"><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${escapeHtml(orders.mode)}</strong></span></div></div>
-            <div class="config-search"><input id="config-stock-filter" type="search" placeholder="Filter symbols" aria-label="Filter symbols" value="${escapeHtml(stockFilter)}"></div></header>${addStockForm()}${retiredSection()}
-            <div class="config-stock-list">${stocks.length ? stocks.map(stockCard).join('') : '<p class="journal-empty">No Alpaca watchlist symbols yet.</p>'}<div class="config-filter-empty empty-state" hidden>No symbols match this filter.</div></div>`;
+            <div class="config-search"><input id="config-stock-filter" type="search" placeholder="Filter symbols" aria-label="Filter symbols" value="${escapeHtml(stockFilter)}"></div></header>
+            <div class="config-stock-list">${stocks.length ? stocks.map(stockCard).join('') : '<p class="journal-empty">No Alpaca watchlist symbols yet.</p>'}<div class="config-filter-empty empty-state" hidden>No symbols match this filter.</div></div>${addStockForm()}${retiredSection()}`;
         if (pendingLevelId) {
             const row = container.querySelector(`[data-alert-id="${CSS.escape(String(pendingLevelId))}"]`);
             row?.classList.add('is-focused');
@@ -245,7 +242,6 @@ export function createConfig({ request: af, reload, notify }) {
             if (!button) return;
             if (button.dataset.stockAction === 'levels') return toggleLevels(button.dataset.stockId);
             if (button.dataset.stockAction === 'retire') return watchlistChange(`/alpaca/watchlist/${encodeURIComponent(button.dataset.stockId)}/retire`, { method: 'POST' }, `${button.dataset.stockSymbol} retired. Its alerts and history are kept.`);
-            if (button.dataset.stockAction === 'delete') return deleteSymbol(button.dataset.stockId, button.dataset.stockSymbol);
             if (button.dataset.retiredAction === 'restore') return watchlistChange(`/alpaca/watchlist/${encodeURIComponent(button.dataset.watchlistId)}/restore`, { method: 'POST' }, `${button.dataset.stockSymbol} is monitored again`);
             if (button.dataset.retiredAction === 'delete') return deleteSymbol(button.dataset.watchlistId, button.dataset.stockSymbol);
             if (button.dataset.budget) return editBudget(button.dataset.budget);
@@ -303,13 +299,10 @@ export function createConfig({ request: af, reload, notify }) {
     async function addStock(form) {
         const symbol = form.querySelector('[data-stock-symbol]').value.trim().toUpperCase();
         const name = form.querySelector('[data-stock-name]').value.trim();
-        const buy = Math.round(Number(form.querySelector('[data-stock-buy]').value) * 100) / 100;
-        const sell = Math.round(Number(form.querySelector('[data-stock-sell]').value) * 100) / 100;
         if (!symbol) return notify?.('Enter a symbol', 'error');
-        if (!(buy > 0) || !(sell > 0) || buy >= sell) return notify?.('The buy threshold must be a positive price below the sell threshold', 'error');
         await mutate('/stocks', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ symbol, name, buy_threshold_usd: buy, sell_threshold_usd: sell }),
+            body: JSON.stringify({ symbol, name }),
         }, `${symbol} added to the watchlist`);
     }
 

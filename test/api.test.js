@@ -449,3 +449,13 @@ test('watchlist symbols can be added, retired, restored and deleted; history blo
     assert.equal(symbols().includes('LIFE'), false);
     assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM stocks WHERE symbol = ?').get('LIFE').n, 0);
 });
+
+test('a stock can be added with no thresholds; it starts with no alert levels', async t => {
+    const f = await fixture();
+    t.after(() => { f.server.close(); f.db.db.close(); fs.rmSync(f.dir, { recursive: true, force: true }); });
+    const response = await f.request('/api/stocks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ symbol: 'PLAIN', name: '' }) });
+    assert.equal(response.status, 201);
+    const { stock } = await response.json();
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM alpaca_alert_levels WHERE watchlist_id = ?').get(stock.watchlist_id).n, 0);
+    assert.equal(f.db.db.prepare('SELECT COUNT(*) AS n FROM alert_levels WHERE stock_id = ?').get(stock.id).n, 0);
+});
