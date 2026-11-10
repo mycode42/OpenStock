@@ -1,5 +1,6 @@
 # Template: scripts/install-user-units.sh renders {ROOT} and {NODE} into
-# ~/.config/systemd/user. Runs as the invoking user; no root needed.
+# ~/.config/systemd/user, then reloads the user manager. Runs as the invoking user; no root needed.
+# Start it with: systemctl --user enable --now openstock.service
 [Unit]
 Description=OpenStock Dashboard
 After=network-online.target
