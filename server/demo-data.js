@@ -120,9 +120,17 @@ function equityHistory(account, now) {
     };
     // Closes stop before the intraday window, so the two series never overlap, as in the recorded history.
     const days = 118;
-    const trend = progress => start * (1 + progress * 0.071);
+    const annualReturn = account === 'options' ? 0.13 : account === 'momentum' ? (1.02 ** 12) - 1 : 0.20;
+    const historyDays = days + 2;
+    const trend = progress => start * (1 + annualReturn) ** (progress * historyDays / 365);
     const dailyWalk = randomWalk(`${account}:close`, days, 0.006);
-    const closes = Array.from({ length: days }, (_, index) => row(end - (days + 2 - index) * 86_400_000, 'close', trend(index / (days - 1)) * (1 + dailyWalk[index])));
+    const firstOffset = dailyWalk[0];
+    const lastOffset = dailyWalk.at(-1);
+    const closes = Array.from({ length: days }, (_, index) => {
+        const progress = index / (days - 1);
+        const offset = dailyWalk[index] - (firstOffset + (lastOffset - firstOffset) * progress);
+        return row(end - (days + 2 - index) * 86_400_000, 'close', trend(progress) * (1 + offset));
+    });
     const latest = trend(1);
     const intradayWalk = randomWalk(`${account}:intraday`, 36 * 12, 0.0025);
     // The walk is shifted so the last 5-minute point is the headline value.
