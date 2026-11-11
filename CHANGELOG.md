@@ -2,6 +2,32 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
+## 3.5.0 - 2026-11-11
+
+### Added
+
+- Momentum paper book: a quarterly cross-sectional momentum book (top five by six-month momentum, equal weight) on its own paper account, never the algo account. It is a dry run by default. `--submit` places orders once per quarter, and a timer runs it on weekdays at 10:00 New York time.
+- Momentum Account view on the Algo Trader page, laid out like the Equity and Options pages: KPIs, equity history, basket, positions and activity. Read-only.
+- Replay: idle cash earns the three-month Treasury bill rate less SGOV's expense ratio, and the replay reports SPY buy-and-hold beside the strategy return.
+- Live entries can be passive: a buy rests at the bid and a short at the ask (`execution.entry_pricing`). Each entry decision records the quote it was priced from.
+- Research lab: results can be chosen from the running and recent runs; the entry and exit rules panel keeps its open state.
+
+### Changed
+
+- Shorts are off for every strategy that had them. Long-only for swing trend, swing mean reversion, swing momentum, intraday trend, intraday momentum, weekly trend, weekly momentum and weekly mean reversion.
+- Weekly momentum holds at least three sessions before a momentum-reversal exit. Stops still apply from entry.
+- Intraday mean reversion is disabled in the live configuration.
+- Replay costs (spread, slippage and commission) are zero. Borrow cost for shorts is unchanged.
+- Research lab phases match the replay-only pipeline: data refresh, factor model and portfolio replay.
+- Research page: the status line and the Kill button are removed.
+- Scheduled job logs are renamed `equity-simulation.log` and `options-simulation.log`. ThetaData logs are hidden once its history is complete.
+
+### Fixed
+
+- The Equity and Options account pages no longer throw on every render, which kept the research page loading.
+- Options account loads reuse parsed research summaries, and options replays load only new or changed sessions.
+- Options research archives no longer grow without bound: older chain caches are removed when a new one is written.
+
 ## 3.4.0 - 2026-11-09
 
 ### Added

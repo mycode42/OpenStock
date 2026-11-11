@@ -90,6 +90,8 @@ test('live orders need ALPACA_ALLOW_LIVE and the order token; paper needs neithe
     const saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
     t.after(() => { for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; } });
     process.env.OPENSTOCK_ORDER_TOKEN = TOKEN;
+    // The test controls the opt-in itself, so the result does not depend on the local .env.
+    delete process.env.ALPACA_ALLOW_LIVE;
     const { base, levelId } = await fixture(t);
     const auth = { 'X-OpenStock-Order-Token': TOKEN };
     const preview = headers => post(base, `/api/alpaca/alert-levels/${levelId}/orders`, headers, { preview: true });

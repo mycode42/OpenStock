@@ -10,7 +10,7 @@ export function renderAccountSwitch({ active, ariaLabel, attribute, options }) {
 }
 
 function renderAccountModeSwitch(active) {
-    return renderAccountSwitch({ active, ariaLabel: 'Algo Trader paper account', attribute: 'data-account-mode', options: [['equity', 'Equity Account'], ['options', 'Options Account']] });
+    return renderAccountSwitch({ active, ariaLabel: 'Algo Trader paper account', attribute: 'data-account-mode', options: [['equity', 'Equity Account'], ['options', 'Options Account'], ['momentum', 'Momentum Account']] });
 }
 
 export function renderAccountLoading({ mode, loading, error }) {

@@ -1,7 +1,9 @@
-import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js?v=3.4.0&config-removed=1';
-import { renderResearchPage } from './algo-trader/research-view.js?v=3.4.0&research-control=2';
-import { mountResearchLab } from './algo-trader/research-lab.js?v=3.4.0&equity-runs=30';
-import { mountDataStatus } from './algo-trader/data-status.js?v=3.4.0&demo-samples=3';
+import { apiRequest } from './api.js';
+import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js?v=3.5.0&config-removed=3';
+import { renderResearchPage } from './algo-trader/research-view.js?v=3.5.0&research-control=2';
+import { mountResearchLab } from './algo-trader/research-lab.js?v=3.5.0&equity-runs=30';
+import { mountDataStatus } from './algo-trader/data-status.js?v=3.5.0&demo-samples=3';
+import { renderMomentumPage } from './algo-trader/momentum-view.js?v=3.5.0&momentum=2';
 
 export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');
@@ -11,6 +13,8 @@ export function createAlgoTrader({ request, charts }) {
     const loadingAccounts = new Set();
     const requestInFlight = new Set();
     let accountMode = 'equity';
+    // The momentum paper book has its own read-only view: its payload and loading state.
+    const momentum = { payload: null, loading: false, error: '' };
     let researchMode = 'equity';
     let range = '1D';
     const researchFilters = { equity: 'all', options: 'all' };
@@ -22,6 +26,11 @@ export function createAlgoTrader({ request, charts }) {
 
     function render() {
         if (!host) return;
+        if (accountMode === 'momentum') {
+            host.innerHTML = renderMomentumPage({ payload: momentum.payload, range, charts, loading: momentum.loading, error: momentum.error });
+            charts.attachInteractiveLineCharts(host);
+            return;
+        }
         const snapshot = snapshots[accountMode];
         if (!snapshot) {
             host.innerHTML = renderAccountLoading({ mode: accountMode, loading: loadingAccounts.has(accountMode), error: errors[accountMode] });
@@ -110,7 +119,18 @@ export function createAlgoTrader({ request, charts }) {
         if (mode === researchMode && researchChanged) renderResearch();
     }
 
+    async function loadMomentum() {
+        momentum.loading = true;
+        if (accountMode === 'momentum') render();
+        const payload = await apiRequest('/algo-trader/momentum-paper', {}, message => { momentum.error = message; });
+        momentum.loading = false;
+        if (payload) { momentum.payload = payload; momentum.error = ''; }
+        else if (!momentum.payload) momentum.error = 'The momentum paper view could not be loaded.';
+        if (accountMode === 'momentum') render();
+    }
+
     function load({ silent = false } = {}) {
+        if (accountMode === 'momentum') return loadMomentum();
         return loadAccount(accountMode, { silent });
     }
 
@@ -142,7 +162,7 @@ export function createAlgoTrader({ request, charts }) {
         if (!button || !host.contains(button)) return;
         if (button.dataset.accountMode) {
             const mode = button.dataset.accountMode;
-            if (!['equity', 'options'].includes(mode) || mode === accountMode) return;
+            if (!['equity', 'options', 'momentum'].includes(mode) || mode === accountMode) return;
             accountMode = mode;
             errors[mode] = '';
             activityPage = 0;

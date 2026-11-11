@@ -9,6 +9,7 @@ const { buildOptionsPayload } = require('../algo-trader/options');
 const { LabError, ResearchLab } = require('../algo-trader/research-lab');
 const { buildDataStatus } = require('../algo-trader/data-status');
 const research = require('../algo-trader/research-control');
+const { buildMomentumPayload } = require('../algo-trader/momentum-paper');
 
 module.exports = function registerAlgoTraderRoutes({ app, root = require('../../lib/paths').algoTraderRoot(), now = () => new Date() }) {
     app.get('/api/algo-trader/universe/:symbol/history', async (req, res) => {
@@ -41,6 +42,18 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
         } catch (error) {
             console.error(`Algo Trader universe unavailable: ${error.message}`);
             res.status(503).json({ error: 'Algo Trader universe data is unavailable' });
+        }
+    });
+
+    // Read-only view of the momentum paper book on its own account. Demo mode shows no account.
+    app.get('/api/algo-trader/momentum-paper', async (_req, res) => {
+        if (app.locals?.demoMode) return res.json({ available: false, account: 'momentum', reason: 'Demo mode has no momentum paper account' });
+        try {
+            res.set('Cache-Control', 'no-store');
+            res.json(await buildMomentumPayload({ root, env: process.env, now: now() }));
+        } catch (error) {
+            console.error(`Momentum paper view unavailable: ${error.message}`);
+            res.status(503).json({ error: 'Momentum paper view is unavailable' });
         }
     });
 
