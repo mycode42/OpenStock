@@ -117,11 +117,10 @@ test('sell limit submits a verified fractional available quantity without roundi
     const levelId = seedLevel(db, { side: 'SELL', price: 60 });
     const client = fakeClient({
         position: { symbol: 'AAPL', qty: '1.000000000', qty_available: '0.7686815899' },
-        asset: { fractionable: true, fractional_eh_enabled: true },
     });
     const result = await orders.placeLevelOrder({ db, client, levelId, env: ENABLED });
     assert.equal(result.order.qty, 0.768681589);
-    assert.equal(client.calls.assets[0], 'AAPL');
+    assert.equal(client.calls.assets.length, 0, 'a fractional sell needs no separate asset lookup');
     assert.equal(client.calls.submitted[0].qty, '0.768681589');
     assert.equal(client.calls.submitted[0].side, 'sell');
     assert.equal(client.calls.submitted[0].type, 'limit');
@@ -129,21 +128,13 @@ test('sell limit submits a verified fractional available quantity without roundi
     assert.equal(client.calls.submitted[0].extended_hours, true);
 });
 
-test('fractional sell fails closed before recording or submission when asset eligibility is unverified', async t => {
+test('a whole position that is fractional sells in full, even when the asset lookup would fail', async t => {
     const db = makeDb(t);
     const levelId = seedLevel(db, { side: 'SELL', price: 60 });
-    const position = { symbol: 'AAPL', qty: '0.75', qty_available: '0.75' };
-    const clients = [
-        fakeClient({ position, asset: { fractionable: false, fractional_eh_enabled: true } }),
-        fakeClient({ position, asset: { fractionable: true, fractional_eh_enabled: false } }),
-        fakeClient({ position }),
-        fakeClient({ position, assetError: new Error('asset lookup unavailable') }),
-    ];
-    for (const client of clients) {
-        await assert.rejects(orders.placeLevelOrder({ db, client, levelId, env: ENABLED }), err => [409, 503].includes(err.status));
-        assert.equal(client.calls.submitted.length, 0);
-    }
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alpaca_orders').get().n, 0);
+    const client = fakeClient({ position: { symbol: 'AAPL', qty: '0.75', qty_available: '0.75' }, assetError: new Error('unused') });
+    const result = await orders.placeLevelOrder({ db, client, levelId, env: ENABLED });
+    assert.equal(result.order.qty, 0.75);
+    assert.equal(client.calls.submitted[0].qty, '0.75');
 });
 
 test('fractional sell fails closed when available quantity or long-position authority is invalid', async t => {
