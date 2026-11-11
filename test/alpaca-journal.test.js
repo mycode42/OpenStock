@@ -54,7 +54,7 @@ test('sells without an open trade are skipped; deposits and withdrawals feed con
 test('equity curve uses only finite portfolio history points', () => {
     const analytics = buildJournalAnalytics({
         account: { equity: 1000, cash: 0 },
-        history: { timestamp: [1767225600, 1767312000, 1767398400], equity: [1000, null, 1010] },
+        history: { timestamp: ['2026-11-11T07:10:00Z', '2026-11-11T07:15:00Z', '2026-11-11T07:20:00Z'].map(at => Date.parse(at) / 1000), equity: [1000, null, 1010] },
     });
     assert.equal(analytics.equity_available, true);
     assert.deepEqual(analytics.equity_curve.map(point => point.equity_usd), [1000, 1010]);
@@ -63,7 +63,7 @@ test('equity curve uses only finite portfolio history points', () => {
 test('equity curve starts at the first funded point, not at the zeros before funding', () => {
     const analytics = buildJournalAnalytics({
         account: { equity: 1010, cash: 0 },
-        history: { timestamp: [1767225600, 1767312000, 1767398400, 1767484800], equity: [0, 0, 500, 1010] },
+        history: { timestamp: ['2026-11-11T07:10:00Z', '2026-11-11T07:15:00Z', '2026-11-11T07:20:00Z', '2026-11-11T07:25:00Z'].map(at => Date.parse(at) / 1000), equity: [0, 0, 500, 1010] },
     });
     assert.deepEqual(analytics.equity_curve.map(point => point.equity_usd), [500, 1010]);
 });

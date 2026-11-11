@@ -47,23 +47,23 @@ test('an unavailable account is not stored as a zero-equity point', async t => {
 
 test('the Journal curve uses broker daily history before the first snapshot and intraday points after it', () => {
     const history = {
-        timestamp: [Date.parse('2026-10-28T20:00:00Z') / 1000, Date.parse('2026-10-29T20:00:00Z') / 1000],
-        equity: [1000, 1005],
+        timestamp: [Date.parse('2026-11-10T20:00:00Z') / 1000, Date.parse('2026-11-11T07:05:00Z') / 1000, Date.parse('2026-11-11T07:10:00Z') / 1000],
+        equity: [1000, 1003, 1005],
     };
     const snapshots = [
-        { snapshot_at: '2026-10-30T14:00:00.000Z', equity_usd: 1010, cash_usd: 400, position_value_usd: 600 },
-        { snapshot_at: '2026-10-30T14:05:00.000Z', equity_usd: 1012, cash_usd: 400, position_value_usd: 612 },
+        { snapshot_at: '2026-11-12T14:00:00.000Z', equity_usd: 1010, cash_usd: 400, position_value_usd: 600 },
+        { snapshot_at: '2026-11-12T14:05:00.000Z', equity_usd: 1012, cash_usd: 400, position_value_usd: 612 },
     ];
-    const analytics = buildJournalAnalytics({ account: { equity: 1012, cash: 400 }, history, snapshots, now: new Date('2026-10-30T14:10:00Z') });
+    const analytics = buildJournalAnalytics({ account: { equity: 1012, cash: 400 }, history, snapshots, now: new Date('2026-11-12T14:10:00Z') });
 
     assert.equal(analytics.equity_curve_resolution, 'intraday');
-    assert.deepEqual(analytics.equity_curve.map(point => point.equity_usd), [1000, 1005, 1010, 1012]);
+    assert.deepEqual(analytics.equity_curve.map(point => point.equity_usd), [1005, 1010, 1012]);
     assert.equal(analytics.equity_curve.at(-1).equity_usd, 1012);
 });
 
 test('without snapshots the Journal keeps the daily broker curve', () => {
-    const history = { timestamp: [Date.parse('2026-10-29T20:00:00Z') / 1000], equity: [1005] };
-    const analytics = buildJournalAnalytics({ account: { equity: 1005, cash: 0 }, history, snapshots: [], now: new Date('2026-10-30T14:10:00Z') });
+    const history = { timestamp: [Date.parse('2026-11-11T07:10:00Z') / 1000], equity: [1005] };
+    const analytics = buildJournalAnalytics({ account: { equity: 1005, cash: 0 }, history, snapshots: [], now: new Date('2026-11-12T14:10:00Z') });
     assert.equal(analytics.equity_curve_resolution, 'daily');
     assert.equal(analytics.equity_curve.length, 1);
 });
