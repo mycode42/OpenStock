@@ -11,12 +11,14 @@ from strategies.state_machine import (
 NOW = datetime(2026, 11, 11, 15, 0, tzinfo=timezone.utc)
 
 
-def _pending(strategy="swing_momentum", ticker="LLY", age_seconds=1200, action="buy", order_id="o1"):
+def _pending(strategy="swing_momentum", ticker="LLY", age_seconds=1200, action="buy", order_id="o1",
+             reference=100.0, pricing="passive", bar="2026-11-11T14:00:00+00:00"):
     stamp = (NOW - timedelta(seconds=age_seconds)).isoformat()
     return {
         strategy: {ticker: {
             "phase": ENTRY_PENDING, "owner": strategy, "entry_action": action, "pending_action": action,
             "order_id": order_id, "entry_order_id": order_id, "updated_at": stamp, "entry_client_order_id": "c1",
+            "entry_reference_price": reference, "entry_pricing": pricing, "last_signal_bar": bar,
         }},
     }
 
@@ -26,7 +28,9 @@ def _portfolio(states, owners=None):
 
 
 class FakeBroker:
-    def __init__(self, orders, after_cancel_status="canceled", positions=(), cancel_error=None):
+    def __init__(self, orders, after_cancel_status="canceled", positions=(), cancel_error=None,
+                 bid=100.0, ask=100.02):
+        self._quote = {"bid": bid, "ask": ask}
         self._orders = list(orders)
         self._status = after_cancel_status
         self._positions = list(positions)
@@ -38,6 +42,9 @@ class FakeBroker:
 
     def positions(self):
         return list(self._positions)
+
+    def latest_quotes(self, symbols, feed=None):
+        return {symbol: dict(self._quote) for symbol in symbols}
 
     def cancel_order(self, order_id):
         if self._cancel_error:
@@ -69,7 +76,7 @@ def test_partly_filled_entries_and_exits_are_not_timed_out():
 def test_a_released_ticker_is_flat_without_cooldown_and_chases_next_time():
     states = _pending()
     machine = RuleStrategyStateMachine(states, {"LLY": "swing_momentum"})
-    machine.release_timed_out_entry("swing_momentum", "LLY", NOW)
+    machine.release_timed_out_entry("swing_momentum", "LLY", NOW, chase=True)
     state = states["swing_momentum"]["LLY"]
     assert state["phase"] == FLAT
     assert state["cooldown_until"] is None
@@ -83,7 +90,36 @@ def test_expiry_cancels_and_releases_when_the_broker_confirms_no_shares():
     results = expire_stale_passive_entries(portfolio, broker, now=NOW)
     assert broker.cancelled == ["o1"]
     assert results[0]["status"] == "released"
+    assert results[0]["retry_at_band"] is True
     assert portfolio["strategy_states"]["swing_momentum"]["LLY"]["phase"] == FLAT
+
+
+def test_retry_at_the_band_only_while_the_market_is_inside_it():
+    # Band is 10 bp: a buy on a $100 signal may retry up to $100.10.
+    inside = _portfolio(_pending(age_seconds=1200, reference=100.0))
+    results = expire_stale_passive_entries(inside, FakeBroker([{"id": "o1", "status": "new"}], ask=100.05), now=NOW)
+    assert results[0]["retry_at_band"] is True
+    outside = _portfolio(_pending(age_seconds=1200, reference=100.0))
+    results = expire_stale_passive_entries(outside, FakeBroker([{"id": "o1", "status": "new"}], ask=100.50), now=NOW)
+    assert results[0]["retry_at_band"] is False
+    assert outside["strategy_states"]["swing_momentum"]["LLY"]["chase_after_timeout"] is False
+
+
+def test_a_retry_that_also_times_out_is_not_retried_again():
+    chased = _portfolio(_pending(age_seconds=1200, pricing="chase_after_timeout"))
+    results = expire_stale_passive_entries(chased, FakeBroker([{"id": "o1", "status": "new"}]), now=NOW)
+    assert results[0]["retry_at_band"] is False
+
+
+def test_a_timed_out_signal_bar_is_not_reentered_unless_the_retry_is_allowed():
+    states = _pending(age_seconds=1200, bar="2026-11-11T14:00:00+00:00")
+    machine = RuleStrategyStateMachine(states, {"LLY": "swing_momentum"})
+    machine.release_timed_out_entry("swing_momentum", "LLY", NOW, chase=False)
+    assert not machine.allows("swing_momentum", "LLY", "buy", "2026-11-11T14:00:00+00:00")
+    assert machine.allows("swing_momentum", "LLY", "buy", "2026-11-11T14:05:00+00:00")
+    retry = RuleStrategyStateMachine(_pending(age_seconds=1200, bar="2026-11-11T14:00:00+00:00"), {"LLY": "swing_momentum"})
+    retry.release_timed_out_entry("swing_momentum", "LLY", NOW, chase=True)
+    assert retry.allows("swing_momentum", "LLY", "buy", "2026-11-11T14:00:00+00:00")
 
 
 def test_expiry_keeps_the_entry_when_shares_arrived_before_the_cancel_took_effect():

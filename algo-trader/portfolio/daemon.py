@@ -220,6 +220,19 @@ def _load_reconciliation_orders(portfolio: dict, broker, *, ledger: BrokerOrderL
     )
 
 
+def _within_entry_band(entry: dict, broker, ticker: str) -> bool:
+    """True if the market still trades within the entry band of the signal price (buy: ask; short: bid)."""
+    reference = float(entry.get("entry_reference_price") or 0)
+    band = float(get_algo_execution_settings()["entry_limit_band_bps"]) / 10_000.0
+    quote = (broker.latest_quotes([ticker], feed="sip") or {}).get(ticker) or {}
+    bid, ask = float(quote.get("bid") or 0), float(quote.get("ask") or 0)
+    if reference <= 0 or bid <= 0 or ask <= 0:
+        return False
+    if str(entry.get("entry_action")) == "short":
+        return bid >= reference * (1 - band)
+    return ask <= reference * (1 + band)
+
+
 def expire_stale_passive_entries(portfolio: dict, broker, *, now: datetime | None = None) -> list[dict]:
     """Cancel passive entries that have rested unfilled past the timeout, then release the ticker.
 
@@ -253,8 +266,11 @@ def expire_stale_passive_entries(portfolio: dict, broker, *, now: datetime | Non
         elif held != 0:
             outcome["status"] = "held_after_cancel"
         else:
-            machine.release_timed_out_entry(item["strategy"], item["ticker"], now)
-            outcome["status"] = "released"
+            # Retry at the band only if the market is still inside it, and only once per signal bar.
+            entry = portfolio["strategy_states"][item["strategy"]][item["ticker"]]
+            chase = _within_entry_band(entry, broker, item["ticker"]) and entry.get("entry_pricing") != "chase_after_timeout"
+            machine.release_timed_out_entry(item["strategy"], item["ticker"], now, chase=chase)
+            outcome.update(status="released", retry_at_band=chase)
         LOG.info("passive entry timeout: %s", json.dumps(outcome, sort_keys=True))
         results.append(outcome)
     return results

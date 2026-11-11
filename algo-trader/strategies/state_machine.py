@@ -363,6 +363,10 @@ class RuleStrategyStateMachine:
                 return False
             if phase not in {FLAT, COOLDOWN}:
                 return False
+            # A timed-out entry spends its signal bar unless the retry at the band is still allowed.
+            if (phase == FLAT and bar_time is not None and bar_time == state.get("timed_out_bar")
+                    and not state.get("chase_after_timeout")):
+                return False
             cooldown_until = self._parse_time(state.get("cooldown_until"))
             if phase == COOLDOWN and cooldown_until and current_time and current_time < cooldown_until:
                 return False
@@ -494,11 +498,12 @@ class RuleStrategyStateMachine:
                 stale.append({"strategy": strategy, "ticker": str(ticker).upper(), "order_id": order_id, "age_seconds": round(age)})
         return stale
 
-    def release_timed_out_entry(self, strategy: str, ticker: str, now: datetime) -> None:
-        """Return a cancelled, unfilled entry to FLAT at once, so the ticker can be tried again without a cooldown.
+    def release_timed_out_entry(self, strategy: str, ticker: str, now: datetime, *, chase: bool) -> None:
+        """Return a cancelled, unfilled entry to FLAT at once, without a cooldown.
 
-        The next entry for this ticker is priced to execute (``chase_after_timeout``). Only call this after the broker
-        confirms the order is cancelled and the ticker holds no shares.
+        ``chase`` lets the next attempt on the same signal bar execute at the marketable band. Without it, the
+        signal bar is spent: the next entry waits for a new bar. Only call this after the broker confirms the order
+        is cancelled and the ticker holds no shares.
         """
         ticker = str(ticker).upper()
         state = _state_for(self.states, strategy, ticker)
@@ -507,7 +512,8 @@ class RuleStrategyStateMachine:
         state.update({
             "phase": FLAT, "owner": None, "pending_action": None, "client_order_id": None, "order_id": None,
             "entry_order_id": None, "entry_client_order_id": None, "entry_action": None, "opened_at": None,
-            "cooldown_until": None, "chase_after_timeout": True, "timed_out_at": now.isoformat(),
+            "cooldown_until": None, "chase_after_timeout": bool(chase), "timed_out_at": now.isoformat(),
+            "timed_out_bar": state.get("last_signal_bar"),
         })
         _touch(state)
         if self.position_owners.get(ticker) == strategy:
@@ -556,6 +562,8 @@ class RuleStrategyStateMachine:
             state["opened_at"] = None
             state["quarantine_reason"] = None
             state["chase_after_timeout"] = False
+            state["entry_reference_price"] = trade.get("entry_price")
+            state["entry_pricing"] = trade.get("entry_pricing")
             signal_time = self._parse_time(trade.get("signal_bar_time"))
             session_day = self.trading_day or (signal_time.astimezone(ET).date().isoformat() if signal_time else None)
             if session_day != state.get("entry_day"):
