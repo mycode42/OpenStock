@@ -74,6 +74,8 @@ test('a level with real orders on places one limit order when it fires and alert
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM alpaca_orders WHERE alpaca_alert_level_id=?').get(levelId).count, 1);
     assert.equal(tg.sent.length, 1);
     assert.match(tg.sent[0], /Real order \(paper\): BUY \d+ @ \$/);
+    // One-shot: the real order is spent with this firing, so the level no longer places real orders.
+    assert.equal(db.prepare('SELECT auto_order FROM alpaca_alert_levels WHERE id=?').get(levelId).auto_order, 0);
 
     // A second poll sees the retired level: no new order and no repeated Telegram alert.
     await run({ db, client, lockPath, env: ENABLED, fetchImpl: tg.fetchImpl });

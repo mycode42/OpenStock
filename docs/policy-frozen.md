@@ -35,6 +35,8 @@ These are the rules that still reject or suppress, grouped. The exact messages a
 
 ## Approved changes
 
+- **2026-11-11, one-shot real orders.** At Andreas's explicit request, a real order on an alert level is spent when the level fires. The level's real order is cleared once it has fired, whether or not the order request succeeded. Setting a real order again needs the order token. This adds no gate message.
+
 - **2026-11-11, live manual account.** At Andreas's explicit request, the OpenStock manual account uses the live Alpaca endpoint, opted in with `ALPACA_ALLOW_LIVE=1` and the order token, because Alpaca allows three paper accounts and the manual account is needed for real dashboard trading. The per-order cap and the live daily cap still apply. The algo equity, options and momentum accounts stay on paper.
 
 - **2026-11-11, momentum paper book.** At Andreas's explicit request, a quarterly cross-sectional momentum book (top five by six-month momentum, equal weight) runs on its own paper account (`ALPACA_MOMENTUM_*`), never the algo account. It is dry run by default; `--submit` places orders once per quarter. Exits and trims are marketable limits; buys rest at the bid. Orders pass the existing per-order cap. The book is research on paper and has no live capital.
