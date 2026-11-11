@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hashlib
 
 from market.calendar import EXTENDED_SESSIONS
+from strategies.catalog import strategy_tag
 
 from .scan_types import ScanScope
 
@@ -34,7 +35,7 @@ def prepare_strategy_exits(scope: ScanScope, generated: list[dict]) -> None:
                 f"{item.get('event_id') or ''}:{item.get('signal_bar_time') or ''}"
             )
             client_order_id = (
-                f"rule-{scope.today.replace('-', '')}-"
+                f"rule-{scope.today.replace('-', '')}-{strategy_tag(strategy)}-"
                 f"{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             )
             state["pending_exit_intent"] = {

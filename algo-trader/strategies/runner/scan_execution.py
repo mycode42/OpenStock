@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 
-from strategies.catalog import CORE_STRATEGIES
+from strategies.catalog import CORE_STRATEGIES, strategy_tag
 from market.calendar import EXTENDED_SESSIONS
 from portfolio.config import get_algo_execution_settings
 from strategies.catalog import strategy_ids_for_group
@@ -337,7 +337,7 @@ def execute_scan_candidates(
             item.get("retry_client_order_id")
             or (retryable_intent or {}).get("client_order_id")
             or (
-                f"rule-{scope.today.replace('-', '')}-"
+                f"rule-{scope.today.replace('-', '')}-{strategy_tag(trade.get("strategy"))}-"
                 f"{hashlib.sha256(identity.encode()).hexdigest()[:12]}"
             )
         )

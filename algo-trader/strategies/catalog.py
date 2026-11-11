@@ -136,3 +136,11 @@ __all__ = [
     "canonical_strategy_id", "strategy_ids_for_group",
     "strategy_ids_for_research_workflow",
 ]
+
+
+def strategy_tag(strategy: object) -> str:
+    """Short strategy label for client order IDs, so a broker order can be traced to its strategy."""
+    import re
+
+    return re.sub(r"[^a-z0-9]", "", str(strategy or "").lower())[:24] or "unknown"
+
