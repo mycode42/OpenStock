@@ -1,5 +1,5 @@
 import { escapeHtml } from '../escape.js';
-import { RANGES, localTimeZone, renderChart } from './equity-chart.js';
+import { RANGES, localTimeZone, renderChart } from './equity-chart.js?life-pl=1';
 import { activityIcon, classForReturn, dateOnly, dateTime, money, signedMoney, signedPercent, timeOnly } from './format.js';
 import { renderAccountSwitch } from './account-view.js';
 
@@ -38,7 +38,7 @@ function chartPanel(payload, range, charts) {
     const metrics = payload.metrics || {};
     return `<article class="card algo-panel algo-chart-panel" data-chart-readout>
         <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>${payload.demo_mode ? 'Simulated momentum account' : 'Momentum paper account'} · USD</p></div>
-        <div class="algo-chart-summary"><strong data-chart-value data-default-value="${escapeHtml(money(payload.equity))}">${escapeHtml(money(payload.equity))}</strong><span data-chart-change class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)}</span></div></div>
+        <div class="algo-chart-summary"><strong data-chart-value data-default-chart-value="${escapeHtml(money(payload.equity))}">${escapeHtml(money(payload.equity))}</strong><span data-chart-change data-default-chart-change="${signedPercent(metrics.total_return_pct)}" data-default-chart-change-class="${classForReturn(metrics.total_return_pct)}" class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)}</span></div></div>
         <div class="algo-range-controls" role="group" aria-label="Chart time range">${RANGES.map(value => `<button type="button" class="algo-range-btn ${range === value ? 'active' : ''}" data-range="${value}" aria-pressed="${range === value}">${value}</button>`).join('')}</div>
         <div class="algo-chart-wrap">${renderChart(history, range, charts)}</div>
         <div class="algo-chart-legend"><span><i></i> Account equity</span><span>Times: ${escapeHtml(localTimeZone())}</span></div>

@@ -122,6 +122,7 @@ function layoutFor(range, points) {
 
 export function renderChart(history, range, charts) {
     const points = range === '1D' ? validPoints(history) : sessionPoints(history);
+    const firstEquity = Number(validPoints(history)[0]?.equity);
     const empty = '<div class="algo-chart-empty">Equity history will appear after more account snapshots are recorded.</div>';
     if (points.length < 2) return empty;
     const { items, ticks } = layoutFor(range, points);
@@ -158,6 +159,7 @@ export function renderChart(history, range, charts) {
         primary: point.point.timestamp ? dateTime(point.point.timestamp) : dateTime(point.point.date),
         secondary: '',
         price: money(point.value),
+        change: Number.isFinite(firstEquity) && firstEquity > 0 ? (point.value / firstEquity - 1) * 100 : null,
     }));
     const chartGrid = `<defs><linearGradient id="algo-chart-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="var(--os-accent, #c8ff00)" stop-opacity=".08"/><stop offset="100%" stop-color="var(--os-accent, #c8ff00)" stop-opacity="0"/></linearGradient></defs><path class="algo-chart-area" d="${area}"/>${grid}${labels}`;
     return charts.interactiveChartSvg({
