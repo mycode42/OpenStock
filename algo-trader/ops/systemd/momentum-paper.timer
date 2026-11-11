@@ -1,0 +1,12 @@
+# Template: scripts/install_units.py renders {ROOT}. Times are America/New_York, so the schedule does not depend on the host clock.
+# Persistent is off: a slot missed while the machine was off is skipped, not run late.
+# Runs each weekday at 10:00 New York time; the job submits only when a quarterly rebalance is due and the market is open.
+[Unit]
+Description=Momentum paper book rebalance (timer)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10:00:00 America/New_York
+Unit=momentum-paper.service
+
+[Install]
+WantedBy=timers.target

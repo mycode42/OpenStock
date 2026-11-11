@@ -1,0 +1,18 @@
+# Template: scripts/install_units.py renders {ROOT}, {ENV_FILE}, and {PYTHON} into ~/.config/systemd/user.
+# Started by momentum-paper.timer. Paper book on its own account (ALPACA_MOMENTUM_*); output appends to data/algo/logs/.
+[Unit]
+Description=Momentum paper book quarterly rebalance
+
+[Service]
+Type=oneshot
+TimeoutStartSec=30min
+WorkingDirectory={ROOT}
+EnvironmentFile={ENV_FILE}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={PYTHON} -m execution.momentum_paper --scheduled
+StandardOutput=append:{ROOT}/data/algo/logs/momentum-paper.log
+StandardError=append:{ROOT}/data/algo/logs/momentum-paper.log
+UMask=0077
+
+[Install]
+WantedBy=default.target
