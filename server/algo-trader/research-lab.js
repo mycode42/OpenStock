@@ -273,6 +273,16 @@ function replayProgress(events) {
     return latest;
 }
 
+// An options job is one underlying after another. The bar counts the finished underlyings plus the share of the
+// replay in progress, so it moves while a single underlying is still replaying.
+function optionsPercent(job, progress, events) {
+    if (job.state === 'finished') return 100;
+    if (!progress.total) return 0;
+    const latest = events.filter(item => item.event === 'replay_progress').pop();
+    const share = latest && !progress.finished ? Math.min(1, Math.max(0, Number(latest.fraction) || 0)) : 0;
+    return Math.min(99, Math.round(((progress.done + share) / progress.total) * 100));
+}
+
 function summarizeProgress(events) {
     const done = events.filter(item => item.event === 'underlying_done' || item.event === 'underlying_error');
     const started = events.filter(item => item.event === 'underlying_started').pop();
@@ -585,7 +595,9 @@ class ResearchLab {
         const events = parseLabEvents(log.text);
         const replay = replayProgress(events);
         const stages = job.account === 'equity' ? await this.equityStages(job, replay) : null;
-        return { ...job, progress: summarizeProgress(events), replay, stages, log_bytes: log.size };
+        const progress = summarizeProgress(events);
+        if (job.account === 'options') progress.percent = optionsPercent(job, progress, events);
+        return { ...job, progress, replay, stages, log_bytes: log.size };
     }
 
     // One row per pipeline stage, from the run's stage file. A stage that never ran reads "not run" once the run has finished.

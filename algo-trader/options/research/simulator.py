@@ -6,8 +6,11 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timezone
 from bisect import bisect_left
 import hashlib
+import json
 import math
+import os
 import random
+import time
 from statistics import mean, median, pstdev
 
 from options.assignment import simulate_early_assignment
@@ -161,6 +164,39 @@ def _metrics(curve: list[dict], trades: list[dict], greek_summary: dict, quality
         "greeks": greek_summary,
         "quality": quality,
     }
+
+
+# Lab runs set ALGO_LAB_PROGRESS=1: the replay then prints a LAB_EVENT replay_progress line at most every half second,
+# so the lab's progress bar moves while one underlying replays. Same event shape as the equity replay.
+PROGRESS_EVENT_PREFIX = "LAB_EVENT "
+PROGRESS_MIN_INTERVAL_SECONDS = 0.5
+
+
+class _ReplayProgress:
+    def __init__(self, total: int) -> None:
+        self.enabled = os.environ.get("ALGO_LAB_PROGRESS") == "1"
+        self.total = total
+        self.started = time.monotonic()
+        self.last = 0.0
+
+    def tick(self, done: int, through) -> None:
+        if not self.enabled:
+            return
+        now = time.monotonic()
+        if done < self.total and now - self.last < PROGRESS_MIN_INTERVAL_SECONDS:
+            return
+        self.last = now
+        elapsed = now - self.started
+        rate = elapsed / done if done else 0.0
+        event = {
+            "event": "replay_progress", "label": os.environ.get("ALGO_REPLAY_LABEL", "replay"),
+            "sessions_done": done, "sessions_total": self.total,
+            "fraction": round(done / self.total, 4) if self.total else 1.0,
+            "through": through.isoformat() if through else None,
+            "elapsed_seconds": round(elapsed, 1),
+            "remaining_seconds": round(rate * (self.total - done), 1),
+        }
+        print(PROGRESS_EVENT_PREFIX + json.dumps(event, sort_keys=True), flush=True)
 
 
 def simulate_options_strategy(
@@ -564,7 +600,9 @@ def simulate_options_strategy(
         trade.exit_reason = exit_reason
         close_share_inventory(trade, observation.spot)
 
+    progress = _ReplayProgress(len(observations))
     for obs_index, observation in enumerate(observations):
+        progress.tick(obs_index, observation.as_of)
         observation_session = observation.as_of.date()
         if observation_session != long_vol_entry_session:
             long_vol_entry_session = observation_session

@@ -307,9 +307,8 @@ def _render_markdown(report: dict) -> str:
             if item.get("status") == "completed":
                 wf = item.get("walk_forward", {})
                 lines.extend([
-                    "", f"Approved for paper config export: **{item.get('approved')}**  ",
+                    "",
                     f"Rolling OOS: trades {wf.get('trade_count', 0)}, return {float(wf.get('total_return', 0.0)):.2%}, Sharpe {float(wf.get('annualized_sharpe', 0.0)):.3f}, max drawdown {float(wf.get('max_drawdown', 0.0)):.2%}  ",
-                    f"Champion: promoted **{((item.get('validation') or {}).get('champion') or {}).get('promoted')}** ({((item.get('validation') or {}).get('champion') or {}).get('reason')})  ",
                     f"Parameters: `{json.dumps(item.get('final_parameters', {}), sort_keys=True)}`  ",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
@@ -414,7 +413,7 @@ def _render_markdown(report: dict) -> str:
                 lines.extend([
                     "",
                     f"Exploratory baseline replay: {metrics.get('trade_count', 0)} trades, {float(metrics.get('total_return', 0.0)):.2%} return, Sharpe {float(metrics.get('annualized_sharpe', 0.0)):.3f}  ",
-                    "No parameter search, OOS validation, or promotion eligibility; treat these as descriptive results only.",
+                    "Replay only: the chosen parameters over the history, with no search. Judge it by its P/L and KPIs.",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
         lines.append("")
@@ -850,6 +849,8 @@ def run_automated_options_research(
         "trade_or_order_actions": 0,
         "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
     }
+    # Per-sleeve P/L and KPIs, stored with the report so the research history can show them without replaying.
+    report["simulation_kpis"] = _simulation_summary(report)
     report_path = automation_dir / f"{today}.json"
     atomic_write_json(report_path, report, indent=2, sort_keys=True, allow_nan=False)
     atomic_write_json(automation_dir / "latest.json", report, indent=2, sort_keys=True, allow_nan=False)

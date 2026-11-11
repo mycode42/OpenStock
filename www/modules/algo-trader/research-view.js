@@ -5,30 +5,51 @@ import { renderAccountSwitch } from './account-view.js';
 function renderRunDetail(run) {
     if (!run) return '<div class="algo-empty">No simulation reports are available yet.</div>';
     if (Array.isArray(run.options_strategies)) {
-        const approved = run.options_strategies.filter(strategy => strategy.approved).length;
         const completed = run.options_strategies.filter(strategy => strategy.status === 'completed').length;
         const errors = run.options_strategies.filter(strategy => strategy.status === 'error').length;
-        const strategies = run.options_strategies.map(strategy => `${strategy.name.replaceAll('_', ' ')}: ${strategy.status}${strategy.approved ? ' · approved' : ''}`).join(' · ');
+        const sleeves = Object.values(run.sleeves || {}).filter(item => item && item.trades);
+        const sleeveLines = sleeves.map(item => `${item.label}: ${signedMoneyText(item.net_pnl_usd)} · ${item.trades} trades · win ${percentText(item.win_rate)} · PF ${item.profit_factor ?? '—'} · worst drawdown ${percentText(item.worst_drawdown)}`).join(' · ');
+        const strategies = run.options_strategies.map(strategy => `${strategy.name.replaceAll('_', ' ')}: ${strategy.status}`).join(' · ');
         return `<div class="algo-research-detail-head"><div><span class="algo-eyebrow">OPTIONS RESEARCH RUN</span><h3>${escapeHtml(run.date || 'Undated run')}</h3></div><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span></div>
             <p class="algo-research-note">${escapeHtml(run.result || 'Options research result unavailable')}</p>
-            <div class="algo-run-metrics"><div><span>Strategies</span><strong>${run.active_trials ?? 0}</strong></div><div><span>Completed</span><strong>${completed}</strong></div><div><span>Approved</span><strong>${approved}</strong></div><div><span>Errors</span><strong>${errors}</strong></div></div>
+            <div class="algo-run-metrics"><div><span>Strategies</span><strong>${run.active_trials ?? 0}</strong></div><div><span>Completed</span><strong>${completed}</strong></div><div><span>Net P/L</span><strong class="${classForReturn(run.net_pnl_usd)}">${signedMoneyText(run.net_pnl_usd)}</strong></div><div><span>Trades</span><strong>${run.trades ?? '—'}</strong></div><div><span>Worst drawdown</span><strong>${percentText(run.worst_drawdown)}</strong></div><div><span>Errors</span><strong>${errors}</strong></div></div>
+            <p class="algo-research-note">${escapeHtml(sleeveLines || 'No sleeve P/L yet for this run')}</p>
             <p class="algo-research-note">${escapeHtml(strategies || 'No strategy results')}</p>
             <small class="algo-detail-time">${run.created_at ? `Completed ${escapeHtml(dateTime(run.created_at))}` : 'Completion time unavailable'} · research only</small>`;
     }
     const strategyFitness = Array.isArray(run.strategy_fitness) ? run.strategy_fitness : [];
     return `<div class="algo-research-detail-head"><div><span class="algo-eyebrow">RESEARCH RUN</span><h3>${escapeHtml(run.date || 'Undated run')}</h3></div><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span></div>
         <p class="algo-research-note">${escapeHtml(run.result || 'Research result unavailable')}${run.portfolio_status && run.portfolio_status !== 'unavailable' ? ` · portfolio replay ${escapeHtml(run.portfolio_status)}` : ''}</p>
-        ${run.factor_model ? `<div class="algo-run-metrics"><div><span>Factor model</span><strong>${escapeHtml(run.factor_model.family)}</strong></div><div><span>Observations</span><strong>${run.factor_model.observations ?? '—'}</strong></div><div><span>Rolling evaluations</span><strong>${run.factor_model.rolling_evaluations ?? '—'}</strong></div><div><span>Forward horizon</span><strong>${run.factor_model.forward_horizon_sessions ?? '—'} sessions</strong></div></div><p class="algo-research-note">Discovery ${escapeHtml(run.discovery_status)}${run.discovery_reason ? ` · ${escapeHtml(run.discovery_reason)}` : ''}</p>` : `<div class="algo-run-metrics"><div><span>Active trials</span><strong>${run.active_trials ?? '—'}</strong></div><div><span>Promoted</span><strong>${run.promoted ?? 0}</strong></div><div><span>Staged</span><strong>${run.staged ?? 0}</strong></div><div><span>Portfolio return</span><strong class="${classForReturn(run.portfolio_return_pct)}">${signedPercent(run.portfolio_return_pct)}</strong></div></div>`}
+        ${run.factor_model ? `<div class="algo-run-metrics"><div><span>Factor model</span><strong>${escapeHtml(run.factor_model.family)}</strong></div><div><span>Observations</span><strong>${run.factor_model.observations ?? '—'}</strong></div><div><span>Rolling evaluations</span><strong>${run.factor_model.rolling_evaluations ?? '—'}</strong></div><div><span>Forward horizon</span><strong>${run.factor_model.forward_horizon_sessions ?? '—'} sessions</strong></div></div><p class="algo-research-note">Discovery ${escapeHtml(run.discovery_status)}${run.discovery_reason ? ` · ${escapeHtml(run.discovery_reason)}` : ''}</p>` : `<div class="algo-run-metrics"><div><span>Active trials</span><strong>${run.active_trials ?? '—'}</strong></div><div><span>Portfolio return</span><strong class="${classForReturn(run.portfolio_return_pct)}">${signedPercent(run.portfolio_return_pct)}</strong></div></div>`}
         ${strategyFitness.length ? `<section class="algo-strategy-fitness"><div class="algo-strategy-fitness-title"><strong>Strategy fitness</strong><span>Out-of-sample score</span></div><div class="algo-strategy-fitness-grid algo-strategy-fitness-header"><span>Strategy</span><span>Current</span><span>Δ vs last run</span></div>${strategyFitness.map(strategy => `<div class="algo-strategy-fitness-grid"><span>${escapeHtml(String(strategy.name || '').replaceAll('_', ' '))}</span><strong class="${classForReturn(strategy.fitness)}">${signedScore(strategy.fitness)}</strong><strong class="${classForReturn(strategy.delta_vs_previous)}"${strategy.previous_run_date ? ` title="Compared with ${escapeHtml(strategy.previous_run_date)}"` : ''}>${signedScore(strategy.delta_vs_previous)}</strong></div>`).join('')}</section>` : ''}
         <small class="algo-detail-time">${run.created_at ? `Completed ${escapeHtml(dateTime(run.created_at))}` : ''}${run.duration_seconds !== null && run.duration_seconds !== undefined ? ` · ${Math.round(run.duration_seconds / 60)} min` : ''}</small>`;
 }
 
 const RUNS_PER_PAGE = 10;
 
+// The P/L a run is judged by: net P/L for options, portfolio return for equity. Runs without one are not filtered out
+// by profit or loss.
+export function runPnl(run) {
+    const value = Array.isArray(run.options_strategies) ? run.net_pnl_usd : run.portfolio_return_pct;
+    return value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+}
+
 export function filterRuns(history, filter) {
-    if (filter === 'promoted') return history.filter(run => run.promoted > 0);
-    if (filter === 'no-promotion') return history.filter(run => !run.promoted);
+    if (filter === 'profitable') return history.filter(run => (runPnl(run) ?? 0) > 0);
+    if (filter === 'losing') return history.filter(run => (runPnl(run) ?? 0) < 0);
     return history;
+}
+
+function signedMoneyText(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+    const number = Number(value);
+    return `${number >= 0 ? '+' : '−'}$${Math.abs(number).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+}
+
+function percentText(value) {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+    const number = Number(value);
+    return `${(Math.abs(number) <= 1 ? number * 100 : number).toFixed(1)}%`;
 }
 
 function renderRunPager(page, pageCount, total) {
@@ -64,8 +85,8 @@ export function renderResearchPage({ mode, snapshot, filter, selectedDate, page,
         <section id="research-data-status" class="card data-status-panel"></section>
         <div id="research-lab-slot"></div>
         <section class="card algo-panel algo-history-panel" id="algo-history">
-            <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${title}</h2><p>${description}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['promoted', isOptions ? 'Approved' : 'Promoted'], ['no-promotion', isOptions ? 'No approval' : 'No promotion']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${filter === key ? 'active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div></div>
-            <div class="algo-history-layout"><div class="algo-run-column"><div class="algo-run-list" role="list">${pageRuns.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === activeDate ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === activeDate}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? `${run.promoted ?? 0} approved` : signedPercent(run.portfolio_return_pct)}<small>${isOptions ? 'paper config approval' : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>${renderRunPager(currentPage, pageCount, runs.length)}</div>
+            <div class="algo-section-heading algo-history-heading"><div><span class="algo-eyebrow">EXPERIMENT ARCHIVE</span><h2>${title}</h2><p>${description}</p></div><div class="algo-history-filters" role="group" aria-label="Filter research runs">${[['all', 'All runs'], ['profitable', 'Profitable'], ['losing', 'Losing']].map(([key, label]) => `<button type="button" data-research-filter="${key}" class="${filter === key ? 'active' : ''}" aria-pressed="${filter === key}">${label}</button>`).join('')}</div></div>
+            <div class="algo-history-layout"><div class="algo-run-column"><div class="algo-run-list" role="list">${pageRuns.map(run => `<button type="button" role="listitem" class="algo-run-row ${run.date === activeDate ? 'selected' : ''}" data-run-date="${escapeHtml(run.date)}" aria-pressed="${run.date === activeDate}"><span class="algo-run-version">${escapeHtml(run.date || 'Undated')}<small>${run.created_at ? escapeHtml(timeOnly(run.created_at)) : 'saved report'}</small></span><span class="algo-run-name">${escapeHtml(run.result || 'Research report')}<small>${escapeHtml(run.options_strategies ? 'options research · research only' : run.portfolio_status || 'portfolio result unavailable')} · ${run.active_trials ?? '—'} ${isOptions ? 'strategies' : 'active trials'}</small></span><span class="algo-run-return ${classForReturn(run.portfolio_return_pct)}">${run.options_strategies ? signedMoneyText(run.net_pnl_usd) : signedPercent(run.portfolio_return_pct)}<small>${run.options_strategies ? `net P/L · ${run.trades ?? 0} trades` : 'portfolio return'}</small></span><span class="algo-status-pill ${statusClass(run.status)}">${escapeHtml(run.status || 'unknown')}</span><span class="algo-run-chevron">›</span></button>`).join('') || '<div class="algo-empty">No reports match this filter.</div>'}</div>${renderRunPager(currentPage, pageCount, runs.length)}</div>
                 <aside class="algo-run-detail">${renderRunDetail(selectedRun)}</aside></div>
         </section>
     </main>`;

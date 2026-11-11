@@ -54,6 +54,7 @@ function logSummary(text) {
 }
 
 function percent(job) {
+    if (Number.isFinite(job?.progress?.percent)) return job.progress.percent;
     const total = job?.progress?.total || 0;
     const done = job?.progress?.done || 0;
     return total ? Math.round((done / total) * 100) : 0;

@@ -23,3 +23,18 @@ def test_say_without_log_file_only_prints(tmp_path, capsys):
 
     assert "not a market session" in capsys.readouterr().out
     assert list(tmp_path.iterdir()) == []
+
+
+def test_select_contracts_keeps_every_strike_inside_the_dte_window():
+    from datetime import date
+    from scripts.options import alpaca_daily_capture as capture
+
+    session = date(2026, 11, 10)
+    rows = [
+        {"expiration_date": "2026-12-18", "strike_price": float(strike), "type": kind}
+        for strike in range(50, 900)
+        for kind in ("call", "put")
+    ] + [{"expiration_date": "2027-06-18", "strike_price": 400.0, "type": "call"}]  # beyond 60 DTE
+    selected = capture._select_contracts(rows, spot=755.0, session_date=session)
+    assert len(selected) == 2 * 850
+    assert {row["expiration_date"] for row in selected} == {"2026-12-18"}

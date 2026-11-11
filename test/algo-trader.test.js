@@ -155,7 +155,7 @@ test('options paper account payload reads its own account journal and research',
   assert.equal(res.body.account.regime_engine, 'committee');
   assert.equal(res.body.account.entries_paused, false);
   assert.deepEqual(res.body.account.active_strategies, ['LLM Driven', 'Volatility Risk Premium']);
-  assert.equal(res.body.research.latest.promoted, 1);
+  assert.equal(res.body.research.latest.active_trials, 1);
   assert.ok(res.body.activity.some(item => item.title.includes('SPY')));
   assert.equal(Object.hasOwn(res.body.account, 'account_id'), false);
 });

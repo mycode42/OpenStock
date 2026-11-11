@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import traceback
 
@@ -34,10 +35,13 @@ def main(argv: list[str] | None = None) -> int:
 
     underlyings = [item.strip().upper() for item in args.underlyings.split(",") if item.strip()]
     emit({"event": "started", "strategy": args.strategy, "total": len(underlyings), "underlyings": underlyings})
+    # The replay prints its progress lines, labelled so the page can tell the chosen and live replays apart.
+    os.environ["ALGO_LAB_PROGRESS"] = "1"
     failures = 0
     for index, underlying in enumerate(underlyings, start=1):
         emit({"event": "underlying_started", "underlying": underlying, "index": index, "total": len(underlyings)})
         try:
+            os.environ["ALGO_REPLAY_LABEL"] = "chosen"
             report = run_research(
                 args.strategy, config_path=args.config, underlying=underlying,
                 parallel_workers=args.workers, replay_only=args.replay_only,
@@ -45,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             # The live settings replay over the same history, so the lab can compare the two.
             live_report = None
             if args.live_config:
+                os.environ["ALGO_REPLAY_LABEL"] = "live"
                 live_report = run_research(
                     args.strategy, config_path=args.live_config, underlying=underlying,
                     parallel_workers=args.workers, replay_only=True,

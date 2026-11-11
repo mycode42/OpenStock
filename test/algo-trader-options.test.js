@@ -55,9 +55,31 @@ test('a missing research folder reports no research', async () => {
     assert.deepEqual(await readOptionsResearch(root), { latest: null, history: [] });
 });
 
-test('summaries keep the approved and completed counts', () => {
-    const summary = summarizeOptionsResearch(report('2026-11-09'));
+test('summaries keep the strategy count and carry P/L from the simulation KPIs', () => {
+    const summary = summarizeOptionsResearch({ ...report('2026-11-09'), simulation_kpis: { vrp: { net_pnl_usd: 120, trades: 3, worst_drawdown: 0.05 } } });
     assert.equal(summary.active_trials, 1);
-    assert.equal(summary.promoted, 0);
-    assert.equal(summary.staged, 1);
+    assert.equal(summary.net_pnl_usd, 120);
+    assert.equal(summary.trades, 3);
+    assert.equal(summary.worst_drawdown, 0.05);
+});
+
+test('archives without simulation KPIs still carry P/L from their exploratory replays', () => {
+    const replay = (pnls, drawdown) => ({
+        trades: pnls.map(pnl => ({ pnl })),
+        metrics: { max_drawdown: drawdown },
+    });
+    const summary = summarizeOptionsResearch({
+        ...report('2026-11-10'),
+        strategies: {
+            vrp: { status: 'completed', underlyings: { SPY: { exploratory_replay: replay([50, -20, 30], 0.04) } } },
+            long_volatility: { status: 'completed', underlyings: { SPY: { exploratory_replay: replay([-100], 0.1) } } },
+        },
+    });
+    assert.equal(summary.sleeves.vrp.trades, 3);
+    assert.equal(summary.sleeves.vrp.net_pnl_usd, 60);
+    assert.equal(summary.sleeves.vrp.profit_factor, 4);
+    assert.equal(summary.sleeves.long_volatility.net_pnl_usd, -100);
+    assert.equal(summary.net_pnl_usd, -40);
+    assert.equal(summary.trades, 4);
+    assert.equal(summary.worst_drawdown, 0.1);
 });

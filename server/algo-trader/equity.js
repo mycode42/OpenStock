@@ -99,8 +99,6 @@ function summarizeResearch(report, fallbackDate = null) {
     const orchestration = safeObject(report.orchestration);
     const adaptive = safeObject(report.adaptive_research);
     const factor = safeObject(report.factor_model);
-    const promoted = Array.isArray(forward.promoted) ? forward.promoted.length : 0;
-    const staged = Array.isArray(forward.staged_candidate_ids) ? forward.staged_candidate_ids.length : 0;
     const rejected = Array.isArray(forward.rejected_candidate_ids) ? forward.rejected_candidate_ids.length : 0;
     const factorOnly = orchestration.factor_only === true;
     const discovery = safeObject(adaptive.discovery);
@@ -110,8 +108,6 @@ function summarizeResearch(report, fallbackDate = null) {
         created_at: isoTimestamp(report.created_at),
         status: String(report.status || 'unknown'),
         active_trials: finite(forward.active_trial_count),
-        promoted,
-        staged,
         rejected,
         portfolio_return_pct: finite(portfolio.compounded_fold_return_pct),
         portfolio_status: String(portfolio.status || 'unavailable'),
@@ -142,7 +138,9 @@ function summarizeResearch(report, fallbackDate = null) {
         discovery_reason: String(discovery.reason || ''),
         verification_status: String(verification.status || 'unavailable'),
         verification_reason: String(verification.reason || ''),
-        result: promoted ? `${promoted} promoted` : staged ? `${staged} staged` : factorOnly ? 'Factor-only model run' : String(report.status) === 'completed' ? 'No candidate promoted' : String(report.status || 'Unknown'),
+        result: factorOnly ? 'Factor-only model run'
+            : finite(portfolio.compounded_fold_return_pct) !== null ? `Portfolio replay ${Number(portfolio.compounded_fold_return_pct).toFixed(1)}% over the history`
+            : String(report.status || 'Unknown'),
     };
 }
 

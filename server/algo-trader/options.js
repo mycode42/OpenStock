@@ -24,6 +24,44 @@ async function optionsAccountDirectory(dataDir) {
     }
 }
 
+
+// Per-sleeve P/L and KPIs, computed from the replays in an archive. Archives written before the nightly stored
+// simulation_kpis still show their sleeve results this way. Same figures as the nightly report.
+const SLEEVE_LABELS = { vrp: 'Volatility risk premium', long_volatility: 'Long volatility' };
+
+function sleeveKpis(report) {
+    if (report.simulation_kpis && typeof report.simulation_kpis === 'object') return report.simulation_kpis;
+    const out = {};
+    for (const [strategy, label] of Object.entries(SLEEVE_LABELS)) {
+        const item = safeObject(safeObject(report.strategies)[strategy]);
+        const pnls = [];
+        let worst = 0;
+        let underlyings = 0;
+        for (const row of Object.values(safeObject(item.underlyings))) {
+            const replay = safeObject(row).exploratory_replay;
+            const trades = Array.isArray(replay?.trades) ? replay.trades : [];
+            if (!replay?.metrics || !trades.length) continue;
+            underlyings += 1;
+            for (const trade of trades) pnls.push(Number(trade.pnl) || 0);
+            worst = Math.max(worst, Number(replay.metrics.max_drawdown) || 0);
+        }
+        if (!pnls.length) continue;
+        const wins = pnls.filter(value => value > 0);
+        const losses = pnls.filter(value => value < 0);
+        const net = pnls.reduce((sum, value) => sum + value, 0);
+        out[strategy] = {
+            label,
+            underlyings,
+            trades: pnls.length,
+            net_pnl_usd: Math.round(net * 100) / 100,
+            win_rate: Math.round((wins.length / pnls.length) * 10000) / 10000,
+            profit_factor: losses.length ? Math.round((wins.reduce((a, b) => a + b, 0) / Math.abs(losses.reduce((a, b) => a + b, 0))) * 1000) / 1000 : null,
+            worst_drawdown: Math.round(worst * 1000000) / 1000000,
+        };
+    }
+    return out;
+}
+
 function summarizeOptionsResearch(report) {
     if (!report) return null;
     const strategies = Object.entries(safeObject(report.strategies)).map(([name, row]) => ({
@@ -45,8 +83,14 @@ function summarizeOptionsResearch(report) {
         status: String(report.status || 'unknown'),
         result,
         active_trials: strategies.length,
-        promoted: approved,
-        staged: Math.max(0, completed - approved),
+        // P/L and KPIs per sleeve, from the report's simulation_kpis (absent in older archives).
+        sleeves: sleeveKpis(report),
+        net_pnl_usd: Object.values(sleeveKpis(report))
+            .reduce((sum, item) => sum + (Number(item?.net_pnl_usd) || 0), 0) || null,
+        trades: Object.values(sleeveKpis(report))
+            .reduce((sum, item) => sum + (Number(item?.trades) || 0), 0) || null,
+        worst_drawdown: Object.values(sleeveKpis(report))
+            .reduce((worst, item) => Math.max(worst, Number(item?.worst_drawdown) || 0), 0) || null,
         rejected: strategies.length - completed,
         portfolio_return_pct: null,
         portfolio_status: 'research only',

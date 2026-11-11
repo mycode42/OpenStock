@@ -27,7 +27,6 @@ from portfolio.config import ALGO_PORTFOLIO_UNIVERSE
 
 ET = ZoneInfo("America/New_York")
 MAX_DTE = 60
-STRIKES_PER_SIDE = 20
 MINIMUM_CHAIN_CONTRACTS = 20
 MAX_QUOTE_BATCH = 100
 CAPTURE_LOCK = RESEARCH_ROOT / ".alpaca-daily-capture.lock"
@@ -131,14 +130,8 @@ def _select_contracts(contracts: list[dict], *, spot: float, session_date: date)
             continue
         by_expiration.setdefault(expiration.isoformat(), []).append((strike, row))
 
-    selected = []
-    for expiry_rows in by_expiration.values():
-        distinct_strikes = sorted({strike for strike, _row in expiry_rows})
-        below = sorted((strike for strike in distinct_strikes if strike <= spot), reverse=True)[:STRIKES_PER_SIDE]
-        above = sorted(strike for strike in distinct_strikes if strike > spot)[:STRIKES_PER_SIDE]
-        strikes = set(below + above)
-        selected.extend(row for strike, row in expiry_rows if strike in strikes)
-    return selected
+    # Every listed strike inside the DTE window is kept, so the history can price wings at any delta.
+    return [row for expiry_rows in by_expiration.values() for _strike, row in expiry_rows]
 
 
 def _fetch_snapshots(client: OptionsPaperClient, symbols: list[str], *, feed: str) -> dict[str, dict]:
