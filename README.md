@@ -9,7 +9,7 @@
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
-<img width="800" alt="Algo-Trader" src="https://github.com/user-attachments/assets/bc19b048-e46d-41b1-bd07-43a6a6cfe98d" />
+  <img width="1000" alt="Dashboard" src="https://github.com/user-attachments/assets/1370c485-5e0c-4137-9c46-5e5a92dc2692" />
 
 
 ## Documentation
@@ -52,9 +52,16 @@ Open http://127.0.0.1:3000. The server binds to `127.0.0.1` only.
 
 Check the setup at any time with `curl -s http://127.0.0.1:3000/api/demo-status`. It reports whether the app is in demo mode and what is missing.
 
-## Algo Trader (part of OpenStock, optional)
+## Algo Trader
 
-The Algo Trader is part of OpenStock, like the alert monitor. It is a research and paper-trading engine: a rule-based equity coordinator with a regime committee, a separate options paper account, and equity and options research with walk-forward validation. The dashboard works without it.
+  <img width="1000" alt="Algo-Trader" src="https://github.com/user-attachments/assets/a4107171-ac24-46be-bdd0-47a236389050" />
+
+
+The Algo Trader is a research and paper-trading engine: a rule-based equity coordinator with a regime committee, a separate options paper account and a momentum paper account.
+It comes with an equity and options research lab with walk-forward validation and nightly full history simulation runs.
+
+  <img width="1000" alt="Momentum" src="https://github.com/user-attachments/assets/04ac22fa-ad31-4888-90fb-e1ef91153787" />
+
 
 Requirements: Python 3.12 and Poetry 2.x (Python 3.11 and 3.13 are not supported), plus a C compiler toolchain for the optional Cython extensions.
 
@@ -143,35 +150,38 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Dashboard:** Alpaca USD quotes, alert levels, and Alpaca price-history charts.
 
-  <img width="800" alt="Dashboard" src="https://github.com/user-attachments/assets/4a7ef91f-980e-4b50-ac99-9d9f05f11172" />
+  <img width="1000" alt="Dashboard" src="https://github.com/user-attachments/assets/dcb4dfcb-f9b7-41dd-97f7-010919d0cc33" />
 
 - **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks BUY and SELL thresholds against Alpaca quotes. Alerts fire once per episode and use a durable outbox for Telegram delivery.
 
-  <img width="800" alt="Configure-Overview" src="https://github.com/user-attachments/assets/893362cf-b60f-4689-b47c-aeaea166181c" />
+  <img width="1183" height="945" alt="Configure-dark" src="https://github.com/user-attachments/assets/91c93b2d-76e7-4853-91c5-100ce179fc87" />
 
-- **Manual trading:** a triggers can be equipped with real trades that are executed when fired.
+- **Manual trading:** triggers can be equipped with real trades that are executed when fired. <br>
+  ***Custom budget configuration for buy triggers***  |  ***full position sold at sell triggers***
 
-  <img width="800" alt="Configure" src="https://github.com/user-attachments/assets/e3d24bb3-ae35-4e2a-9485-c252f85baf31" />
+  <img width="1000" alt="Configure" src="https://github.com/user-attachments/assets/42dac58b-6997-4a5e-a368-efac76c709ba" />
 
 - **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
 
-  <img width="800" alt="Journal" src="https://github.com/user-attachments/assets/40321332-f0d0-4ef6-9571-f0c3b2d5b7b1" />
+  <img width="1000" alt="Journal" src="https://github.com/user-attachments/assets/81330302-4404-4100-923b-868eb7679284" />
 
 - **Universe:** shows the current selected dynamic algo trading universe.
 
-  <img width="1179" height="647" alt="Universe" src="https://github.com/user-attachments/assets/1f382cd4-24d9-4d2f-aa49-f341acf6badf" />
+  <img width="1000" alt="Universe" src="https://github.com/user-attachments/assets/1f382cd4-24d9-4d2f-aa49-f341acf6badf" />
 
 - **Performance:** per strategy P&L and latest coordinator & trading activity 
 
-  <img width="800" alt="Algo-Performance" src="https://github.com/user-attachments/assets/39136276-48c6-452b-8795-de5a7604d480"/>
+  <img width="1000" alt="Algo-Performance" src="https://github.com/user-attachments/assets/39136276-48c6-452b-8795-de5a7604d480"/>
 
 - **Research Lab:** Shows nightly research history and provides manual research and refining option.
 
-  <img width="800" alt="Research" src="https://github.com/user-attachments/assets/287d75c0-c1cb-4ffe-9840-0490c4167d8c"/>
+  <img width="1000" alt="Research" src="https://github.com/user-attachments/assets/287d75c0-c1cb-4ffe-9840-0490c4167d8c"/>
+  <img width="1000" alt="Research" src="https://github.com/user-attachments/assets/44c120a7-ad5c-4c82-9241-1a0d54b77a8e" />
+
 
 - **Themes:** twelve colour themes, each in light, dark or system mode. The choice is saved in the browser.
 
-  <img width="800" alt="Themes" src="https://github.com/user-attachments/assets/0d195d8d-4d29-469c-87d4-0a062f31791a"/>
+  <img width="1000" alt="Themes" src="https://github.com/user-attachments/assets/0d195d8d-4d29-469c-87d4-0a062f31791a"/>
 
 
 
