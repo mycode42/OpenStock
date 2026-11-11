@@ -6,11 +6,21 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Added
 
-- Momentum paper book: a quarterly cross-sectional momentum book (top five by six-month momentum, equal weight) on its own paper account, never the algo account. It is a dry run by default. `--submit` places orders once per quarter, and a timer runs it on weekdays at 10:00 New York time.
+- Momentum paper book: a quarterly cross-sectional momentum book on its own paper account (`ALPACA_MOMENTUM_*`), never the algo account. Running `python -m execution.momentum_paper` by hand is a dry run that prints the plan; `--submit` places the orders. The weekday timer at 10:00 New York time runs the same job with `--scheduled`, which places paper orders once per quarter when a rebalance is due and the market is open. See the momentum book section below.
 - Momentum Account view on the Algo Trader page, laid out like the Equity and Options pages: KPIs, equity history, basket, positions and activity. Read-only.
 - Replay: idle cash earns the three-month Treasury bill rate less SGOV's expense ratio, and the replay reports SPY buy-and-hold beside the strategy return.
 - Live entries can be passive: a buy rests at the bid and a short at the ask (`execution.entry_pricing`). Each entry decision records the quote it was priced from.
 - Research lab: results can be chosen from the running and recent runs; the entry and exit rules panel keeps its open state.
+
+### Momentum paper book
+
+- **Universe:** the 116 names in the market store with at least a year of daily history. These are the names that exist today, so the test is not point-in-time and survivorship bias flatters the results.
+- **Ranking:** the close 21 sessions ago divided by the close 126 sessions ago, minus one. This is a six-month return that skips the latest month.
+- **Basket:** the top five names, weighted 20% each.
+- **Rebalance:** quarterly, in the first week of each quarter at 10:00 New York time. Sells come first. Exits and trims are marketable limits 25 bp through the bid. Buys rest at the bid, so an unfilled buy expires with the day and the next rebalance corrects it.
+- **Backtest, 2021-01 to 2026-11, realistic costs (6.5 bp per side), monthly or quarterly:** top five, six-month lookback, quarterly: 60.1% a year, maximum drawdown 37.5%, Sharpe 1.26. Across all 18 settings tested (lookback 6, 9 or 12 months; 3, 5 or 10 names; monthly or quarterly), returns ran from 35% to 60% a year and drawdowns from 33% to 52%. SPY over the same window: 12.9% a year.
+- **Caveat:** this is a backtest on the names that survived to today, not an expectation. The drawdowns are far beyond the 15% limit the project started with, so the book is a paper test of whether the edge holds forward.
+
 
 ### Changed
 
