@@ -9,7 +9,7 @@
 
 > **For research and personal use only.** OpenStock is not investment advice and comes with no warranty. Orders it places are real orders on the account you configure, and they can lose money.
 
-  <img width="1000" alt="Dashboard" src="https://github.com/user-attachments/assets/1370c485-5e0c-4137-9c46-5e5a92dc2692" />
+  <img width="1000" alt="Dashboard-blue" src="https://github.com/user-attachments/assets/4d3a37b2-8bd8-482d-a3d2-810677fb57c0" />
 
 
 ## Documentation
