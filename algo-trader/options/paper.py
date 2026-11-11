@@ -2,7 +2,7 @@
 
 Run ``python -m options.paper`` for a dry-run report. ``--submit`` enables
 orders only at Alpaca's fixed paper endpoint. The Algo equity service remains a
-separate process and account; it is queried read-only for combined risk.
+separate process and account. Its equity and positions are not used for options risk.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from options.market_inputs import (
     MarketInputs, configured_dividend_symbols, refresh_dividend_yields, refresh_market_inputs,
 )
 from options.journal import OptionsJournal
+from options.snapshots import TRADING_MODE as OPTIONS_TRADING_MODE
 from options.iv_history import seed_theta_iv_history
 from options.models import GreeksSnapshot, OptionContract, OptionLeg
 from options.assignment import simulate_early_assignment
@@ -221,6 +222,24 @@ def _stock_position_exposures(client: OptionsPaperClient, positions: list[dict])
             source="broker_equity_position",
         ))
     return result
+
+
+def _rolling_drawdown_pct(account_id: str, current_equity: float, sessions: int) -> float | None:
+    """How far the options account is below its highest close over the last `sessions` closes.
+
+    Today's live equity counts as a point. Returns None when there is no close history yet, so a new
+    account is not blocked before it has any history.
+    """
+    from reporting import snapshot_store
+
+    closes = [
+        float(row["equity"]) for row in snapshot_store.load(OPTIONS_TRADING_MODE, account_id, kind="close")[-sessions:]
+        if float(row.get("equity") or 0) > 0
+    ]
+    if not closes or current_equity <= 0:
+        return None
+    peak = max([*closes, current_equity])
+    return max(0.0, 1.0 - current_equity / peak)
 
 
 def _sleeve_by_symbol(journal: OptionsJournal) -> dict[str, str]:
@@ -919,19 +938,12 @@ def run_paper_cycle(
     if str(account.get("id") or account.get("account_number")) == str(algo_account.get("id") or algo_account.get("account_number")):
         raise RuntimeError("Options and Algo API credentials resolve to the same account")
     option_account_equity = _safe_number(account.get("equity"))
-    algo_equity = _safe_number(algo_account.get("equity"))
-    combined_equity = option_account_equity + algo_equity
-    if min(option_account_equity, algo_equity, combined_equity) <= 0:
-        raise RuntimeError("account equity is unavailable for combined options risk checks")
+    if option_account_equity <= 0:
+        raise RuntimeError("options account equity is unavailable for options risk checks")
     previous_options_equity = _safe_number(account.get("last_equity"))
-    previous_algo_equity = _safe_number(algo_account.get("last_equity"))
-    previous_combined_equity = (
-        previous_options_equity + previous_algo_equity
-        if previous_options_equity > 0 and previous_algo_equity > 0 else 0.0
-    )
-    combined_daily_pnl_pct = (
-        (combined_equity - previous_combined_equity) / previous_combined_equity
-        if previous_combined_equity > 0 else None
+    options_daily_pnl_pct = (
+        (option_account_equity - previous_options_equity) / previous_options_equity
+        if previous_options_equity > 0 else None
     )
     # Trading level may be intentionally downgraded below approval level.
     trading_level_raw = account.get("options_trading_level")
@@ -939,7 +951,6 @@ def run_paper_cycle(
     active_level_raw = trading_level_raw if trading_level_raw is not None else approved_level_raw
     option_level = int(_safe_number(active_level_raw, -1.0)) if active_level_raw is not None else None
     approved_level = int(_safe_number(approved_level_raw, -1.0)) if approved_level_raw is not None else None
-    algo_positions = algo.positions()
     option_positions_all = client.positions()
     open_orders = client.orders("open")
     all_orders = client.orders("all")
@@ -975,7 +986,7 @@ def run_paper_cycle(
         "volatility_state": volatility_state,
         "options_trading_level": option_level,
         "options_approved_level": approved_level,
-        "combined_daily_pnl_pct": combined_daily_pnl_pct,
+        "options_daily_pnl_pct": options_daily_pnl_pct,
     }
     diagnostics["options_entries_today"] = entries_today
     diagnostics["market_inputs"] = {"rate_refresh": market_refresh, "dividend_refresh": dividend_refresh}
@@ -1313,7 +1324,6 @@ def run_paper_cycle(
         "count": pending_order_count,
         "symbols": sorted(pending_order_symbols),
     }
-    equity_exposures = _stock_position_exposures(client, algo_positions)
     option_account_stock_exposures = _stock_position_exposures(client, option_positions_all)
     data_quality.extend(pending_data_quality)
     if data_quality:
@@ -1606,6 +1616,9 @@ def run_paper_cycle(
         if client_order_id:
             directional_entry_intents_today[client_order_id] = True
     directional_entries_today = len(directional_entry_intents_today)
+    options_drawdown_pct = _rolling_drawdown_pct(
+        account_id, option_account_equity, int(config["risk"]["rolling_drawdown_sessions"]),
+    )
     for signal, chain, _closes in candidates:
         if (
             signal.strategy == "options_vrp"
@@ -1619,13 +1632,13 @@ def run_paper_cycle(
         ):
             decisions.append({"signal": signal.to_dict(), "approved": False, "reason": "long-volatility daily entry limit reached"})
             continue
-        max_daily_loss_pct = float(config["risk"]["max_daily_loss_pct"])
-        if combined_daily_pnl_pct is not None and combined_daily_pnl_pct <= -max_daily_loss_pct:
+        max_drawdown_pct = float(config["risk"]["max_rolling_drawdown_pct"])
+        if options_drawdown_pct is not None and options_drawdown_pct >= max_drawdown_pct:
             decisions.append({
                 "signal": signal.to_dict(),
                 "approved": False,
-                "reason": "combined portfolio daily loss limit reached",
-                "combined_daily_pnl_pct": combined_daily_pnl_pct,
+                "reason": "options rolling drawdown limit reached",
+                "options_drawdown_pct": options_drawdown_pct,
             })
             continue
         if entries_today >= int(config["risk"]["max_entries_per_day"]):
@@ -1676,9 +1689,7 @@ def run_paper_cycle(
         buying_power = _safe_number(account.get("options_buying_power", account.get("buying_power")), math.inf)
         decision = manager.size_and_validate(
             signal,
-            combined_equity=combined_equity,
             options_equity=option_account_equity,
-            equity_positions=equity_exposures,
             options_equity_positions=option_account_stock_exposures,
             option_positions=staged_options,
             existing_option_structures=staged_structures,
@@ -1784,7 +1795,6 @@ def run_paper_cycle(
         "stress_iv_shock": float(config["risk"]["stress_iv_shock"]),
     }
     option_only = summarize_portfolio(
-        combined_equity=combined_equity,
         options_equity=option_account_equity,
         positions=published_rows,
         data_quality=data_quality,
@@ -1792,9 +1802,8 @@ def run_paper_cycle(
     )
     publish_risk_snapshot(option_only, account_id=account_id)
     full_summary = summarize_portfolio(
-        combined_equity=combined_equity,
         options_equity=option_account_equity,
-        positions=[*equity_exposures, *published_rows],
+        positions=published_rows,
         data_quality=data_quality,
         **stress_kwargs,
     )
@@ -1804,8 +1813,7 @@ def run_paper_cycle(
         "regime": regime,
         "volatility_state": volatility_state,
         "options_equity": option_account_equity,
-        "algo_equity": algo_equity,
-        "combined_daily_pnl_pct": combined_daily_pnl_pct,
+        "options_daily_pnl_pct": options_daily_pnl_pct,
         "summary": full_summary.to_dict(),
         "options_account_summary": option_only.to_dict(),
         "decisions": decisions,

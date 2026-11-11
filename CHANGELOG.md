@@ -6,6 +6,9 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Added
 
+- Options: a rolling drawdown gate. New entries stop when the options account is 8% or more below its highest close over the last 20 sessions (`max_rolling_drawdown_pct`, `rolling_drawdown_sessions`).
+- Strategy tags on rule order IDs, so broker orders can be attributed to a strategy.
+
 - Options research history shows net P/L, trades, worst drawdown and per-sleeve results for each nightly run. Runs without stored KPIs compute them from their replays. The Profitable and Losing filters use net P/L.
 - Options lab runs show replay progress while an underlying replays, so the bar moves during a run.
 - The daily Alpaca option capture keeps every listed strike within 60 days to expiry, not 20 per side, so the forward history has the wings that the 10 to 20 delta legs need.
@@ -15,6 +18,9 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Changed
 
+- Options risk is options-only. The equity account's equity and stock positions no longer feed the options limits, and the six "combined" limit messages are renamed "options ...". The same-account safety check remains.
+- Options defined-loss budget (`max_total_defined_risk_pct`) is 60% of options equity, up from 10%. The per-trade, margin, delta, vega, gamma, theta and stress limits still apply.
+- The options daily loss limit (2%) is removed; the rolling drawdown gate replaces it.
 - Equity research history shows the portfolio return. The promoted and staged labels are removed.
 - Options exposure no longer counts toward the equity book's gross and net limits. The options delta overlay that was wired into the equity coordinator is removed.
 - The cash-proxy ETF (SGOV) is cash. It is left out of scan positions and orders, and its value counts as free cash in the risk account.

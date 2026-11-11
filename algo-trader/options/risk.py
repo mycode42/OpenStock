@@ -59,7 +59,6 @@ def _safe_number(value: object, default: float = 0.0) -> float:
 
 def summarize_portfolio(
     *,
-    combined_equity: float,
     options_equity: float,
     positions: Iterable[PositionExposure],
     data_quality: Iterable[str] = (),
@@ -69,8 +68,6 @@ def summarize_portfolio(
     shocks = tuple(float(value) for value in stress_spot_shocks)
     if len(shocks) != 2:
         raise ValueError("stress_spot_shocks must contain exactly two shocks")
-    if not math.isfinite(combined_equity) or combined_equity <= 0:
-        raise ValueError("combined portfolio equity must be positive")
     if not math.isfinite(options_equity) or options_equity <= 0:
         raise ValueError("options account equity must be positive")
     delta: dict[str, float] = {}
@@ -109,7 +106,7 @@ def summarize_portfolio(
             scenario_pnls.append(pnl)
         stress_results.append(max(0.0, -min(scenario_pnls)))
     return PortfolioRiskSummary(
-        equity=combined_equity,
+        equity=options_equity,
         options_equity=options_equity,
         delta_by_underlying=delta,
         delta_notional_by_underlying=delta_notional,
@@ -142,9 +139,7 @@ class PortfolioRiskManager:
         self,
         signal: OptionSignal,
         *,
-        combined_equity: float,
         options_equity: float,
-        equity_positions: Iterable[PositionExposure],
         options_equity_positions: Iterable[PositionExposure] = (),
         option_positions: Iterable[PositionExposure],
         existing_option_structures: int,
@@ -153,13 +148,12 @@ class PortfolioRiskManager:
         limits = self.config
         options_equity_positions = list(options_equity_positions)
         option_positions = list(option_positions)
-        base = list(equity_positions) + options_equity_positions + option_positions
+        base = options_equity_positions + option_positions
         stress_kwargs = {
             "stress_spot_shocks": limits["stress_spot_shocks"],
             "stress_iv_shock": float(limits["stress_iv_shock"]),
         }
         current = summarize_portfolio(
-            combined_equity=combined_equity,
             options_equity=options_equity,
             positions=base,
             **stress_kwargs,
@@ -234,7 +228,7 @@ class PortfolioRiskManager:
             return self._reject("premium risk plus costs exceeds the per-trade budget", signal)
         total_risk = structure.risk.max_loss * contracts + self.costs.estimate(structure, contracts)
         if current.max_loss_at_risk + total_risk > options_equity * float(limits["max_total_defined_risk_pct"]):
-            return self._reject("combined defined-loss budget would be exceeded", signal)
+            return self._reject("options defined-loss budget would be exceeded", signal)
         margin_after = current.estimated_margin + structure.risk.estimated_margin * contracts
         margin_cap = options_equity * float(limits["max_margin_pct"])
         if margin_after > margin_cap:
@@ -244,43 +238,42 @@ class PortfolioRiskManager:
 
         candidate = self._candidate_exposure(structure, contracts)
         projected = summarize_portfolio(
-            combined_equity=combined_equity,
             options_equity=options_equity,
             positions=[*base, candidate],
             **stress_kwargs,
         )
-        if max((abs(v) for v in projected.delta_notional_by_underlying.values()), default=0.0) > combined_equity * float(limits["max_delta_notional_pct"]):
-            return self._reject("combined per-underlying delta-notional limit would be exceeded", signal)
+        if max((abs(v) for v in projected.delta_notional_by_underlying.values()), default=0.0) > options_equity * float(limits["max_delta_notional_pct"]):
+            return self._reject("options per-underlying delta-notional limit would be exceeded", signal)
         total_vega = sum(abs(value) for value in projected.vega_per_vol_point_by_underlying.values())
-        if total_vega > combined_equity * float(limits["max_vega_per_vol_point_pct"]):
-            return self._reject("combined vega limit would be exceeded", signal)
+        if total_vega > options_equity * float(limits["max_vega_per_vol_point_pct"]):
+            return self._reject("options vega limit would be exceeded", signal)
         # Short gamma is the loss; long gamma gains do not consume the budget.
         total_gamma_loss = sum(max(0.0, -value) for value in projected.gamma_pnl_1pct_by_underlying.values())
-        if total_gamma_loss > combined_equity * float(limits["max_gamma_1pct_loss_pct"]):
-            return self._reject("combined gamma limit would be exceeded", signal)
+        if total_gamma_loss > options_equity * float(limits["max_gamma_1pct_loss_pct"]):
+            return self._reject("options gamma limit would be exceeded", signal)
         # Per-sleeve vega and gamma. Positions the journal cannot attribute count in every sleeve.
         sleeve_limits = limits["sleeve_limits"].get(structure.strategy)
         if sleeve_limits:
             in_sleeve = [position for position in [*base, candidate] if position.sleeve in ("", structure.strategy)]
             sleeve_projected = summarize_portfolio(
-                combined_equity=combined_equity, options_equity=options_equity,
+                options_equity=options_equity,
                 positions=in_sleeve, **stress_kwargs,
             )
             sleeve_vega = sum(abs(v) for v in sleeve_projected.vega_per_vol_point_by_underlying.values())
-            if sleeve_vega > combined_equity * float(sleeve_limits["max_vega_per_vol_point_pct"]):
+            if sleeve_vega > options_equity * float(sleeve_limits["max_vega_per_vol_point_pct"]):
                 return self._reject("sleeve vega limit would be exceeded", signal)
             sleeve_gamma = sum(max(0.0, -v) for v in sleeve_projected.gamma_pnl_1pct_by_underlying.values())
-            if sleeve_gamma > combined_equity * float(sleeve_limits["max_gamma_1pct_loss_pct"]):
+            if sleeve_gamma > options_equity * float(sleeve_limits["max_gamma_1pct_loss_pct"]):
                 return self._reject("sleeve gamma limit would be exceeded", signal)
         theta_loss_per_day = sum(
             max(0.0, -value) for value in projected.theta_per_day_by_underlying.values()
         )
-        if theta_loss_per_day > combined_equity * float(limits["max_theta_loss_per_day_pct"]):
-            return self._reject("combined daily theta-loss limit would be exceeded", signal)
+        if theta_loss_per_day > options_equity * float(limits["max_theta_loss_per_day_pct"]):
+            return self._reject("options daily theta-loss limit would be exceeded", signal)
         if projected.assignment_shares > int(limits["max_assignment_shares"]):
             return self._reject("early-assignment share exposure limit would be exceeded", signal)
-        if projected.stress_loss_10pct > combined_equity * float(limits["stress_gate_loss_pct"]):
-            return self._reject("combined underlying stress loss exceeds the configured equity limit", signal)
+        if projected.stress_loss_10pct > options_equity * float(limits["stress_gate_loss_pct"]):
+            return self._reject("options underlying stress loss exceeds the configured equity limit", signal)
 
         order_price = structure_limit_price(structure, costs=self.costs, contracts=contracts)
         # A credit structure must remain a credit after conservative slippage.

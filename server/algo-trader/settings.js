@@ -85,7 +85,7 @@ function validateConfigShape(value, template, prefix = '') {
 
 function validateOptionsConfig(config) {
     const nonNegative = [
-        ['risk', 'max_risk_per_trade_pct'], ['risk', 'max_total_defined_risk_pct'], ['risk', 'max_daily_loss_pct'],
+        ['risk', 'max_risk_per_trade_pct'], ['risk', 'max_total_defined_risk_pct'], ['risk', 'max_rolling_drawdown_pct'],
         ['risk', 'max_delta_notional_pct'], ['risk', 'max_vega_per_vol_point_pct'], ['risk', 'max_gamma_1pct_loss_pct'],
         ['risk', 'max_theta_loss_per_day_pct'], ['risk', 'max_margin_pct'], ['vrp', 'min_iv_minus_rv'],
         ['vrp', 'short_delta_min'], ['vrp', 'short_delta_max'], ['vrp', 'wing_delta_max'],

@@ -49,7 +49,6 @@ def test_vertical_debit_spread_has_bounded_loss_and_aggregated_greeks():
 
 def test_portfolio_risk_aggregates_equity_and_option_greeks():
     summary = summarize_portfolio(
-        combined_equity=100_000,
         options_equity=25_000,
         positions=[
             PositionExposure("SPY", 500, delta_shares=10, gamma=0.01, theta_per_day=-2,
@@ -176,8 +175,8 @@ def test_open_short_call_is_not_double_counted_as_covered_shares(tmp_path):
         "SPY", 100, delta_shares=-50, short_call_shares=100, source="broker_option_position",
     )
     kwargs = dict(
-        combined_equity=1_000_000, options_equity=1_000_000,
-        equity_positions=[], options_equity_positions=[held_shares],
+        options_equity=1_000_000,
+        options_equity_positions=[held_shares],
         option_positions=[open_short_call], existing_option_structures=1,
     )
 
@@ -204,8 +203,8 @@ def test_candidate_covered_call_counts_its_short_call_shares(tmp_path):
 
 def test_stress_gate_uses_configured_limit(tmp_path):
     kwargs = dict(
-        combined_equity=1_000_000, options_equity=1_000_000,
-        equity_positions=[], options_equity_positions=[PositionExposure("SPY", 100, delta_shares=300)],
+        options_equity=1_000_000,
+        options_equity_positions=[PositionExposure("SPY", 100, delta_shares=300)],
         option_positions=[], existing_option_structures=0,
     )
     tight = _manager(tmp_path, stress_gate_loss_pct=0.000001)
