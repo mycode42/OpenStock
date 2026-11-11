@@ -3,7 +3,7 @@ import { renderAccountLoading, renderAccountPage } from './algo-trader/account-v
 import { renderResearchPage } from './algo-trader/research-view.js?v=3.5.0&research-control=2';
 import { mountResearchLab } from './algo-trader/research-lab.js?v=3.5.0&equity-runs=30';
 import { mountDataStatus } from './algo-trader/data-status.js?v=3.5.0&demo-samples=3';
-import { renderMomentumPage } from './algo-trader/momentum-view.js?v=3.5.0&momentum=2';
+import { renderMomentumPage } from './algo-trader/momentum-view.js?v=3.5.0&momentum=3';
 
 export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');

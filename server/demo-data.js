@@ -2,6 +2,7 @@
 
 const { basePrice, priceAt } = require('./demo-seed');
 const { universeHistory: universeReplay } = require('./demo-replay');
+const { calculateMetrics } = require('./algo-trader/equity');
 
 // Prices come from the demo market in demo-seed, the same source the simulated broker quotes from.
 const UNIVERSE = Object.freeze([
@@ -107,9 +108,9 @@ function universeHistory(symbol, range, nowValue = new Date()) {
 // 5-minute points around the clock for the last 36 hours. The last point is the headline value.
 // The path is a seeded random walk on a rising trend, so it does not repeat a fixed cycle.
 function equityHistory(account, now) {
-    const start = account === 'options' ? 38_000 : 100_000;
+    const start = account === 'options' ? 38_000 : account === 'momentum' ? 60_000 : 100_000;
     const end = now.getTime();
-    const positionCount = account === 'options' ? 3 : 5;
+    const positionCount = account === 'options' ? 3 : account === 'momentum' ? 6 : 5;
     const row = (time, kind, equity) => {
         const timestamp = new Date(time).toISOString();
         return {
@@ -218,6 +219,62 @@ function algoPayload(accountType = 'equity', nowValue = new Date()) {
     };
 }
 
+function momentumPayload(nowValue = new Date()) {
+    const now = date(nowValue);
+    const history = equityHistory('momentum', now);
+    history.forEach((row, index) => {
+        const previous = history[index - 1];
+        row.daily_pnl = previous ? Number((row.equity - previous.equity).toFixed(2)) : null;
+        row.daily_pnl_pct = previous?.equity ? row.daily_pnl / previous.equity * 100 : null;
+    });
+    const latest = history.at(-1);
+    const previousDay = [...history].reverse().find(row => row.date < latest.date) || history.at(-2) || latest;
+    const lastEquity = previousDay.equity;
+    const metrics = calculateMetrics(history);
+    metrics.daily_pnl = Number((latest.equity - lastEquity).toFixed(2));
+    metrics.daily_pnl_pct = lastEquity > 0 ? metrics.daily_pnl / lastEquity * 100 : null;
+
+    const basket = [
+        { symbol: 'NVDA', momentum_6m: 0.48 },
+        { symbol: 'AMD', momentum_6m: 0.36 },
+        { symbol: 'META', momentum_6m: 0.31 },
+        { symbol: 'MSFT', momentum_6m: 0.24 },
+        { symbol: 'GOOGL', momentum_6m: 0.19 },
+        { symbol: 'AMZN', momentum_6m: 0.16 },
+    ].map(row => ({ ...row, weight: 1 / 6, close: Number(priceAt(row.symbol, now.getTime()).toFixed(2)) }));
+    const perPositionValue = latest.equity * 0.68 / basket.length;
+    const positions = basket.map((row, index) => {
+        const currentPrice = priceAt(row.symbol, now.getTime());
+        const qty = Math.max(1, Math.floor(perPositionValue / currentPrice));
+        const avgEntryPrice = currentPrice * (index === 4 ? 1.012 : 1 - (0.018 + index * 0.004));
+        const marketValue = qty * currentPrice;
+        const unrealizedPl = qty * (currentPrice - avgEntryPrice);
+        return {
+            symbol: row.symbol, qty, avg_entry_price: Number(avgEntryPrice.toFixed(2)), current_price: Number(currentPrice.toFixed(2)),
+            market_value: Number(marketValue.toFixed(2)), unrealized_pl: Number(unrealizedPl.toFixed(2)),
+            unrealized_plpc: (currentPrice - avgEntryPrice) / avgEntryPrice,
+        };
+    });
+    const quarter = Math.floor(now.getUTCMonth() / 3) + 1;
+    const quarterStart = Date.UTC(now.getUTCFullYear(), (quarter - 1) * 3, 1, 15);
+    const rebalanceAt = Math.min(now.getTime() - 60 * 60_000, quarterStart + 3 * 86_400_000);
+    return {
+        demo_mode: true, available: true, account: 'momentum', generated_at: now.toISOString(),
+        equity: latest.equity,
+        cash: Number((latest.equity - positions.reduce((total, row) => total + row.market_value, 0)).toFixed(2)),
+        last_equity: lastEquity,
+        history, metrics, positions, basket,
+        latest_quarter: `${now.getUTCFullYear()}-Q${quarter}`,
+        last_quarter: `${now.getUTCFullYear()}-Q${quarter}`,
+        last_rebalance: new Date(rebalanceAt).toISOString(), quarter_orders: basket.length,
+        activity: [
+            { at: new Date(now.getTime() - 35 * 60_000).toISOString(), kind: 'order', title: `Demo BUY ${basket[0].symbol}`, detail: 'limit order · simulated quarterly rebalance · filled', status: 'simulated' },
+            { at: new Date(now.getTime() - 2 * 86_400_000).toISOString(), kind: 'order', title: `Demo BUY ${basket[1].symbol}`, detail: 'limit order · simulated quarterly rebalance · filled', status: 'simulated' },
+            { at: new Date(now.getTime() - 6 * 86_400_000).toISOString(), kind: 'order', title: `Demo SELL ${basket[5].symbol}`, detail: 'limit order · sample rebalance activity · filled', status: 'simulated' },
+        ],
+    };
+}
+
 // Research lab overview with no Algo Trader data behind it: the same strategy list and limits, nothing to tune or run.
 function labOverview(account = 'options') {
     const { EQUITY_PRESET_NAMES, EQUITY_STRATEGIES, LIMITS, LabError, OPTIONS_STRATEGIES, equityPresetParameters, equityProfileKeys } = require('./algo-trader/research-lab');
@@ -263,4 +320,4 @@ function dataStatusPayload(nowValue = new Date()) {
     };
 }
 
-module.exports = { labOverview, universePayload, universeHistory, algoPayload, dataStatusPayload };
+module.exports = { labOverview, universePayload, universeHistory, algoPayload, momentumPayload, dataStatusPayload };

@@ -37,7 +37,7 @@ function chartPanel(payload, range, charts) {
     const history = payload.history || [];
     const metrics = payload.metrics || {};
     return `<article class="card algo-panel algo-chart-panel" data-chart-readout>
-        <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>Momentum paper account · USD</p></div>
+        <div class="algo-section-heading algo-chart-heading"><div><span class="algo-eyebrow">ACCOUNT PERFORMANCE</span><h2>Equity history</h2><p>${payload.demo_mode ? 'Simulated momentum account' : 'Momentum paper account'} · USD</p></div>
         <div class="algo-chart-summary"><strong data-chart-value data-default-value="${escapeHtml(money(payload.equity))}">${escapeHtml(money(payload.equity))}</strong><span data-chart-change class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)}</span></div></div>
         <div class="algo-range-controls" role="group" aria-label="Chart time range">${RANGES.map(value => `<button type="button" class="algo-range-btn ${range === value ? 'active' : ''}" data-range="${value}" aria-pressed="${range === value}">${value}</button>`).join('')}</div>
         <div class="algo-chart-wrap">${renderChart(history, range, charts)}</div>
@@ -52,7 +52,7 @@ function basketPanel(payload) {
         : '<li class="algo-muted-text">No basket recorded yet.</li>';
     const lastRebalance = payload.last_rebalance ? escapeHtml(dateTime(payload.last_rebalance)) : 'never';
     return `<article class="card algo-panel algo-strategy-panel">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">MOMENTUM BASKET</span><h2>${escapeHtml(payload.latest_quarter || 'Not rebalanced yet')}</h2></div><span class="algo-state-pill"><i></i> ${payload.available ? 'PAPER' : 'UNAVAILABLE'}</span></div>
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">MOMENTUM BASKET</span><h2>${escapeHtml(payload.latest_quarter || 'Not rebalanced yet')}</h2></div><span class="algo-state-pill"><i></i> ${payload.demo_mode ? 'DEMO' : payload.available ? 'PAPER' : 'UNAVAILABLE'}</span></div>
         <div class="algo-strategy-score"><div class="algo-score-ring"><span>${basket.length}</span><small>/names</small></div><div><strong>Top six-month momentum, equal weight</strong><span>Rebalanced quarterly</span></div></div>
         <div class="algo-strategy-list"><div><span>Last rebalance</span><strong>${lastRebalance}</strong></div><div><span>Orders in that quarter</span><strong>${escapeHtml(String(payload.quarter_orders ?? 0))}</strong></div><div><span>Next rebalance</span><strong>first week of next quarter, 10:00 NY</strong></div></div>
         <ol class="algo-activity-list">${rows}</ol>
@@ -64,7 +64,7 @@ function positionsPanel(payload) {
         ? payload.positions.map(row => `<tr><td>${escapeHtml(row.symbol)}</td><td>${escapeHtml(String(row.qty))}</td><td>${escapeHtml(money(row.avg_entry_price))}</td><td>${escapeHtml(money(row.current_price))}</td><td>${escapeHtml(money(row.market_value))}</td><td class="${classForReturn(row.unrealized_pl)}">${escapeHtml(signedMoney(row.unrealized_pl))} (${escapeHtml(signedPercent(100 * row.unrealized_plpc))})</td></tr>`).join('')
         : '<tr><td colspan="6" class="algo-muted-text">No open positions.</td></tr>';
     return `<section class="card algo-panel algo-positions-panel">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">POSITIONS</span><h2>Open positions</h2><p>Paper account holdings, marked at the latest price.</p></div></div>
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">POSITIONS</span><h2>Open positions</h2><p>${payload.demo_mode ? 'Simulated holdings' : 'Paper account holdings'}, marked at the latest price.</p></div></div>
         <div class="table-scroll"><table class="algo-table"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg entry</th><th>Price</th><th>Value</th><th>Unrealized P/L</th></tr></thead><tbody>${rows}</tbody></table></div>
     </section>`;
 }
@@ -75,9 +75,9 @@ function activityPanel(payload) {
         ? items.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-copy"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span></div><time>${escapeHtml(dateOnly(item.at))} ${escapeHtml(timeOnly(item.at))}</time></li>`).join('')
         : '<li class="algo-muted-text">No orders on this account yet.</li>';
     return `<article class="card algo-panel algo-activity-panel">
-        <div class="algo-section-heading"><div><span class="algo-eyebrow">ORDERS &amp; JOURNAL</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> PAPER</span></div>
+        <div class="algo-section-heading"><div><span class="algo-eyebrow">ORDERS &amp; JOURNAL</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> ${payload.demo_mode ? 'DEMO' : 'PAPER'}</span></div>
         <ol class="algo-activity-list">${rows}</ol>
-        <div class="algo-view-more"><span>Orders are read from the momentum paper account</span><span aria-hidden="true">↻</span></div>
+        <div class="algo-view-more"><span>${payload.demo_mode ? 'Example order activity only; no orders are sent' : 'Orders are read from the momentum paper account'}</span><span aria-hidden="true">↻</span></div>
     </article>`;
 }
 
@@ -89,13 +89,16 @@ export function renderMomentumPage({ payload, range = '1M', charts, loading = fa
     const available = payload.available === true;
     const header = `<header class="algo-page-header">
         <div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${switchMarkup('momentum')}</div>
-        <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ALPACA MOMENTUM PAPER</span><span class="algo-state-pill"><i></i> QUARTERLY REBALANCE</span></div>
+        <div class="algo-header-status"><span class="algo-demo-tag"><i></i> ${payload.demo_mode ? 'SIMULATED MOMENTUM' : 'ALPACA MOMENTUM PAPER'}</span><span class="algo-state-pill"><i></i> QUARTERLY REBALANCE</span></div>
     </header>`;
+    const demoNotice = payload.demo_mode
+        ? '<section class="algo-demo-notice"><span class="algo-notice-mark">i</span><p><strong>Example data only.</strong> Account values, positions and activity are simulated. No broker is contacted and no orders are sent.</p></section>'
+        : '';
     if (!available) {
         return `<main class="algo-page">${header}${unavailable(payload, error)}${basketPanel(payload)}${positionsPanel(payload)}${activityPanel(payload)}</main>`;
     }
     return `<main class="algo-page algo-momentum-page">
-        ${header}
+        ${header}${demoNotice}
         ${kpis(payload)}
         <section class="algo-primary-grid">
             ${chartPanel(payload, range, charts)}

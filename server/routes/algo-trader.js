@@ -45,9 +45,9 @@ module.exports = function registerAlgoTraderRoutes({ app, root = require('../../
         }
     });
 
-    // Read-only view of the momentum paper book on its own account. Demo mode shows no account.
+    // Read-only view of the momentum paper book on its own account. Demo mode uses simulated account data.
     app.get('/api/algo-trader/momentum-paper', async (_req, res) => {
-        if (app.locals?.demoMode) return res.json({ available: false, account: 'momentum', reason: 'Demo mode has no momentum paper account' });
+        if (app.locals?.demoMode) return res.json(app.locals.demoData.momentumPayload(now()));
         try {
             res.set('Cache-Control', 'no-store');
             res.json(await buildMomentumPayload({ root, env: process.env, now: now() }));
