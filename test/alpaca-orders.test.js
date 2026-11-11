@@ -33,14 +33,19 @@ function seedLevel(db, { symbol = 'AAPL', side = 'BUY', price = 100, enabled = 1
         VALUES (?, ?, ?, ?, ?, 1, ?, ?)`).run(watchlistId, Math.floor(Math.random() * 1e9), side, price, enabled, triggered, retired).lastInsertRowid);
 }
 
-function fakeClient({ bid = 99, ask = 101, position = null, submitError = null, submitStatus = 'new' } = {}) {
-    const calls = { submitted: [], cancelled: [] };
+function fakeClient({ bid = 99, ask = 101, position = null, asset = null, assetError = null, submitError = null, submitStatus = 'new' } = {}) {
+    const calls = { submitted: [], cancelled: [], assets: [] };
     return {
         calls,
         async getLatestQuotes(symbols) {
             return { feed: 'iex', quotes: Object.fromEntries(symbols.map(s => [s, { bp: bid, ap: ask, t: '2026-10-29T10:00:00Z' }])) };
         },
         async getPositions() { return position ? [position] : []; },
+        async getAsset(symbol) {
+            calls.assets.push(symbol);
+            if (assetError) throw assetError;
+            return asset;
+        },
         async submitOrder(body) {
             if (submitError) throw submitError;
             calls.submitted.push(body);
@@ -96,14 +101,63 @@ test('amount sizes the buy in whole shares, with no per-order or daily cap', asy
     await assert.rejects(orders.placeLevelOrder({ db, client, levelId, env: ENABLED, dryRun: true, amountUsd: 50 }), err => err.status === 400);
 });
 
-test('sell limit exits the full position and refuses without one', async t => {
+test('sell limit exits the available whole-share position and refuses without one', async t => {
     const db = makeDb(t);
     const levelId = seedLevel(db, { side: 'SELL', price: 110 });
     await assert.rejects(orders.placeLevelOrder({ db, client: fakeClient(), levelId, env: ENABLED }), err => err.status === 409);
-    const client = fakeClient({ position: { symbol: 'AAPL', qty: '7' } });
+    const client = fakeClient({ position: { symbol: 'AAPL', qty: '7', qty_available: '4' } });
     const result = await orders.placeLevelOrder({ db, client, levelId, env: ENABLED });
-    assert.equal(result.order.qty, 7);
+    assert.equal(result.order.qty, 4);
     assert.equal(client.calls.submitted[0].side, 'sell');
+    assert.equal(client.calls.submitted[0].qty, '4');
+});
+
+test('sell limit submits a verified fractional available quantity without rounding up', async t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db, { side: 'SELL', price: 60 });
+    const client = fakeClient({
+        position: { symbol: 'AAPL', qty: '1.000000000', qty_available: '0.7686815899' },
+        asset: { fractionable: true, fractional_eh_enabled: true },
+    });
+    const result = await orders.placeLevelOrder({ db, client, levelId, env: ENABLED });
+    assert.equal(result.order.qty, 0.768681589);
+    assert.equal(client.calls.assets[0], 'AAPL');
+    assert.equal(client.calls.submitted[0].qty, '0.768681589');
+    assert.equal(client.calls.submitted[0].side, 'sell');
+    assert.equal(client.calls.submitted[0].type, 'limit');
+    assert.equal(client.calls.submitted[0].time_in_force, 'day');
+    assert.equal(client.calls.submitted[0].extended_hours, true);
+});
+
+test('fractional sell fails closed before recording or submission when asset eligibility is unverified', async t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db, { side: 'SELL', price: 60 });
+    const position = { symbol: 'AAPL', qty: '0.75', qty_available: '0.75' };
+    const clients = [
+        fakeClient({ position, asset: { fractionable: false, fractional_eh_enabled: true } }),
+        fakeClient({ position, asset: { fractionable: true, fractional_eh_enabled: false } }),
+        fakeClient({ position }),
+        fakeClient({ position, assetError: new Error('asset lookup unavailable') }),
+    ];
+    for (const client of clients) {
+        await assert.rejects(orders.placeLevelOrder({ db, client, levelId, env: ENABLED }), err => [409, 503].includes(err.status));
+        assert.equal(client.calls.submitted.length, 0);
+    }
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM alpaca_orders').get().n, 0);
+});
+
+test('fractional sell fails closed when available quantity or long-position authority is invalid', async t => {
+    const db = makeDb(t);
+    const levelId = seedLevel(db, { side: 'SELL', price: 60 });
+    for (const position of [
+        { symbol: 'AAPL', qty: '0.75' },
+        { symbol: 'AAPL', qty: '-0.75', qty_available: '0.75' },
+        { symbol: 'AAPL', qty: '0.5', qty_available: '0.75' },
+    ]) {
+        const client = fakeClient({ position });
+        await assert.rejects(orders.placeLevelOrder({ db, client, levelId, env: ENABLED }), err => err.status === 409);
+        assert.equal(client.calls.submitted.length, 0);
+    }
 });
 
 test('one live order per level, and triggered levels take no orders', async t => {

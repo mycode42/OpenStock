@@ -65,7 +65,7 @@ test('an order at exactly the $100,000 cap is allowed and one dollar over is ref
 test('a SELL of a position larger than the cap is refused rather than split', async t => {
     const db = makeDb(t);
     const levelId = seedLevel(db, { side: 'SELL', price: 100 });
-    const position = { symbol: 'AAPL', qty: '1500', avg_entry_price: '50' };
+    const position = { symbol: 'AAPL', qty: '1500', qty_available: '1500', avg_entry_price: '50' };
     await assert.rejects(
         orders.placeLevelOrder({ db, client: fakeClient(position), levelId, env: { ...LIVE, ALPACA_ALLOW_LIVE: '1' }, dryRun: true }),
         error => error.status === 400 && /per-order limit/.test(error.message),
