@@ -2,6 +2,34 @@
 
 All notable changes to OpenStock, including the Algo Trader. Each release lists its dashboard changes and its Algo Trader changes.
 
+## Unreleased
+
+### Added
+
+- Options research history shows net P/L, trades, worst drawdown and per-sleeve results for each nightly run. Runs without stored KPIs compute them from their replays. The Profitable and Losing filters use net P/L.
+- Options lab runs show replay progress while an underlying replays, so the bar moves during a run.
+- The daily Alpaca option capture keeps every listed strike within 60 days to expiry, not 20 per side, so the forward history has the wings that the 10 to 20 delta legs need.
+- Passive entries time out: an entry still unfilled after 15 minutes is cancelled. The ticker returns to flat without the strategy cooldown, once the broker confirms the cancel and no shares are held.
+- A timed-out entry is retried once, on the same signal bar, at the 10 bp entry band, and only if the market is still inside the band. Otherwise the signal is spent.
+- Coordinator capacity rejections log the limits behind them (room, gross, group and tier usage), so a blocked buy can be explained from the log.
+
+### Changed
+
+- Equity research history shows the portfolio return. The promoted and staged labels are removed.
+- Options exposure no longer counts toward the equity book's gross and net limits. The options delta overlay that was wired into the equity coordinator is removed.
+- The cash-proxy ETF (SGOV) is cash. It is left out of scan positions and orders, and its value counts as free cash in the risk account.
+- `cash_reserve.max_proxy_pct` is 0.85 (was 0.80).
+- A sell of a fractional position sells the whole available quantity. The separate asset-eligibility checks are removed; Alpaca decides on the order.
+- A pending entry blocks only its own ticker. It no longer pauses every new entry in the book.
+
+### Fixed
+
+- An unfilled passive buy blocked every new entry in the book until the close. Pending orders now block only their own ticker, and stale passive entries are cancelled after 15 minutes.
+- Equity buys were refused for capacity because a stale options delta (about $35k on a day-old snapshot) was counted in the equity gross limit. It is no longer counted.
+- Idle cash above the 80% SGOV cap was not parked. The cap is now 85%, so the reserve buys with the spare cash.
+- The options research history had no P/L for nightly reports written before simulation KPIs were stored. P/L is now derived from their replays.
+- The options lab progress bar stayed at 0% until a replay finished. Replays now report progress while they run.
+
 ## 3.5.0 - 2026-11-11
 
 ### Added
