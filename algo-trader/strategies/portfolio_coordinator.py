@@ -204,7 +204,6 @@ class CoordinatorBook:
         position_owners: Mapping[str, str] | None = None,
         pending_buy_values: Mapping[str, float] | None = None,
         pending_short_values: Mapping[str, float] | None = None,
-        options_delta_notional_by_underlying: Mapping[str, float] | None = None,
         entries_today: int = 0,
         intraday_entries_today: int = 0,
         swing_entries_today: int = 0,
@@ -251,17 +250,6 @@ class CoordinatorBook:
                 unattributed_pending += amount
         for tier in self.tier_used:
             self.tier_used[tier] += unattributed_pending
-        # The options account is separate at the broker, but delta-equivalent
-        # notional participates in the shared equity coordinator's gross/net
-        # book. Gamma, vega, margin, and assignment are checked by its options
-        # risk manager before option orders are submitted.
-        for ticker, value in (options_delta_notional_by_underlying or {}).items():
-            amount = float(value)
-            if not math.isfinite(amount):
-                raise ValueError("options delta overlay must contain finite notionals")
-            key = str(ticker).upper()
-            self.name_signed[key] = self.name_signed.get(key, 0.0) + amount
-            self._add_group_value(key, abs(amount))
 
     def _group(self, ticker: str) -> str:
         return self.ticker_groups.get(ticker.upper(), "other")
@@ -352,6 +340,15 @@ class CoordinatorBook:
         room = max(0.0, min(limits))
         allowed_qty = min(qty, int(room / price))
         if allowed_qty <= 0:
+            # Diagnostic only: the limits behind a capacity rejection, so the cause can be read from the log.
+            logging.getLogger(__name__).info(
+                "coordinator capacity: ticker=%s strategy=%s qty=%s price=%.2f room=%.2f limits=%s "
+                "equity=%.2f effective_gross_pct=%.2f gross=%.2f group=%s group_gross=%s tier_used=%s",
+                ticker, strategy, qty, price, room, [round(value, 2) for value in limits],
+                self.equity, effective_gross_pct, gross, group,
+                {key: round(value, 2) for key, value in self.group_gross.items()},
+                {key: round(value, 2) for key, value in self.tier_used.items()},
+            )
             return self._reject(proposal, "name, sector, gross, or net exposure cap leaves no capacity")
 
         approved = dict(proposal)

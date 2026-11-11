@@ -17,6 +17,8 @@ Enforcement: `algo-trader/tests/policy/test_gate_freeze.py` extracts every rejec
 - **Session-aware execution gates.** Regular-session quotes become stale after 90 seconds; extended-session quotes after 900 seconds (15 minutes). Extended-hours orders are limit-only; opening shorts use DAY sell-to-open limits and retain the existing risk/borrow checks. Overnight shorts fail closed unless current asset eligibility is verified and the asset is not halted.
 - **Short sizing.** Hard-to-borrow shorts are sized to `portfolio.hard_to_borrow_short_risk_multiplier` (default 0.5). Easy-to-borrow is a preference, not a requirement; unavailable overnight asset eligibility still blocks overnight short entries.
 - **No moonshot blocklist.**
+- **Idle cash in SGOV is cash.** 2026-11-11, approved by Andreas in chat. The cash-proxy ETF (`cash_reserve.proxy_symbol`, SGOV) is left out of the scan's positions and open orders (`algo-trader/strategies/runner/data.py`, `current_portfolio`), so it does not count toward gross, net, sector, name, or position limits, and it is not an unowned position. Its market value counts as free cash in the risk account (`algo-trader/execution/risk_account.py`). `algo-trader/tests/strategies/test_cash_proxy_is_cash.py` enforces this. It is not a gate message, so `frozen_gates.json` is unchanged.
+- **Cash reserve proxy cap 85%.** 2026-11-11, approved by Andreas in chat. `cash_reserve.max_proxy_pct` is 0.85 (was 0.80): at most 85% of equity may sit in SGOV. The reserve target stays 10% cash.
 - **LLM confidence.** Options `llm_driven.min_llm_confidence` is 0.80. Algo `swing_llm_driven.minimum_confidence` is 80.
 
 ## Gate categories that remain

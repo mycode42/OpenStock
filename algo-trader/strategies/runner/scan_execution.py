@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 
-from options.risk import load_options_delta_overlay
 from strategies.catalog import CORE_STRATEGIES
 from market.calendar import EXTENDED_SESSIONS
 from portfolio.config import get_algo_execution_settings
@@ -122,22 +121,16 @@ def execute_scan_candidates(
                 continue
             target = pending_buys if side == "buy" else pending_shorts
             target[ticker] = target.get(ticker, 0.0) + qty * reference
-        options_delta_overlay, options_overlay_status = load_options_delta_overlay()
         coordinator_book = coordinator.new_book(
             equity=scope.equity,
             positions=scope.positions,
             position_owners=scope.owner_map,
             pending_buy_values=pending_buys,
             pending_short_values=pending_shorts,
-            options_delta_notional_by_underlying=options_delta_overlay,
             entries_today=entries_today,
             intraday_entries_today=intraday_entries_today,
             swing_entries_today=group_entry_counts.get("swing", 0),
         )
-    else:
-        options_delta_overlay, options_overlay_status = {}, {
-            "available": False, "reason": "equity options overlay is Algo-only",
-        }
 
     ordered_generated = list(generated)
     if scope.mode == "algo":
@@ -418,6 +411,4 @@ def execute_scan_candidates(
         trades=trades,
         decision_diagnostics=decision_diagnostics,
         entries_paused=entries_paused,
-        options_delta_overlay=options_delta_overlay,
-        options_overlay_status=options_overlay_status,
     )

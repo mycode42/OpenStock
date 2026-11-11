@@ -350,7 +350,7 @@
     "proxy_symbol": "SGOV",
     "reserve_pct": 0.1,
     "target_gross_pct": 0.9,
-    "max_proxy_pct": 0.8,
+    "max_proxy_pct": 0.85,
     "min_trade_value": 500.0
   }
 }

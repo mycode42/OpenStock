@@ -115,5 +115,3 @@ class ExecutionResult:
     trades: list[dict]
     decision_diagnostics: list[dict]
     entries_paused: bool
-    options_delta_overlay: dict
-    options_overlay_status: dict

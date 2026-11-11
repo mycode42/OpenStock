@@ -211,24 +211,10 @@ def test_backtest_reports_correlated_and_overlapping_strategy_pairs():
     assert flagged[0]["same_ticker_same_direction_overlap_days"] == 2
 
 
-def test_options_delta_notional_is_included_in_shared_name_and_gross_exposure():
-    book = PortfolioCoordinator().new_book(
-        equity=100_000,
-        options_delta_notional_by_underlying={"SPY": 12_500},
-    )
-
-    assert book.name_signed["SPY"] == 12_500
-    assert sum(book.group_gross.values()) == 12_500
-
-
-def test_non_finite_options_delta_notional_is_rejected():
-    import pytest
-
-    with pytest.raises(ValueError, match="finite notionals"):
-        PortfolioCoordinator().new_book(
-            equity=100_000,
-            options_delta_notional_by_underlying={"SPY": float("nan")},
-        )
+def test_equity_book_ignores_options_delta():
+    book = PortfolioCoordinator().new_book(equity=100_000)
+    assert book.name_signed == {}
+    assert sum(book.group_gross.values()) == 0
 
 
 def test_intraday_tier_budget_trims_to_its_seven_percent_then_rejects():

@@ -41,11 +41,6 @@ def build_scan_response(
         "execution_decisions": execution.decision_diagnostics,
         "portfolio_coordinator": {
             "enabled": True,
-            "options_delta_overlay": {
-                "enabled": bool(execution.options_delta_overlay),
-                "underlyings": execution.options_delta_overlay,
-                "status": execution.options_overlay_status,
-            },
             "max_name_pct": scope.coordinator_config.max_name_pct,
             "sector_caps": dict(scope.coordinator_config.sector_caps),
             "max_gross_pct": scope.coordinator_config.max_gross_pct,
