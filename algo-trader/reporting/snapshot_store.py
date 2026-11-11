@@ -1,7 +1,7 @@
 """Account equity snapshots, kept in the algo state database.
 
 One row per snapshot: intraday points through the day and one close per trading day,
-for the Algo account and the options paper account. Risk baselines, the performance
+for the Algo, options, and Momentum paper accounts. Risk baselines, the performance
 report and the Dashboard read from here.
 """
 

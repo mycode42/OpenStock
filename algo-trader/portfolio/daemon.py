@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
+from broker.momentum import MomentumPaperClient
 from portfolio.config import get_algo_execution_settings, get_cash_reserve_settings, get_mode_config, is_cash_proxy
 from strategies.runner.cash_reserve import plan_cash_reserve, plan_entry_cash
 from portfolio.incidents import open_incident_symbols, record_incident
@@ -29,6 +30,7 @@ from runtime.paths import DATA_DIR
 from portfolio.state_store import AlgoStateStore, StateStoreError
 from portfolio.config import ALGO_SERVICE_CONFIG
 from execution.strategy import execute_strategy_trades
+from execution.momentum_snapshots import MomentumSnapshotSchedule
 from strategies.runner.scan import scan as scan_strategy_portfolio
 from strategies.state_machine import ACTIVE_PHASES, RuleStrategyStateMachine
 from strategies.universe import current_selector_rules_sha256, load_algo_universe
@@ -699,6 +701,12 @@ def run_loop(
     store = AlgoStateStore(state_path)
     _, portfolio = store.load()
     broker = broker_client if broker_client is not None else AlgoAlpaca()
+    momentum_snapshots = None
+    if os.getenv("ALPACA_MOMENTUM_API_KEY", "").strip() or os.getenv("ALPACA_MOMENTUM_API_SECRET", "").strip():
+        try:
+            momentum_snapshots = MomentumSnapshotSchedule(MomentumPaperClient())
+        except Exception:
+            LOG.exception("[MOMENTUM] Account snapshots disabled; Algo coordinator continues")
     coordinator_token = secrets.token_urlsafe(32)
     coordinator_pid = os.getpid()
     store.activate_coordinator(coordinator_token, coordinator_pid)
@@ -729,6 +737,13 @@ def run_loop(
                     (now.date() + timedelta(days=14)).isoformat(),
                 )
                 window = get_trading_window(now, calendar)
+                if momentum_snapshots is not None:
+                    try:
+                        captured = momentum_snapshots.tick(now, window)
+                        if captured:
+                            LOG.info("[MOMENTUM] %s equity snapshot saved", captured)
+                    except Exception:
+                        LOG.exception("[MOMENTUM] Equity snapshot failed; Algo coordinator continues")
                 if window is None:
                     last_window_name = None
                     store.save("CLOSED", portfolio)

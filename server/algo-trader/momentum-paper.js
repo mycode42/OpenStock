@@ -4,7 +4,7 @@
 // its decision log. Nothing here places or changes an order.
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { calculateMetrics } = require('./equity');
+const { calculateMetrics, readSnapshotHistory } = require('./equity');
 
 const PAPER_BASE = 'https://paper-api.alpaca.markets/v2';
 const TIMEOUT_MS = 10_000;
@@ -101,7 +101,15 @@ async function buildMomentumPayload({ root, env = process.env, fetchImpl = fetch
             .catch(() => null);
         const orders = await alpacaGet(configured, headers, '/orders?status=all&limit=30&direction=desc', fetchImpl)
             .catch(() => []);
-        const history = historyRows(portfolio);
+        const dailyHistory = historyRows(portfolio);
+        const accountId = String(account.id || account.account_number || '').trim();
+        const snapshots = accountId
+            ? await readSnapshotHistory(path.join(root, 'data'), accountId, { tradingMode: 'momentum' })
+            : [];
+        const firstSnapshotAt = snapshots[0]?.timestamp || null;
+        const history = firstSnapshotAt
+            ? [...dailyHistory.filter(point => point.timestamp && point.timestamp < firstSnapshotAt), ...snapshots]
+            : snapshots.length ? snapshots : dailyHistory;
         return {
             ...base, available: true,
             equity: Number(account.equity), cash: Number(account.cash),
