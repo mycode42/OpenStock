@@ -77,7 +77,7 @@ select option{background:#0a0a0a;color:var(--ui-text,#e0e1e5);padding:.4rem}
 .alert-box.error{background:rgba(239,68,68,.1);border-left:3px solid #ef4444}
 .alert-box.success{background:rgba(34,197,94,.1);border-left:3px solid #22c55e}
 .toast-layer{position:fixed;right:1rem;bottom:1rem;z-index:1000;display:grid;gap:.5rem;width:min(24rem,calc(100vw - 2rem));pointer-events:none}
-.toast-layer .alert-box{margin:0;background-color:#0a0a0a;background-image:linear-gradient(var(--toast-tint),var(--toast-tint));box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.toast-layer .alert-box{margin:0;background-color:var(--os-raised,#0a0a0a);background-image:linear-gradient(var(--toast-tint),var(--toast-tint));color:var(--os-text,#f8fafc);box-shadow:0 8px 24px rgba(0,0,0,.5)}
 .toast-layer .alert-box.info{--toast-tint:rgba(200,255,0,.1)}
 .toast-layer .alert-box.error{--toast-tint:rgba(239,68,68,.1)}
 .toast-layer .alert-box.success{--toast-tint:rgba(34,197,94,.1)}
@@ -748,6 +748,18 @@ html[data-theme-mode="light"] .sys-high{color:#b91c1c}
 /* Unit suffixes sit on the input, not on a dark chip */
 #page-config .config-price-input span,
 #page-config .config-percent-input span { background: transparent; }
+#page-config .config-price-input,
+#page-config .config-percent-input { background-color: var(--os-raised, var(--os-surface, #0a0a0a)); }
+#page-config .config-price-input input,
+#page-config .config-percent-input input { background: transparent; }
+@media (max-width: 640px) {
+  #page-config .config-zone-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  #page-config .config-zone-fields select,
+  #page-config .config-zone-fields .config-price-input,
+  #page-config .config-zone-fields .config-percent-input { flex: 1 1 0; width: 100%; min-width: 0; }
+  #page-config .config-zone-fields .config-order-note { grid-column: 1 / -1; }
+  #page-config .config-percent-row .config-zone-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
 
 .data-status-panel{margin-bottom:1rem}
 .data-status-panel h3{margin:.25rem 0 .5rem}

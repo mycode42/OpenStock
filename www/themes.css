@@ -391,7 +391,8 @@ html[data-theme]:not([data-theme="openstock"]) input,
 html[data-theme]:not([data-theme="openstock"]) select,
 html[data-theme]:not([data-theme="openstock"]) textarea,
 html[data-theme]:not([data-theme="openstock"]) .history-range,
-html[data-theme]:not([data-theme="openstock"]) .config-price-input {
+html[data-theme]:not([data-theme="openstock"]) .config-price-input,
+html[data-theme]:not([data-theme="openstock"]) .config-percent-input {
   background-color: var(--os-raised);
   border-color: var(--os-border);
   color: var(--os-text);
@@ -514,7 +515,8 @@ html[data-theme-mode="light"] .settings-appearance-panel {
 
 html[data-theme-mode="light"] .stock-card {
   background: var(--os-raised);
-  border-left-color: var(--os-accent);
+  border: 1px solid var(--os-border);
+  border-left: 4px solid var(--os-accent);
 }
 
 html[data-theme-mode="light"] .stock-symbol,
