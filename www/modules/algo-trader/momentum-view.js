@@ -1,6 +1,6 @@
 import { escapeHtml } from '../escape.js';
 import { RANGES, localTimeZone, renderChart } from './equity-chart.js?life-pl=1';
-import { activityIcon, classForReturn, dateOnly, dateTime, money, signedMoney, signedPercent, timeOnly } from './format.js';
+import { activityIcon, classForReturn, dateOnly, dateTime, money, signedMoney, signedPercent, statusClass, timeOnly } from './format.js';
 import { renderAccountSwitch } from './account-view.js';
 
 // The momentum paper book, laid out like the Equity and Options pages. Its strategy panel is the basket, and its
@@ -48,35 +48,35 @@ function chartPanel(payload, range, charts) {
 function basketPanel(payload) {
     const basket = payload.basket || [];
     const rows = basket.length
-        ? basket.map(row => `<li class="algo-activity-item"><span class="algo-run-version">${escapeHtml(row.symbol)}</span><span class="${classForReturn(row.momentum_6m)}">${escapeHtml(signedPercent(100 * row.momentum_6m))} 6-month</span><span>${escapeHtml(signedPercent(100 * row.weight, 0))}</span></li>`).join('')
-        : '<li class="algo-muted-text">No basket recorded yet.</li>';
+        ? basket.map(row => `<tr><td class="algo-momentum-symbol">${escapeHtml(row.symbol)}</td><td class="${classForReturn(row.momentum_6m)}">${escapeHtml(signedPercent(100 * row.momentum_6m))}</td><td>${escapeHtml(signedPercent(100 * row.weight, 0))}</td></tr>`).join('')
+        : '<tr><td colspan="3" class="algo-momentum-empty">No basket recorded yet.</td></tr>';
     const lastRebalance = payload.last_rebalance ? escapeHtml(dateTime(payload.last_rebalance)) : 'never';
     return `<article class="card algo-panel algo-strategy-panel">
         <div class="algo-section-heading"><div><span class="algo-eyebrow">MOMENTUM BASKET</span><h2>${escapeHtml(payload.latest_quarter || 'Not rebalanced yet')}</h2></div><span class="algo-state-pill"><i></i> ${payload.demo_mode ? 'DEMO' : payload.available ? 'PAPER' : 'UNAVAILABLE'}</span></div>
         <div class="algo-strategy-score"><div class="algo-score-ring"><span>${basket.length}</span><small>/names</small></div><div><strong>Top six-month momentum, equal weight</strong><span>Rebalanced quarterly</span></div></div>
         <div class="algo-strategy-list"><div><span>Last rebalance</span><strong>${lastRebalance}</strong></div><div><span>Orders in that quarter</span><strong>${escapeHtml(String(payload.quarter_orders ?? 0))}</strong></div><div><span>Next rebalance</span><strong>first week of next quarter, 10:00 NY</strong></div></div>
-        <ol class="algo-activity-list">${rows}</ol>
+        <div class="algo-momentum-table-wrap"><table class="algo-momentum-table algo-momentum-basket-table"><thead><tr><th scope="col">Symbol</th><th scope="col">6M return</th><th scope="col">Weight</th></tr></thead><tbody>${rows}</tbody></table></div>
     </article>`;
 }
 
 function positionsPanel(payload) {
     const rows = payload.positions.length
-        ? payload.positions.map(row => `<tr><td>${escapeHtml(row.symbol)}</td><td>${escapeHtml(String(row.qty))}</td><td>${escapeHtml(money(row.avg_entry_price))}</td><td>${escapeHtml(money(row.current_price))}</td><td>${escapeHtml(money(row.market_value))}</td><td class="${classForReturn(row.unrealized_pl)}">${escapeHtml(signedMoney(row.unrealized_pl))} (${escapeHtml(signedPercent(100 * row.unrealized_plpc))})</td></tr>`).join('')
-        : '<tr><td colspan="6" class="algo-muted-text">No open positions.</td></tr>';
+        ? payload.positions.map(row => `<tr><td class="algo-momentum-symbol">${escapeHtml(row.symbol)}</td><td>${escapeHtml(String(row.qty))}</td><td>${escapeHtml(money(row.avg_entry_price))}</td><td>${escapeHtml(money(row.current_price))}</td><td>${escapeHtml(money(row.market_value))}</td><td class="${classForReturn(row.unrealized_pl)}">${escapeHtml(signedMoney(row.unrealized_pl))} <small>(${escapeHtml(signedPercent(100 * row.unrealized_plpc))})</small></td></tr>`).join('')
+        : '<tr><td colspan="6" class="algo-momentum-empty">No open positions.</td></tr>';
     return `<section class="card algo-panel algo-positions-panel">
         <div class="algo-section-heading"><div><span class="algo-eyebrow">POSITIONS</span><h2>Open positions</h2><p>${payload.demo_mode ? 'Simulated holdings' : 'Paper account holdings'}, marked at the latest price.</p></div></div>
-        <div class="table-scroll"><table class="algo-table"><thead><tr><th>Symbol</th><th>Qty</th><th>Avg entry</th><th>Price</th><th>Value</th><th>Unrealized P/L</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="algo-momentum-table-wrap"><table class="algo-momentum-table algo-momentum-positions-table"><thead><tr><th scope="col">Symbol</th><th scope="col">Qty</th><th scope="col">Avg entry</th><th scope="col">Price</th><th scope="col">Value</th><th scope="col">Unrealized P/L</th></tr></thead><tbody>${rows}</tbody></table></div>
     </section>`;
 }
 
 function activityPanel(payload) {
     const items = (payload.activity || []).slice(0, ACTIVITY_LIMIT);
     const rows = items.length
-        ? items.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-copy"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span></div><time>${escapeHtml(dateOnly(item.at))} ${escapeHtml(timeOnly(item.at))}</time></li>`).join('')
-        : '<li class="algo-muted-text">No orders on this account yet.</li>';
+        ? `<ol class="algo-activity-list">${items.map(item => `<li class="algo-activity-item"><span class="algo-activity-icon ${escapeHtml(item.kind)}" aria-hidden="true">${activityIcon(item.kind)}</span><div class="algo-activity-content"><div class="algo-activity-title"><strong>${escapeHtml(item.title)}</strong><time>${escapeHtml(dateOnly(item.at))} · ${escapeHtml(timeOnly(item.at))}</time></div><p>${escapeHtml(item.detail || '')}</p><span class="algo-activity-tag ${statusClass(item.status)}">${escapeHtml(item.status || item.kind)}</span></div></li>`).join('')}</ol>`
+        : '<div class="algo-empty">No orders on this account yet.</div>';
     return `<article class="card algo-panel algo-activity-panel">
         <div class="algo-section-heading"><div><span class="algo-eyebrow">ORDERS &amp; JOURNAL</span><h2>Latest activity</h2></div><span class="algo-feed-label"><i></i> ${payload.demo_mode ? 'DEMO' : 'PAPER'}</span></div>
-        <ol class="algo-activity-list">${rows}</ol>
+        ${rows}
         <div class="algo-view-more"><span>${payload.demo_mode ? 'Example order activity only; no orders are sent' : 'Orders are read from the momentum paper account'}</span><span aria-hidden="true">↻</span></div>
     </article>`;
 }

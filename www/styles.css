@@ -889,3 +889,21 @@ html[data-demo="1"] .config-real-word,html[data-demo="1"] .config-real-count{dis
 #page-config .config-stock-add-fields { align-items: center; }
 #page-config .config-stock-add-fields input { margin: 0; }
 #page-config .config-retired-list { margin: 1rem 0; }
+
+/* Keep momentum tables on the same neutral, divider-based surface as account scorecards. */
+.algo-momentum-table-wrap{overflow-x:auto}
+.algo-momentum-table{width:100%;border-collapse:collapse;color:var(--ui-text,#e5e7eb);font-size:.72rem;font-variant-numeric:tabular-nums;text-align:left}
+.algo-momentum-table th,.algo-momentum-table td{padding:.55rem;border-bottom:1px solid var(--algo-line,#20252a);white-space:nowrap}
+.algo-momentum-table thead th{color:var(--ui-muted,#94a3b8);font-size:.6rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+.algo-momentum-table tbody tr:last-child td{border-bottom:0}
+.algo-momentum-table .algo-momentum-symbol{color:var(--ui-text,#e5e7eb);font-weight:650}
+.algo-momentum-table .algo-momentum-empty{padding:1.1rem;color:var(--ui-muted,#94a3b8);text-align:center}
+.algo-momentum-basket-table{table-layout:fixed}
+.algo-momentum-basket-table th:first-child,.algo-momentum-basket-table td:first-child{width:29%}
+.algo-momentum-basket-table th:nth-child(2),.algo-momentum-basket-table td:nth-child(2){width:42%;text-align:right}
+.algo-momentum-basket-table th:nth-child(3),.algo-momentum-basket-table td:nth-child(3){width:29%;text-align:right}
+.algo-momentum-positions-table{min-width:650px}
+.algo-momentum-positions-table th:not(:first-child),.algo-momentum-positions-table td:not(:first-child){text-align:right}
+.algo-momentum-positions-table td:last-child small{font-size:.65rem;opacity:.85}
+.algo-momentum-page .algo-activity-content{min-width:0}
+@media(max-width:520px){.algo-momentum-table th,.algo-momentum-table td{padding:.56rem .5rem}.algo-momentum-page .algo-activity-title time{font-size:.58rem}}
