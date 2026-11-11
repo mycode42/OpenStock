@@ -18,6 +18,7 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 
 ### Changed
 
+- ThetaData history backfill collects every listed strike (no strike window; `THETA_STRIKE_RANGE` defaults to `max`) into `data/options/research/theta-max`. It replaces each symbol's stored Theta history only once that symbol's full history is complete. Partial and recent-only compiles never replace stored history. A new OpenStock install gets the same full history from its initial backfill. The 20-per-side history it replaces stays in `data/options/research/theta` until removed.
 - Options risk is options-only. The equity account's equity and stock positions no longer feed the options limits, and the six "combined" limit messages are renamed "options ...". The same-account safety check remains.
 - Options defined-loss budget (`max_total_defined_risk_pct`) is 60% of options equity, up from 10%. The per-trade, margin, delta, vega, gamma, theta and stress limits still apply.
 - The options daily loss limit (2%) is removed; the rolling drawdown gate replaces it.

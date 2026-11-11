@@ -34,13 +34,18 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = ROOT / ".env"
-RESEARCH_DIR = ROOT / "data" / "options" / "research" / "theta"
+# Pilots set THETA_RESEARCH_DIR (a separate archive folder) and THETA_DATABASE_SYNC=0 (no write to the live
+# options history database), so a wider strike range can be measured without touching the current data.
+RESEARCH_DIR = Path(os.getenv("THETA_RESEARCH_DIR") or ROOT / "data" / "options" / "research" / "theta-max")
 LOCK_PATH = RESEARCH_DIR / "theta_backfill.lock"
 FIRST_DATA_DATE = date(2020, 1, 1)
 REQUIRED_RESEARCH_SESSIONS = 1013
 MIN_EXPLORATORY_RESEARCH_SESSIONS = 60
 MAX_RESEARCH_DTE = 60
-STRIKE_RANGE = 20
+# THETA_STRIKE_RANGE=max requests every strike the vendor lists (no strike window).
+_STRIKE_RANGE_SETTING = os.getenv("THETA_STRIKE_RANGE", "max").strip().lower()
+STRIKE_RANGE = None if _STRIKE_RANGE_SETTING in {"max", "all", "0"} else int(_STRIKE_RANGE_SETTING)
+DATABASE_SYNC = os.getenv("THETA_DATABASE_SYNC", "1") != "0"
 ET = ZoneInfo("America/New_York")
 # Per-symbol start dates and historical ticker aliases live in
 # options/research/universe.json. Unlisted symbols use FIRST_DATA_DATE; explicit
@@ -318,7 +323,7 @@ def _session_labels(closes: dict[date, float]) -> dict[date, tuple[str, str]]:
     return _classify_sessions(closes)
 
 
-def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
+def _compile_symbol(symbol: str, *, start_date: date, end_date: date, write_database: bool = False) -> dict:
     symbol_dir = RESEARCH_DIR / symbol
     eod_dir, oi_dir = symbol_dir / "archive" / "eod", symbol_dir / "archive" / "open_interest"
     stock_rows = _load_stock_rows_from_db(symbol, start_date=start_date, end_date=end_date)
@@ -426,15 +431,20 @@ def _compile_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
         })
 
     history_store = OptionsHistoryStore()
-    database_sync = history_store.write_snapshots(
-        symbol, "theta", rows, replace_source=True,
-    )
     archive_chunks = list(_month_chunks(start_date, end_date))
     archive_complete = all(
         _archive_covers_period(eod_dir / f"{month_start:%Y-%m}.json.gz", month_start, month_end)
         and _archive_covers_period(oi_dir / f"{month_start:%Y-%m}.json.gz", month_start, month_end)
         for month_start, month_end in archive_chunks
     )
+    # Only a complete full-history compile replaces the stored history. A partial or recent-only compile
+    # would otherwise shrink the active source to the sessions it has.
+    if write_database and DATABASE_SYNC and archive_complete:
+        database_sync = history_store.write_snapshots(
+            symbol, "theta", rows, replace_source=True,
+        )
+    else:
+        database_sync = {"status": "not_written", "sessions": 0}
     standard_research_ready = len(rows) >= REQUIRED_RESEARCH_SESSIONS
     exploratory_research_ready = (
         archive_complete and len(rows) >= MIN_EXPLORATORY_RESEARCH_SESSIONS
@@ -592,7 +602,7 @@ def _fetch_symbol(
 
     if not compile_after:
         return None
-    manifest = _compile_symbol(symbol, start_date=start_date, end_date=end_date)
+    manifest = _compile_symbol(symbol, start_date=start_date, end_date=end_date, write_database=True)
     print(
         f"ThetaData {symbol}: sessions={manifest['dataset_sessions']}/"
         f"{REQUIRED_RESEARCH_SESSIONS}, contracts={manifest['contracts_in_dataset']}, "

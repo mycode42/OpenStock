@@ -22,6 +22,7 @@ from scripts.options.theta_historical_backfill import (
     LOCK_PATH,
     MAX_RESEARCH_DTE,
     RESEARCH_DIR,
+    DATABASE_SYNC,
     STRIKE_RANGE,
     _atomic_gzip_json,
     _atomic_json,
@@ -205,7 +206,7 @@ def _download_open_quotes(
     return rows, no_data_requests, failed_requests
 
 
-def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) -> dict:
+def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date, write_database: bool = False) -> dict:
     symbol_dir = RESEARCH_DIR / symbol
     archive_dir = symbol_dir / "archive"
     opening_dir = archive_dir / "opening_quote"
@@ -314,11 +315,6 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
             "contracts": contracts,
         })
 
-    history_store = OptionsHistoryStore()
-    database_sync = history_store.write_snapshots(
-        symbol, "theta_opening", snapshots, replace_source=True,
-    )
-
     months = list(_month_chunks(start_date, end_date))
     known_provider_gaps = sum(
         1
@@ -334,6 +330,14 @@ def _compile_opening_symbol(symbol: str, *, start_date: date, end_date: date) ->
         )
         for month_start, month_end in months
     )
+    history_store = OptionsHistoryStore()
+    # Only a complete full-history compile replaces the stored opening history (see the EOD backfill).
+    if write_database and DATABASE_SYNC and archive_complete:
+        database_sync = history_store.write_snapshots(
+            symbol, "theta_opening", snapshots, replace_source=True,
+        )
+    else:
+        database_sync = {"status": "not_written", "sessions": 0}
     manifest = {
         "provider": "ThetaData",
         "data_type": "historical opening option NBBO and open interest",
@@ -569,7 +573,7 @@ def _fetch_symbol(client: Any, symbol: str, *, start_date: date, end_date: date)
                 flush=True,
             )
 
-    manifest = _compile_opening_symbol(symbol, start_date=start_date, end_date=end_date)
+    manifest = _compile_opening_symbol(symbol, start_date=start_date, end_date=end_date, write_database=True)
     print(
         f"ThetaData opening {symbol}: sessions={manifest['dataset_sessions']}, "
         f"contracts={manifest['contracts_in_dataset']}, archive_complete={manifest['archive_complete']}",
