@@ -95,6 +95,21 @@ def _recent_transition(state: dict, seconds: int = 180) -> bool:
         return False
 
 
+# A passive entry rests at the bid. If it has not filled after this long, it is cancelled and the
+# next attempt is priced to execute (see scan_execution). Pending entries never pause other tickers.
+PASSIVE_ENTRY_TIMEOUT_SECONDS = 900
+
+
+def _age_seconds(value: str | None, now: datetime) -> float | None:
+    try:
+        stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (now - stamp).total_seconds()
+
+
 class RuleStrategyStateMachine:
     """Reconcile broker state and enforce legal per-strategy transitions."""
 
@@ -459,6 +474,45 @@ class RuleStrategyStateMachine:
         })
         _touch(state)
 
+    def stale_entry_orders(
+        self, open_orders: list[dict], now: datetime, max_age_seconds: float = PASSIVE_ENTRY_TIMEOUT_SECONDS,
+    ) -> list[dict]:
+        """Unfilled entry orders older than the timeout. A partly filled order is progress and is left alone."""
+        by_id = {str(order.get("id")): order for order in open_orders if order.get("id")}
+        stale = []
+        for strategy, by_symbol in self.states.items():
+            for ticker, state in by_symbol.items():
+                if state.get("phase") != ENTRY_PENDING or state.get("entry_action") not in {"buy", "short"}:
+                    continue
+                order_id = str(state.get("entry_order_id") or state.get("order_id") or "")
+                order = by_id.get(order_id)
+                if order is None or str(order.get("status", "")).lower() not in {"new", "accepted", "pending_new"}:
+                    continue
+                age = _age_seconds(state.get("updated_at"), now)
+                if age is None or age < max_age_seconds:
+                    continue
+                stale.append({"strategy": strategy, "ticker": str(ticker).upper(), "order_id": order_id, "age_seconds": round(age)})
+        return stale
+
+    def release_timed_out_entry(self, strategy: str, ticker: str, now: datetime) -> None:
+        """Return a cancelled, unfilled entry to FLAT at once, so the ticker can be tried again without a cooldown.
+
+        The next entry for this ticker is priced to execute (``chase_after_timeout``). Only call this after the broker
+        confirms the order is cancelled and the ticker holds no shares.
+        """
+        ticker = str(ticker).upper()
+        state = _state_for(self.states, strategy, ticker)
+        if state.get("phase") != ENTRY_PENDING:
+            return
+        state.update({
+            "phase": FLAT, "owner": None, "pending_action": None, "client_order_id": None, "order_id": None,
+            "entry_order_id": None, "entry_client_order_id": None, "entry_action": None, "opened_at": None,
+            "cooldown_until": None, "chase_after_timeout": True, "timed_out_at": now.isoformat(),
+        })
+        _touch(state)
+        if self.position_owners.get(ticker) == strategy:
+            self.position_owners.pop(ticker, None)
+
     def prepare(self, trade: dict) -> None:
         """Persist the pending transition before contacting the executor."""
         strategy = str(trade.get("strategy", "unspecified"))
@@ -501,6 +555,7 @@ class RuleStrategyStateMachine:
             state["entry_action"] = action
             state["opened_at"] = None
             state["quarantine_reason"] = None
+            state["chase_after_timeout"] = False
             signal_time = self._parse_time(trade.get("signal_bar_time"))
             session_day = self.trading_day or (signal_time.astimezone(ET).date().isoformat() if signal_time else None)
             if session_day != state.get("entry_day"):

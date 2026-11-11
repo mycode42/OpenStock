@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from broker.algo import AlgoAccountMismatchError, AlgoAlpaca
@@ -218,6 +218,46 @@ def _load_reconciliation_orders(portfolio: dict, broker, *, ledger: BrokerOrderL
         exact_incident_orders=exact_incident_orders,
         history_complete=history_complete,
     )
+
+
+def expire_stale_passive_entries(portfolio: dict, broker, *, now: datetime | None = None) -> list[dict]:
+    """Cancel passive entries that have rested unfilled past the timeout, then release the ticker.
+
+    A cancelled entry returns to FLAT with ``chase_after_timeout`` set, so the next attempt executes at the ask
+    plus the band instead of resting at the bid again. The ticker is released only when the broker confirms the
+    cancellation and the ticker holds no shares; otherwise the normal reconciliation keeps handling it.
+    """
+    from strategies.state_machine import PASSIVE_ENTRY_TIMEOUT_SECONDS
+
+    now = now or datetime.now(timezone.utc)
+    machine = RuleStrategyStateMachine(portfolio["strategy_states"], portfolio["position_owners"])
+    results: list[dict] = []
+    stale = machine.stale_entry_orders(broker.orders("open"), now, PASSIVE_ENTRY_TIMEOUT_SECONDS)
+    if not stale:
+        return results
+    holdings = {str(p.get("symbol", "")).upper(): p for p in broker.positions()}
+    for item in stale:
+        outcome = {**item, "status": "cancel_requested"}
+        try:
+            broker.cancel_order(item["order_id"])
+            order = broker.order(item["order_id"])
+        except Exception as exc:  # the order stays pending; reconciliation handles it on the next scan
+            outcome.update(status="cancel_error", error=f"{type(exc).__name__}: {exc}"[:300])
+            results.append(outcome)
+            continue
+        order_status = str(order.get("status", "")).lower()
+        outcome["order_status"] = order_status
+        held = float((holdings.get(item["ticker"]) or {}).get("qty", 0) or 0)
+        if order_status != "canceled":
+            outcome["status"] = "not_cancelled"
+        elif held != 0:
+            outcome["status"] = "held_after_cancel"
+        else:
+            machine.release_timed_out_entry(item["strategy"], item["ticker"], now)
+            outcome["status"] = "released"
+        LOG.info("passive entry timeout: %s", json.dumps(outcome, sort_keys=True))
+        results.append(outcome)
+    return results
 
 
 def _reconcile_broker_state(portfolio: dict, broker, store, state_path: Path, window) -> float:
@@ -484,6 +524,8 @@ def _scan_strategy_portfolio(
                 trade for trade in trades
                 if str(trade.get("action", "")).lower() not in {"buy", "short"}
             ]
+    if broker is not None and not dry_run:
+        expire_stale_passive_entries(portfolio, broker)
     if trades:
         machine = RuleStrategyStateMachine(
             portfolio["strategy_states"], portfolio["position_owners"],

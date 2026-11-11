@@ -290,9 +290,13 @@ def execute_scan_candidates(
             bid, ask = float(quote.get("bid") or 0), float(quote.get("ask") or 0)
             entry_quote = {"bid": bid, "ask": ask, "mid": round((bid + ask) / 2, 4) if bid and ask else None,
                            "quote_at": quote_time.isoformat()}
-            if get_algo_execution_settings().get("entry_pricing") == "passive":
+            # A passive entry that timed out unfilled is retried at the marketable band, so it cannot stall the ticker.
+            ticker_state = ((scope.strategy_states or {}).get(trade.get("strategy")) or {}).get(
+                str(trade.get("ticker", "")).upper()) or {}
+            chase = bool(ticker_state.get("chase_after_timeout"))
+            if get_algo_execution_settings().get("entry_pricing") == "passive" and not chase:
                 # Passive entries rest on our side of the book: a buy at the bid, a short at the ask. They do not
-                # cross the spread, so a fill is not guaranteed; an unfilled entry expires with the day.
+                # cross the spread, so a fill is not guaranteed; a stale one is cancelled after the timeout.
                 if bid <= 0 or ask <= 0 or ask < bid:
                     item["suppressed_reason"] = "no two-sided quote for a passive entry"
                     record(item, "entry_quote_unavailable", "suppressed", item["suppressed_reason"], entry_quote=entry_quote)
@@ -303,7 +307,7 @@ def execute_scan_candidates(
                 limit = entry_limit_price(action, float(trade.get("entry_price") or execution_price),
                                           get_algo_execution_settings()["entry_limit_band_bps"])
             trade["entry_quote"] = entry_quote
-            trade["entry_pricing"] = get_algo_execution_settings().get("entry_pricing", "band")
+            trade["entry_pricing"] = "chase_after_timeout" if chase else get_algo_execution_settings().get("entry_pricing", "band")
             if limit is not None:
                 trade.update({"order_type": "limit", "limit_price": limit})
         elif scope.mode == "algo" and action in {"sell", "cover"}:

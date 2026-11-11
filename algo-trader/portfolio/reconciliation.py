@@ -469,12 +469,9 @@ def reconcile_startup(
     incident_symbols = open_incident_symbols(portfolio)
     if incident_symbols:
         pause_reasons.append("Algo execution incident needs broker resolution: " + ", ".join(incident_symbols))
-    pending = [
-        ticker for ticker, strategy in machine.position_owners.items()
-        if (machine.states.get(strategy) or {}).get(ticker, {}).get("phase") in {ENTRY_PENDING, EXIT_PENDING}
-    ]
-    if pending:
-        pause_reasons.append("Algo orders are pending startup reconciliation: " + ", ".join(sorted(pending)))
+    # Pending orders do not pause the book: each pending ticker is blocked on its own (pending entries are
+    # excluded from the scan, and their notional is reserved in the coordinator), and stale passive entries
+    # are cancelled by the daemon (see expire_stale_passive_entries).
     report = {
         "status": "verified" if not pause_reasons else "degraded",
         "checked_at": datetime.now(timezone.utc).isoformat(),
