@@ -1,6 +1,14 @@
 import json
+from datetime import datetime, timezone
+from pathlib import Path
 
 from options.research import automation
+from options.research.dataset import OptionsResearchDataset, ResearchObservation
+
+
+class _PortfolioProvider:
+    def underlying_closes(self, underlying, *, as_of, sessions):
+        return []
 
 
 def _write_config(tmp_path, *, data_path, strategies=None):
@@ -69,6 +77,53 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
     assert report["strategies"]["llm_driven"]["portfolio_metrics"]["net_pnl_usd"] == 800.0
     assert report["fold_workers_used_by_strategy"] == {"llm_driven": 0}
     assert report["replay_data_workers_used_by_strategy"] == {"llm_driven": 4}
+
+
+def test_portfolio_replay_loads_sqlite_symbols_in_a_bounded_worker_pool(monkeypatch, tmp_path):
+    paths = {symbol: tmp_path / "chains.sqlite3" for symbol in ("SPY", "AAPL")}
+    next(iter(paths.values())).write_bytes(b"fixture")
+
+    def fake_loader(path, *, underlying, workers, lazy_chains, **kwargs):
+        assert workers == 1
+        assert lazy_chains is True
+        observations = tuple(
+            ResearchObservation(
+                as_of=datetime(2026, 10, day, 20, tzinfo=timezone.utc),
+                underlying=underlying, spot=100.0, regime="range_bound",
+                volatility_state="normal", feed="historical", events=(),
+                equity_signals={}, event_recommendations={}, dividends={}, source_line=day,
+                chain_error="fixture chain",
+            )
+            for day in (26, 27)
+        )
+        return OptionsResearchDataset(
+            observations=observations, provider=_PortfolioProvider(), source_path=Path(path),
+            source_sha256=underlying, data_mode="historical_chains",
+            underlying_history={underlying: ()}, loading_parallelism={"chain_workers_used": 1},
+        )
+
+    seen = {}
+
+    def fake_simulator(dataset, observations, **kwargs):
+        seen["symbols"] = sorted({row.underlying for row in observations})
+        seen["strategy_underlyings"] = kwargs["strategy_underlyings"]
+        return {"metrics": {"trade_count": 0}, "trades": []}
+
+    monkeypatch.setattr(automation, "load_options_research_dataset", fake_loader)
+    monkeypatch.setattr(automation, "simulate_options_strategy", fake_simulator)
+    progress = []
+    config = automation._read_json(automation.RESEARCH_DEFAULTS_PATH)
+
+    replay, unavailable, loading = automation._run_portfolio_replay(
+        config, strategies=["vrp"], underlyings_by_strategy={"vrp": ["SPY", "AAPL"]},
+        data_paths=paths, workers=2, progress_callback=progress.append,
+    )
+
+    assert replay is not None
+    assert unavailable == {}
+    assert set(loading) == {"SPY", "AAPL"}
+    assert seen == {"symbols": ["AAPL", "SPY"], "strategy_underlyings": {"vrp": {"SPY", "AAPL"}}}
+    assert progress[-1]["symbols_done"] == 2
 
 
 def test_options_simulation_counts_only_underlyings_with_trades_and_sums_their_pnl():

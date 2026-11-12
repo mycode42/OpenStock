@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import dataclasses
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 import fcntl
 import hashlib
 import json
+import multiprocessing as mp
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -30,6 +32,26 @@ ET = ZoneInfo("America/New_York")
 SUPPORTED_STRATEGIES = ("vrp", "llm_driven", "directional_overlay", "long_volatility")
 
 
+def _load_portfolio_symbol(args):
+    symbol, path, rate, dividend_yield, data_mode, model_surface_config, range_start, range_end = args
+    try:
+        dataset = load_options_research_dataset(
+            path, underlying=symbol, rate=rate, dividend_yield=dividend_yield,
+            data_mode=data_mode, model_surface_config=model_surface_config,
+            workers=1, lazy_chains=True,
+        )
+        observations = tuple(
+            item for item in dataset.observations
+            if (range_start is None or item.as_of.date() >= range_start)
+            and (range_end is None or item.as_of.date() <= range_end)
+        )
+        if len(observations) < 2:
+            return symbol, None, "fewer than two observations in the selected date range", None
+        return symbol, dataclasses.replace(dataset, observations=observations), None, dataset.loading_parallelism
+    except (OSError, ValueError) as exc:
+        return symbol, None, f"{type(exc).__name__}: {exc}", None
+
+
 def _append_jsonl(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
@@ -43,7 +65,7 @@ def _run_portfolio_replay(
     config: dict, *, strategies: list[str], underlyings_by_strategy: dict[str, list[str]],
     data_paths: dict[str, Path], workers: int, progress_callback=None,
 ) -> tuple[dict | None, dict[str, str], dict[str, dict]]:
-    """Load covered symbols sequentially, then replay one shared options account."""
+    """Load covered symbols in a bounded pool, then replay one shared options account."""
     base_config = live_defaults()
     market_inputs = research_market_inputs(config.get("execution", {}))
     today = datetime.now(timezone.utc).date()
@@ -57,44 +79,92 @@ def _run_portfolio_replay(
         symbol for symbols in underlyings_by_strategy.values() for symbol in symbols
     }
     ordered_symbols = sorted(requested_symbols)
-    for symbol_index, symbol in enumerate(ordered_symbols, start=1):
+    loadable_symbols = []
+    completed_symbols = 0
+    for symbol in ordered_symbols:
         path = data_paths[symbol]
-        if not path.is_file():
+        if path.is_file():
+            loadable_symbols.append(symbol)
+        else:
             unavailable[symbol] = "dataset file is missing"
+            completed_symbols += 1
             if progress_callback:
                 progress_callback({
-                    "phase": "dataset_loading", "symbols_done": symbol_index,
+                    "phase": "dataset_loading", "symbols_done": completed_symbols,
                     "symbols_total": len(ordered_symbols), "symbol": symbol,
                 })
-            continue
-        try:
-            dataset = load_options_research_dataset(
-                path, underlying=symbol,
-                rate=market_inputs.rate(today).value,
-                dividend_yield=market_inputs.dividend_yield(symbol, today).value,
-                data_mode=str(config.get("data_mode", "auto")),
-                model_surface_config=config.get("model_surface", {}),
-                workers=workers, lazy_chains=True,
+
+    sqlite_inputs = bool(loadable_symbols) and all(
+        data_paths[symbol].suffix.lower() in {".sqlite", ".sqlite3", ".db"}
+        for symbol in loadable_symbols
+    )
+    if sqlite_inputs:
+        tasks = [
+            (
+                symbol, data_paths[symbol], market_inputs.rate(today).value,
+                market_inputs.dividend_yield(symbol, today).value,
+                str(config.get("data_mode", "auto")), config.get("model_surface", {}),
+                range_start, range_end,
             )
-            observations = tuple(
-                item for item in dataset.observations
-                if (range_start is None or item.as_of.date() >= range_start)
-                and (range_end is None or item.as_of.date() <= range_end)
-            )
-            if len(observations) < 2:
-                unavailable[symbol] = "fewer than two observations in the selected date range"
-                continue
-            dataset = dataclasses.replace(dataset, observations=observations)
-            datasets[symbol] = dataset
-            loading[symbol] = dataset.loading_parallelism
-        except (OSError, ValueError) as exc:
-            unavailable[symbol] = f"{type(exc).__name__}: {exc}"
-        if progress_callback:
-            progress_callback({
-                "phase": "dataset_loading", "symbols_done": symbol_index,
-                "symbols_total": len(ordered_symbols), "symbol": symbol,
-                "observations_loaded": sum(len(item.observations) for item in datasets.values()),
-            })
+            for symbol in loadable_symbols
+        ]
+        methods = mp.get_all_start_methods()
+        context = mp.get_context("fork" if "fork" in methods else "spawn")
+        with ProcessPoolExecutor(
+            max_workers=min(workers, REPLAY_DATA_WORKER_CAP, len(tasks)),
+            mp_context=context,
+        ) as executor:
+            futures = {
+                executor.submit(_load_portfolio_symbol, task): task[0]
+                for task in tasks
+            }
+            for future in as_completed(futures):
+                symbol = futures.pop(future)
+                _symbol, dataset, error, stats = future.result()
+                completed_symbols += 1
+                if dataset is not None:
+                    datasets[symbol] = dataset
+                    loading[symbol] = stats
+                else:
+                    unavailable[symbol] = error or "dataset is unavailable"
+                if progress_callback:
+                    progress_callback({
+                        "phase": "dataset_loading", "symbols_done": completed_symbols,
+                        "symbols_total": len(ordered_symbols), "symbol": symbol,
+                        "observations_loaded": sum(len(item.observations) for item in datasets.values()),
+                    })
+    else:
+        for symbol in loadable_symbols:
+            path = data_paths[symbol]
+            try:
+                dataset = load_options_research_dataset(
+                    path, underlying=symbol,
+                    rate=market_inputs.rate(today).value,
+                    dividend_yield=market_inputs.dividend_yield(symbol, today).value,
+                    data_mode=str(config.get("data_mode", "auto")),
+                    model_surface_config=config.get("model_surface", {}),
+                    workers=workers, lazy_chains=True,
+                )
+                observations = tuple(
+                    item for item in dataset.observations
+                    if (range_start is None or item.as_of.date() >= range_start)
+                    and (range_end is None or item.as_of.date() <= range_end)
+                )
+                if len(observations) < 2:
+                    unavailable[symbol] = "fewer than two observations in the selected date range"
+                else:
+                    dataset = dataclasses.replace(dataset, observations=observations)
+                    datasets[symbol] = dataset
+                    loading[symbol] = dataset.loading_parallelism
+            except (OSError, ValueError) as exc:
+                unavailable[symbol] = f"{type(exc).__name__}: {exc}"
+            completed_symbols += 1
+            if progress_callback:
+                progress_callback({
+                    "phase": "dataset_loading", "symbols_done": completed_symbols,
+                    "symbols_total": len(ordered_symbols), "symbol": symbol,
+                    "observations_loaded": sum(len(item.observations) for item in datasets.values()),
+                })
     if not datasets:
         return None, unavailable, loading
 
