@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import datetime, timezone
+import dataclasses
+from datetime import date, datetime, timezone
 import fcntl
 import hashlib
 import json
-import multiprocessing as mp
 import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -15,7 +14,12 @@ from zoneinfo import ZoneInfo
 from equity_research.cpu import available_cpu_count
 from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.history_store import DEFAULT_DATABASE, OptionsHistoryStore
-from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json, run_research
+from options.market_inputs import research_market_inputs
+from options.research.dataset import combine_options_research_datasets, load_options_research_dataset
+from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json
+from options.research.search import Candidate, candidate_pool
+from options.research.simulator import simulate_options_strategy
+from options.research.strategy_factory import live_defaults
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
@@ -35,88 +39,122 @@ def _append_jsonl(path: Path, row: dict) -> None:
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def _strategy_summary(strategy: str, report: dict) -> dict:
-    candidate_leaderboard = []
-    for item in report.get("candidate_leaderboard", []):
-        metrics = item.get("mean_is_metrics") or {}
-        candidate_leaderboard.append({
-            "candidate_id": item.get("candidate_id"),
-            "parameters": item.get("parameters", {}),
-            "is_baseline": bool(item.get("is_baseline", False)),
-            "fitness": metrics.get("risk_adjusted_score"),
-            "baseline_fitness": item.get("baseline_fitness"),
-            "fitness_delta_vs_baseline": item.get("fitness_delta_vs_baseline"),
-        })
-    return {
-        "status": report.get("status", "completed"),
-        "run_id": report.get("run_id"),
-        "run_dir": report.get("run_dir"),
-        "report_path": str(Path(report["run_dir"]) / "report.md") if report.get("run_dir") else None,
-        "approved": bool((report.get("validation") or {}).get("approved")),
-        "validation": report.get("validation", {}),
-        "walk_forward": (report.get("walk_forward") or {}).get("oos_metrics", {}),
-        "final_parameters": report.get("final_parameters", {}),
-        "candidate_leaderboard": candidate_leaderboard,
-        "baseline_comparison": report.get("baseline_comparison", {}),
-        "parallelism": report.get("parallelism", {}),
-        "exploratory_replay": report.get("exploratory_replay"),
-        "data_mode": report.get("data_mode"),
-        "underlying": report.get("underlying"),
+def _run_portfolio_replay(
+    config: dict, *, strategies: list[str], underlyings_by_strategy: dict[str, list[str]],
+    data_paths: dict[str, Path], workers: int, progress_callback=None,
+) -> tuple[dict | None, dict[str, str], dict[str, dict]]:
+    """Load covered symbols sequentially, then replay one shared options account."""
+    base_config = live_defaults()
+    market_inputs = research_market_inputs(config.get("execution", {}))
+    today = datetime.now(timezone.utc).date()
+    date_range = config.get("date_range") or {}
+    range_start = date.fromisoformat(date_range["start"]) if date_range.get("start") else None
+    range_end = date.fromisoformat(date_range["end"]) if date_range.get("end") else None
+    datasets = {}
+    unavailable = {}
+    loading = {}
+    requested_symbols = {
+        symbol for symbols in underlyings_by_strategy.values() for symbol in symbols
     }
-
-
-def _error_summary(
-    strategy: str, error: Exception, *, started_at: datetime,
-    run_log: Path, output_root: Path, underlying: str,
-) -> dict:
-    status = "error"
-    message = f"{type(error).__name__}: {error}"
-    if isinstance(error, FileNotFoundError) and "historical options dataset not found" in str(error):
-        status = "skipped_missing_dataset"
-    elif isinstance(error, ValueError) and "no daily_close options history" in str(error):
-        status = "skipped_missing_dataset"
-    elif isinstance(error, ValueError) and (
-        "insufficient history for" in str(error)
-        or "fewer than two" in str(error)
-    ):
-        status = "insufficient_history"
-    # run_research records preflight failures before raising. Include the artifact
-    # path so a malformed or too-short dataset can be diagnosed without guessing.
-    latest_run = None
-    if run_log.is_file():
-        for line in run_log.read_text(encoding="utf-8").splitlines():
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
+    ordered_symbols = sorted(requested_symbols)
+    for symbol_index, symbol in enumerate(ordered_symbols, start=1):
+        path = data_paths[symbol]
+        if not path.is_file():
+            unavailable[symbol] = "dataset file is missing"
+            if progress_callback:
+                progress_callback({
+                    "phase": "dataset_loading", "symbols_done": symbol_index,
+                    "symbols_total": len(ordered_symbols), "symbol": symbol,
+                })
+            continue
+        try:
+            dataset = load_options_research_dataset(
+                path, underlying=symbol,
+                rate=market_inputs.rate(today).value,
+                dividend_yield=market_inputs.dividend_yield(symbol, today).value,
+                data_mode=str(config.get("data_mode", "auto")),
+                model_surface_config=config.get("model_surface", {}),
+                workers=workers, lazy_chains=True,
+            )
+            observations = tuple(
+                item for item in dataset.observations
+                if (range_start is None or item.as_of.date() >= range_start)
+                and (range_end is None or item.as_of.date() <= range_end)
+            )
+            if len(observations) < 2:
+                unavailable[symbol] = "fewer than two observations in the selected date range"
                 continue
-            if (
-                row.get("strategy") == strategy
-                and str(row.get("underlying", "")).upper() == underlying.upper()
-                and row.get("status") in {"started", "preflight_failed"}
-            ):
-                try:
-                    stamp = datetime.fromisoformat(str(row.get("created_at", "")).replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-                if stamp >= started_at:
-                    latest_run = row
-    return {
-        "status": status,
-        "error": message,
-        "run_id": (latest_run or {}).get("run_id"),
-        "run_dir": str(output_root / latest_run["run_id"]) if latest_run and latest_run.get("run_id") else None,
+            dataset = dataclasses.replace(dataset, observations=observations)
+            datasets[symbol] = dataset
+            loading[symbol] = dataset.loading_parallelism
+        except (OSError, ValueError) as exc:
+            unavailable[symbol] = f"{type(exc).__name__}: {exc}"
+        if progress_callback:
+            progress_callback({
+                "phase": "dataset_loading", "symbols_done": symbol_index,
+                "symbols_total": len(ordered_symbols), "symbol": symbol,
+                "observations_loaded": sum(len(item.observations) for item in datasets.values()),
+            })
+    if not datasets:
+        return None, unavailable, loading
+
+    covered_by_strategy = {
+        strategy: [symbol for symbol in underlyings_by_strategy[strategy] if symbol in datasets]
+        for strategy in strategies
     }
-
-
-def _run_research_job(
-    strategy: str, config_path: Path, data_path: Path, underlying: str,
-    replay_data_workers: int,
-) -> dict:
-    report = run_research(
-        strategy, config_path=config_path, data_path=data_path, underlying=underlying,
-        parallel_workers=replay_data_workers, replay_only=True,
+    active_strategies = [strategy for strategy in strategies if covered_by_strategy[strategy]]
+    candidates = {}
+    for strategy in active_strategies:
+        pool = candidate_pool(strategy, config, base_config)
+        baseline = next((item for item in pool if item.is_baseline), pool[0])
+        parameters = _merge(
+            config.get("strategy_defaults", {}).get(strategy, {}), baseline.parameters,
+        )
+        candidates[strategy] = Candidate(
+            baseline.candidate_id, parameters, baseline.allowed_regimes,
+            baseline.grid_indices, is_baseline=True,
+        )
+    combined = combine_options_research_datasets(datasets)
+    if progress_callback:
+        progress_callback({
+            "phase": "portfolio_replay", "symbols_done": len(datasets),
+            "symbols_total": len(ordered_symbols),
+            "sessions_total": len(combined.observations),
+        })
+    replay = simulate_options_strategy(
+        combined, combined.observations,
+        strategy_name=active_strategies[0], candidate=candidates[active_strategies[0]],
+        strategy_candidates=candidates,
+        strategy_underlyings={key: set(covered_by_strategy[key]) for key in active_strategies},
+        config=config, base_config=base_config, force_close=True,
+        progress_callback=(
+            (lambda event: progress_callback({"phase": "portfolio_replay", **event}))
+            if progress_callback else None
+        ),
     )
-    return _strategy_summary(strategy, report)
+    replay.update({
+        "period_start": combined.observations[0].as_of.isoformat(),
+        "period_end": combined.observations[-1].as_of.isoformat(),
+        "underlyings": sorted(datasets),
+        "underlyings_by_strategy": covered_by_strategy,
+        "data_mode": combined.data_mode,
+        "loading_parallelism": loading,
+        "starting_equity": float(config.get("starting_equity", 100000)),
+    })
+    sleeve_metrics = {}
+    for strategy in strategies:
+        trades = [trade for trade in replay["trades"] if trade.get("strategy") == strategy]
+        pnls = [float(trade.get("pnl", 0.0)) for trade in trades]
+        wins = [value for value in pnls if value > 0]
+        losses = [value for value in pnls if value < 0]
+        sleeve_metrics[strategy] = {
+            "trades": len(trades), "net_pnl_usd": round(sum(pnls), 2),
+            "win_rate": len(wins) / len(pnls) if pnls else None,
+            "profit_factor": sum(wins) / abs(sum(losses)) if losses else None,
+            "underlyings_with_trades": sorted({trade["underlying"] for trade in trades}),
+        }
+    replay["sleeve_metrics"] = sleeve_metrics
+    return replay, unavailable, loading
 
 
 def _input_fingerprint(paths: dict[str, Path], *, config_hash: str, data_marks: dict[str, str] | None = None) -> str:
@@ -145,26 +183,6 @@ def _input_fingerprint(paths: dict[str, Path], *, config_hash: str, data_marks: 
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _checkpointable_job_status(status: str | None) -> bool:
-    return status in {
-        "completed", "exploratory_only", "skipped_missing_dataset", "insufficient_history",
-    }
-
-
-def _job_report_valid(summary: dict, output_root: Path) -> bool:
-    status = summary.get("status")
-    if status in {"completed", "exploratory_only"}:
-        run_dir = Path(str(summary.get("run_dir") or ""))
-        if not run_dir.is_absolute():
-            run_dir = output_root / run_dir
-        run = _read_json(run_dir / "run.json")
-        return bool(
-            run and run.get("status") == status
-            and (run_dir / "report.json").is_file()
-        )
-    return status in {"skipped_missing_dataset", "insufficient_history"}
-
-
 def _return_improvement(baseline: object, tuned: object) -> str:
     """Relative return improvement over the baseline, or the gap in points if the baseline is not positive."""
     if baseline is None or tuned is None:
@@ -179,6 +197,30 @@ SIMULATION_LABELS = {"vrp": "Volatility risk premium", "long_volatility": "Long 
 
 
 def _simulation_summary(report: dict) -> dict:
+    portfolio = report.get("portfolio_replay")
+    if portfolio and portfolio.get("metrics"):
+        metrics = portfolio["metrics"]
+        trades = portfolio.get("trades", [])
+        pnls = [float(trade.get("pnl", 0.0)) for trade in trades]
+        wins = [value for value in pnls if value > 0]
+        losses = [value for value in pnls if value < 0]
+        return {
+            "portfolio": {
+                "label": "Shared options portfolio",
+                "underlyings": len(portfolio.get("underlyings", [])),
+                "trades": len(trades),
+                "net_pnl_usd": round(sum(pnls), 2),
+                "win_rate": len(wins) / len(pnls) if pnls else 0.0,
+                "profit_factor": sum(wins) / abs(sum(losses)) if losses else None,
+                "average_return": float(metrics.get("total_return", 0.0)),
+                "median_sharpe": float(metrics.get("annualized_sharpe", 0.0)),
+                "worst_drawdown": float(metrics.get("max_drawdown", 0.0)),
+                "period_start": portfolio.get("period_start"),
+                "period_end": portfolio.get("period_end"),
+                "starting_equity": portfolio.get("starting_equity"),
+                "sleeve_metrics": portfolio.get("sleeve_metrics", {}),
+            },
+        }
     """Per-sleeve P/L and KPIs over the full replay history, from the underlyings that have it.
 
     Every underlying is replayed from its own starting equity, so P/L adds up across underlyings.
@@ -235,10 +277,12 @@ def _simulation_markdown(summary: dict) -> list[str]:
         )
     periods = [item for item in summary.values() if item.get("period_start")]
     if periods:
-        lines.append(f"History: {periods[0]['period_start']} to {periods[0]['period_end']}. Each underlying starts at 100,000 USD.")
+        start_equity = periods[0].get("starting_equity")
+        equity_label = f"Starting equity: {start_equity:,.0f} USD." if start_equity is not None else ""
+        lines.append(f"History: {str(periods[0]['period_start'])[:10]} to {str(periods[0]['period_end'])[:10]}. {equity_label}")
         lines.append("")
     lines.extend([
-        "| Sleeve | Underlyings | Trades | Net P/L (USD) | Win rate | Profit factor | Avg return | Median Sharpe | Worst drawdown |",
+        "| Portfolio | Covered symbols | Trades | Net P/L (USD) | Win rate | Profit factor | Total return | Annualized Sharpe | Max drawdown |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         *rows,
         "",
@@ -259,6 +303,33 @@ def _render_markdown(report: dict) -> str:
         "",
     ]
     lines.extend(_simulation_markdown(_simulation_summary(report)))
+    portfolio = report.get("portfolio_replay")
+    if portfolio:
+        lines.extend([
+            f"One shared account across {len(portfolio.get('underlyings', []))} covered symbol(s); "
+            f"starting equity {float(portfolio.get('starting_equity', 0.0)):,.0f} USD.",
+            f"Trades: {portfolio.get('metrics', {}).get('trade_count', 0)}; "
+            f"return {float(portfolio.get('metrics', {}).get('total_return', 0.0)):.2%}; "
+            f"Sharpe {float(portfolio.get('metrics', {}).get('annualized_sharpe', 0.0)):.3f}; "
+            f"max drawdown {float(portfolio.get('metrics', {}).get('max_drawdown', 0.0)):.2%}.",
+            "",
+        ])
+        contributions = portfolio.get("sleeve_metrics", {})
+        if contributions:
+            lines.extend(["Strategy P/L attribution:", ""])
+            lines.extend(
+                f"- **{strategy}:** {item.get('trades', 0)} trades, "
+                f"{float(item.get('net_pnl_usd', 0.0)):+,.2f} USD"
+                for strategy, item in contributions.items()
+            )
+            lines.append("")
+        if report.get("unavailable_symbols"):
+            lines.extend(["Symbols without usable history:", ""])
+            lines.extend(
+                f"- **{symbol}:** {reason}"
+                for symbol, reason in report["unavailable_symbols"].items()
+            )
+            lines.append("")
     eligibility = report.get("eligible_universe")
     if eligibility:
         lines.extend([
@@ -285,24 +356,26 @@ def _render_markdown(report: dict) -> str:
         lines.append("")
     matrix = report.get("underlyings_by_strategy", {})
     if matrix:
-        lines.extend(["## Research matrix", ""])
+        lines.extend(["## Strategy coverage", ""])
         for strategy, symbols in matrix.items():
             lines.append(f"- **{strategy}:** {', '.join(symbols)}")
         lines.append("")
-    worker_map = report.get("workers_used_by_strategy", {})
-    if worker_map:
+    if report.get("portfolio_replay"):
         lines.extend(["## Parallelism", ""])
-        for strategy, count in worker_map.items():
-            data_workers = report.get("replay_data_workers_used_by_strategy", {}).get(strategy)
-            if data_workers is None:
-                data_workers = report.get("fold_workers_used_by_strategy", {}).get(strategy, 1)
-            lines.append(
-                f"- **{strategy}:** {count} concurrent ticker job(s), "
-                f"{data_workers} historical-chain preparation worker(s) per job; "
-                "the replay itself is sequential"
-            )
+        lines.append(
+            f"- One sequential portfolio replay; historical-chain preparation used up to "
+            f"{report.get('replay_data_workers', 1)} worker(s) per symbol."
+        )
         lines.append("")
     for strategy, result in report.get("strategies", {}).items():
+        if "portfolio_metrics" in result:
+            contribution = result["portfolio_metrics"]
+            lines.extend([
+                f"## {strategy}", "", f"Status: **{result.get('status')}**",
+                f"Shared-account contribution: {contribution.get('trades', 0)} trades, "
+                f"{float(contribution.get('net_pnl_usd', 0.0)):+,.2f} USD.", "",
+            ])
+            continue
         by_underlying = result.get("underlyings") or {result.get("underlying", "configured"): result}
         lines.extend([f"## {strategy}", "", f"Status: **{result.get('status')}**"])
         for underlying, item in by_underlying.items():
@@ -476,44 +549,27 @@ def run_automated_options_research(
         )
         for symbol in underlyings
     }
-    configured_workers = automation_config.get("workers", 1) if workers is None else workers
-    if isinstance(configured_workers, bool) or not isinstance(configured_workers, int) or configured_workers < 1:
-        raise ValueError("automation workers must be a positive integer")
-    configured_workers_by_strategy = automation_config.get("workers_by_strategy", {})
-    if not isinstance(configured_workers_by_strategy, dict):
-        raise ValueError("automation workers_by_strategy must be an object")
-    available_cpus = available_cpu_count()
     configured_fold_workers = config.get("search", {}).get("parallel_workers", 1)
     if isinstance(configured_fold_workers, bool) or not isinstance(configured_fold_workers, int) or configured_fold_workers < 1:
         raise ValueError("search.parallel_workers must be a positive integer")
-    replay_data_worker_budget = min(configured_fold_workers, REPLAY_DATA_WORKER_CAP, available_cpus)
-    workers_requested_by_strategy = {}
-    workers_used_by_strategy = {}
-    fold_workers_used_by_strategy = {}
-    replay_data_workers_used_by_strategy = {}
-    for strategy, symbols in underlyings_by_strategy.items():
-        strategy_limit = configured_workers_by_strategy.get(strategy, configured_workers)
-        if isinstance(strategy_limit, bool) or not isinstance(strategy_limit, int) or strategy_limit < 1:
-            raise ValueError(f"automation workers_by_strategy.{strategy} must be a positive integer")
-        if workers is not None:
-            strategy_limit = min(strategy_limit, workers)
-        workers_requested_by_strategy[strategy] = strategy_limit
-        # This scheduled automation runs full-history replays, not fold search.
-        # Cap parallel historical-chain preparation at the profiled memory-safe
-        # limit while respecting the configured search worker ceiling.
-        outer_limit = max(1, min(configured_workers, available_cpus))
-        workers_used_by_strategy[strategy] = min(strategy_limit, outer_limit, len(symbols))
-        fold_workers_used_by_strategy[strategy] = 0
-        replay_data_workers_used_by_strategy[strategy] = min(
-            replay_data_worker_budget,
-            max(1, available_cpus // workers_used_by_strategy[strategy]),
-        )
-    worker_count = max(workers_used_by_strategy.values(), default=0)
+    if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
+        raise ValueError("workers must be a positive integer")
+    available_cpus = available_cpu_count()
+    replay_data_worker_budget = min(
+        configured_fold_workers, REPLAY_DATA_WORKER_CAP, available_cpus,
+        workers if workers is not None else REPLAY_DATA_WORKER_CAP,
+    )
+    workers_requested = workers if workers is not None else configured_fold_workers
+    workers_requested_by_strategy = {strategy: 1 for strategy in strategies}
+    workers_used_by_strategy = {strategy: 1 for strategy in strategies}
+    fold_workers_used_by_strategy = {strategy: 0 for strategy in strategies}
+    replay_data_workers_used_by_strategy = {
+        strategy: replay_data_worker_budget for strategy in strategies
+    }
     output_root = _project_path(config.get("output_dir", "data/options/research/runs"))
     automation_dir = output_root.parent / "simulation"
     automation_dir.mkdir(parents=True, exist_ok=True)
     created_at = datetime.now(timezone.utc)
-    run_log = output_root / "research_runs.jsonl"
     config_hash = hashlib.sha256(json.dumps(config, sort_keys=True).encode("utf-8")).hexdigest()
     fingerprint_paths = dict(underlying_data_paths)
     eligibility_fingerprint_config = automation_config.get("eligibility", {})
@@ -535,13 +591,13 @@ def run_automated_options_research(
     )
     checkpoint = checkpoint_store.read_automation_checkpoint(run_id) or {}
     if (
-        checkpoint.get("schema") != "swarm_options_automation_checkpoint_v1"
+        checkpoint.get("schema") != "swarm_options_automation_checkpoint_v2"
         or checkpoint.get("run_id") != run_id
         or checkpoint.get("config_sha256") != config_hash
         or checkpoint.get("input_fingerprint") != input_fingerprint
     ):
         checkpoint = {
-            "schema": "swarm_options_automation_checkpoint_v1",
+            "schema": "swarm_options_automation_checkpoint_v2",
             "run_id": run_id,
             "config_sha256": config_hash,
             "input_fingerprint": input_fingerprint,
@@ -618,19 +674,6 @@ def run_automated_options_research(
                 strategy: [symbol for symbol in symbols if symbol not in eligible]
                 for strategy, symbols in original_by_strategy.items()
             }
-            for strategy, symbols in underlyings_by_strategy.items():
-                outer_limit = max(1, min(configured_workers, available_cpus))
-                workers_used_by_strategy[strategy] = min(
-                    workers_requested_by_strategy[strategy], outer_limit, len(symbols),
-                )
-                fold_workers_used_by_strategy[strategy] = 0
-                replay_data_workers_used_by_strategy[strategy] = (
-                    min(
-                        replay_data_worker_budget,
-                        max(1, available_cpus // workers_used_by_strategy[strategy]),
-                    ) if workers_used_by_strategy[strategy] else 0
-                )
-            worker_count = max(workers_used_by_strategy.values(), default=0)
     data_available = any(
         history_store.has_underlying(symbol)
         if history_store and path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
@@ -639,187 +682,122 @@ def run_automated_options_research(
     )
     data_mode = config.get("data_mode", "auto")
 
+    portfolio_replay = None
+    unavailable_symbols = {}
+    portfolio_loading = {}
+    portfolio_error = None
     if not enabled:
         status = "disabled"
         strategies_report = {strategy: {"status": "disabled"} for strategy in strategies}
     else:
-        jobs = [
-            (strategy, underlying)
-            for strategy in strategies
-            for underlying in underlyings_by_strategy[strategy]
-        ]
-        job_results: dict[tuple[str, str], tuple[datetime, dict]] = {}
         run_progress_dir = automation_dir / "runs" / run_id
         run_progress_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_jobs = checkpoint.setdefault("jobs", {})
-        for strategy, underlying in jobs:
-            key = f"{strategy}/{underlying}"
-            saved = checkpoint_jobs.get(key) or {}
-            summary = saved.get("summary") or {}
-            if (
-                saved.get("input_fingerprint") == input_fingerprint
-                and _checkpointable_job_status(summary.get("status"))
-                and _job_report_valid(summary, output_root)
-            ):
-                try:
-                    started = datetime.fromisoformat(saved.get("started_at") or created_at.isoformat())
-                except ValueError:
-                    started = created_at
-                job_results[(strategy, underlying)] = (started, {"summary": summary})
 
-        def write_job_progress() -> None:
-            checkpoint["updated_at"] = datetime.now(timezone.utc).isoformat()
-            checkpoint["completed_jobs"] = len(job_results)
-            checkpoint["total_jobs"] = len(jobs)
-            checkpoint_store.write_automation_checkpoint(run_id, checkpoint)
-            completed = {
-                f"{strategy}/{underlying}": result.get("summary")
-                for (strategy, underlying), (_, result) in job_results.items()
-                if result.get("summary") is not None
-            }
-            pending = [
-                f"{strategy}/{underlying}" for strategy, underlying in jobs
-                if (strategy, underlying) not in job_results
-            ]
+        def record_portfolio_progress(detail: dict) -> None:
             snapshot = {
-                "schema": "swarm_options_automation_progress_v1",
+                "schema": "swarm_options_automation_progress_v2",
                 "run_id": run_id,
                 "status": "running",
                 "created_at": checkpoint.get("created_at"),
-                "updated_at": checkpoint["updated_at"],
-                "config_sha256": config_hash,
-                "input_fingerprint": input_fingerprint,
-                "completed_jobs": len(completed),
-                "total_jobs": len(jobs),
-                "pending_jobs": pending,
-                "jobs": completed,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "completed_jobs": 0,
+                "total_jobs": 1,
+                "pending_jobs": ["portfolio_replay"],
+                "phase": detail.get("phase"),
+                "progress": detail,
                 "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
             }
             atomic_write_json(run_progress_dir / "progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
             atomic_write_json(run_progress_dir / "partial-report.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
             atomic_write_json(automation_dir / "latest-progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
 
-        def record_job(strategy: str, underlying: str, started: datetime, summary: dict) -> None:
-            job_results[(strategy, underlying)] = (started, {"summary": summary})
-            checkpoint_jobs[f"{strategy}/{underlying}"] = {
-                "status": summary.get("status"),
-                "summary": summary,
-                "started_at": started.isoformat(),
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "input_fingerprint": input_fingerprint,
-            }
-            write_job_progress()
-
-        write_job_progress()
+        record_portfolio_progress({"phase": "starting"})
+        try:
+            portfolio_replay, unavailable_symbols, portfolio_loading = _run_portfolio_replay(
+                config, strategies=strategies, underlyings_by_strategy=underlyings_by_strategy,
+                data_paths=underlying_data_paths, workers=replay_data_worker_budget,
+                progress_callback=record_portfolio_progress,
+            )
+        except Exception as exc:
+            portfolio_error = f"{type(exc).__name__}: {exc}"
+        if portfolio_error:
+            status = "partial_error"
+            strategies_report = {strategy: {"status": "error", "error": portfolio_error} for strategy in strategies}
+        elif portfolio_replay is None:
+            if apply_eligibility and not any(underlyings_by_strategy.values()):
+                status = "eligibility_empty"
+                strategies_report = {strategy: {"status": "skipped_eligibility_empty"} for strategy in strategies}
+            else:
+                status = "waiting_for_data"
+                strategies_report = {
+                    strategy: {
+                        "status": "skipped_missing_dataset",
+                        "underlyings": {
+                            symbol: {"status": "skipped_missing_dataset", "error": unavailable_symbols.get(symbol)}
+                            for symbol in underlyings_by_strategy[strategy]
+                        },
+                    }
+                    for strategy in strategies
+                }
+        else:
+            status = "partial_data" if unavailable_symbols else "completed"
+            for strategy in strategies:
+                strategies_report[strategy] = {
+                    "status": (
+                        "skipped_eligibility_empty"
+                        if apply_eligibility and not portfolio_replay["underlyings_by_strategy"].get(strategy)
+                        else status
+                    ),
+                    "covered_underlyings": portfolio_replay["underlyings_by_strategy"].get(strategy, []),
+                    "portfolio_metrics": portfolio_replay["sleeve_metrics"].get(strategy, {}),
+                }
+        checkpoint = {
+            "schema": "swarm_options_automation_checkpoint_v2",
+            "run_id": run_id,
+            "config_sha256": config_hash,
+            "input_fingerprint": input_fingerprint,
+            "created_at": checkpoint.get("created_at", created_at.isoformat()),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "status": status,
+            "completed_jobs": 1 if portfolio_replay is not None or portfolio_error else 0,
+            "total_jobs": 1,
+            "portfolio_replay": {
+                "status": status,
+                "trade_count": (portfolio_replay or {}).get("metrics", {}).get("trade_count", 0),
+                "underlyings": (portfolio_replay or {}).get("underlyings", []),
+            },
+            "unavailable_symbols": unavailable_symbols,
+            "portfolio_error": portfolio_error,
+        }
+        checkpoint_store.write_automation_checkpoint(run_id, checkpoint)
+        progress_snapshot = {
+            "schema": "swarm_options_automation_progress_v2",
+            "run_id": run_id,
+            "status": status,
+            "created_at": checkpoint["created_at"],
+            "updated_at": checkpoint["updated_at"],
+            "completed_jobs": checkpoint["completed_jobs"],
+            "total_jobs": 1,
+            "pending_jobs": [],
+            "portfolio_replay": checkpoint["portfolio_replay"],
+            "unavailable_symbols": unavailable_symbols,
+            "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
+        }
+        run_progress_dir = automation_dir / "runs" / run_id
+        run_progress_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(run_progress_dir / "progress.json", progress_snapshot, indent=2, sort_keys=True, allow_nan=False)
+        atomic_write_json(run_progress_dir / "partial-report.json", progress_snapshot, indent=2, sort_keys=True, allow_nan=False)
+        atomic_write_json(automation_dir / "latest-progress.json", progress_snapshot, indent=2, sort_keys=True, allow_nan=False)
         print(
-            f"Options research: {len(jobs)} strategy/ticker jobs, "
-            f"ticker workers {workers_used_by_strategy}; "
-            f"historical-chain preparation workers {replay_data_workers_used_by_strategy}; "
-            f"parameter-search folds are not run "
-            f"(maximum requested {configured_workers}, CPUs available {available_cpus})",
+            f"Options portfolio replay: {len((portfolio_replay or {}).get('underlyings', []))} covered symbols, "
+            f"one shared account, sequential replay; historical-chain preparation workers {replay_data_worker_budget}",
             flush=True,
         )
-
-        # Strategy groups have separate pools. This lets broad, lighter VRP jobs
-        # occupy all available cores while keeping the memory-heavy long-vol
-        # replay at its lower configured concurrency. Pools close between
-        # groups so idle worker processes do not retain historical datasets.
-        for strategy in strategies:
-            strategy_jobs = [
-                (strategy, underlying) for underlying in underlyings_by_strategy[strategy]
-                if (strategy, underlying) not in job_results
-            ]
-            if not strategy_jobs:
-                strategies_report[strategy] = {
-                    "status": "skipped_eligibility_empty" if eligibility_report else "skipped_empty_universe",
-                    "eligible_snapshot": eligibility_report.get("snapshot_location") if eligibility_report else None,
-                }
-                continue
-            strategy_workers = workers_used_by_strategy[strategy]
-            if strategy_workers == 1:
-                for job_strategy, underlying in strategy_jobs:
-                    started = datetime.now(timezone.utc)
-                    try:
-                        summary = _run_research_job(
-                            job_strategy, config_path_resolved,
-                            underlying_data_paths[underlying], underlying,
-                            replay_data_workers_used_by_strategy[strategy],
-                        )
-                    except Exception as exc:
-                        summary = _error_summary(
-                            job_strategy, exc, started_at=started, run_log=run_log,
-                            output_root=output_root, underlying=underlying,
-                        )
-                    record_job(job_strategy, underlying, started, summary)
-                continue
-
-            with ProcessPoolExecutor(
-                max_workers=strategy_workers,
-                mp_context=mp.get_context("spawn"),
-            ) as executor:
-                futures = {}
-                for job_strategy, underlying in strategy_jobs:
-                    started = datetime.now(timezone.utc)
-                    future = executor.submit(
-                        _run_research_job, job_strategy, config_path_resolved,
-                        underlying_data_paths[underlying], underlying,
-                        replay_data_workers_used_by_strategy[strategy],
-                    )
-                    futures[future] = (job_strategy, underlying, started)
-                for future in as_completed(futures):
-                    job_strategy, underlying, started = futures[future]
-                    try:
-                        summary = future.result()
-                    except Exception as exc:
-                        summary = _error_summary(
-                            job_strategy, exc, started_at=started, run_log=run_log,
-                            output_root=output_root, underlying=underlying,
-                        )
-                    record_job(job_strategy, underlying, started, summary)
-
-        for strategy in strategies:
-            by_underlying = {}
-            strategy_underlyings = underlyings_by_strategy[strategy]
-            for underlying in strategy_underlyings:
-                _, job_result = job_results[(strategy, underlying)]
-                by_underlying[underlying] = job_result["summary"]
-            if not strategy_underlyings:
-                continue
-            if len(strategy_underlyings) == 1:
-                strategies_report[strategy] = by_underlying[strategy_underlyings[0]]
-            else:
-                child_statuses = {item.get("status") for item in by_underlying.values()}
-                strategy_status = (
-                    "partial_error" if "error" in child_statuses
-                    else "waiting_for_data" if child_statuses <= {"skipped_missing_dataset", "insufficient_history"}
-                    else "partial_data" if child_statuses & {"skipped_missing_dataset", "insufficient_history", "exploratory_only"}
-                    else "completed"
-                )
-                strategies_report[strategy] = {
-                    "status": strategy_status,
-                    "underlyings": by_underlying,
-                    "completed_count": sum(item.get("status") == "completed" for item in by_underlying.values()),
-                    "approved_count": sum(item.get("approved", False) for item in by_underlying.values()),
-                }
-        statuses = {
-            item.get("status")
-            for result in strategies_report.values()
-            for item in (result.get("underlyings", {}).values() if result.get("underlyings") else [result])
-        }
-        if "error" in statuses:
-            status = "partial_error"
-        elif statuses and statuses <= {"skipped_eligibility_empty"}:
-            status = "eligibility_empty"
-        elif statuses and statuses <= {"skipped_missing_dataset", "insufficient_history"}:
-            status = "waiting_for_data"
-        elif statuses & {"skipped_missing_dataset", "insufficient_history", "exploratory_only"}:
-            status = "partial_data"
-        else:
-            status = "completed"
 
     today = datetime.now(ET).date().isoformat()
     report = {
         "schema": "swarm_options_nightly_research_v1",
+        "simulation_model": "shared_portfolio_replay_v1",
         "status": status,
         "run_id": run_id,
         "created_at": created_at.isoformat(),
@@ -849,14 +827,19 @@ def run_automated_options_research(
             }
             for symbol, result in history_store_sync.items()
         },
-        "data_mode": data_mode,
-        "workers_requested": configured_workers,
-        "workers_used": worker_count if enabled else 0,
+        "data_mode": portfolio_replay.get("data_mode", data_mode) if portfolio_replay else data_mode,
+        "workers_requested": workers_requested,
+        "workers_used": 1 if enabled and portfolio_replay is not None else 0,
+        "replay_data_workers": replay_data_worker_budget if enabled else 0,
         "workers_requested_by_strategy": workers_requested_by_strategy,
-        "workers_used_by_strategy": workers_used_by_strategy if enabled else {},
+        "workers_used_by_strategy": ({strategy: 1 for strategy in strategies} if enabled and portfolio_replay else {}),
         "fold_workers_requested": configured_fold_workers,
-        "fold_workers_used_by_strategy": fold_workers_used_by_strategy if enabled else {},
-        "replay_data_workers_used_by_strategy": replay_data_workers_used_by_strategy if enabled else {},
+        "fold_workers_used_by_strategy": ({strategy: 0 for strategy in strategies} if enabled else {}),
+        "replay_data_workers_used_by_strategy": ({strategy: replay_data_worker_budget for strategy in strategies} if enabled else {}),
+        "portfolio_replay": portfolio_replay,
+        "portfolio_error": portfolio_error,
+        "unavailable_symbols": unavailable_symbols,
+        "portfolio_loading": portfolio_loading,
         "strategies": strategies_report,
         "research_only": True,
         "trade_or_order_actions": 0,
@@ -875,8 +858,9 @@ def run_automated_options_research(
         "created_at": created_at.isoformat(), "run_date_et": today,
         "status": status, "config_sha256": config_hash,
         "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
-        "workers_requested": configured_workers,
-        "workers_used": worker_count if enabled else 0,
+        "workers_requested": workers_requested,
+        "workers_used": 1 if enabled and portfolio_replay is not None else 0,
+        "replay_data_workers": replay_data_worker_budget if enabled else 0,
         "workers_requested_by_strategy": workers_requested_by_strategy,
         "workers_used_by_strategy": workers_used_by_strategy if enabled else {},
         "fold_workers_requested": configured_fold_workers,
@@ -894,24 +878,20 @@ def run_automated_options_research(
         } if eligibility_report else None),
         "dataset_paths": {symbol: str(path) for symbol, path in underlying_data_paths.items()}, "dataset_available": data_available,
         "strategies": {
-            name: (
-                {
-                    "status": result.get("status"),
-                    "underlyings": {
-                        symbol: {
-                            "status": child.get("status"), "run_id": child.get("run_id"),
-                            "run_dir": child.get("run_dir"), "error": child.get("error"),
-                        }
-                        for symbol, child in result.get("underlyings", {}).items()
-                    },
-                }
-                if result.get("underlyings") else {
-                    "status": result.get("status"), "run_id": result.get("run_id"),
-                    "run_dir": result.get("run_dir"), "error": result.get("error"),
-                }
-            )
+            name: {
+                "status": result.get("status"),
+                "error": result.get("error"),
+                "covered_underlyings": result.get("covered_underlyings", []),
+                "portfolio_metrics": result.get("portfolio_metrics"),
+            }
             for name, result in strategies_report.items()
         },
+        "portfolio_replay": {
+            "trade_count": (portfolio_replay or {}).get("metrics", {}).get("trade_count", 0),
+            "total_return": (portfolio_replay or {}).get("metrics", {}).get("total_return"),
+            "underlyings": (portfolio_replay or {}).get("underlyings", []),
+        },
+        "unavailable_symbols": unavailable_symbols,
         "report_path": str(report_path),
     })
     artifact_store = OptionsResearchArtifactStore()
@@ -926,14 +906,14 @@ def run_automated_options_research(
     final_path = automation_dir / "runs" / run_id / "final-report.json"
     atomic_write_json(final_path, report, indent=2, sort_keys=True, allow_nan=False)
     checkpoint.update({
-        "status": "completed" if status != "partial_error" else "partial_error",
+        "status": status,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "report_path": str(final_path.resolve()),
-        "completed_jobs": len(checkpoint.get("jobs", {})),
+        "completed_jobs": 1 if portfolio_replay is not None or portfolio_error else 0,
     })
     checkpoint_store.write_automation_checkpoint(run_id, checkpoint)
     final_progress = {
-        "schema": "swarm_options_automation_progress_v1",
+        "schema": "swarm_options_automation_progress_v2",
         "run_id": run_id,
         "status": checkpoint["status"],
         "created_at": checkpoint.get("created_at"),
@@ -956,7 +936,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Run configured options research sleeves")
     parser.add_argument("--config", help="options research config override")
-    parser.add_argument("--workers", type=int, help="maximum concurrent research processes")
+    parser.add_argument("--workers", type=int, help="historical-chain preparation workers (maximum 4)")
     parser.add_argument("--run-id", help="stable cycle ID used to resume an interrupted research batch")
     args = parser.parse_args()
     try:

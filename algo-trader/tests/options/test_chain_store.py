@@ -2,9 +2,13 @@
 
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import options.research.dataset as dataset_module
-from options.research.dataset import load_options_research_dataset
+from options.research.dataset import (
+    OptionsResearchDataset, ResearchObservation,
+    combine_options_research_datasets, load_options_research_dataset,
+)
 from options.research.history_store import OptionsHistoryStore
 
 
@@ -82,6 +86,21 @@ def test_replay_chain_batches_stay_disk_backed_and_resume(tmp_path, monkeypatch)
     assert all(item.chain is None and item.chain_error is None for item in dataset.observations)
     chain = dataset.provider.get_chain_for_observation(dataset.observations[0])
     assert chain is not None and len(chain.contracts) == 3
+    assert dataset.provider.get_chain_for_observation(dataset.observations[1]) is not None
+    assert dataset.provider._loaded_results == []
+    assert len(dataset.provider._loaded_offsets) == 2
+    assert dataset.provider.get_chain_for_observation(dataset.observations[2]) is not None
+    cached_batch = next((tmp_path / "chains" / "replay-batches").rglob("batch-000000.pkl"))
+    import pickle
+    with cached_batch.open("rb") as handle:
+        header = pickle.load(handle)
+        assert header["schema"] == "options_replay_chain_batch_v2"
+        results = []
+        for offset in header["offsets"]:
+            handle.seek(offset)
+            results.append(pickle.load(handle))
+    with cached_batch.open("wb") as handle:
+        pickle.dump({"schema": "options_replay_chain_batch_v1", "refs": header["refs"], "results": results}, handle)
 
     resumed = load_options_research_dataset(
         db, underlying="SPY", rate=0.04, dividend_yield=0.015,
@@ -90,6 +109,48 @@ def test_replay_chain_batches_stay_disk_backed_and_resume(tmp_path, monkeypatch)
     assert resumed.loading_parallelism["chains_prepared"] == 0
     assert resumed.loading_parallelism["chains_reused"] == 3
     assert resumed.provider.get_chain_for_observation(resumed.observations[0]) is not None
+    with cached_batch.open("rb") as handle:
+        assert pickle.load(handle)["schema"] == "options_replay_chain_batch_v2"
+
+
+def test_portfolio_dataset_merges_same_time_symbols_without_chain_key_collisions(tmp_path):
+    as_of = datetime(2026, 10, 26, 20, tzinfo=timezone.utc)
+
+    class Provider:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        def get_chain_for_observation(self, observation):
+            return self.symbol
+
+        def underlying_closes(self, underlying, *, as_of, sessions):
+            return [(as_of.date(), float(ord(self.symbol[0])))]
+
+    datasets = {}
+    for symbol in ("SPY", "AAPL"):
+        observation = ResearchObservation(
+            as_of=as_of, underlying=symbol, spot=100.0, regime="range_bound",
+            volatility_state="normal", feed="historical", events=(), equity_signals={},
+            event_recommendations={}, dividends={}, source_line=1,
+        )
+        datasets[symbol] = OptionsResearchDataset(
+            observations=(observation,), provider=Provider(symbol),
+            source_path=tmp_path / "history.sqlite3", source_sha256=symbol,
+            data_mode="historical_chains", underlying_history={symbol: ()},
+            loading_parallelism={"elapsed_seconds": 1, "chain_workers_used": 1},
+        )
+
+    portfolio = combine_options_research_datasets(datasets)
+
+    assert [(item.underlying, item.as_of) for item in portfolio.observations] == [
+        ("AAPL", as_of), ("SPY", as_of),
+    ]
+    assert [portfolio.provider.get_chain_for_observation(item) for item in portfolio.observations] == [
+        "AAPL", "SPY",
+    ]
+    assert portfolio.provider.underlying_closes("SPY", as_of=as_of, sessions=1) == [
+        (as_of.date(), float(ord("S"))),
+    ]
 
 
 def test_the_store_keeps_one_file_per_underlying_and_drops_stale_sessions(tmp_path, monkeypatch):

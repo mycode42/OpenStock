@@ -16,7 +16,6 @@ from statistics import mean, median, pstdev
 from options.assignment import simulate_early_assignment
 from options.data import ChainQuote, OptionChain
 from options.research.execution import is_two_sided
-from options.market_inputs import research_market_inputs
 from options.models import GreeksSnapshot, OptionLeg, OptionSignal
 from options.research.dataset import OptionsResearchDataset, ResearchObservation
 from options.research.execution import (
@@ -30,8 +29,6 @@ from strategies.options.vrp import vrp_exit_reason
 from options.research.strategy_factory import make_strategy
 
 
-_LONG_VOL_IV_HISTORY_CACHE: dict[tuple, dict] = {}
-_LONG_VOL_IV_HISTORY_CACHE_LIMIT = 32
 
 
 @dataclass
@@ -47,6 +44,7 @@ class _LegPosition:
 @dataclass
 class _OpenTrade:
     signal: OptionSignal
+    strategy_name: str
     contracts: int
     entry_at: datetime
     entry_regime: str
@@ -65,6 +63,7 @@ class _OpenTrade:
     stale_marks: int = 0
     greek_path: list[dict] = field(default_factory=list)
     last_spot: float | None = None
+    current_exposures: dict[str, float] = field(default_factory=dict)
     exit_at: datetime | None = None
     exit_reason: str = ""
     pnl: float = 0.0
@@ -138,7 +137,9 @@ def _metrics(curve: list[dict], trades: list[dict], greek_summary: dict, quality
     gamma_vega_share = gamma_vega_positive / positive_daily if positive_daily > 0 else 0.0
     largest_positive_trade_share = max((value for value in pnls if value > 0), default=0.0) / gains if gains > 0 else 0.0
     episode_dominated = gamma_vega_share >= threshold or largest_positive_trade_share >= 0.50
-    missing_fraction = quality.get("missing_chain_observations", 0) / max(1, len(curve))
+    missing_fraction = quality.get("missing_chain_observations", 0) / max(
+        1, quality.get("observations_total", len(curve)),
+    )
     risk_adjusted = sharpe - 2.0 * max_drawdown - 2.0 * missing_fraction
     # A no-trade candidate has supplied no evidence of an exploitable edge.
     if not trades:
@@ -173,19 +174,16 @@ PROGRESS_MIN_INTERVAL_SECONDS = 0.5
 
 
 class _ReplayProgress:
-    def __init__(self, total: int) -> None:
+    def __init__(self, total: int, callback=None) -> None:
         self.enabled = os.environ.get("ALGO_LAB_PROGRESS") == "1"
+        self.callback = callback
         self.total = total
         self.started = time.monotonic()
         self.last = 0.0
+        self.last_callback = 0.0
 
     def tick(self, done: int, through) -> None:
-        if not self.enabled:
-            return
         now = time.monotonic()
-        if done < self.total and now - self.last < PROGRESS_MIN_INTERVAL_SECONDS:
-            return
-        self.last = now
         elapsed = now - self.started
         rate = elapsed / done if done else 0.0
         event = {
@@ -196,7 +194,12 @@ class _ReplayProgress:
             "elapsed_seconds": round(elapsed, 1),
             "remaining_seconds": round(rate * (self.total - done), 1),
         }
-        print(PROGRESS_EVENT_PREFIX + json.dumps(event, sort_keys=True), flush=True)
+        if self.enabled and (done >= self.total or now - self.last >= PROGRESS_MIN_INTERVAL_SECONDS):
+            self.last = now
+            print(PROGRESS_EVENT_PREFIX + json.dumps(event, sort_keys=True), flush=True)
+        if self.callback and (done >= self.total or now - self.last_callback >= 5.0):
+            self.last_callback = now
+            self.callback(event)
 
 
 def simulate_options_strategy(
@@ -211,86 +214,57 @@ def simulate_options_strategy(
     spread_width_multiplier: float = 1.0,
     assignment_enabled: bool = True,
     force_close: bool = True,
+    strategy_candidates: dict[str, Candidate] | None = None,
+    strategy_underlyings: dict[str, set[str] | tuple[str, ...] | list[str]] | None = None,
+    progress_callback=None,
 ) -> dict:
-    """Run one options sleeve over a chronological slice; no equity pipeline calls."""
+    """Replay one shared options account over a chronological multi-symbol slice."""
     if not observations:
         raise ValueError("simulation slice is empty")
     execution_values = dict(config.get("execution", {}))
     execution_values["spread_fraction_per_leg"] = float(execution_values.get("spread_fraction_per_leg", 0.5)) * slippage_multiplier
     execution = ExecutionAssumptions.from_dict(execution_values)
     market = config.get("market_data", {})
-    strategy_parameters = dict(candidate.parameters)
-    if strategy_name == "long_volatility" and "underlyings" not in strategy_parameters:
-        strategy_parameters["underlyings"] = sorted({item.underlying.upper() for item in observations})
-    strategy, strategy_section = make_strategy(
-        strategy_name,
-        parameters=strategy_parameters,
-        allowed_regimes=candidate.allowed_regimes,
-        base_config=base_config,
-    )
-    date_to_index = {row.as_of: index for index, row in enumerate(dataset.observations)}
-    iv_history_by_underlying: dict[str, tuple[list[datetime], list[float]]] = {}
-    needs_iv_history = strategy_name == "long_volatility" or (
-        strategy_name == "vrp" and strategy_section.get("min_iv_percentile") is not None
-    )
-    if needs_iv_history:
-        iv_settings = tuple(
-            (key, strategy_section.get(key))
-            for key in (
-                "min_dte", "max_dte", "target_dte", "max_spread_pct",
-                "min_open_interest", "atm_delta_tolerance",
-            )
+    candidates = dict(strategy_candidates or {strategy_name: candidate})
+    strategy_universes = {
+        name: {str(symbol).upper() for symbol in symbols}
+        for name, symbols in (strategy_underlyings or {}).items()
+    }
+    observed_symbols = sorted({item.underlying.upper() for item in observations})
+    strategy_definitions = {}
+    for name, selected_candidate in candidates.items():
+        strategy_parameters = dict(selected_candidate.parameters)
+        if name in {"long_volatility", "directional_overlay"} and "underlyings" not in strategy_parameters:
+            strategy_parameters["underlyings"] = sorted(strategy_universes.get(name, set(observed_symbols)))
+        strategy_instance, strategy_section = make_strategy(
+            name,
+            parameters=strategy_parameters,
+            allowed_regimes=selected_candidate.allowed_regimes,
+            base_config=base_config,
         )
-        cache_underlying = dataset.observations[0].underlying.upper() if dataset.observations else ""
-        research_inputs = research_market_inputs(config.get("execution", {}))
-        input_day = date.today()
-        cache_key = (
-            dataset.source_sha256,
-            cache_underlying,
-            iv_settings,
-            int(market.get("maximum_snapshot_age_sessions", 1)),
-            research_inputs.rate(input_day).value,
-            research_inputs.dividend_yield(cache_underlying, input_day).value,
-        )
-        cached_history = _LONG_VOL_IV_HISTORY_CACHE.get(cache_key)
-        if cached_history is None:
-            histories: dict[str, list[tuple[datetime, float]]] = {}
-            for historical in dataset.observations:
-                if historical.chain is None:
-                    continue
-                snapshot_index = date_to_index.get(historical.chain.as_of)
-                observation_index = date_to_index.get(historical.as_of)
-                if (
-                    snapshot_index is None or observation_index is None
-                    or snapshot_index > observation_index
-                    or observation_index - snapshot_index > int(market.get("maximum_snapshot_age_sessions", 1))
-                ):
-                    continue
-                sample = atm_implied_volatility(historical.chain, strategy_section)
-                if sample is not None:
-                    histories.setdefault(historical.underlying.upper(), []).append((historical.as_of, sample))
-            cached_history = {
-                symbol: (
-                    [stamp for stamp, _value in ordered],
-                    [value for _stamp, value in ordered],
-                )
-                for symbol, values in histories.items()
-                for ordered in [sorted(values)]
-            }
-            if len(_LONG_VOL_IV_HISTORY_CACHE) >= _LONG_VOL_IV_HISTORY_CACHE_LIMIT:
-                _LONG_VOL_IV_HISTORY_CACHE.pop(next(iter(_LONG_VOL_IV_HISTORY_CACHE)))
-            _LONG_VOL_IV_HISTORY_CACHE[cache_key] = cached_history
-        iv_history_by_underlying = cached_history
+        strategy_definitions[name] = {
+            "candidate": selected_candidate,
+            "instance": strategy_instance,
+            "section": strategy_section,
+            "needs_iv_history": name == "long_volatility" or (
+                name == "vrp" and strategy_section.get("min_iv_percentile") is not None
+            ),
+        }
+    if not strategy_definitions:
+        raise ValueError("portfolio replay needs at least one enabled strategy")
+    strategy_name = next(iter(strategy_definitions))
+    date_to_index = {
+        (row.underlying.upper(), row.as_of): index
+        for index, row in enumerate(dataset.observations)
+    }
+    iv_history_by_underlying: dict[tuple[str, str], list[tuple[datetime, float]]] = {}
+    # Build IV history during the chronological replay so lazy chain batches
+    # stay disk-backed and prior observations cannot leak into earlier dates.
     initial_equity = float(config.get("starting_equity", 100000))
     if initial_equity <= 0 or not math.isfinite(initial_equity):
         raise ValueError("starting_equity must be positive and finite")
     max_contracts = int(execution_values.get("maximum_contracts_per_trade", 1))
     risk_per_trade = float(execution_values["max_risk_per_trade_pct"])
-    if strategy_name == "long_volatility":
-        risk_per_trade = min(
-            risk_per_trade,
-            float(strategy_section.get("max_risk_per_trade_pct", risk_per_trade)),
-        )
     max_total_risk = float(execution_values.get("max_total_defined_risk_pct", 0.10))
     minimum_chain_contracts = int(market.get("minimum_contracts_per_chain", 20))
     maximum_spread = float(market.get("maximum_leg_spread_pct", 0.25))
@@ -307,6 +281,7 @@ def simulate_options_strategy(
     realized_cash = 0.0
     curve: list[dict] = []
     quality = {
+        "observations_total": len(observations),
         "missing_chain_observations": 0,
         "stale_chain_observations": 0,
         "low_liquidity_signals": 0,
@@ -324,8 +299,7 @@ def simulate_options_strategy(
     }
     greek_peaks = {"delta_notional": 0.0, "gamma_pnl_1pct": 0.0, "vega_per_vol_point": 0.0, "theta_per_day": 0.0}
     last_equity = initial_equity
-    long_vol_entry_session = None
-    long_vol_entries_this_session = 0
+    long_vol_entries_by_session: dict[tuple[str, date], int] = {}
     total_attribution = {"delta": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0, "residual": 0.0}
 
     def current_chain(observation: ResearchObservation):
@@ -337,8 +311,9 @@ def simulate_options_strategy(
         if chain is None:
             quality["missing_chain_observations"] += 1
             return None
-        snapshot_index = date_to_index.get(chain.as_of)
-        current_index = date_to_index.get(observation.as_of)
+        symbol = observation.underlying.upper()
+        snapshot_index = date_to_index.get((symbol, chain.as_of))
+        current_index = date_to_index.get((symbol, observation.as_of))
         age = current_index - snapshot_index if snapshot_index is not None and current_index is not None else 10**6
         if age > max_snapshot_age:
             quality["stale_chain_observations"] += 1
@@ -358,7 +333,7 @@ def simulate_options_strategy(
         trade.pnl = trade.cashflow
         realized_cash += trade.cashflow
         closed_trades.append({
-            "strategy": strategy_name,
+            "strategy": trade.strategy_name,
             "structure_type": trade.signal.structure.structure_type,
             "structure_id": trade.signal.structure.structure_id,
             "entry_at": trade.entry_at.isoformat(),
@@ -541,6 +516,12 @@ def simulate_options_strategy(
             trade.greek_path[-1] = greek_row
         else:
             trade.greek_path.append(greek_row)
+        trade.current_exposures = {
+            "delta_notional": delta_notional,
+            "gamma_pnl_1pct": gamma_1pct,
+            "vega_per_vol_point": vega_point,
+            "theta_per_day": exposures["theta_per_day"],
+        }
         return equity_value, daily_attribution, exposures
 
     def _pnl_if_closed(trade: _OpenTrade, chain_by_symbol: dict[str, ChainQuote]) -> float | None:
@@ -604,27 +585,91 @@ def simulate_options_strategy(
         trade.exit_reason = exit_reason
         close_share_inventory(trade, observation.spot)
 
-    progress = _ReplayProgress(len(observations))
+    progress = _ReplayProgress(len(observations), callback=progress_callback)
+    session_date: date | None = None
+    session_attribution = {key: 0.0 for key in total_attribution}
+    session_regimes: set[str] = set()
+    session_volatility_states: set[str] = set()
+    last_observation_by_symbol = {
+        item.underlying.upper(): item for item in observations
+    }
+    observation_count_by_symbol: dict[str, int] = {}
+    for item in observations:
+        key = item.underlying.upper()
+        observation_count_by_symbol[key] = observation_count_by_symbol.get(key, 0) + 1
+    seen_observation_count_by_symbol: dict[str, int] = {}
+
+    def finish_session() -> None:
+        nonlocal last_equity
+        if session_date is None:
+            return
+        current_equity = initial_equity + realized_cash
+        for trade in active:
+            option_value = sum(
+                state.signed_contracts * execution.exit_fill(state.last_quote, state.signed_contracts)
+                * state.contract.multiplier
+                for state in trade.legs.values()
+                if state.signed_contracts and state.last_quote is not None and is_two_sided(state.last_quote)
+            )
+            current_equity += trade.cashflow + trade.shares * float(trade.last_spot or trade.entry_spot) + option_value
+        daily_pnl = current_equity - last_equity
+        daily_greeks = {
+            "delta_notional": sum(item.current_exposures.get("delta_notional", 0.0) for item in active),
+            "gamma_pnl_1pct": sum(item.current_exposures.get("gamma_pnl_1pct", 0.0) for item in active),
+            "vega_per_vol_point": sum(item.current_exposures.get("vega_per_vol_point", 0.0) for item in active),
+            "theta_per_day": sum(item.current_exposures.get("theta_per_day", 0.0) for item in active),
+        }
+        for key, value in daily_greeks.items():
+            greek_peaks[key] = max(greek_peaks[key], abs(value))
+        attribution = dict(session_attribution)
+        attribution["residual"] = daily_pnl - sum(
+            attribution[key] for key in ("delta", "gamma", "vega", "theta")
+        )
+        for key, value in attribution.items():
+            total_attribution[key] += value
+        curve.append({
+            "date": session_date.isoformat(),
+            "equity": current_equity,
+            "daily_pnl": daily_pnl,
+            "return": daily_pnl / last_equity if last_equity else 0.0,
+            "regime": ",".join(sorted(session_regimes)) or "unknown",
+            "volatility_state": ",".join(sorted(session_volatility_states)) or "unknown",
+            "greeks": daily_greeks,
+            "attribution": attribution,
+            "open_structures": len(active),
+        })
+        last_equity = current_equity
+
     for obs_index, observation in enumerate(observations):
-        progress.tick(obs_index, observation.as_of)
+        progress.tick(obs_index + 1, observation.as_of)
         observation_session = observation.as_of.date()
-        if observation_session != long_vol_entry_session:
-            long_vol_entry_session = observation_session
-            long_vol_entries_this_session = 0
+        symbol = observation.underlying.upper()
+        if session_date is None:
+            session_date = observation_session
+        elif observation_session != session_date:
+            finish_session()
+            session_date = observation_session
+            session_attribution = {key: 0.0 for key in total_attribution}
+            session_regimes.clear()
+            session_volatility_states.clear()
+        session_regimes.add(observation.regime or "unknown")
+        session_volatility_states.add(observation.volatility_state or "unknown")
         chain = None
         chain = current_chain(observation)
         if chain is not None:
             chain = _widen_chain(chain, spread_width_multiplier)
         chain_by_symbol = chain.symbol_index() if chain is not None else {}
         day_attribution = {"delta": 0.0, "gamma": 0.0, "vega": 0.0, "theta": 0.0, "residual": 0.0}
-        daily_greeks = {key: 0.0 for key in greek_peaks}
         newly_opened: list[_OpenTrade] = []
         for trade in list(active):
+            if trade.signal.underlying.upper() != symbol:
+                continue
+            trade_definition = strategy_definitions[trade.strategy_name]
+            trade_strategy = trade_definition["instance"]
+            trade_section = trade_definition["section"]
             marked_value, attribution, exposures = mark_and_manage(trade, observation, chain, chain_by_symbol)
             for key in ("delta", "gamma", "vega", "theta"):
                 day_attribution[key] += attribution[key]
-            for key in daily_greeks:
-                daily_greeks[key] += exposures[key]
             if all(state.signed_contracts == 0 for state in trade.legs.values()):
                 trade.exit_at = observation.as_of
                 trade.exit_reason = "assignment_or_expiration"
@@ -633,22 +678,22 @@ def simulate_options_strategy(
                 realized_cash = sum(float(item["pnl"]) for item in closed_trades)
             else:
                 exit_reason = None
-                if strategy_name == "vrp":
+                if trade.strategy_name == "vrp":
                     held_days = max(0, (observation.as_of.date() - trade.entry_at.date()).days)
                     exit_reason = vrp_exit_reason(
                         entry_credit=trade.entry_credit,
                         pnl_if_closed=_pnl_if_closed(trade, chain_by_symbol),
                         held_days=held_days,
-                        config=strategy_section,
+                        config=trade_section,
                     )
-                if strategy_name == "long_volatility":
+                if trade.strategy_name == "long_volatility":
                     held_days = max(0, (observation.as_of.date() - trade.entry_at.date()).days)
                     open_dtes = [
                         (state.contract.expiration - observation.as_of.date()).days
                         for state in trade.legs.values() if state.signed_contracts
                     ]
                     package_value = marked_value - trade.cashflow - trade.shares * observation.spot
-                    exit_reason = strategy.exit_reason(
+                    exit_reason = trade_strategy.exit_reason(
                         entry_debit=trade.entry_debit,
                         current_value=package_value,
                         held_days=held_days,
@@ -658,7 +703,7 @@ def simulate_options_strategy(
                             trade.signal.data_quality.get("activation_state")
                             or trade.entry_regime
                         ),
-                        config=strategy_section,
+                        config=trade_section,
                     )
                 expired = all(state.contract.expiration <= observation.as_of.date() for state in trade.legs.values() if state.signed_contracts)
                 if exit_reason:
@@ -677,25 +722,70 @@ def simulate_options_strategy(
                     active.remove(trade)
                     realized_cash = sum(float(item["pnl"]) for item in closed_trades)
 
-        daily_entry_room = (
-            strategy_name != "long_volatility"
-            or long_vol_entries_this_session < int(strategy_section.get("max_entries_per_day", 1))
-        )
-        if chain is not None and len(chain.contracts) >= minimum_chain_contracts and not active and daily_entry_room:
-            threshold_activation = (
-                strategy_name == "long_volatility"
-                and strategy_section.get("activation_mode") == "regime_or_realized_vol"
+        entry_signals = []
+        iv_samples = {}
+        if chain is not None and len(chain.contracts) >= minimum_chain_contracts:
+            max_lookback = max((
+                int(definition["section"].get("realized_lookback_sessions", 0)) + 1
+                for definition in strategy_definitions.values()
+            ), default=2)
+            closes = dataset.provider.underlying_closes(
+                observation.underlying, as_of=observation.as_of,
+                sessions=max(3, max_lookback),
             )
-            if threshold_activation or _regime_allowed(observation.regime, observation.volatility_state, candidate.allowed_regimes):
-                dte_min = max(0, int(strategy_section.get("min_dte", 0)))
-                dte_max = int(strategy_section.get("max_dte", 730))
-                closes = dataset.provider.underlying_closes(
-                    observation.underlying, as_of=observation.as_of,
-                    sessions=max(3, int(strategy_section.get("realized_lookback_sessions", 0)) + 1),
+            iv_contexts = {}
+            for history_name, definition in strategy_definitions.items():
+                if not definition["needs_iv_history"]:
+                    continue
+                if history_name in strategy_universes and symbol not in strategy_universes[history_name]:
+                    continue
+                history_section = definition["section"]
+                try:
+                    atm_iv = atm_implied_volatility(chain, history_section)
+                except (ValueError, ArithmeticError, OverflowError):
+                    atm_iv = None
+                iv_samples[history_name] = atm_iv
+                prior = iv_history_by_underlying.get((history_name, symbol), [])
+                lookback = int(history_section.get("iv_percentile_lookback_sessions", 252))
+                prior_values = [value for stamp, value in prior if stamp < observation.as_of][-lookback:]
+                percentile = historical_iv_percentile(
+                    atm_iv,
+                    prior_values,
+                    min_samples=int(history_section.get("iv_rank_min_samples", 20)),
+                ) if atm_iv is not None else None
+                iv_contexts[history_name] = (percentile, len(prior_values))
+                if percentile is None:
+                    quality["iv_rank_warmup_skips"] += 1
+            for current_name, definition in strategy_definitions.items():
+                if current_name in strategy_universes and symbol not in strategy_universes[current_name]:
+                    continue
+                if any(
+                    trade.signal.underlying.upper() == symbol and trade.strategy_name == current_name
+                    for trade in active
+                ):
+                    continue
+                current_candidate = definition["candidate"]
+                current_strategy = definition["instance"]
+                current_section = definition["section"]
+                session_key = (symbol, observation_session)
+                if (
+                    current_name == "long_volatility"
+                    and long_vol_entries_by_session.get(session_key, 0)
+                    >= int(current_section.get("max_entries_per_day", 1))
+                ):
+                    continue
+                threshold_activation = (
+                    current_name == "long_volatility"
+                    and current_section.get("activation_mode") == "regime_or_realized_vol"
                 )
+                if not threshold_activation and not _regime_allowed(
+                    observation.regime, observation.volatility_state,
+                    current_candidate.allowed_regimes,
+                ):
+                    continue
                 context = OptionsStrategyContext(
                     chain=chain,
-                    underlying_closes=closes,
+                    underlying_closes=closes[-max(3, int(current_section.get("realized_lookback_sessions", 0)) + 1):],
                     regime=observation.regime,
                     volatility_state=observation.volatility_state,
                     events=observation.events,
@@ -703,221 +793,205 @@ def simulate_options_strategy(
                     equity_signals=observation.equity_signals,
                     as_of=observation.as_of,
                 )
-                if needs_iv_history:
-                    atm_iv = atm_implied_volatility(chain, strategy_section)
-                    prior_stamps, prior_values = iv_history_by_underlying.get(
-                        observation.underlying.upper(), ([], []),
-                    )
-                    history_end = bisect_left(prior_stamps, observation.as_of)
-                    lookback = int(strategy_section.get("iv_percentile_lookback_sessions", 252))
-                    prior_values_window = prior_values[max(0, history_end - lookback):history_end]
-                    percentile = historical_iv_percentile(
-                        atm_iv,
-                        prior_values_window,
-                        min_samples=int(strategy_section.get("iv_rank_min_samples", 20)),
-                    )
+                if current_name in iv_contexts:
+                    percentile, sample_count = iv_contexts[current_name]
                     context = replace(
                         context,
                         iv_percentile=percentile,
-                        iv_percentile_samples=len(prior_values_window),
+                        iv_percentile_samples=sample_count,
                         iv_percentile_source="historical_chain_atm_iv",
                     )
-                    if percentile is None:
-                        quality["iv_rank_warmup_skips"] += 1
                 try:
-                    signal = strategy.generate(context)
+                    signal = current_strategy.generate(context)
                 except (ValueError, ArithmeticError, OverflowError):
                     signal = None
                 if signal is not None:
-                    quality["signals_seen"] += 1
-                    liquidity = assess_structure_liquidity(
-                        signal.structure,
-                        chain_by_symbol,
-                        maximum_spread_pct=min(maximum_spread, float(strategy_section.get("max_spread_pct", maximum_spread))),
-                        minimum_open_interest=minimum_oi,
-                        require_open_interest=require_oi,
+                    entry_signals.append((signal, current_name, current_candidate, current_section))
+            for current_name, sample in iv_samples.items():
+                if sample is not None:
+                    iv_history_by_underlying.setdefault((current_name, symbol), []).append(
+                        (observation.as_of, sample),
                     )
-                    stale_symbols = []
-                    for leg in signal.structure.legs:
-                        quote = chain_by_symbol.get(leg.contract.symbol)
-                        if quote is None:
-                            continue
-                        age = (observation.as_of - quote.observed_at).total_seconds()
-                        if age < 0 or age > maximum_quote_age:
-                            stale_symbols.append(leg.contract.symbol)
-                    if stale_symbols:
-                        quality["stale_entry_quote_legs"] += len(stale_symbols)
-                        liquidity = replace(
-                            liquidity, eligible=False,
-                            reasons=liquidity.reasons + tuple(f"stale_quote:{symbol}" for symbol in stale_symbols),
+        quality["signals_seen"] += len(entry_signals)
+        if entry_signals:
+            signal, strategy_name, candidate, strategy_section = max(
+                entry_signals, key=lambda row: float(row[0].confidence),
+            )
+            liquidity = assess_structure_liquidity(
+                signal.structure,
+                chain_by_symbol,
+                maximum_spread_pct=min(maximum_spread, float(strategy_section.get("max_spread_pct", maximum_spread))),
+                minimum_open_interest=minimum_oi,
+                require_open_interest=require_oi,
+            )
+            stale_symbols = []
+            for leg in signal.structure.legs:
+                quote = chain_by_symbol.get(leg.contract.symbol)
+                if quote is None:
+                    continue
+                age = (observation.as_of - quote.observed_at).total_seconds()
+                if age < 0 or age > maximum_quote_age:
+                    stale_symbols.append(leg.contract.symbol)
+            if stale_symbols:
+                quality["stale_entry_quote_legs"] += len(stale_symbols)
+                liquidity = replace(
+                    liquidity, eligible=False,
+                    reasons=liquidity.reasons + tuple(f"stale_quote:{symbol}" for symbol in stale_symbols),
+                )
+            quality["missing_open_interest_legs"] += liquidity.missing_open_interest_legs
+            quality["low_open_interest_legs"] += liquidity.low_open_interest_legs
+            if not liquidity.eligible:
+                quality["low_liquidity_signals"] += 1
+            else:
+                contracts = min(max_contracts, int(signal.desired_contracts))
+                premium_cap = signal.data_quality.get("max_premium_per_trade_usd")
+                if premium_cap is not None and signal.structure.risk.premium_at_risk > 0:
+                    contracts = min(
+                        contracts,
+                        int(float(premium_cap) // signal.structure.risk.premium_at_risk),
+                    )
+                package_greeks = _package_greeks(signal.structure, chain.spot)
+                limits = {
+                    "delta_notional": initial_equity * float(greek_limits.get("max_abs_delta_notional_pct_equity", 0.75)),
+                    "gamma_pnl_1pct": initial_equity * float(greek_limits.get("max_abs_gamma_pnl_1pct_pct_equity", 0.005)),
+                    "vega_per_vol_point": initial_equity * float(greek_limits.get("max_abs_vega_per_vol_point_pct_equity", 0.01)),
+                    "theta_per_day": initial_equity * float(greek_limits.get("max_abs_theta_per_day_pct_equity", 0.001)),
+                }
+                greek_rejected = False
+                for greek_name, exposure in package_greeks.items():
+                    exposure_abs = abs(exposure)
+                    limit = limits[greek_name]
+                    if exposure_abs > 0:
+                        current_exposure = sum(
+                            abs(trade.current_exposures.get(greek_name, 0.0))
+                            for trade in active
                         )
-                    quality["missing_open_interest_legs"] += liquidity.missing_open_interest_legs
-                    quality["low_open_interest_legs"] += liquidity.low_open_interest_legs
-                    if not liquidity.eligible:
-                        quality["low_liquidity_signals"] += 1
-                    else:
-                        contracts = min(max_contracts, int(signal.desired_contracts))
-                        premium_cap = signal.data_quality.get("max_premium_per_trade_usd")
-                        if premium_cap is not None and signal.structure.risk.premium_at_risk > 0:
-                            contracts = min(
-                                contracts,
-                                int(float(premium_cap) // signal.structure.risk.premium_at_risk),
-                            )
-                        package_greeks = _package_greeks(signal.structure, chain.spot)
-                        limits = {
-                            "delta_notional": initial_equity * float(greek_limits.get("max_abs_delta_notional_pct_equity", 0.75)),
-                            "gamma_pnl_1pct": initial_equity * float(greek_limits.get("max_abs_gamma_pnl_1pct_pct_equity", 0.005)),
-                            "vega_per_vol_point": initial_equity * float(greek_limits.get("max_abs_vega_per_vol_point_pct_equity", 0.01)),
-                            "theta_per_day": initial_equity * float(greek_limits.get("max_abs_theta_per_day_pct_equity", 0.001)),
-                        }
-                        greek_rejected = False
-                        for greek_name, exposure in package_greeks.items():
-                            exposure_abs = abs(exposure)
-                            limit = limits[greek_name]
-                            if exposure_abs > 0:
-                                if limit <= 0:
-                                    contracts = 0
-                                    greek_rejected = True
-                                    break
-                                contracts = min(contracts, int(limit // exposure_abs))
-                        if signal.structure.risk.assignment_share_exposure * contracts > int(greek_limits.get("max_assignment_shares", 200)):
+                        available = limit - current_exposure
+                        if available <= 0:
                             contracts = 0
                             greek_rejected = True
-                        if contracts < 1:
-                            quality["greek_limit_rejections"] += int(greek_rejected)
-                            quality["signals_unfilled"] += 1
-                        if not all(is_two_sided(chain_by_symbol[leg.contract.symbol]) for leg in signal.structure.legs):
-                            contracts = 0
-                            quality["signals_unquoted"] = quality.get("signals_unquoted", 0) + 1
-                        entry_costs = structure_entry_cost(signal.structure, chain_by_symbol, execution, contracts) if contracts > 0 else 0.0
-                        regime_weight = float(signal.data_quality.get("regime_risk_multiplier", 1.0))
-                        budget = initial_equity * risk_per_trade * regime_weight
-                        total_open_risk = signal.structure.risk.max_loss * contracts + entry_costs
-                        if contracts > 0 and signal.structure.risk.defined_risk and total_open_risk <= budget and total_open_risk <= initial_equity * max_total_risk:
-                            fill_key = f"entry:{observation.as_of.date()}:{observation.underlying}"
-                            gross_entry_cashflow = sum(
-                                -leg.signed_ratio * contracts
-                                * execution.entry_fill(chain_by_symbol[leg.contract.symbol], leg.side)
-                                * leg.contract.multiplier
-                                for leg in signal.structure.legs
+                            break
+                        contracts = min(contracts, int(available // exposure_abs))
+                current_assignment_shares = sum(
+                    abs(trade.signal.structure.risk.assignment_share_exposure * trade.contracts)
+                    for trade in active
+                )
+                if current_assignment_shares + signal.structure.risk.assignment_share_exposure * contracts > int(greek_limits.get("max_assignment_shares", 200)):
+                    contracts = 0
+                    greek_rejected = True
+                if contracts < 1:
+                    quality["greek_limit_rejections"] += int(greek_rejected)
+                    quality["signals_unfilled"] += 1
+                if not all(is_two_sided(chain_by_symbol[leg.contract.symbol]) for leg in signal.structure.legs):
+                    contracts = 0
+                    quality["signals_unquoted"] = quality.get("signals_unquoted", 0) + 1
+                entry_costs = structure_entry_cost(signal.structure, chain_by_symbol, execution, contracts) if contracts > 0 else 0.0
+                regime_weight = float(signal.data_quality.get("regime_risk_multiplier", 1.0))
+                risk_per_trade = float(execution_values["max_risk_per_trade_pct"])
+                if strategy_name == "long_volatility":
+                    risk_per_trade = min(
+                        risk_per_trade,
+                        float(strategy_section.get("max_risk_per_trade_pct", risk_per_trade)),
+                    )
+                budget = initial_equity * risk_per_trade * regime_weight
+                new_trade_risk = signal.structure.risk.max_loss * contracts + entry_costs
+                current_open_risk = sum(
+                    trade.signal.structure.risk.max_loss * trade.contracts + trade.entry_costs
+                    for trade in active
+                )
+                if (
+                    contracts > 0 and signal.structure.risk.defined_risk
+                    and new_trade_risk <= budget
+                    and current_open_risk + new_trade_risk <= initial_equity * max_total_risk
+                ):
+                    fill_key = f"entry:{observation.as_of.date()}:{observation.underlying}:{strategy_name}"
+                    gross_entry_cashflow = sum(
+                        -leg.signed_ratio * contracts
+                        * execution.entry_fill(chain_by_symbol[leg.contract.symbol], leg.side)
+                        * leg.contract.multiplier
+                        for leg in signal.structure.legs
+                    )
+                    credit_remains_credit = (
+                        signal.structure.net_debit_per_share >= 0 or gross_entry_cashflow > 0
+                    )
+                    package_fill_probability = execution.package_fill_probability(len(signal.structure.legs))
+                    fill_draw = _hash_uniform(seed, fill_key)
+                    if credit_remains_credit and fill_draw <= package_fill_probability:
+                        entry_cashflow = 0.0
+                        states = {}
+                        realized_entry_slippage = 0.0
+                        for leg in signal.structure.legs:
+                            quote = chain_by_symbol[leg.contract.symbol]
+                            fill = execution.entry_fill(quote, leg.side)
+                            signed_qty = leg.signed_ratio * contracts
+                            entry_cashflow -= signed_qty * fill * leg.contract.multiplier
+                            midpoint = (quote.bid + quote.ask) / 2.0
+                            realized_entry_slippage += abs(fill - midpoint) * leg.ratio_qty * contracts * leg.contract.multiplier
+                            states[leg.contract.symbol] = _LegPosition(
+                                contract=leg.contract,
+                                signed_contracts=signed_qty,
+                                last_quote=quote,
+                                last_greeks=quote.greeks,
+                                last_iv=quote.greeks.implied_volatility,
+                                last_spot=observation.spot,
                             )
-                            credit_remains_credit = (
-                                signal.structure.net_debit_per_share >= 0 or gross_entry_cashflow > 0
-                            )
-                            package_fill_probability = execution.package_fill_probability(len(signal.structure.legs))
-                            fill_draw = _hash_uniform(seed, fill_key)
-                            if credit_remains_credit and fill_draw <= package_fill_probability:
-                                entry_cashflow = 0.0
-                                states = {}
-                                realized_entry_slippage = 0.0
-                                for leg in signal.structure.legs:
-                                    quote = chain_by_symbol[leg.contract.symbol]
-                                    fill = execution.entry_fill(quote, leg.side)
-                                    signed_qty = leg.signed_ratio * contracts
-                                    entry_cashflow -= signed_qty * fill * leg.contract.multiplier
-                                    midpoint = (quote.bid + quote.ask) / 2.0
-                                    realized_entry_slippage += abs(fill - midpoint) * leg.ratio_qty * contracts * leg.contract.multiplier
-                                    states[leg.contract.symbol] = _LegPosition(
-                                        contract=leg.contract,
-                                        signed_contracts=signed_qty,
-                                        last_quote=quote,
-                                        last_greeks=quote.greeks,
-                                        last_iv=quote.greeks.implied_volatility,
-                                        last_spot=observation.spot,
-                                    )
-                                commission = execution.commission(contracts, sum(leg.ratio_qty for leg in signal.structure.legs))
-                                entry_cashflow -= commission
-                                entry_cost_total = realized_entry_slippage + commission
-                                signal_structure = replace(
-                                    signal.structure,
-                                    metadata={**signal.structure.metadata, "underlying_spot": chain.spot},
-                                )
-                                signal = replace(signal, structure=signal_structure)
-                                active.append(_OpenTrade(
-                                    signal=signal,
-                                    contracts=contracts,
-                                    entry_at=observation.as_of,
-                                    entry_regime=observation.regime,
-                                    entry_spot=observation.spot,
-                                    entry_debit=max(0.0, -gross_entry_cashflow),
-                                    entry_credit=max(0.0, gross_entry_cashflow),
-                                    cashflow=entry_cashflow,
-                                    legs=states,
-                                    entry_costs=entry_cost_total,
-                                    last_spot=observation.spot,
-                                ))
-                                newly_opened.append(active[-1])
-                                quality["signals_filled"] += 1
-                                if strategy_name == "long_volatility":
-                                    long_vol_entries_this_session += 1
-                            else:
-                                quality["signals_unfilled"] += 1
-                                if credit_remains_credit and len(signal.structure.legs) > 1 and fill_draw > package_fill_probability:
-                                    quality["multileg_order_no_fills"] += 1
-                        elif contracts > 0:
-                            quality["risk_limit_rejections"] += 1
+                        commission = execution.commission(contracts, sum(leg.ratio_qty for leg in signal.structure.legs))
+                        entry_cashflow -= commission
+                        entry_cost_total = realized_entry_slippage + commission
+                        signal_structure = replace(
+                            signal.structure,
+                            metadata={**signal.structure.metadata, "underlying_spot": chain.spot},
+                        )
+                        signal = replace(signal, structure=signal_structure)
+                        active.append(_OpenTrade(
+                            signal=signal,
+                            strategy_name=strategy_name,
+                            contracts=contracts,
+                            entry_at=observation.as_of,
+                            entry_regime=observation.regime,
+                            entry_spot=observation.spot,
+                            entry_debit=max(0.0, -gross_entry_cashflow),
+                            entry_credit=max(0.0, gross_entry_cashflow),
+                            cashflow=entry_cashflow,
+                            legs=states,
+                            entry_costs=entry_cost_total,
+                            last_spot=observation.spot,
+                        ))
+                        newly_opened.append(active[-1])
+                        quality["signals_filled"] += 1
+                        if strategy_name == "long_volatility":
+                            session_key = (symbol, observation_session)
+                            long_vol_entries_by_session[session_key] = long_vol_entries_by_session.get(session_key, 0) + 1
+                    else:
+                        quality["signals_unfilled"] += 1
+                        if credit_remains_credit and len(signal.structure.legs) > 1 and fill_draw > package_fill_probability:
+                            quality["multileg_order_no_fills"] += 1
+                elif contracts > 0:
+                    quality["risk_limit_rejections"] += 1
 
         for trade in newly_opened:
             _, attribution, exposures = mark_and_manage(trade, observation, chain, chain_by_symbol)
             for key in ("delta", "gamma", "vega", "theta"):
                 day_attribution[key] += attribution[key]
-            for key in daily_greeks:
-                daily_greeks[key] += exposures[key]
             if all(state.signed_contracts == 0 for state in trade.legs.values()):
                 trade.exit_at = observation.as_of
                 trade.exit_reason = "assignment_at_entry"
                 close_share_inventory(trade, observation.spot)
                 active.remove(trade)
                 realized_cash = sum(float(item["pnl"]) for item in closed_trades)
-        for key, value in daily_greeks.items():
-            greek_peaks[key] = max(greek_peaks[key], abs(value))
-        current_equity = initial_equity + realized_cash + sum(
-            trade.cashflow
-            + trade.shares * observation.spot
-            + sum(
-                state.signed_contracts * execution.exit_fill(state.last_quote, state.signed_contracts) * state.contract.multiplier
-                for state in trade.legs.values()
-                if state.signed_contracts and state.last_quote is not None and is_two_sided(state.last_quote)
-            )
-            for trade in active
-        )
-        daily_pnl = current_equity - last_equity
-        # Daily attribution also includes commissions, spread crossing, and
-        # exercise settlement in the residual term.
-        attribution_total = sum(day_attribution.values())
-        day_attribution["residual"] = daily_pnl - attribution_total
-        for key in total_attribution:
-            total_attribution[key] += day_attribution[key]
-        curve.append({
-            "date": observation.as_of.isoformat(),
-            "equity": current_equity,
-            "daily_pnl": daily_pnl,
-            "return": daily_pnl / last_equity if last_equity else 0.0,
-            "regime": observation.regime,
-            "volatility_state": observation.volatility_state,
-            "greeks": dict(daily_greeks),
-            "attribution": dict(day_attribution),
-            "open_structures": len(active),
-        })
-        last_equity = current_equity
+        for key in ("delta", "gamma", "vega", "theta"):
+            session_attribution[key] += day_attribution[key]
+        seen_observation_count_by_symbol[symbol] = seen_observation_count_by_symbol.get(symbol, 0) + 1
+        if force_close and seen_observation_count_by_symbol[symbol] == observation_count_by_symbol[symbol]:
+            final_observation = last_observation_by_symbol[symbol]
+            for trade in list(active):
+                if trade.signal.underlying.upper() != symbol:
+                    continue
+                close_at_window_end(trade, final_observation, chain_by_symbol)
+                active.remove(trade)
+                realized_cash = sum(float(item["pnl"]) for item in closed_trades)
 
-    if force_close and active:
-        observation = observations[-1]
-        chain = current_chain(observation)
-        if chain is not None:
-            chain = _widen_chain(chain, spread_width_multiplier)
-        chain_by_symbol = chain.symbol_index() if chain else {}
-        for trade in list(active):
-            close_at_window_end(trade, observation, chain_by_symbol)
-            active.remove(trade)
-        realized_cash = sum(float(item["pnl"]) for item in closed_trades)
-        current_equity = initial_equity + realized_cash
-        if curve:
-            prior = curve[-1]["equity"]
-            curve[-1]["daily_pnl"] = current_equity - (curve[-2]["equity"] if len(curve) > 1 else initial_equity)
-            curve[-1]["equity"] = current_equity
-            curve[-1]["return"] = curve[-1]["daily_pnl"] / (curve[-2]["equity"] if len(curve) > 1 else initial_equity)
-            curve[-1]["attribution"]["residual"] += current_equity - prior
+    finish_session()
 
     regime_breakdown = {}
     volatility_breakdown = {}

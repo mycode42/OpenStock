@@ -36,7 +36,7 @@ def test_missing_chain_dataset_generates_separate_waiting_report(tmp_path):
     checkpoint = automation.OptionsHistoryStore(tmp_path / "history.sqlite3").read_automation_checkpoint(
         report["run_id"],
     )
-    assert checkpoint["schema"] == "swarm_options_automation_checkpoint_v1"
+    assert checkpoint["schema"] == "swarm_options_automation_checkpoint_v2"
     assert report["checkpoint_location"].endswith(f"#{report['run_id']}")
 
 
@@ -47,24 +47,26 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
     config_path = _write_config(tmp_path, data_path=dataset_path, strategies=["llm_driven"])
     calls = []
 
-    def fake_run_research(strategy, *, config_path, data_path, underlying, parallel_workers, replay_only=False):
-        calls.append((strategy, config_path, data_path, underlying, parallel_workers, replay_only))
-        return {
-            "run_id": "event-run-1", "run_dir": str(tmp_path / "runs" / "event-run-1"),
-            "underlying": "SPY", "data_mode": "historical_chains",
-            "validation": {"approved": False, "minimum_oos_trades_met": True},
-            "walk_forward": {"oos_metrics": {"trade_count": 10, "annualized_sharpe": 0.7}},
-            "final_parameters": {"min_move_edge_pct": 0.15},
-        }
+    def fake_portfolio_replay(config, *, strategies, underlyings_by_strategy, data_paths, workers, progress_callback=None):
+        calls.append((strategies, underlyings_by_strategy, data_paths, workers))
+        return ({
+            "metrics": {"trade_count": 10, "total_return": 0.08, "annualized_sharpe": 0.7,
+                        "max_drawdown": 0.04},
+            "trades": [{"strategy": "llm_driven", "underlying": "SPY", "pnl": 800.0}],
+            "underlyings": ["SPY"], "underlyings_by_strategy": {"llm_driven": ["SPY"]},
+            "sleeve_metrics": {"llm_driven": {"trades": 10, "net_pnl_usd": 800.0}},
+            "period_start": "2020-01-02T21:00:00+00:00", "period_end": "2026-11-09T21:00:00+00:00",
+            "starting_equity": 100000.0, "data_mode": "historical_chains",
+        }, {}, {"SPY": {"chain_workers_used": 4}})
 
-    monkeypatch.setattr(automation, "run_research", fake_run_research)
+    monkeypatch.setattr(automation, "_run_portfolio_replay", fake_portfolio_replay)
 
     report = automation.run_automated_options_research(config_path=config_path)
 
-    assert calls == [("llm_driven", config_path.resolve(), dataset_path.resolve(), "SPY", 4, True)]
+    assert calls == [(["llm_driven"], {"llm_driven": ["SPY"]}, {"SPY": dataset_path.resolve()}, 4)]
     assert report["status"] == "completed"
-    assert report["strategies"]["llm_driven"]["walk_forward"]["trade_count"] == 10
-    assert report["strategies"]["llm_driven"]["approved"] is False
+    assert report["portfolio_replay"]["metrics"]["trade_count"] == 10
+    assert report["strategies"]["llm_driven"]["portfolio_metrics"]["net_pnl_usd"] == 800.0
     assert report["fold_workers_used_by_strategy"] == {"llm_driven": 0}
     assert report["replay_data_workers_used_by_strategy"] == {"llm_driven": 4}
 

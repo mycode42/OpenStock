@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from bisect import bisect_left
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -64,34 +65,124 @@ class OptionsResearchDataset:
     loading_parallelism: dict[str, Any]
 
 
+class PortfolioReplayChainProvider:
+    """Dispatch portfolio observations to their underlying's bounded chain cache."""
+
+    lazy_chains = True
+
+    def __init__(self, datasets: dict[str, OptionsResearchDataset]):
+        self._datasets = {symbol.upper(): dataset for symbol, dataset in datasets.items()}
+
+    def get_chain_for_observation(self, observation: ResearchObservation) -> OptionChain | None:
+        dataset = self._datasets.get(observation.underlying.upper())
+        if dataset is None:
+            return None
+        getter = getattr(dataset.provider, "get_chain_for_observation", None)
+        return getter(observation) if getter is not None else None
+
+    def underlying_closes(self, underlying: str, *, as_of: datetime, sessions: int) -> list[tuple[date, float]]:
+        dataset = self._datasets.get(underlying.upper())
+        if dataset is None:
+            return []
+        return dataset.provider.underlying_closes(underlying, as_of=as_of, sessions=sessions)
+
+
+def combine_options_research_datasets(
+    datasets: dict[str, OptionsResearchDataset],
+) -> OptionsResearchDataset:
+    """Combine per-underlying history into one chronological portfolio dataset."""
+    normalized = {str(symbol).upper(): dataset for symbol, dataset in datasets.items()}
+    if not normalized:
+        raise ValueError("portfolio dataset needs at least one underlying")
+    observations = tuple(sorted(
+        (observation for dataset in normalized.values() for observation in dataset.observations),
+        key=lambda item: (item.as_of, item.underlying.upper()),
+    ))
+    identities = [(item.underlying.upper(), item.as_of) for item in observations]
+    if len(identities) != len(set(identities)):
+        raise ValueError("portfolio dataset contains duplicate underlying/as_of observations")
+    history = {
+        symbol: tuple(dataset.underlying_history.get(symbol, ()))
+        for symbol, dataset in normalized.items()
+    }
+    source_paths = {dataset.source_path.resolve() for dataset in normalized.values()}
+    source_path = next(iter(source_paths)) if len(source_paths) == 1 else sorted(source_paths)[0]
+    source_digest = hashlib.sha256(json.dumps(
+        [(symbol, dataset.source_sha256) for symbol, dataset in sorted(normalized.items())],
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    modes = {dataset.data_mode for dataset in normalized.values()}
+    data_mode = next(iter(modes)) if len(modes) == 1 else "mixed_options_data"
+    loading_rows = {symbol: dataset.loading_parallelism for symbol, dataset in sorted(normalized.items())}
+    return OptionsResearchDataset(
+        observations=observations,
+        provider=PortfolioReplayChainProvider(normalized),
+        source_path=source_path,
+        source_sha256=source_digest,
+        data_mode=data_mode,
+        underlying_history=history,
+        loading_parallelism={
+            "source_format": "portfolio",
+            "underlyings": loading_rows,
+            "underlyings_loaded": len(normalized),
+            "observations_loaded": len(observations),
+            "chain_workers_used": max(
+                (int(row.get("chain_workers_used", 1)) for row in loading_rows.values()), default=1,
+            ),
+            "elapsed_seconds": round(sum(
+                float(row.get("elapsed_seconds", 0.0)) for row in loading_rows.values()
+            ), 3),
+        },
+    )
+
+
 class ReplayChainBatchProvider:
     """Load one prepared-chain batch at a time for chronological replay."""
 
     lazy_chains = True
 
-    def __init__(self, locations: dict[datetime, tuple[Path, int]], history: dict[str, list[tuple[date, float]]]):
+    def __init__(
+        self,
+        locations: dict[tuple[str, datetime], tuple[Path, int]],
+        history: dict[str, list[tuple[date, float]]],
+    ):
         self._locations = locations
         self._history = {key.upper(): tuple(value) for key, value in history.items()}
         self._loaded_path: Path | None = None
         self._loaded_results: list[tuple[OptionChain | None, str | None]] = []
+        self._loaded_offsets: list[int] = []
+        self._loaded_handle = None
 
     def get_chain_for_observation(self, observation: ResearchObservation) -> OptionChain | None:
-        location = self._locations.get(observation.as_of)
+        location = self._locations.get((observation.underlying.upper(), observation.as_of))
         if location is None:
             return None
         path, index = location
         if path != self._loaded_path:
             self._loaded_results = []
+            self._loaded_offsets = []
+            if self._loaded_handle is not None:
+                self._loaded_handle.close()
+                self._loaded_handle = None
             self._loaded_path = None
-            with path.open("rb") as handle:
-                payload = pickle.load(handle)
-            self._loaded_results = payload["results"]
+            self._loaded_handle = path.open("rb")
+            payload = pickle.load(self._loaded_handle)
+            if payload.get("schema") == "options_replay_chain_batch_v2":
+                self._loaded_offsets = payload["offsets"]
+            else:
+                self._loaded_results = payload["results"]
             self._loaded_path = path
-        chain, _error = self._loaded_results[index]
+        if self._loaded_offsets:
+            self._loaded_handle.seek(self._loaded_offsets[index])
+            chain, _error = pickle.load(self._loaded_handle)
+        else:
+            chain, _error = self._loaded_results[index]
         return chain
 
     def underlying_closes(self, underlying: str, *, as_of: datetime, sessions: int) -> list[tuple[date, float]]:
-        return [row for row in self._history.get(underlying.upper(), ()) if row[0] < as_of.date()][-sessions:]
+        rows = self._history.get(underlying.upper(), ())
+        end = bisect_left(rows, (as_of.date(), float("-inf")))
+        return list(rows[max(0, end - sessions):end])
 
 
 def _load_rows(path: Path) -> tuple[list[dict], dict[str, list[tuple[date, float]]], dict]:
@@ -418,8 +509,28 @@ def _write_replay_chain_batch(path: Path, refs: list[tuple[int, str]], results: 
     temporary = path.with_suffix(f".{os.getpid()}.tmp")
     try:
         with temporary.open("wb") as handle:
-            pickle.dump({"schema": "options_replay_chain_batch_v1", "refs": refs, "results": results},
-                        handle, protocol=pickle.HIGHEST_PROTOCOL)
+            lengths = [
+                len(pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL))
+                for result in results
+            ]
+            header = {
+                "schema": "options_replay_chain_batch_v2", "refs": refs,
+                "offsets": [0] * len(results),
+                "valid": [chain is not None and error is None for chain, error in results],
+            }
+            while True:
+                encoded_header = pickle.dumps(header, protocol=pickle.HIGHEST_PROTOCOL)
+                offsets = []
+                cursor = len(encoded_header)
+                for length in lengths:
+                    offsets.append(cursor)
+                    cursor += length
+                if offsets == header["offsets"]:
+                    break
+                header["offsets"] = offsets
+            handle.write(encoded_header)
+            for result in results:
+                pickle.dump(result, handle, protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(temporary, path)
     finally:
         try:
@@ -448,7 +559,7 @@ def _load_historical_database_replay(
     requested_loader_workers = min(workers, available_cpu_count())
     fork_available = "fork" in mp.get_all_start_methods()
     cache_dir = _replay_batch_cache_dir(source, target, rate, dividend_yield, requested_mode)
-    locations: dict[datetime, tuple[Path, int]] = {}
+    locations: dict[tuple[str, datetime], tuple[Path, int]] = {}
     observations: list[ResearchObservation] = []
     prepared_count = 0
     reused_count = 0
@@ -461,22 +572,40 @@ def _load_historical_database_replay(
         refs = [reference for _, reference in batch]
         cache_path = cache_dir / f"batch-{batch_start:06d}.pkl"
         results = None
+        cached_indexed_batch = False
+        cached_valid_count = 0
+        legacy_batch = False
         if cache_path.is_file():
             try:
                 with cache_path.open("rb") as handle:
                     payload = pickle.load(handle)
                 if (
-                    payload.get("schema") == "options_replay_chain_batch_v1"
+                    payload.get("schema") in {"options_replay_chain_batch_v1", "options_replay_chain_batch_v2"}
                     and payload.get("refs") == refs
-                    and isinstance(payload.get("results"), list)
-                    and len(payload["results"]) == len(batch)
+                    and (
+                        (isinstance(payload.get("results"), list) and len(payload["results"]) == len(batch))
+                        or (isinstance(payload.get("offsets"), list) and len(payload["offsets"]) == len(batch))
+                    )
                 ):
-                    results = payload["results"]
+                    if payload.get("schema") == "options_replay_chain_batch_v2":
+                        cached_indexed_batch = True
+                        cached_valid_count = sum(payload.get("valid", []))
+                    else:
+                        results = payload["results"]
+                        legacy_batch = True
             except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ImportError, ValueError, TypeError):
                 results = None
             finally:
                 if "payload" in locals():
                     del payload
+
+        if cached_indexed_batch:
+            reused_count += len(batch)
+            stored_count += cached_valid_count
+            for index, (observation, _reference) in enumerate(batch):
+                observations.append(_with_chain(observation, None, None))
+                locations[(observation.underlying.upper(), observation.as_of)] = (cache_path, index)
+            continue
 
         if results is None:
             prepared_count += len(batch)
@@ -529,10 +658,12 @@ def _load_historical_database_replay(
         else:
             reused_count += len(batch)
             stored_count += sum(chain is not None and error is None for chain, error in results)
+            if legacy_batch:
+                _write_replay_chain_batch(cache_path, refs, results)
 
         for index, ((observation, _reference), (_chain, error)) in enumerate(zip(batch, results)):
             observations.append(_with_chain(observation, None, error))
-            locations[observation.as_of] = (cache_path, index)
+            locations[(observation.underlying.upper(), observation.as_of)] = (cache_path, index)
         del results
 
     data_mode_name = "historical_chains_spot_close_proxy" if close_proxy else "historical_chains"
@@ -1134,4 +1265,7 @@ def _load_options_research_dataset_uncached(
     )
 
 
-__all__ = ["OptionsResearchDataset", "ResearchObservation", "load_options_research_dataset"]
+__all__ = [
+    "OptionsResearchDataset", "PortfolioReplayChainProvider", "ResearchObservation",
+    "combine_options_research_datasets", "load_options_research_dataset",
+]
