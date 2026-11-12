@@ -43,7 +43,7 @@ function alertText(level) {
 }
 
 export function createDashboard(context) {
-    const { getStocks, request: af, charts, reloadCurrentPage } = context;
+    const { getStocks, request: af, charts, reloadCurrentPage, showA } = context;
     const attachChartHovers = charts.attachChartHovers;
     const refreshOpenHistoryPanels = charts.refreshOpenHistoryPanels;
     const stockList = () => getStocks();
@@ -81,7 +81,12 @@ export function createDashboard(context) {
         if (liveRequestInFlight || document.hidden || (window.location.hash && window.location.hash !== '#/dashboard')) return;
         liveRequestInFlight = true;
         liveAbortController = new AbortController();
-        try { applyLivePrices(await af('/live-prices', { signal: liveAbortController.signal })); }
+        try {
+            const payload = await af('/live-prices', { signal: liveAbortController.signal }, message => {
+                if (!liveAbortController?.signal.aborted) showA?.(message, 'error');
+            });
+            applyLivePrices(payload);
+        }
         finally { liveAbortController = null; liveRequestInFlight = false; }
     }
     async function refreshOpenCharts() {

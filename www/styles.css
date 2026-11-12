@@ -693,7 +693,8 @@ html[data-theme-mode="light"] .sys-high{color:#b91c1c}
 #page-config .config-zone-order { display: grid; grid-template-columns: 96px minmax(0, 1fr) 118px; }
 #page-config .config-zone-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
 #page-config .config-real-order { display: inline-flex; align-items: center; gap: 0.35rem; white-space: nowrap; font-size: 0.82rem; cursor: pointer; }
-#page-config .config-real-order input { margin: 0; width: 1rem; height: 1rem; accent-color: var(--os-accent, #c8ff00); }
+#page-config .config-real-order input,
+#page-config .config-switch input { margin: 0; width: 1rem; height: 1rem; accent-color: var(--os-accent, #c8ff00); }
 #page-config .config-order-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.76rem; color: var(--os-muted, #94a3b8); }
 #page-config .config-action,
 #page-config .btn.config-action {
