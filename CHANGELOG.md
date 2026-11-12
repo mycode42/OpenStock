@@ -37,6 +37,19 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 - The options research history had no P/L for nightly reports written before simulation KPIs were stored. P/L is now derived from their replays.
 - The options lab progress bar stayed at 0% until a replay finished. Replays now report progress while they run.
 
+## 3.5.1 - 2026-11-12
+
+### Changed
+
+- Momentum Account equity history follows continuous snapshots, and selecting charts no longer adds a glow.
+- Demo Configure includes the Real order toggle and budget controls; the demo banner explains that orders are simulated.
+- Account loading indicators use a staggered three-dot animation.
+- Alert Active checkboxes use the same accent color as the Real order checkbox.
+
+### Fixed
+
+- Navigating away from the Dashboard no longer reports a cancelled live quote request as a network error.
+
 ## 3.5.0 - 2026-11-11
 
 ### Added

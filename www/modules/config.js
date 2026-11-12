@@ -7,7 +7,7 @@ function inDemoMode() {
 }
 
 function orderLabel() {
-    return inDemoMode() ? 'Simulated order' : 'Real order';
+    return 'Real order';
 }
 
 // Asks once per session for OPENSTOCK_ORDER_TOKEN. Returns '' when cancelled.
@@ -92,7 +92,7 @@ export function createConfig({ request: af, reload, notify }) {
         const id = escapeHtml(level.id);
         const on = Boolean(level.auto_order);
         const detail = !on ? '' : level.side === 'SELL'
-            ? inDemoMode() ? 'sells simulated position' : 'sells whole position'
+            ? 'sells whole position'
             : `${escapeHtml(usd(level.order_budget_usd))} budget`;
         const budget = on && level.side === 'BUY'
             ? `<button type="button" class="btn config-action btn-secondary" data-budget="${id}">Edit budget</button>`
@@ -168,9 +168,7 @@ export function createConfig({ request: af, reload, notify }) {
         const alertExplanation = demoMode
             ? 'Demo alerts are examples and do not send Telegram notifications.'
             : 'Each alert sends one Telegram notification and retires.';
-        const orderExplanation = demoMode
-            ? 'Turn on "Simulated order" to simulate a day limit order when this alert fires.'
-            : 'Turn on "Real order" to also place a day limit order when it fires.';
+        const orderExplanation = 'Turn on "Real order" to also place a day limit order when it fires.';
         return `<div class="config-alert-editor" data-level-stock="${escapeHtml(stock.id)}">
             <div class="config-alert-heading"><div><strong>Price and percentage alerts</strong><p>${alertExplanation} ${orderExplanation}</p></div>${positionSummary(stock)}</div>
             <div class="config-alert-list">
@@ -235,7 +233,7 @@ export function createConfig({ request: af, reload, notify }) {
         const heldCount = stocks.filter(stock => Number(stock.position?.quantity) > 0).length;
         const realCount = stocks.reduce((total, stock) => total + (stock.alert_levels || []).filter(level => level.auto_order).length, 0);
         const demoMode = inDemoMode();
-        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, <span class="config-real-word">${demoMode ? 'simulated-order switches and ' : 'real-order switches and '}</span>one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span class="config-real-count"><strong>${realCount}</strong> with ${demoMode ? 'simulated' : 'real'} orders</span><span>Account: <strong>${demoMode ? 'simulated demo' : escapeHtml(orders.mode)}</strong></span></div></div>
+        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, <span class="config-real-word">real-order switches and </span>one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span class="config-real-count"><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${demoMode ? 'demo' : escapeHtml(orders.mode)}</strong></span></div></div>
             <div class="config-search"><input id="config-stock-filter" type="search" placeholder="Filter symbols" aria-label="Filter symbols" value="${escapeHtml(stockFilter)}"></div></header>
             <div class="config-stock-list">${stocks.length ? stocks.map(stockCard).join('') : '<p class="journal-empty">No Alpaca watchlist symbols yet.</p>'}<div class="config-filter-empty empty-state" hidden>No symbols match this filter.</div></div>${addStockForm()}${retiredSection()}`;
         if (pendingLevelId) {
@@ -374,7 +372,7 @@ export function createConfig({ request: af, reload, notify }) {
 
     // Asks for the budget when a BUY level is switched on or its budget is changed. Returns null when cancelled.
     function askBudget(current) {
-        const entered = window.prompt(`${inDemoMode() ? 'Simulated ' : ''}USD budget this BUY spends when the alert fires (whole shares, rounded down)`, String(current || orders.notional_usd || 250));
+        const entered = window.prompt(`USD budget this BUY spends when the alert fires (whole shares, rounded down)`, String(current || orders.notional_usd || 250));
         if (entered === null) return null;
         const amount = Number(entered);
         if (!Number.isFinite(amount) || amount <= 0) { notify?.('Enter a positive USD budget', 'error'); return null; }
@@ -410,7 +408,7 @@ export function createConfig({ request: af, reload, notify }) {
             if (level.side === 'BUY') {
                 budget = askBudget(level.order_budget_usd);
                 if (budget === null) { box.checked = false; return; }
-            } else if (!window.confirm(`When this SELL fires, OpenStock sells the whole open position with a day limit order on ${inDemoMode() ? 'the simulated demo account' : `the ${orders.mode} account`}. Turn it on?`)) {
+            } else if (!window.confirm(`When this SELL fires, OpenStock sells the whole open position with a day limit order on ${inDemoMode() ? 'the demo account' : `the ${orders.mode} account`}. Turn it on?`)) {
                 box.checked = false;
                 return;
             }
@@ -419,8 +417,8 @@ export function createConfig({ request: af, reload, notify }) {
         const result = await setOrderSettings(levelId, enabling, budget);
         if (!result) { box.checked = !enabling; box.disabled = false; return; }
         notify?.(enabling
-            ? inDemoMode() ? 'Simulated order armed in the demo' : `Real order armed on the ${orders.mode} account`
-            : inDemoMode() ? 'Simulated order switched off' : 'Real order switched off', 'success');
+            ? inDemoMode() ? 'Real order armed on the demo account' : `Real order armed on the ${orders.mode} account`
+            : 'Real order switched off', 'success');
         await reload?.();
     }
 
@@ -431,7 +429,7 @@ export function createConfig({ request: af, reload, notify }) {
         if (budget === null) return;
         const result = await setOrderSettings(levelId, true, budget);
         if (!result) return;
-        notify?.(inDemoMode() ? 'Simulated order budget saved' : 'Order budget saved', 'success');
+        notify?.('Order budget saved', 'success');
         await reload?.();
     }
 

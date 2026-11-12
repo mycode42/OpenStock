@@ -1,9 +1,9 @@
 import { apiRequest } from './api.js';
-import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js?v=3.5.0&config-removed=3&life-pl=1&loading-mark=1';
-import { renderResearchPage } from './algo-trader/research-view.js?v=3.5.0&research-control=2&loading-mark=1';
-import { mountResearchLab } from './algo-trader/research-lab.js?v=3.5.0&equity-runs=30';
-import { mountDataStatus } from './algo-trader/data-status.js?v=3.5.0&demo-samples=3';
-import { renderMomentumPage } from './algo-trader/momentum-view.js?v=3.5.0&momentum=4&life-pl=1&loading-mark=1';
+import { renderAccountLoading, renderAccountPage } from './algo-trader/account-view.js?v=3.5.1&config-removed=3&life-pl=1&loading-mark=1';
+import { renderResearchPage } from './algo-trader/research-view.js?v=3.5.1&research-control=2&loading-mark=1';
+import { mountResearchLab } from './algo-trader/research-lab.js?v=3.5.1&equity-runs=30';
+import { mountDataStatus } from './algo-trader/data-status.js?v=3.5.1&demo-samples=3';
+import { renderMomentumPage } from './algo-trader/momentum-view.js?v=3.5.1&momentum=4&life-pl=1&loading-mark=1';
 
 export function createAlgoTrader({ request, charts }) {
     const host = document.getElementById('page-algo-trader');
