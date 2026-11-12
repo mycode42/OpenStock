@@ -10,7 +10,7 @@ const { createApp } = require('../server');
 
 const TOKEN = 'route-test-token-value';
 
-async function fixture(t) {
+async function fixture(t, { demoMode = false } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openstock-order-routes-'));
     const file = path.join(dir, 'test.db');
     initDatabase({ dbPath: file, seedDefaults: false, silent: true });
@@ -22,8 +22,8 @@ async function fixture(t) {
     raw.close();
     const db = new OpenStockDB(file);
     const backfill = { enqueue() {}, enqueueMissing() { return 0; } };
-    const app = createApp({ db, backfill, fetchImpl: async () => { throw new Error('unexpected fetch'); }, sdkClient: { isEnabled: () => false } });
-    app.locals.alpacaClient = {
+    const app = createApp({ db, backfill, demoMode, fetchImpl: async () => { throw new Error('unexpected fetch'); }, sdkClient: { isEnabled: () => false } });
+    if (!demoMode) app.locals.alpacaClient = {
         submitted: [],
         async getLatestQuotes() { return { feed: 'iex', quotes: { AAPL: { bp: 99, ap: 101 } } }; },
         async getPositions() { return []; },
@@ -36,7 +36,7 @@ async function fixture(t) {
 }
 
 function withEnv(t, env) {
-    const saved = { ALPACA_MANUAL_BASE_URL: process.env.ALPACA_MANUAL_BASE_URL };
+    const saved = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
     for (const [key, value] of Object.entries(env)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     t.after(() => { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
 }
@@ -110,4 +110,29 @@ test('live orders need ALPACA_ALLOW_LIVE and the order token; paper needs neithe
     delete process.env.ALPACA_MANUAL_BASE_URL;
     delete process.env.ALPACA_ALLOW_LIVE;
     assert.equal((await preview({})).status, 200, 'paper needs no token');
+});
+
+test('demo order controls always use the simulated paper account', async t => {
+    withEnv(t, {
+        ALPACA_MANUAL_BASE_URL: 'https://api.alpaca.markets/v2',
+        ALPACA_ALLOW_LIVE: '1',
+        OPENSTOCK_ORDER_TOKEN: TOKEN,
+        OPENSTOCK_DEMO_DATABASE: '1',
+    });
+    const { base, levelId, client } = await fixture(t, { demoMode: true });
+
+    const config = await (await fetch(`${base}/api/alpaca/orders/config`)).json();
+    assert.equal(config.orders.mode, 'paper');
+    assert.equal(config.orders.live_allowed, false);
+
+    const enable = await fetch(`${base}/api/alpaca/alert-levels/${levelId}/order`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json', origin: base },
+        body: JSON.stringify({ auto_order: true, budget_usd: 250 }),
+    });
+    assert.equal(enable.status, 200);
+
+    const placed = await post(base, `/api/alpaca/alert-levels/${levelId}/orders`, {}, { confirm: true });
+    assert.equal(placed.status, 201);
+    assert.equal((await placed.json()).order.mode, 'paper');
+    assert.equal(client.simulated, true);
 });

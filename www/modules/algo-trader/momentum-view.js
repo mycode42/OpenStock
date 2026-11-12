@@ -84,7 +84,7 @@ function activityPanel(payload) {
 export function renderMomentumPage({ payload, range = '1M', charts, loading = false, error = '' }) {
     if (!payload) {
         return `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${switchMarkup('momentum')}</div></header>
-            <section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? 'Loading the momentum paper account…' : 'Momentum account unavailable'}</strong><p>${escapeHtml(error || 'Checking the momentum paper account.')}</p></section></main>`;
+            <section class="card algo-connection-card"><div class="algo-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div><strong>${loading ? 'Loading the momentum paper account…' : 'Momentum account unavailable'}</strong><p>${escapeHtml(error || 'Checking the momentum paper account.')}</p></section></main>`;
     }
     const available = payload.available === true;
     const header = `<header class="algo-page-header">

@@ -15,7 +15,7 @@ function renderAccountModeSwitch(active) {
 
 export function renderAccountLoading({ mode, loading, error }) {
     const isOptions = mode === 'options';
-    return `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountModeSwitch(mode)}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark">↻</div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(error || 'Loading the paper-account snapshot and coordinator data.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
+    return `<main class="algo-page"><header class="algo-page-header"><div><div class="algo-breadcrumb">SYSTEMS <span>/</span> STRATEGY MONITOR</div><h1>Algo trader</h1>${renderAccountModeSwitch(mode)}</div></header><section class="card algo-connection-card"><div class="algo-loading-mark" aria-hidden="true"><span></span><span></span><span></span></div><strong>${loading ? `Connecting to ${isOptions ? 'Options' : 'Equity'} Account…` : `${isOptions ? 'Options' : 'Equity'} Account data unavailable`}</strong><p>${escapeHtml(error || 'Loading the paper-account snapshot and coordinator data.')}</p><button type="button" class="btn btn-secondary" data-action="retry">Retry connection</button></section></main>`;
 }
 
 export function renderAccountPage({ mode, snapshot, settings, range, activityPage, charts }) {

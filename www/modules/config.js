@@ -2,6 +2,14 @@ import { escapeHtml } from './escape.js';
 
 const ORDER_TOKEN_KEY = 'openstock-order-token';
 
+function inDemoMode() {
+    return document.documentElement.dataset.demo === '1';
+}
+
+function orderLabel() {
+    return inDemoMode() ? 'Simulated order' : 'Real order';
+}
+
 // Asks once per session for OPENSTOCK_ORDER_TOKEN. Returns '' when cancelled.
 function orderToken() {
     let token = sessionStorage.getItem(ORDER_TOKEN_KEY);
@@ -50,7 +58,7 @@ export function createConfig({ request: af, reload, notify }) {
     function levelSummary(stock) {
         const active = (stock.alert_levels || []).filter(level => level.enabled && level.active && !level.retired);
         if (!active.length) return '<span class="config-level-empty">No active levels</span>';
-        return active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${level.auto_order ? '<span class="config-real-word"> · real order</span>' : ''}</span>`).join('');
+        return active.map(level => `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${level.auto_order ? `<span class="config-real-word"> · ${orderLabel().toLowerCase()}</span>` : ''}</span>`).join('');
     }
 
     // The add form posts to the same endpoint as the API; the server checks the symbol with Alpaca.
@@ -70,24 +78,26 @@ export function createConfig({ request: af, reload, notify }) {
     function positionSummary(stock) {
         const quantity = Number(stock.position?.quantity || 0);
         return quantity > 0
-            ? `<span class="config-position held">${formatQuantity(quantity)} shares held</span>`
-            : '<span class="config-position">No open Alpaca position</span>';
+            ? `<span class="config-position held">${formatQuantity(quantity)} shares held${inDemoMode() ? ' in demo' : ''}</span>`
+            : `<span class="config-position">No open ${inDemoMode() ? 'demo' : 'Alpaca'} position</span>`;
     }
 
-    // Each alert row has four fixed zones (fields, state, real order, actions), so every row and every button lines up.
+    // Each alert row has four fixed zones (fields, state, order controls, actions), so every row and every button lines up.
     function stateZone(level) {
         return `<label class="config-switch"><input type="checkbox" data-alert-enabled ${level.enabled ? 'checked' : ''}><span>${level.enabled ? 'Active' : 'Paused'}</span></label>`;
     }
 
-    // Real order: a checkbox, one detail line, and the budget button. Empty slots keep the zone's shape when a value is absent.
+    // Order control: a checkbox, one detail line, and the budget button. Empty slots keep the zone's shape when a value is absent.
     function orderZone(level) {
         const id = escapeHtml(level.id);
         const on = Boolean(level.auto_order);
-        const detail = !on ? '' : level.side === 'SELL' ? 'sells whole position' : `${escapeHtml(usd(level.order_budget_usd))} budget`;
+        const detail = !on ? '' : level.side === 'SELL'
+            ? inDemoMode() ? 'sells simulated position' : 'sells whole position'
+            : `${escapeHtml(usd(level.order_budget_usd))} budget`;
         const budget = on && level.side === 'BUY'
             ? `<button type="button" class="btn config-action btn-secondary" data-budget="${id}">Edit budget</button>`
             : '<span class="config-action-slot" aria-hidden="true"></span>';
-        return `<label class="config-real-order"><input type="checkbox" data-real-order="${id}" ${on ? 'checked' : ''}><span>Real order</span></label>`
+        return `<label class="config-real-order"><input type="checkbox" data-real-order="${id}" ${on ? 'checked' : ''}><span>${orderLabel()}</span></label>`
             + `<span class="config-order-detail">${detail}</span>${budget}`;
     }
 
@@ -138,7 +148,7 @@ export function createConfig({ request: af, reload, notify }) {
         return `<div class="config-retired-row config-alert-row" data-alert-id="${id}">${rowZones(
             `<span class="threshold ${level.side === 'BUY' ? 'buy' : 'sell'}">${escapeHtml(alertLabel(level))}${target}</span>`,
             `<span class="config-level-state">Triggered</span>${level.delivery_unknown ? '<span class="config-delivery-unknown" title="The Telegram send may or may not have gone through. Check the chat before you rearm.">Delivery unknown · check Telegram</span>' : ''}`,
-            `<span class="config-order-detail">${level.auto_order ? 'Real order on' : 'Notification only'}</span>`,
+            `<span class="config-order-detail">${level.auto_order ? `${orderLabel()} on` : 'Notification only'}</span>`,
             actionZone('<button type="button" class="btn config-action btn-success" data-alert-action="rearm">Rearm</button>', deleteButton))}</div>`;
     }
 
@@ -154,15 +164,22 @@ export function createConfig({ request: af, reload, notify }) {
             `<select id="percent-direction-${escapeHtml(stock.id)}" data-alert-direction aria-label="Percentage alert direction"><option value="DROP">Drop by</option><option value="GAIN">Gain by</option></select>`
                 + `<div class="config-percent-input"><input type="number" min=".01" max="99.99" step=".01" data-alert-percent required placeholder="%" aria-label="Percentage move"><span>%</span></div>`,
             '', '', actionZone('<button type="submit" class="btn config-action config-add btn-primary">Add percentage alert</button>'))}</form>`;
+        const demoMode = inDemoMode();
+        const alertExplanation = demoMode
+            ? 'Demo alerts are examples and do not send Telegram notifications.'
+            : 'Each alert sends one Telegram notification and retires.';
+        const orderExplanation = demoMode
+            ? 'Turn on "Simulated order" to simulate a day limit order when this alert fires.'
+            : 'Turn on "Real order" to also place a day limit order when it fires.';
         return `<div class="config-alert-editor" data-level-stock="${escapeHtml(stock.id)}">
-            <div class="config-alert-heading"><div><strong>Price and percentage alerts</strong><p>Each alert sends one Telegram notification and retires. Turn on "Real order" to also place a day limit order when it fires.</p></div>${positionSummary(stock)}</div>
+            <div class="config-alert-heading"><div><strong>Price and percentage alerts</strong><p>${alertExplanation} ${orderExplanation}</p></div>${positionSummary(stock)}</div>
             <div class="config-alert-list">
                 ${editable.map(level => (level.trigger_mode === 'PERCENT' ? percentRow(stock, level) : priceRow(stock, level))).join('') || '<p class="journal-empty">No active or paused alerts.</p>'}
                 ${retired.length ? `<div class="config-retired"><div class="config-retired-title">Triggered · ready to rearm</div>${retired.map(retiredRow).join('')}</div>` : ''}
             </div>
             ${addPrice}
             ${addPercent}
-            <small class="config-percent-help">Percentage alerts are measured from the current Alpaca quote, then retire after one notification.</small>
+            <small class="config-percent-help">${inDemoMode() ? 'Demo percentage alerts use the simulated quote, then retire after one notification.' : 'Percentage alerts are measured from the current Alpaca quote, then retire after one notification.'}</small>
         </div>`;
     }
 
@@ -217,7 +234,8 @@ export function createConfig({ request: af, reload, notify }) {
         const activeCount = stocks.filter(stock => stock.enabled).length;
         const heldCount = stocks.filter(stock => Number(stock.position?.quantity) > 0).length;
         const realCount = stocks.reduce((total, stock) => total + (stock.alert_levels || []).filter(level => level.auto_order).length, 0);
-        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, <span class="config-real-word">real-order switches and </span>one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span class="config-real-count"><strong>${realCount}</strong> with real orders</span><span>Account: <strong>${escapeHtml(orders.mode)}</strong></span></div></div>
+        const demoMode = inDemoMode();
+        body.innerHTML = `<header class="config-header"><div><h1>Configure</h1><p class="subtitle">Alpaca watchlist: alert levels, <span class="config-real-word">${demoMode ? 'simulated-order switches and ' : 'real-order switches and '}</span>one-time percentage moves.</p><div class="config-overview"><span><strong>${activeCount}</strong> monitored</span><span><strong>${heldCount}</strong> held</span><span class="config-real-count"><strong>${realCount}</strong> with ${demoMode ? 'simulated' : 'real'} orders</span><span>Account: <strong>${demoMode ? 'simulated demo' : escapeHtml(orders.mode)}</strong></span></div></div>
             <div class="config-search"><input id="config-stock-filter" type="search" placeholder="Filter symbols" aria-label="Filter symbols" value="${escapeHtml(stockFilter)}"></div></header>
             <div class="config-stock-list">${stocks.length ? stocks.map(stockCard).join('') : '<p class="journal-empty">No Alpaca watchlist symbols yet.</p>'}<div class="config-filter-empty empty-state" hidden>No symbols match this filter.</div></div>${addStockForm()}${retiredSection()}`;
         if (pendingLevelId) {
@@ -356,7 +374,7 @@ export function createConfig({ request: af, reload, notify }) {
 
     // Asks for the budget when a BUY level is switched on or its budget is changed. Returns null when cancelled.
     function askBudget(current) {
-        const entered = window.prompt('USD budget this BUY spends when the alert fires (whole shares, rounded down)', String(current || orders.notional_usd || 250));
+        const entered = window.prompt(`${inDemoMode() ? 'Simulated ' : ''}USD budget this BUY spends when the alert fires (whole shares, rounded down)`, String(current || orders.notional_usd || 250));
         if (entered === null) return null;
         const amount = Number(entered);
         if (!Number.isFinite(amount) || amount <= 0) { notify?.('Enter a positive USD budget', 'error'); return null; }
@@ -392,7 +410,7 @@ export function createConfig({ request: af, reload, notify }) {
             if (level.side === 'BUY') {
                 budget = askBudget(level.order_budget_usd);
                 if (budget === null) { box.checked = false; return; }
-            } else if (!window.confirm(`When this SELL fires, OpenStock sells the whole open position with a day limit order on the ${orders.mode} account. Turn it on?`)) {
+            } else if (!window.confirm(`When this SELL fires, OpenStock sells the whole open position with a day limit order on ${inDemoMode() ? 'the simulated demo account' : `the ${orders.mode} account`}. Turn it on?`)) {
                 box.checked = false;
                 return;
             }
@@ -400,7 +418,9 @@ export function createConfig({ request: af, reload, notify }) {
         box.disabled = true;
         const result = await setOrderSettings(levelId, enabling, budget);
         if (!result) { box.checked = !enabling; box.disabled = false; return; }
-        notify?.(enabling ? `Real order armed on the ${orders.mode} account` : 'Real order switched off', 'success');
+        notify?.(enabling
+            ? inDemoMode() ? 'Simulated order armed in the demo' : `Real order armed on the ${orders.mode} account`
+            : inDemoMode() ? 'Simulated order switched off' : 'Real order switched off', 'success');
         await reload?.();
     }
 
@@ -411,7 +431,7 @@ export function createConfig({ request: af, reload, notify }) {
         if (budget === null) return;
         const result = await setOrderSettings(levelId, true, budget);
         if (!result) return;
-        notify?.('Order budget saved', 'success');
+        notify?.(inDemoMode() ? 'Simulated order budget saved' : 'Order budget saved', 'success');
         await reload?.();
     }
 

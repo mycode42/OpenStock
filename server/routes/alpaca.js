@@ -6,6 +6,16 @@ const orders = require('../../lib/alpaca-orders');
 const levels = require('../../lib/alpaca-alert-levels');
 const watchlist = require('../../lib/alpaca-watchlist');
 
+const DEMO_ORDER_ENV = Object.freeze({
+    ALPACA_MANUAL_BASE_URL: 'https://paper-api.alpaca.markets/v2',
+    ALPACA_ALLOW_LIVE: '',
+    OPENSTOCK_ORDER_TOKEN: '',
+});
+
+function orderEnvironment(req) {
+    return req.app.locals?.demoMode ? { ...process.env, ...DEMO_ORDER_ENV } : process.env;
+}
+
 function orderFailure(res, error) {
     const status = error.status || 502;
     if (status >= 500) console.warn(`Alpaca order failed: ${error.message}`);
@@ -14,6 +24,7 @@ function orderFailure(res, error) {
 
 // Live accounts only: the order token must match OPENSTOCK_ORDER_TOKEN. Paper accounts pass through.
 function requireLiveToken(req, res, next) {
+    if (req.app.locals?.demoMode) return next();
     const settings = orders.orderSettings();
     if (!settings.live) return next();
     if (!settings.liveAllowed) return res.status(403).json({ error: 'Live trading is off: set ALPACA_ALLOW_LIVE=1 to place orders on the live account' });
@@ -28,7 +39,7 @@ function requireLiveToken(req, res, next) {
 
 module.exports = function registerAlpacaRoutes({ app }) {
     app.get('/api/alpaca/orders/config', (req, res) => {
-        res.json({ orders: orders.publicSettings() });
+        res.json({ orders: orders.publicSettings(orderEnvironment(req)) });
     });
 
     app.get('/api/alpaca/orders', (req, res) => {
@@ -47,6 +58,7 @@ module.exports = function registerAlpacaRoutes({ app }) {
         try {
             const result = await orders.placeLevelOrder({
                 db: req.app.locals.db, client: req.app.locals.alpacaClient, levelId: id, dryRun, amountUsd,
+                env: orderEnvironment(req),
             });
             res.status(dryRun ? 200 : 201).json(result);
         } catch (error) {
