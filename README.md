@@ -152,12 +152,12 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Monitoring:** a one-shot monitor cycle (run by `npm run monitor` or a scheduler) that checks BUY and SELL thresholds against Alpaca quotes. Alerts fire once per episode and use a durable outbox for Telegram delivery.
 
-  <img width="1183" height="945" alt="Configure-dark" src="https://github.com/user-attachments/assets/91c93b2d-76e7-4853-91c5-100ce179fc87" />
+  <img width="1000" alt="Monitoring" src="https://github.com/user-attachments/assets/a767c27e-9ffb-4fcd-8e55-caeb908495fe" />
 
 - **Manual trading:** triggers can be equipped with real trades that are executed when fired. <br>
   ***Custom budget configuration for buy triggers***  |  ***full position sold at sell triggers***
 
-  <img width="1000" alt="Configure" src="https://github.com/user-attachments/assets/42dac58b-6997-4a5e-a368-efac76c709ba" />
+  <img width="1000" alt="Manual-trading" src="https://github.com/user-attachments/assets/d8257c0c-4b27-4e58-8dfb-8c1886c0de70" />
 
 - **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
 
