@@ -713,9 +713,9 @@ def simulate_options_strategy(
                     active.remove(trade)
                     realized_cash = sum(float(item["pnl"]) for item in closed_trades)
                 elif expired:
-                    for symbol, state in trade.legs.items():
+                    for leg_symbol, state in trade.legs.items():
                         if state.signed_contracts:
-                            settle_leg(trade, symbol, state, observation.spot, observation.as_of, reason="expiration_assignment")
+                            settle_leg(trade, leg_symbol, state, observation.spot, observation.as_of, reason="expiration_assignment")
                     trade.exit_at = observation.as_of
                     trade.exit_reason = "expiration"
                     close_share_inventory(trade, observation.spot)
