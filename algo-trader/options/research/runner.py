@@ -84,6 +84,12 @@ def _dataset_digest(path: Path, underlying: str) -> str:
     return _digest_path(path)
 
 
+def _dataset_chain_errors(dataset) -> int:
+    if getattr(dataset.provider, "lazy_chains", False):
+        return sum(item.chain_error is not None for item in dataset.observations)
+    return sum(item.chain is None for item in dataset.observations)
+
+
 def _mean_metrics(rows: list[dict]) -> dict:
     keys = (
         "trade_count", "total_return", "annualized_sharpe", "annualized_sortino",
@@ -481,6 +487,7 @@ def run_research(
             data_mode=str(research_config.get("data_mode", "auto")),
             model_surface_config=research_config.get("model_surface", {}),
             workers=loader_worker_count,
+            lazy_chains=replay_only,
         )
         # Optional research window from the UI or config: keep only observations inside it.
         date_range = research_config.get("date_range") or {}
@@ -558,7 +565,7 @@ def run_research(
                     "run_dir": str(run_dir),
                     "dataset_sha256": dataset.source_sha256,
                     "dataset_observations": len(dataset.observations),
-                    "dataset_chain_errors": sum(item.chain is None for item in dataset.observations),
+                    "dataset_chain_errors": _dataset_chain_errors(dataset),
                     "data_mode": dataset.data_mode,
                     "parallelism": {
                         "loader_workers_requested": loader_worker_count,
@@ -646,10 +653,7 @@ def run_research(
         _append_run_log(output_root / "research_runs.jsonl", failure)
         OptionsResearchArtifactStore().store_run(run_dir, failure)
         raise
-    if not all(item.chain is not None for item in dataset.observations):
-        chain_errors = sum(item.chain is None for item in dataset.observations)
-    else:
-        chain_errors = 0
+    chain_errors = _dataset_chain_errors(dataset)
     starting_equity = float(research_config.get("starting_equity", 100000))
     gamma_vega_threshold = float(research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60))
 

@@ -13,6 +13,7 @@ def _write_config(tmp_path, *, data_path, strategies=None):
             "strategies": strategies or ["vrp", "llm_driven"],
             "checkpoint_database": str(tmp_path / "history.sqlite3"),
         },
+        "search": {"parallel_workers": 8},
     }), encoding="utf-8")
     return config_path
 
@@ -40,13 +41,14 @@ def test_missing_chain_dataset_generates_separate_waiting_report(tmp_path):
 
 
 def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path):
+    monkeypatch.setattr(automation, "available_cpu_count", lambda: 8)
     dataset_path = tmp_path / "chains.jsonl"
     dataset_path.write_text("placeholder", encoding="utf-8")
     config_path = _write_config(tmp_path, data_path=dataset_path, strategies=["llm_driven"])
     calls = []
 
     def fake_run_research(strategy, *, config_path, data_path, underlying, parallel_workers, replay_only=False):
-        calls.append((strategy, config_path, data_path, underlying))
+        calls.append((strategy, config_path, data_path, underlying, parallel_workers, replay_only))
         return {
             "run_id": "event-run-1", "run_dir": str(tmp_path / "runs" / "event-run-1"),
             "underlying": "SPY", "data_mode": "historical_chains",
@@ -59,10 +61,12 @@ def test_automation_runs_only_configured_strategy_modules(monkeypatch, tmp_path)
 
     report = automation.run_automated_options_research(config_path=config_path)
 
-    assert calls == [("llm_driven", config_path.resolve(), dataset_path.resolve(), "SPY")]
+    assert calls == [("llm_driven", config_path.resolve(), dataset_path.resolve(), "SPY", 4, True)]
     assert report["status"] == "completed"
     assert report["strategies"]["llm_driven"]["walk_forward"]["trade_count"] == 10
     assert report["strategies"]["llm_driven"]["approved"] is False
+    assert report["fold_workers_used_by_strategy"] == {"llm_driven": 0}
+    assert report["replay_data_workers_used_by_strategy"] == {"llm_driven": 4}
 
 
 def test_options_simulation_counts_only_underlyings_with_trades_and_sums_their_pnl():

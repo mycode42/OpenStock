@@ -64,6 +64,36 @@ class OptionsResearchDataset:
     loading_parallelism: dict[str, Any]
 
 
+class ReplayChainBatchProvider:
+    """Load one prepared-chain batch at a time for chronological replay."""
+
+    lazy_chains = True
+
+    def __init__(self, locations: dict[datetime, tuple[Path, int]], history: dict[str, list[tuple[date, float]]]):
+        self._locations = locations
+        self._history = {key.upper(): tuple(value) for key, value in history.items()}
+        self._loaded_path: Path | None = None
+        self._loaded_results: list[tuple[OptionChain | None, str | None]] = []
+
+    def get_chain_for_observation(self, observation: ResearchObservation) -> OptionChain | None:
+        location = self._locations.get(observation.as_of)
+        if location is None:
+            return None
+        path, index = location
+        if path != self._loaded_path:
+            self._loaded_results = []
+            self._loaded_path = None
+            with path.open("rb") as handle:
+                payload = pickle.load(handle)
+            self._loaded_results = payload["results"]
+            self._loaded_path = path
+        chain, _error = self._loaded_results[index]
+        return chain
+
+    def underlying_closes(self, underlying: str, *, as_of: datetime, sessions: int) -> list[tuple[date, float]]:
+        return [row for row in self._history.get(underlying.upper(), ()) if row[0] < as_of.date()][-sessions:]
+
+
 def _load_rows(path: Path) -> tuple[list[dict], dict[str, list[tuple[date, float]]], dict]:
     raw = path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".jsonl":
@@ -370,6 +400,169 @@ def _events(raw: Any, *, as_of: datetime) -> tuple[ScheduledEvent, ...]:
 
 CHAIN_STORE_VERSION = "options-chain-store-v2"
 CHAIN_CACHE_DIR = ROOT / ".cache" / "options-chains"
+CHAIN_PREPARATION_BATCH_SIZE = 16
+
+
+def _replay_batch_cache_dir(source: Path, target: str, rate: float, dividend_yield: float, requested_mode: str) -> Path:
+    key = json.dumps({
+        "version": "options-replay-chain-batches-v1",
+        "source": str(source.resolve()), "underlying": target,
+        "rate": rate, "dividend_yield": dividend_yield, "data_mode": requested_mode,
+    }, sort_keys=True, default=str)
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
+    return CHAIN_CACHE_DIR / "replay-batches" / f"{target}-{digest}"
+
+
+def _write_replay_chain_batch(path: Path, refs: list[tuple[int, str]], results: list[tuple[OptionChain | None, str | None]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f".{os.getpid()}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            pickle.dump({"schema": "options_replay_chain_batch_v1", "refs": refs, "results": results},
+                        handle, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _load_historical_database_replay(
+    source: Path,
+    *,
+    target: str,
+    rate: float,
+    dividend_yield: float,
+    requested_mode: str,
+    workers: int,
+    source_sha256: str,
+    pairs: list[tuple[ResearchObservation, tuple[int, str]]],
+    history: dict[str, list[tuple[date, float]]],
+    close_proxy: bool,
+    database_elapsed_seconds: float,
+    store,
+) -> OptionsResearchDataset:
+    """Prepare replay chains in bounded batches and keep them disk-backed."""
+    chain_started = perf_counter()
+    requested_loader_workers = min(workers, available_cpu_count())
+    fork_available = "fork" in mp.get_all_start_methods()
+    cache_dir = _replay_batch_cache_dir(source, target, rate, dividend_yield, requested_mode)
+    locations: dict[datetime, tuple[Path, int]] = {}
+    observations: list[ResearchObservation] = []
+    prepared_count = 0
+    reused_count = 0
+    stored_count = 0
+    chain_worker_count = 0
+    preparation_batches = 0
+
+    for batch_start in range(0, len(pairs), CHAIN_PREPARATION_BATCH_SIZE):
+        batch = pairs[batch_start:batch_start + CHAIN_PREPARATION_BATCH_SIZE]
+        refs = [reference for _, reference in batch]
+        cache_path = cache_dir / f"batch-{batch_start:06d}.pkl"
+        results = None
+        if cache_path.is_file():
+            try:
+                with cache_path.open("rb") as handle:
+                    payload = pickle.load(handle)
+                if (
+                    payload.get("schema") == "options_replay_chain_batch_v1"
+                    and payload.get("refs") == refs
+                    and isinstance(payload.get("results"), list)
+                    and len(payload["results"]) == len(batch)
+                ):
+                    results = payload["results"]
+            except (OSError, pickle.UnpicklingError, EOFError, AttributeError, ImportError, ValueError, TypeError):
+                results = None
+            finally:
+                if "payload" in locals():
+                    del payload
+
+        if results is None:
+            prepared_count += len(batch)
+            preparation_batches += 1
+            contracts = store.contracts_for_snapshots([reference[0] for reference in refs])
+            normalized_snapshots = [
+                {
+                    "underlying": target,
+                    "spot": observation.spot,
+                    "as_of": observation.as_of.isoformat(),
+                    "feed": observation.feed,
+                    "contracts": [
+                        _normalize_contract(contract, as_of=observation.as_of, underlying=target)
+                        for contract in contracts.get(reference[0], [])
+                    ],
+                }
+                for (observation, reference) in batch
+            ]
+            provider = HistoricalChainSnapshotProvider(
+                normalized_snapshots, history, rate=rate, dividend_yield=dividend_yield,
+            )
+            batch_workers = min(requested_loader_workers, len(batch)) if fork_available else 1
+            chain_worker_count = max(chain_worker_count, batch_workers)
+            if batch_workers > 1:
+                _CHAIN_PREPARATION_CONTEXT.update({
+                    "observations": [observation for observation, _ in batch],
+                    "provider": provider,
+                    "underlying": target,
+                })
+                try:
+                    with ProcessPoolExecutor(
+                        max_workers=batch_workers, mp_context=mp.get_context("fork"),
+                    ) as executor:
+                        results = list(executor.map(_prepare_chain_index, range(len(batch)), chunksize=1))
+                finally:
+                    _CHAIN_PREPARATION_CONTEXT.clear()
+            else:
+                results = []
+                for observation, _reference in batch:
+                    try:
+                        chain = provider.get_chain(
+                            target, as_of=observation.as_of, min_dte=0, max_dte=730,
+                        )
+                        results.append((chain, None))
+                    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                        results.append((None, f"{type(exc).__name__}: {exc}"))
+            del contracts, normalized_snapshots, provider
+            stored_count += sum(chain is not None and error is None for chain, error in results)
+            _write_replay_chain_batch(cache_path, refs, results)
+        else:
+            reused_count += len(batch)
+            stored_count += sum(chain is not None and error is None for chain, error in results)
+
+        for index, ((observation, _reference), (_chain, error)) in enumerate(zip(batch, results)):
+            observations.append(_with_chain(observation, None, error))
+            locations[observation.as_of] = (cache_path, index)
+        del results
+
+    data_mode_name = "historical_chains_spot_close_proxy" if close_proxy else "historical_chains"
+    return OptionsResearchDataset(
+        observations=tuple(observations),
+        provider=ReplayChainBatchProvider(locations, history),
+        source_path=source.resolve(),
+        source_sha256=source_sha256,
+        data_mode=(
+            "model_or_synthetic_chain_rows"
+            if any(item.feed in {"model", "synthetic"} for item in observations)
+            else data_mode_name
+        ),
+        underlying_history={key: tuple(values) for key, values in history.items()},
+        loading_parallelism={
+            "cache": "replay_chain_batches",
+            "chains_reused": reused_count,
+            "chains_prepared": prepared_count,
+            "chains_stored": stored_count,
+            "workers_requested": requested_loader_workers,
+            "workers_used": requested_loader_workers,
+            "chain_workers_used": chain_worker_count,
+            "chain_preparation_batches": preparation_batches,
+            "source_format": "sqlite_batches",
+            "database_read_elapsed_seconds": round(database_elapsed_seconds, 3),
+            "jsonl_parse_and_normalize_elapsed_seconds": 0.0,
+            "chain_preparation_elapsed_seconds": round(perf_counter() - chain_started, 3),
+            "elapsed_seconds": round(database_elapsed_seconds + perf_counter() - chain_started, 3),
+        },
+    )
 
 
 def load_options_research_dataset(
@@ -381,6 +574,7 @@ def load_options_research_dataset(
     data_mode: str = "auto",
     model_surface_config: dict | None = None,
     workers: int = 1,
+    lazy_chains: bool = False,
 ) -> OptionsResearchDataset:
     """Load a prepared dataset. Prepared chains are kept per snapshot, so a load only prepares new or changed days.
 
@@ -394,7 +588,7 @@ def load_options_research_dataset(
     if source.suffix.lower() in {".sqlite", ".sqlite3", ".db"} and requested_mode not in {"model", "model_surface"}:
         dataset = _load_historical_database(
             source, target=target, rate=rate, dividend_yield=dividend_yield,
-            requested_mode=requested_mode, workers=workers,
+            requested_mode=requested_mode, workers=workers, lazy_chains=lazy_chains,
         )
         if dataset is not None:
             return dataset
@@ -471,6 +665,7 @@ def prune_stale_chain_caches(cache_dir: Path, keep: Path) -> int:
 
 def _load_historical_database(
     source: Path, *, target: str, rate: float, dividend_yield: float, requested_mode: str, workers: int,
+    lazy_chains: bool = False,
 ) -> OptionsResearchDataset | None:
     """Historical chains from SQLite, with prepared chains reused from the store. Returns None for model-surface data."""
     from options.research.history_store import OptionsHistoryStore
@@ -523,25 +718,18 @@ def _load_historical_database(
     else:
         close_proxy = False
 
+    if lazy_chains:
+        return _load_historical_database_replay(
+            source, target=target, rate=rate, dividend_yield=dividend_yield,
+            requested_mode=requested_mode, workers=workers, source_sha256=source_sha256,
+            pairs=pairs, history=history, close_proxy=close_proxy,
+            database_elapsed_seconds=database_elapsed_seconds, store=store,
+        )
+
     store_path = _chain_store_path(source, target, rate, dividend_yield, requested_mode)
     stored = _read_chain_store(store_path)
     current_keys = {reference for _, reference in pairs}
     missing = [(index, observation) for index, (observation, reference) in enumerate(pairs) if reference not in stored]
-    contracts = store.contracts_for_snapshots([pairs[index][1][0] for index, _ in missing])
-    normalized_snapshots = [
-        {
-            "underlying": target,
-            "spot": observation.spot,
-            "as_of": observation.as_of.isoformat(),
-            "feed": observation.feed,
-            "contracts": [
-                _normalize_contract(contract, as_of=observation.as_of, underlying=target)
-                for contract in contracts.get(pairs[index][1][0], [])
-            ],
-        }
-        for index, observation in missing
-    ]
-    provider = HistoricalChainSnapshotProvider(normalized_snapshots, history, rate=rate, dividend_yield=dividend_yield)
     print(
         f"Options dataset {target}: reusing {len(pairs) - len(missing)} stored chains, "
         f"preparing {len(missing)} new or changed sessions",
@@ -552,27 +740,51 @@ def _load_historical_database(
     fork_available = "fork" in mp.get_all_start_methods()
     requested_loader_workers = min(workers, available_cpu_count())
     chain_worker_count = min(requested_loader_workers, len(missing)) if fork_available else 1
-    if chain_worker_count > 1:
-        _CHAIN_PREPARATION_CONTEXT.update({
-            "observations": [observation for _, observation in missing],
-            "provider": provider,
-            "underlying": target,
-        })
-        try:
-            context = mp.get_context("fork")
-            with ProcessPoolExecutor(max_workers=chain_worker_count, mp_context=context) as executor:
-                results = executor.map(_prepare_chain_index, range(len(missing)), chunksize=1)
-                for (index, _), result in zip(missing, results):
-                    prepared[index] = result
-        finally:
-            _CHAIN_PREPARATION_CONTEXT.clear()
-    else:
-        for index, observation in missing:
+    preparation_batches = 0
+    for batch_start in range(0, len(missing), CHAIN_PREPARATION_BATCH_SIZE):
+        batch = missing[batch_start:batch_start + CHAIN_PREPARATION_BATCH_SIZE]
+        preparation_batches += 1
+        contracts = store.contracts_for_snapshots([pairs[index][1][0] for index, _ in batch])
+        normalized_snapshots = [
+            {
+                "underlying": target,
+                "spot": observation.spot,
+                "as_of": observation.as_of.isoformat(),
+                "feed": observation.feed,
+                "contracts": [
+                    _normalize_contract(contract, as_of=observation.as_of, underlying=target)
+                    for contract in contracts.get(pairs[index][1][0], [])
+                ],
+            }
+            for index, observation in batch
+        ]
+        provider = HistoricalChainSnapshotProvider(
+            normalized_snapshots, history, rate=rate, dividend_yield=dividend_yield,
+        )
+        if chain_worker_count > 1:
+            _CHAIN_PREPARATION_CONTEXT.update({
+                "observations": [observation for _, observation in batch],
+                "provider": provider,
+                "underlying": target,
+            })
             try:
-                chain = provider.get_chain(target, as_of=observation.as_of, min_dte=0, max_dte=730)
-                prepared[index] = (chain, None)
-            except (KeyError, TypeError, ValueError, OverflowError) as exc:
-                prepared[index] = (None, f"{type(exc).__name__}: {exc}")
+                context = mp.get_context("fork")
+                with ProcessPoolExecutor(
+                    max_workers=min(chain_worker_count, len(batch)), mp_context=context,
+                ) as executor:
+                    results = executor.map(_prepare_chain_index, range(len(batch)), chunksize=1)
+                    for (index, _), result in zip(batch, results):
+                        prepared[index] = result
+            finally:
+                _CHAIN_PREPARATION_CONTEXT.clear()
+        else:
+            for index, observation in batch:
+                try:
+                    chain = provider.get_chain(target, as_of=observation.as_of, min_dte=0, max_dte=730)
+                    prepared[index] = (chain, None)
+                except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                    prepared[index] = (None, f"{type(exc).__name__}: {exc}")
+        del contracts, normalized_snapshots, provider
     observations: list[ResearchObservation] = []
     entries: dict = {}
     for index, (observation, reference) in enumerate(pairs):
@@ -589,7 +801,10 @@ def _load_historical_database(
     data_mode_name = "historical_chains_spot_close_proxy" if close_proxy else "historical_chains"
     return OptionsResearchDataset(
         observations=tuple(observations),
-        provider=provider,
+        # Replay observations already own their prepared chains. Keep only
+        # underlying-close history here instead of a second full copy of every
+        # raw historical contract snapshot.
+        provider=HistoricalChainSnapshotProvider([], history, rate=rate, dividend_yield=dividend_yield),
         source_path=source.resolve(),
         source_sha256=source_sha256,
         data_mode=("model_or_synthetic_chain_rows" if any(item.feed in {"model", "synthetic"} for item in observations) else data_mode_name),
@@ -602,6 +817,7 @@ def _load_historical_database(
             "workers_requested": requested_loader_workers,
             "workers_used": requested_loader_workers,
             "chain_workers_used": chain_worker_count,
+            "chain_preparation_batches": preparation_batches,
             "source_format": "sqlite_batches",
             "database_read_elapsed_seconds": round(database_elapsed_seconds, 3),
             "jsonl_parse_and_normalize_elapsed_seconds": 0.0,

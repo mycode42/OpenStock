@@ -19,6 +19,8 @@ from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_pat
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
+REPLAY_DATA_WORKER_CAP = 4
+
 
 ET = ZoneInfo("America/New_York")
 SUPPORTED_STRATEGIES = ("vrp", "llm_driven", "directional_overlay", "long_volatility")
@@ -108,11 +110,11 @@ def _error_summary(
 
 def _run_research_job(
     strategy: str, config_path: Path, data_path: Path, underlying: str,
-    parallel_workers: int,
+    replay_data_workers: int,
 ) -> dict:
     report = run_research(
         strategy, config_path=config_path, data_path=data_path, underlying=underlying,
-        parallel_workers=parallel_workers, replay_only=True,
+        parallel_workers=replay_data_workers, replay_only=True,
     )
     return _strategy_summary(strategy, report)
 
@@ -291,10 +293,13 @@ def _render_markdown(report: dict) -> str:
     if worker_map:
         lines.extend(["## Parallelism", ""])
         for strategy, count in worker_map.items():
-            fold_count = report.get("fold_workers_used_by_strategy", {}).get(strategy, 1)
+            data_workers = report.get("replay_data_workers_used_by_strategy", {}).get(strategy)
+            if data_workers is None:
+                data_workers = report.get("fold_workers_used_by_strategy", {}).get(strategy, 1)
             lines.append(
                 f"- **{strategy}:** {count} concurrent ticker job(s), "
-                f"up to {fold_count} dataset-loading and fold worker(s) per job"
+                f"{data_workers} historical-chain preparation worker(s) per job; "
+                "the replay itself is sequential"
             )
         lines.append("")
     for strategy, result in report.get("strategies", {}).items():
@@ -481,10 +486,11 @@ def run_automated_options_research(
     configured_fold_workers = config.get("search", {}).get("parallel_workers", 1)
     if isinstance(configured_fold_workers, bool) or not isinstance(configured_fold_workers, int) or configured_fold_workers < 1:
         raise ValueError("search.parallel_workers must be a positive integer")
-    fold_worker_budget = min(configured_fold_workers, available_cpus)
+    replay_data_worker_budget = min(configured_fold_workers, REPLAY_DATA_WORKER_CAP, available_cpus)
     workers_requested_by_strategy = {}
     workers_used_by_strategy = {}
     fold_workers_used_by_strategy = {}
+    replay_data_workers_used_by_strategy = {}
     for strategy, symbols in underlyings_by_strategy.items():
         strategy_limit = configured_workers_by_strategy.get(strategy, configured_workers)
         if isinstance(strategy_limit, bool) or not isinstance(strategy_limit, int) or strategy_limit < 1:
@@ -492,12 +498,14 @@ def run_automated_options_research(
         if workers is not None:
             strategy_limit = min(strategy_limit, workers)
         workers_requested_by_strategy[strategy] = strategy_limit
-        # Ticker jobs run in parallel up to the configured worker count. Fold
-        # processes share the remaining cores, so the total stays within the CPU budget.
+        # This scheduled automation runs full-history replays, not fold search.
+        # Cap parallel historical-chain preparation at the profiled memory-safe
+        # limit while respecting the configured search worker ceiling.
         outer_limit = max(1, min(configured_workers, available_cpus))
         workers_used_by_strategy[strategy] = min(strategy_limit, outer_limit, len(symbols))
-        fold_workers_used_by_strategy[strategy] = min(
-            fold_worker_budget,
+        fold_workers_used_by_strategy[strategy] = 0
+        replay_data_workers_used_by_strategy[strategy] = min(
+            replay_data_worker_budget,
             max(1, available_cpus // workers_used_by_strategy[strategy]),
         )
     worker_count = max(workers_used_by_strategy.values(), default=0)
@@ -615,9 +623,12 @@ def run_automated_options_research(
                 workers_used_by_strategy[strategy] = min(
                     workers_requested_by_strategy[strategy], outer_limit, len(symbols),
                 )
-                fold_workers_used_by_strategy[strategy] = (
-                    min(fold_worker_budget, max(1, available_cpus // workers_used_by_strategy[strategy]))
-                    if workers_used_by_strategy[strategy] else 0
+                fold_workers_used_by_strategy[strategy] = 0
+                replay_data_workers_used_by_strategy[strategy] = (
+                    min(
+                        replay_data_worker_budget,
+                        max(1, available_cpus // workers_used_by_strategy[strategy]),
+                    ) if workers_used_by_strategy[strategy] else 0
                 )
             worker_count = max(workers_used_by_strategy.values(), default=0)
     data_available = any(
@@ -703,7 +714,8 @@ def run_automated_options_research(
         print(
             f"Options research: {len(jobs)} strategy/ticker jobs, "
             f"ticker workers {workers_used_by_strategy}; "
-            f"fold workers {fold_workers_used_by_strategy} "
+            f"historical-chain preparation workers {replay_data_workers_used_by_strategy}; "
+            f"parameter-search folds are not run "
             f"(maximum requested {configured_workers}, CPUs available {available_cpus})",
             flush=True,
         )
@@ -731,7 +743,7 @@ def run_automated_options_research(
                         summary = _run_research_job(
                             job_strategy, config_path_resolved,
                             underlying_data_paths[underlying], underlying,
-                            fold_workers_used_by_strategy[strategy],
+                            replay_data_workers_used_by_strategy[strategy],
                         )
                     except Exception as exc:
                         summary = _error_summary(
@@ -751,7 +763,7 @@ def run_automated_options_research(
                     future = executor.submit(
                         _run_research_job, job_strategy, config_path_resolved,
                         underlying_data_paths[underlying], underlying,
-                        fold_workers_used_by_strategy[strategy],
+                        replay_data_workers_used_by_strategy[strategy],
                     )
                     futures[future] = (job_strategy, underlying, started)
                 for future in as_completed(futures):
@@ -844,6 +856,7 @@ def run_automated_options_research(
         "workers_used_by_strategy": workers_used_by_strategy if enabled else {},
         "fold_workers_requested": configured_fold_workers,
         "fold_workers_used_by_strategy": fold_workers_used_by_strategy if enabled else {},
+        "replay_data_workers_used_by_strategy": replay_data_workers_used_by_strategy if enabled else {},
         "strategies": strategies_report,
         "research_only": True,
         "trade_or_order_actions": 0,
@@ -868,6 +881,7 @@ def run_automated_options_research(
         "workers_used_by_strategy": workers_used_by_strategy if enabled else {},
         "fold_workers_requested": configured_fold_workers,
         "fold_workers_used_by_strategy": fold_workers_used_by_strategy if enabled else {},
+        "replay_data_workers_used_by_strategy": replay_data_workers_used_by_strategy if enabled else {},
         "underlyings_by_strategy": underlyings_by_strategy,
         "eligible_universe": ({
             "status": eligibility_report.get("status"),

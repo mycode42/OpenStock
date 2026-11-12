@@ -330,6 +330,10 @@ def simulate_options_strategy(
 
     def current_chain(observation: ResearchObservation):
         chain = observation.chain
+        if chain is None and observation.chain_error is None:
+            load_chain = getattr(dataset.provider, "get_chain_for_observation", None)
+            if load_chain is not None:
+                chain = load_chain(observation)
         if chain is None:
             quality["missing_chain_observations"] += 1
             return None
@@ -607,6 +611,7 @@ def simulate_options_strategy(
         if observation_session != long_vol_entry_session:
             long_vol_entry_session = observation_session
             long_vol_entries_this_session = 0
+        chain = None
         chain = current_chain(observation)
         if chain is not None:
             chain = _widen_chain(chain, spread_width_multiplier)

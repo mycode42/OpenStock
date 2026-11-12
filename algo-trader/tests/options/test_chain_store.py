@@ -37,6 +37,7 @@ def _load(path: Path, cache_dir: Path):
 
 def test_only_new_or_changed_sessions_are_prepared(tmp_path, monkeypatch):
     monkeypatch.setattr(dataset_module, "CHAIN_CACHE_DIR", tmp_path / "chains")
+    monkeypatch.setattr(dataset_module, "CHAIN_PREPARATION_BATCH_SIZE", 2)
     # Write the store synchronously, so the next load in this test can read it.
     monkeypatch.setattr(dataset_module, "_write_chain_store", dataset_module._write_chain_store_now)
     db = tmp_path / "history.sqlite3"
@@ -45,6 +46,7 @@ def test_only_new_or_changed_sessions_are_prepared(tmp_path, monkeypatch):
 
     first = _load(db, tmp_path)
     assert first.loading_parallelism["chains_prepared"] == 3
+    assert first.loading_parallelism["chain_preparation_batches"] == 2
     assert [item.chain is not None for item in first.observations] == [True, True, True]
 
     second = _load(db, tmp_path)
@@ -62,6 +64,32 @@ def test_only_new_or_changed_sessions_are_prepared(tmp_path, monkeypatch):
     assert fourth.loading_parallelism["chains_prepared"] == 1, "only the changed session is prepared again"
     changed = next(item for item in fourth.observations if item.as_of.date() == date(2026, 10, 27))
     assert min(quote.bid for quote in changed.chain.contracts) == 5.4
+
+
+def test_replay_chain_batches_stay_disk_backed_and_resume(tmp_path, monkeypatch):
+    monkeypatch.setattr(dataset_module, "CHAIN_CACHE_DIR", tmp_path / "chains")
+    monkeypatch.setattr(dataset_module, "CHAIN_PREPARATION_BATCH_SIZE", 2)
+    db = tmp_path / "history.sqlite3"
+    _store_with_days(db, [date(2026, 10, 26), date(2026, 10, 27), date(2026, 10, 28)])
+
+    dataset = load_options_research_dataset(
+        db, underlying="SPY", rate=0.04, dividend_yield=0.015,
+        workers=2, lazy_chains=True,
+    )
+
+    assert dataset.loading_parallelism["chains_prepared"] == 3
+    assert dataset.loading_parallelism["chain_workers_used"] == 2
+    assert all(item.chain is None and item.chain_error is None for item in dataset.observations)
+    chain = dataset.provider.get_chain_for_observation(dataset.observations[0])
+    assert chain is not None and len(chain.contracts) == 3
+
+    resumed = load_options_research_dataset(
+        db, underlying="SPY", rate=0.04, dividend_yield=0.015,
+        workers=2, lazy_chains=True,
+    )
+    assert resumed.loading_parallelism["chains_prepared"] == 0
+    assert resumed.loading_parallelism["chains_reused"] == 3
+    assert resumed.provider.get_chain_for_observation(resumed.observations[0]) is not None
 
 
 def test_the_store_keeps_one_file_per_underlying_and_drops_stale_sessions(tmp_path, monkeypatch):
