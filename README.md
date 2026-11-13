@@ -59,7 +59,7 @@ Check the setup at any time with `curl -s http://127.0.0.1:3000/api/demo-status`
 The Algo Trader is a research and paper-trading engine: a rule-based equity coordinator with a regime committee, a separate options paper account and a momentum paper account.
 It comes with an equity and options research lab with walk-forward validation and nightly full history simulation runs.
 
-  <img width="1000" alt="Momentum" src="https://github.com/user-attachments/assets/adaf8175-c1dd-4ff8-ab13-2e36b4571856" />
+  <img width="1000" alt="Momentum" src="https://github.com/user-attachments/assets/cbcfdf20-5318-4d39-b9f6-fa0ca7299800" />
 
 Requirements: Python 3.12 and Poetry 2.x (Python 3.11 and 3.13 are not supported), plus a C compiler toolchain for the optional Cython extensions.
 
