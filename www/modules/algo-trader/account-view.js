@@ -1,6 +1,6 @@
 import { escapeHtml } from '../escape.js';
 import { money, signedMoney, signedPercent, dateTime, timeOnly, classForReturn, statusClass, activityIcon } from './format.js';
-import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js?life-pl=1';
+import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js?life-pl=1&sparkline-1d=1';
 import { renderStrategyPerformance } from './strategies.js';
 
 const ACTIVITY_PAGE_SIZE = 10;

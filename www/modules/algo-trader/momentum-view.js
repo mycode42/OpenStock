@@ -1,5 +1,5 @@
 import { escapeHtml } from '../escape.js';
-import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js?life-pl=1';
+import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js?life-pl=1&sparkline-1d=1';
 import { activityIcon, classForReturn, dateOnly, dateTime, money, signedMoney, signedPercent, statusClass, timeOnly } from './format.js';
 import { renderAccountSwitch } from './account-view.js';
 

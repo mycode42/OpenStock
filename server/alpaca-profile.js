@@ -118,7 +118,7 @@ async function alpacaJournalData(app) {
         positions: positionView,
         // Recent fills for the table; the analytics below use the full history.
         fills: fillView.slice(-100).reverse(),
-        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, snapshots: db.getAlpacaEquitySnapshots(), now: new Date() })
+        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, snapshots: db.getAlpacaEquitySnapshots(), now: new Date(), equityCurveStartAt: app.locals.demoMode === true ? null : undefined })
     };
 }
 

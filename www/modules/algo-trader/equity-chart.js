@@ -176,13 +176,25 @@ export function renderChart(history, range, charts) {
 }
 
 export function sparklinePath(history) {
-    const values = (history || []).slice(-14).map(point => Number(point.equity)).filter(Number.isFinite);
-    if (values.length < 2) return 'M1 27 L119 27';
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    return values.map((value, index) => {
-        const x = 1 + 118 * index / (values.length - 1);
-        const y = 28 - ((value - min) / (max - min || 1)) * 24;
+    const points = validPoints(history);
+    if (points.length < 2) return 'M1 27 L119 27';
+    const end = snapshotTime(points[points.length - 1]);
+    const start = end - DAY_MS;
+    const visible = points.filter(point => {
+        const time = snapshotTime(point);
+        return time >= start && time <= end;
+    });
+    if (visible.length < 2) return 'M1 27 L119 27';
+    const values = visible.map(point => Number(point.equity));
+    const low = Math.min(...values);
+    const high = Math.max(...values);
+    const padding = Math.max((high - low) * 0.16, Math.max(Math.abs(high), 1) * 0.0005);
+    const span = high - low + 2 * padding;
+    return visible.map((point, index) => {
+        const value = Number(point.equity);
+        const fraction = (snapshotTime(point) - start) / DAY_MS;
+        const x = 1 + 118 * fraction;
+        const y = 28 - ((value - low + padding) / span) * 24;
         return `${index ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`;
     }).join(' ');
 }
