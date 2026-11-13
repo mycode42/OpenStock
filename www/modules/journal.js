@@ -205,8 +205,9 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line', e
         x: slot.x,
         y: top + plotHeight - ((slot.point.value - low) / (high - low || 1) * plotHeight)
     }] : []);
-    const performanceDetail = point => equityChange ? 'Equity change' : `${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`;
-    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: daily ? journalDayMonthLabel(point.at) : journalMonthLabel(point.at), secondary: '', tertiary: '', price: journalSigned(value), detail: performanceDetail(point), change: capitalBase > 0 ? value / capitalBase * 100 : null });
+    const performanceDetail = point => `${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`;
+    const chartDetail = point => equityChange ? 'Equity change' : performanceDetail(point);
+    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: daily ? journalDayMonthLabel(point.at) : journalMonthLabel(point.at), secondary: '', tertiary: '', price: journalSigned(value), detail: chartDetail(point), change: capitalBase > 0 ? value / capitalBase * 100 : null });
     const hoverPoints = fixedSlots.map(({ point, label, x }) => point
         ? performanceHoverPoint(point, point.value, x, top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight))
         : { x: Number(x.toFixed(1)), y: Number((top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)).toFixed(1)), primary: label || 'No data', secondary: '', tertiary: '', price: 'N/A', detail: '', change: null });
@@ -244,7 +245,7 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line', e
     const xLabelClass = daily ? 'journal-equity-x-labels daily-performance-labels' : 'journal-equity-x-labels';
     const lastPoint = [...fixedSlots].reverse().find(slot => slot.point)?.point;
     const latestChange = lastPoint && capitalBase > 0 ? lastPoint.value / capitalBase * 100 : undefined;
-    return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(lastPoint ? journalSigned(lastPoint.value) : 'N/A', latestChange, lastPoint ? performanceDetail(lastPoint) : '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div></div>`;
+    return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(lastPoint ? journalSigned(lastPoint.value) : 'N/A', latestChange, lastPoint ? chartDetail(lastPoint) : '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div></div>`;
 }
 
 function journalChartControls(active, chartType) {
