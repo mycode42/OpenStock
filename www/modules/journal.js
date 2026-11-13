@@ -69,12 +69,10 @@ function journalKpi(label, displayValue, hint = '', cssClass = '', visual = '') 
     return `<div class="journal-kpi" title="${escapeHtml(hint)}"><div class="journal-kpi-head"><div>${escapeHtml(label)}</div><strong class="${cssClass}">${displayValue}</strong></div>${visual ? `<div class="journal-kpi-visual">${visual}</div>` : ''}</div>`;
 }
 
-function journalKpiSparkline(values, cssClass = '') {
-    const clean = (values || []).map(Number).filter(Number.isFinite);
-    if (clean.length < 2) return '<div class="journal-kpi-visual-empty">Trend appears as snapshots accumulate</div>';
-    const minimum = Math.min(...clean), maximum = Math.max(...clean);
-    const span = maximum - minimum || 1;
-    const points = clean.map((value, index) => `${(4 + index / (clean.length - 1) * 112).toFixed(1)},${(28 - (value - minimum) / span * 22).toFixed(1)}`);
+function journalKpiSparkline(curve, cssClass = '') {
+    const geometry = equityCurveSamples(curve);
+    if (!geometry) return '<div class="journal-kpi-visual-empty">Trend appears as snapshots accumulate</div>';
+    const points = geometry.samples.map(({ x, y }) => `${(4 + x * 112).toFixed(1)},${(4 + y * 24).toFixed(1)}`);
     const line = `M${points.join(' L')}`;
     const area = `${line} L116,31 L4,31 Z`;
     return `<svg class="journal-kpi-sparkline ${cssClass}" viewBox="0 0 120 32" preserveAspectRatio="none" aria-hidden="true"><path class="journal-kpi-sparkline-area" d="${area}"/><path class="journal-kpi-sparkline-line" d="${line}"/></svg>`;
@@ -112,6 +110,23 @@ function equityAxisBounds(minimum, maximum, ticks = 5) {
     return { low, high, values };
 }
 
+function equityCurveSamples(points) {
+    const clean = (points || []).filter(point => Number.isFinite(Number(point.equity_usd)) && parseOpenStockDate(point.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
+    if (clean.length < 2) return null;
+    const values = clean.map(point => Number(point.equity_usd));
+    const minimum = Math.min(...values), maximum = Math.max(...values), padding = Math.max((maximum - minimum) * 0.08, 1);
+    const { low, high, values: axisValues } = equityAxisBounds(minimum - padding, maximum + padding);
+    const times = clean.map(point => parseOpenStockDate(point.at).getTime());
+    const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
+    const samples = clean.map((point, index) => ({
+        point,
+        value: values[index],
+        x: (times[index] - firstTime) / timeRange,
+        y: 1 - (values[index] - low) / (high - low || 1),
+    }));
+    return { clean, values, low, high, axisValues, times, firstTime, timeRange, samples };
+}
+
 function journalDayMonthLabel(value) {
     const date = parseOpenStockDate(value);
     if (!date) return '';
@@ -141,15 +156,11 @@ function journalAxisMoney(value, step = 1000) {
 }
 
 function renderEquityCurve(points, resolution = 'snapshot', initialCapital) {
-    const clean = (points || []).filter(point => Number.isFinite(Number(point.equity_usd)) && parseOpenStockDate(point.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
-    if (clean.length < 2) return '<div class="journal-empty">Insufficient data — equity snapshots begin after initial capital is recorded.</div>';
-    const values = clean.map(point => Number(point.equity_usd));
-    const min = Math.min(...values), max = Math.max(...values), padding = Math.max((max - min) * 0.08, 1);
+    const geometry = equityCurveSamples(points);
+    if (!geometry) return '<div class="journal-empty">Insufficient data — equity snapshots begin after initial capital is recorded.</div>';
+    const { clean, values, low, high, axisValues, times, firstTime, timeRange, samples } = geometry;
     const width = 800, height = 260, left = 40, right = 12, top = 10, bottom = 32, plotWidth = width - left - right, plotHeight = height - top - bottom;
-    const { low, high, values: axisValues } = equityAxisBounds(min - padding, max + padding);
-    const times = clean.map(point => parseOpenStockDate(point.at).getTime());
-    const firstTime = times[0], timeRange = times[times.length - 1] - firstTime || 1;
-    const coordinates = clean.map((point, index) => ({ point, value: Number(point.equity_usd), x: left + (times[index] - firstTime) / timeRange * plotWidth, y: top + plotHeight - ((Number(point.equity_usd) - low) / (high - low || 1) * plotHeight) }));
+    const coordinates = samples.map(({ point, value, x, y }) => ({ point, value, x: left + x * plotWidth, y: top + y * plotHeight }));
     const line = coordinates.map(({ x, y }) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
     const capitalBase = Number(initialCapital);
     const hoverPoints = coordinates.map(({ point, value, x, y }) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: journalDayMonthLabel(point.at), secondary: '', tertiary: '', price: journalMoney(value), change: capitalBase > 0 ? (value / capitalBase - 1) * 100 : null }));
@@ -357,7 +368,7 @@ function renderJournal() {
     const performance = analytics?.performance || {};
     const currentPnl = (Number(realized.net_usd) || 0) + (Number(capital.unrealized_pnl_usd) || 0);
     container.innerHTML = `<header><h1>Trading Journal</h1></header><div id="ac"></div>${analytics?.equity_available ? '' : '<div class="alert-box info">The equity curve appears once Alpaca reports portfolio history.</div>'}
-      <div class="journal-kpi-grid journal-kpi-featured-grid">${journalKpi('Current Capital', journalMoney(capital.current_usd), 'Cash plus priced open positions.', '', journalKpiSparkline((analytics?.equity_curve || []).map(point => point.equity_usd)))}${journalKpi('Net P/L', journalSigned(currentPnl), 'Realized plus unrealized P/L; capital events excluded.', journalClass(currentPnl), journalKpiBalance(currentPnl, capital.net_contributions_usd))}${journalKpi('Return', journalPercent(capital.current_return_pct), 'Current capital less net owner contributions divided by net owner contributions.', journalClass(capital.current_return_pct), journalKpiRing(capital.current_return_pct, 25, 'Return magnitude · 25% scale'))}${journalKpi('Win Rate', journalPercent(tradeStats.win_rate_pct), 'Winning completed trades divided by completed trades.', '', journalKpiRing(tradeStats.win_rate_pct, 100, 'Winning closed trades'))}</div>
+      <div class="journal-kpi-grid journal-kpi-featured-grid">${journalKpi('Current Capital', journalMoney(capital.current_usd), 'Cash plus priced open positions.', '', journalKpiSparkline(analytics?.equity_curve || []))}${journalKpi('Net P/L', journalSigned(currentPnl), 'Realized plus unrealized P/L; capital events excluded.', journalClass(currentPnl), journalKpiBalance(currentPnl, capital.net_contributions_usd))}${journalKpi('Return', journalPercent(capital.current_return_pct), 'Current capital less net owner contributions divided by net owner contributions.', journalClass(capital.current_return_pct), journalKpiRing(capital.current_return_pct, 25, 'Return magnitude · 25% scale'))}${journalKpi('Win Rate', journalPercent(tradeStats.win_rate_pct), 'Winning completed trades divided by completed trades.', '', journalKpiRing(tradeStats.win_rate_pct, 100, 'Winning closed trades'))}</div>
       <div class="journal-kpi-grid journal-kpi-secondary-grid">${journalKpi('Available Cash', journalMoney(capital.available_cash_usd), 'Capital events less purchases/fees plus sales.')}${journalKpi('Avg Daily', `${journalSigned(performance.average_daily_pnl_usd)} · ${journalPercent(performance.average_daily_return_pct)}`, 'Average realized P/L per completed trading day and its percentage of contributed capital.', journalClass(performance.average_daily_pnl_usd))}${journalKpi('Avg Monthly', `${journalSigned(performance.average_monthly_pnl_usd)} · ${journalPercent(performance.average_monthly_return_pct)}`, 'Average realized P/L per completed month and its percentage of contributed capital.', journalClass(performance.average_monthly_pnl_usd))}${journalKpi('YTD P/L', journalSigned(performance.ytd_pnl_usd), 'Net P/L from completed trades this calendar year.', journalClass(performance.ytd_pnl_usd))}${journalKpi('Est. Yearly Profit', journalSigned(performance.estimated_yearly_profit_usd), 'Observed-rate annual profit illustration.', journalClass(performance.estimated_yearly_profit_usd))}${journalKpi('Open Positions', String(tradeStats.open ?? 0), 'Lots not yet closed.')}</div>
       <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution)}</div>
       <div class="card journal-performance-card"></div>
