@@ -1,5 +1,5 @@
 import { escapeHtml } from '../escape.js';
-import { money, signedMoney, signedPercent, dateTime, timeOnly, dateOnly, classForReturn, statusClass, activityIcon } from './format.js';
+import { money, signedMoney, signedPercent, dateTime, timeOnly, classForReturn, statusClass, activityIcon } from './format.js';
 import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js?life-pl=1';
 import { renderStrategyPerformance } from './strategies.js';
 
@@ -31,7 +31,6 @@ export function renderAccountPage({ mode, snapshot, settings, range, activityPag
     const activityStart = activityPage * ACTIVITY_PAGE_SIZE;
     const visibleActivities = activities.slice(activityStart, activityStart + ACTIVITY_PAGE_SIZE);
     const latestSnapshot = history[history.length - 1];
-    const snapshotDate = latestSnapshot?.date ? dateOnly(latestSnapshot.date) : 'no snapshots';
     const pauseReasons = Array.isArray(account.entry_pause_reasons) ? account.entry_pause_reasons : [];
     const marketStatus = String(account.market_status || account.market_state || '').toUpperCase();
     const regimeLabel = String(account.regime || 'unknown').replaceAll('_', ' ').toUpperCase();
@@ -77,7 +76,7 @@ export function renderAccountPage({ mode, snapshot, settings, range, activityPag
         ${account.entries_paused && pauseReasons.length ? `<section class="algo-paused-notice ${marketClosedPause ? 'market-closed' : ''}"><strong>${pauseNoticeTitle}</strong><span>${escapeHtml(pauseNoticeDetail)}</span></section>` : ''}
 
         <section class="algo-kpi-grid" aria-label="Algo account KPIs">
-            <article class="algo-kpi algo-kpi-featured"><div class="algo-kpi-label">ACCOUNT EQUITY <span class="algo-kpi-period">${escapeHtml(snapshotDate)}</span></div><strong>${money(metrics.equity)}</strong><div class="algo-kpi-foot"><span>${isOptions ? 'Open positions' : 'Cash'} ${isOptions ? latestSnapshot?.position_count ?? '—' : money(latestSnapshot?.cash)}</span><span>${isOptions ? 'Options equity' : 'Invested'} ${isOptions ? money(metrics.equity) : money(latestSnapshot?.invested)}</span></div><div class="algo-kpi-spark"><svg viewBox="0 0 120 32" aria-hidden="true"><path d="${sparklinePath(history)}"/></svg></div></article>
+            <article class="algo-kpi algo-kpi-featured"><div class="algo-kpi-label">ACCOUNT EQUITY</div><strong>${money(metrics.equity)}</strong><div class="algo-kpi-foot"><span>${isOptions ? 'Open positions' : 'Cash'} ${isOptions ? latestSnapshot?.position_count ?? '—' : money(latestSnapshot?.cash)}</span>${isOptions ? '' : `<span>Invested ${money(latestSnapshot?.invested)}</span>`}</div><div class="algo-kpi-spark"><svg viewBox="0 0 120 32" aria-hidden="true"><path d="${sparklinePath(history)}"/></svg></div></article>
             <article class="algo-kpi"><div class="algo-kpi-label">EQUITY CHANGE</div><strong class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)}</strong><div class="algo-kpi-foot"><span class="${classForReturn(metrics.total_pnl)}">${signedMoney(metrics.total_pnl)}</span><span>since first snapshot</span></div></article>
             <article class="algo-kpi"><div class="algo-kpi-label">LATEST DAILY P&amp;L</div><strong class="${classForReturn(metrics.daily_pnl)}">${signedMoney(metrics.daily_pnl)}</strong><div class="algo-kpi-foot"><span class="${classForReturn(metrics.daily_pnl_pct)}">${signedPercent(metrics.daily_pnl_pct, 3)}</span><span>last account snapshot</span></div></article>
             <article class="algo-kpi"><div class="algo-kpi-label">MAX DRAWDOWN</div><strong class="algo-kpi-negative">${metrics.max_drawdown_pct === null ? '—' : `${metrics.max_drawdown_pct.toFixed(2)}%`}</strong><div class="algo-kpi-foot"><span>snapshot series</span><span>${history.length} points</span></div></article>

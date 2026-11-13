@@ -37,6 +37,12 @@ All notable changes to OpenStock, including the Algo Trader. Each release lists 
 - The options research history had no P/L for nightly reports written before simulation KPIs were stored. P/L is now derived from their replays.
 - The options lab progress bar stayed at 0% until a replay finished. Replays now report progress while they run.
 
+## 3.5.2 - 2026-11-13
+
+### Fixed
+
+- Algo Trader equity KPI cards no longer show the current date. The Options card removes its duplicate equity amount, and Momentum now shows the miniature equity chart.
+
 ## 3.5.1 - 2026-11-12
 
 ### Changed

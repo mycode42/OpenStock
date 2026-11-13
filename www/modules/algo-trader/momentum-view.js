@@ -1,5 +1,5 @@
 import { escapeHtml } from '../escape.js';
-import { RANGES, localTimeZone, renderChart } from './equity-chart.js?life-pl=1';
+import { RANGES, localTimeZone, renderChart, sparklinePath } from './equity-chart.js?life-pl=1';
 import { activityIcon, classForReturn, dateOnly, dateTime, money, signedMoney, signedPercent, statusClass, timeOnly } from './format.js';
 import { renderAccountSwitch } from './account-view.js';
 
@@ -22,10 +22,9 @@ function unavailable(payload, error) {
 
 function kpis(payload) {
     const metrics = payload.metrics || {};
-    const latest = (payload.history || []).at(-1);
     const dayChange = Number.isFinite(payload.last_equity) ? payload.equity - payload.last_equity : null;
     return `<section class="algo-kpi-grid" aria-label="Momentum account KPIs">
-        <article class="algo-kpi algo-kpi-featured"><div class="algo-kpi-label">ACCOUNT EQUITY <span class="algo-kpi-period">${escapeHtml(latest ? dateOnly(latest.date) : 'no history')}</span></div><strong>${money(payload.equity)}</strong><div class="algo-kpi-foot"><span>Cash ${escapeHtml(money(payload.cash))}</span><span>${escapeHtml(signedMoney(dayChange))} today</span></div></article>
+        <article class="algo-kpi algo-kpi-featured"><div class="algo-kpi-label">ACCOUNT EQUITY</div><strong>${money(payload.equity)}</strong><div class="algo-kpi-foot"><span>Cash ${escapeHtml(money(payload.cash))}</span><span>${escapeHtml(signedMoney(dayChange))} today</span></div><div class="algo-kpi-spark"><svg viewBox="0 0 120 32" aria-hidden="true"><path d="${sparklinePath(payload.history || [])}"/></svg></div></article>
         <article class="algo-kpi"><div class="algo-kpi-label">EQUITY CHANGE</div><strong class="${classForReturn(metrics.total_return_pct)}">${signedPercent(metrics.total_return_pct)}</strong><div class="algo-kpi-foot"><span>since first snapshot</span><span>${signedMoney(metrics.total_pnl)}</span></div></article>
         <article class="algo-kpi"><div class="algo-kpi-label">LATEST DAILY P&amp;L</div><strong class="${classForReturn(metrics.daily_pnl)}">${signedMoney(metrics.daily_pnl)}</strong><div class="algo-kpi-foot"><span class="${classForReturn(metrics.daily_pnl_pct)}">${signedPercent(metrics.daily_pnl_pct)}</span></div></article>
         <article class="algo-kpi"><div class="algo-kpi-label">MAX DRAWDOWN</div><strong class="algo-kpi-negative">${metrics.max_drawdown_pct === null || metrics.max_drawdown_pct === undefined ? '—' : `${Number(metrics.max_drawdown_pct).toFixed(2)}%`}</strong><div class="algo-kpi-foot"><span>over the history shown</span></div></article>
