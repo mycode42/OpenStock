@@ -190,7 +190,7 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
     const periodSlotWidth = plotWidth / periodCount;
     const fixedSlots = daily
         ? Array.from({ length: periodCount }, (_, index) => {
-            const point = visibleRows[index] || null;
+            const point = visibleRows[index - (periodCount - visibleRows.length)] || null;
             const label = point ? journalDayMonthLabel(point.at) : '';
             return { point, label, x: left + periodSlotWidth * (index + .5), left: left + periodSlotWidth * index, width: periodSlotWidth };
         })
