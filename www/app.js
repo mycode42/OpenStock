@@ -2,7 +2,7 @@ import { apiRequest } from './modules/api.js';
 import { createState, sortedStocks, indexStocks } from './modules/state.js';
 import { createCharts } from './modules/charts.js?demo-mode=1&alpaca-usd-only=1';
 import { createDashboard } from './modules/dashboard.js?title-cleanup=1&demo-mode=1&alpaca-usd-only=1&silent-abort=1';
-import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1';
+import { createJournal } from './modules/journal.js?trade-pagination=2&title-cleanup=1&alpaca-usd-only=1&equity-periods=1';
 import { createAlgoTrader } from './modules/algo-trader.js?v=3.5.2&research-control=9&research-lab=3&options-api-guard=1&strategy-scorecard=2&appearance=1&optimizer-table=1&chart-range=1&coordinator-regime=1&research-page=1&demo-mode=1&split-modules=1&momentum-demo=2&life-pl=1&loading-mark=1';
 import { createSettings } from './modules/settings.js';
 import { createConfig } from './modules/config.js?v=3.5.2&demo-real=3';

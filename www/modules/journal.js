@@ -169,7 +169,7 @@ function renderEquityCurve(points, resolution = 'snapshot', initialCapital) {
     return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(journalMoney(lastEquity), equityChange, '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels equity-x-labels" aria-hidden="true">${xLabels}</div></div></div>`;
 }
 
-function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
+function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line', equityChange = false) {
     const clean = (rows || []).filter(row => Number.isFinite(Number(row.pnl_usd)) && row.day).map(row => ({ ...row, at: `${row.day}T12:00:00Z`, value: Number(row.pnl_usd) })).filter(row => parseOpenStockDate(row.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
     const daily = period === 'daily';
     const periodName = daily ? 'Daily' : 'Monthly';
@@ -205,7 +205,7 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
         x: slot.x,
         y: top + plotHeight - ((slot.point.value - low) / (high - low || 1) * plotHeight)
     }] : []);
-    const performanceDetail = point => `${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`;
+    const performanceDetail = point => equityChange ? 'Equity change' : `${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`;
     const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: daily ? journalDayMonthLabel(point.at) : journalMonthLabel(point.at), secondary: '', tertiary: '', price: journalSigned(value), detail: performanceDetail(point), change: capitalBase > 0 ? value / capitalBase * 100 : null });
     const hoverPoints = fixedSlots.map(({ point, label, x }) => point
         ? performanceHoverPoint(point, point.value, x, top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight))
@@ -238,7 +238,7 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
     const linePoints = chartType === 'line' ? lineRuns.flatMap(run => run).join(' ') : '';
     const markers = chartType === 'line' ? coordinates.map(({ x, y, value }) => `<span class="performance-point ${value < 0 ? 'negative' : 'positive'}" style="left:${(x / width * 100).toFixed(3)}%;top:${(y / height * 100).toFixed(3)}%"></span>`).join('') : '';
     const zeroLine = `<line class="equity-axis-baseline performance-zero-line" x1="${left}" x2="${width - right}" y1="${zeroY}" y2="${zeroY}"/>`;
-    const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}${zeroLine}</g>${bars}`, lineClass: `performance-line ${period}`, linePoints, lineSegments, hoverPoints, ariaLabel: `${periodName} realized P/L ${chartType} chart in EUR` });
+    const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}${zeroLine}</g>${bars}`, lineClass: `performance-line ${period}`, linePoints, lineSegments, hoverPoints, ariaLabel: `${periodName} ${equityChange ? 'equity change' : 'realized P/L'} ${chartType} chart in USD` });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}${journalAxisMoney(value)}</span>`).join('');
     const xLabels = fixedSlots.map(({ x, label }) => `<span style="left:${(x / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
     const xLabelClass = daily ? 'journal-equity-x-labels daily-performance-labels' : 'journal-equity-x-labels';
@@ -254,8 +254,12 @@ function journalChartControls(active, chartType) {
 }
 
 function renderJournalChart(analytics, mode, chartType, initialCapital) {
-    if (mode === 'daily') return renderPerformanceCurve(analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_usd), chartType);
-    if (mode === 'monthly') return renderPerformanceCurve(analytics?.monthly_performance?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_usd), chartType);
+    const equityPeriods = analytics?.equity_period_performance;
+    if (mode === 'daily') return renderPerformanceCurve(equityPeriods?.daily || analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_usd), chartType, Boolean(equityPeriods));
+    if (mode === 'monthly') {
+        const rows = equityPeriods?.monthly || analytics?.monthly_performance;
+        return renderPerformanceCurve(rows?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_usd), chartType, Boolean(equityPeriods));
+    }
     return renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution, initialCapital);
 }
 
@@ -364,7 +368,8 @@ function renderJournal() {
     const chartHeader = chartCard?.querySelector('.section-header');
     if (chartCard && chartHeader) {
         chartHeader.classList.add('journal-chart-header');
-        chartHeader.querySelector('.section-title').textContent = journalChartMode === 'equity' ? 'Equity Curve' : journalChartMode === 'daily' ? 'Daily Performance' : 'Monthly Performance';
+        const equityPeriods = analytics?.equity_period_performance;
+        chartHeader.querySelector('.section-title').textContent = journalChartMode === 'equity' ? 'Equity Curve' : journalChartMode === 'daily' ? (equityPeriods ? 'Daily Equity Change' : 'Daily Performance') : (equityPeriods ? 'Monthly Equity Change' : 'Monthly Performance');
         chartHeader.insertAdjacentHTML('beforeend', journalChartControls(journalChartMode, journalPerformanceChartType));
         [...chartCard.children].filter(child => child !== chartHeader).forEach(child => child.remove());
         chartHeader.insertAdjacentHTML('afterend', renderJournalChart(analytics, journalChartMode, journalPerformanceChartType, analytics?.capital?.net_contributions_usd));

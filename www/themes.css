@@ -1800,3 +1800,9 @@ html[data-theme] #page-journal .journal-kpi-featured-grid .journal-kpi:nth-child
 html[data-theme] .algo-kpi-grid .algo-kpi:nth-child(5) {
   border-top-color: rgba(200, 255, 0, .45);
 }
+
+
+/* Keep Journal KPI ring tracks legible on light surfaces. */
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-kpi-ring-track {
+  stroke: var(--os-border);
+}
