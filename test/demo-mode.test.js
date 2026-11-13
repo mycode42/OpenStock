@@ -111,7 +111,7 @@ test('the demo account, equity curve and journal agree on return and closed trad
         account, positions: await broker.getPositions(), fills: await broker.getActivities('FILL'),
         activities: await broker.getActivities('CSD,CSW'), history, now: NOW,
     });
-    assert.equal(analytics.trades.closed, 6);
+    assert.equal(analytics.trades.closed, 20);
     assert.equal(analytics.trades.open, 3);
     assert.ok(analytics.trades.win_rate_pct > 0);
     assert.notEqual(analytics.performance.ytd_pnl_usd, 0);

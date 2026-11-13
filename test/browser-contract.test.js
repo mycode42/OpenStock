@@ -125,7 +125,7 @@ test('Journal loads read-only Alpaca account activity', () => {
 
 test('Journal displays instrument and quantity with trades without exposing trade IDs or a dividends column', () => {
     const journal = fs.readFileSync(path.join(__dirname, '..', 'www', 'modules', 'journal.js'), 'utf8');
-    assert.match(journal, /<th>Trade No\.<\/th><th>Opened<\/th><th>Status<\/th><th>Instrument<\/th><th>Quantity<\/th><th>Buy-in Price<\/th><th>Sell Price<\/th><th>Net P\/L<\/th><th>Return<\/th>/);
+    assert.match(journal, /<th>Trade No\.<\/th><th>Opened<\/th><th>Closed<\/th><th>Status<\/th><th>Instrument<\/th><th>Quantity<\/th><th>Buy-in Price<\/th><th>Sell Price<\/th><th>Net P\/L<\/th><th>Return<\/th>/);
     assert.doesNotMatch(journal, /<th>Trade ID<\/th>/);
     assert.doesNotMatch(journal, /dividendHeader|tradeHeaders|<th>Dividends<\/th>/);
     assert.match(journal, /trade\.trade_number/);

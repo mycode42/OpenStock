@@ -113,12 +113,13 @@ async function alpacaJournalData(app) {
     }));
     return {
         broker: 'alpaca',
+        demo_mode: app.locals.demoMode === true,
         currency: 'USD',
         account: accountView,
         positions: positionView,
         // Recent fills for the table; the analytics below use the full history.
         fills: fillView.slice(-100).reverse(),
-        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, snapshots: db.getAlpacaEquitySnapshots(), now: new Date(), equityCurveStartAt: app.locals.demoMode === true ? null : undefined, demoMode: app.locals.demoMode === true })
+        analytics: buildJournalAnalytics({ account: accountView, positions: positionView, fills: fillView, activities: activities || [], history, snapshots: db.getAlpacaEquitySnapshots(), now: new Date(), equityCurveStartAt: app.locals.demoMode === true ? null : undefined })
     };
 }
 

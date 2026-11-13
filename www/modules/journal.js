@@ -7,6 +7,7 @@ export function createJournal(context) {
     const openJournalSections = new Set();
     const { charts } = context;
     let journalData = null;
+    let journalDefaultsInitialized = false;
     let journalTradePage = 1;
     const TRADES_PER_PAGE = 15;
     const tradingAnalytics = () => journalData?.analytics || {};
@@ -169,7 +170,7 @@ function renderEquityCurve(points, resolution = 'snapshot', initialCapital) {
     return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(journalMoney(lastEquity), equityChange, '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}<div class="journal-equity-x-labels equity-x-labels" aria-hidden="true">${xLabels}</div></div></div>`;
 }
 
-function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line', equityChange = false) {
+function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line') {
     const clean = (rows || []).filter(row => Number.isFinite(Number(row.pnl_usd)) && row.day).map(row => ({ ...row, at: `${row.day}T12:00:00Z`, value: Number(row.pnl_usd) })).filter(row => parseOpenStockDate(row.at)).sort((left, right) => parseOpenStockDate(left.at).getTime() - parseOpenStockDate(right.at).getTime());
     const daily = period === 'daily';
     const periodName = daily ? 'Daily' : 'Monthly';
@@ -206,8 +207,7 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line', e
         y: top + plotHeight - ((slot.point.value - low) / (high - low || 1) * plotHeight)
     }] : []);
     const performanceDetail = point => `${point.trades} ${point.trades === 1 ? 'trade' : 'trades'}`;
-    const chartDetail = point => equityChange ? 'Equity change' : performanceDetail(point);
-    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: daily ? journalDayMonthLabel(point.at) : journalMonthLabel(point.at), secondary: '', tertiary: '', price: journalSigned(value), detail: chartDetail(point), change: capitalBase > 0 ? value / capitalBase * 100 : null });
+    const performanceHoverPoint = (point, value, x, y) => ({ x: Number(x.toFixed(1)), y: Number(y.toFixed(1)), primary: daily ? journalDayMonthLabel(point.at) : journalMonthLabel(point.at), secondary: '', tertiary: '', price: journalSigned(value), detail: performanceDetail(point), change: capitalBase > 0 ? value / capitalBase * 100 : null });
     const hoverPoints = fixedSlots.map(({ point, label, x }) => point
         ? performanceHoverPoint(point, point.value, x, top + plotHeight - ((point.value - low) / (high - low || 1) * plotHeight))
         : { x: Number(x.toFixed(1)), y: Number((top + plotHeight - ((0 - low) / (high - low || 1) * plotHeight)).toFixed(1)), primary: label || 'No data', secondary: '', tertiary: '', price: 'N/A', detail: '', change: null });
@@ -239,13 +239,13 @@ function renderPerformanceCurve(rows, period, capitalBase, chartType = 'line', e
     const linePoints = chartType === 'line' ? lineRuns.flatMap(run => run).join(' ') : '';
     const markers = chartType === 'line' ? coordinates.map(({ x, y, value }) => `<span class="performance-point ${value < 0 ? 'negative' : 'positive'}" style="left:${(x / width * 100).toFixed(3)}%;top:${(y / height * 100).toFixed(3)}%"></span>`).join('') : '';
     const zeroLine = `<line class="equity-axis-baseline performance-zero-line" x1="${left}" x2="${width - right}" y1="${zeroY}" y2="${zeroY}"/>`;
-    const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}${zeroLine}</g>${bars}`, lineClass: `performance-line ${period}`, linePoints, lineSegments, hoverPoints, ariaLabel: `${periodName} ${equityChange ? 'equity change' : 'realized P/L'} ${chartType} chart in USD` });
+    const chart = interactiveChartSvg({ className: 'journal-equity-curve', width, height, grid: `<g class="equity-axis">${yAxis}${xAxis}${zeroLine}</g>${bars}`, lineClass: `performance-line ${period}`, linePoints, lineSegments, hoverPoints, ariaLabel: `${periodName} realized P/L ${chartType} chart in USD` });
     const yLabels = yTicks.map(({ value, y }) => `<span style="top:${(y / height * 100).toFixed(3)}%">${value > 0 ? '+' : ''}${journalAxisMoney(value)}</span>`).join('');
     const xLabels = fixedSlots.map(({ x, label }) => `<span style="left:${(x / width * 100).toFixed(3)}%">${escapeHtml(label)}</span>`).join('');
     const xLabelClass = daily ? 'journal-equity-x-labels daily-performance-labels' : 'journal-equity-x-labels';
     const lastPoint = [...fixedSlots].reverse().find(slot => slot.point)?.point;
     const latestChange = lastPoint && capitalBase > 0 ? lastPoint.value / capitalBase * 100 : undefined;
-    return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(lastPoint ? journalSigned(lastPoint.value) : 'N/A', latestChange, lastPoint ? chartDetail(lastPoint) : '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div></div>`;
+    return `<div class="journal-chart-container" data-chart-readout>${journalChartMeta(lastPoint ? journalSigned(lastPoint.value) : 'N/A', latestChange, lastPoint ? performanceDetail(lastPoint) : '')}<div class="journal-equity-chart"><div class="journal-equity-y-labels" aria-hidden="true">${yLabels}</div>${chart}${markers ? `<div class="performance-point-layer" aria-hidden="true">${markers}</div>` : ''}<div class="${xLabelClass}" aria-hidden="true">${xLabels}</div></div></div>`;
 }
 
 function journalChartControls(active, chartType) {
@@ -255,11 +255,10 @@ function journalChartControls(active, chartType) {
 }
 
 function renderJournalChart(analytics, mode, chartType, initialCapital) {
-    const equityPeriods = analytics?.equity_period_performance;
-    if (mode === 'daily') return renderPerformanceCurve(equityPeriods?.daily || analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_usd), chartType, Boolean(equityPeriods));
+    if (mode === 'daily') return renderPerformanceCurve(analytics?.daily_performance, 'daily', Number(analytics?.capital?.net_contributions_usd), chartType);
     if (mode === 'monthly') {
-        const rows = equityPeriods?.monthly || analytics?.monthly_performance;
-        return renderPerformanceCurve(rows?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_usd), chartType, Boolean(equityPeriods));
+        const rows = analytics?.monthly_performance;
+        return renderPerformanceCurve(rows?.map(row => ({ ...row, day: `${row.month}-15` })), 'monthly', Number(analytics?.capital?.net_contributions_usd), chartType);
     }
     return renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution, initialCapital);
 }
@@ -283,12 +282,12 @@ function tradeGroupLegs(trade) {
 }
 
 function renderTradeRows(items) {
-    if (!items.length) return '<tr><td colspan="9" style="color:#64748b">No trades recorded.</td></tr>';
+    if (!items.length) return '<tr><td colspan="10" style="color:#64748b">No trades recorded.</td></tr>';
     const quantity = value => Number.isFinite(Number(value)) ? new Intl.NumberFormat('en-GB', { maximumFractionDigits: 12 }).format(Number(value)) : '—';
     return items.map(trade => {
         const legs = tradeGroupLegs(trade);
         const details = legs.length ? `<details class="journal-trade-details"><summary>View ${legs.length} fill${legs.length === 1 ? '' : 's'}</summary><div class="journal-trade-fill-list">${legs.map(leg => `<div><strong>${escapeHtml(leg.type)}</strong> · ${escapeHtml(journalTradeOpenedDate(leg.at))} · ${quantity(leg.quantity)} @ ${escapeHtml(journalTradePrice(leg.price, leg.currency, leg.asset_type))}${Number(leg.fee) > 0 ? ` · fee ${escapeHtml(journalMoney(leg.fee))}` : ''}</div>`).join('')}</div></details>` : '';
-        return `<tr><td>${Number(trade.trade_number)}</td><td>${journalTradeOpenedDate(trade.opened_at)}</td><td><span class="badge ${trade.is_closed ? 'sold' : 'owned'}">${trade.is_closed ? 'CLOSED' : 'OPEN'}</span></td><td><strong>${escapeHtml(trade.symbol)}</strong>${details}</td><td>${quantity(trade.quantity)}</td><td>${journalTradePrice(trade.entry_price_usd, trade.currency, trade.asset_type)}</td><td>${journalTradePrice(trade.exit_price_usd, trade.currency, trade.asset_type)}</td><td class="${journalClass(trade.net_pnl_usd)}">${journalSigned(trade.net_pnl_usd)}</td><td class="${journalClass(trade.return_pct)}">${journalPercent(trade.return_pct)}</td></tr>`;
+        return `<tr><td>${Number(trade.trade_number)}</td><td>${journalTradeOpenedDate(trade.opened_at)}</td><td>${trade.is_closed ? journalTradeOpenedDate(trade.closed_at) : '—'}</td><td><span class="badge ${trade.is_closed ? 'sold' : 'owned'}">${trade.is_closed ? 'CLOSED' : 'OPEN'}</span></td><td><strong>${escapeHtml(trade.symbol)}</strong>${details}</td><td>${quantity(trade.quantity)}</td><td>${journalTradePrice(trade.entry_price_usd, trade.currency, trade.asset_type)}</td><td>${journalTradePrice(trade.exit_price_usd, trade.currency, trade.asset_type)}</td><td class="${journalClass(trade.net_pnl_usd)}">${journalSigned(trade.net_pnl_usd)}</td><td class="${journalClass(trade.return_pct)}">${journalPercent(trade.return_pct)}</td></tr>`;
     }).join('');
 }
 
@@ -363,14 +362,13 @@ function renderJournal() {
       <div class="card"><div class="section-header"><div class="section-title">Equity Curve</div></div>${renderEquityCurve(analytics?.equity_curve, analytics?.equity_curve_resolution)}</div>
       <div class="card journal-performance-card"></div>
       <div class="card"><div class="section-title">Capital Events</div><p class="subtitle">Deposits and withdrawals reported by Alpaca. Capital events change cash/equity, never trading P/L.</p>${capitalEvents().length ? `<div class="journal-events">${capitalEvents().map(event => `<span><strong>${escapeHtml(event.event_type)}</strong> ${journalMoney(event.amount_usd)} · ${formatLocalDate(event.occurred_at)}</span>`).join('')}</div>` : '<p class="journal-empty">No deposits or withdrawals reported by Alpaca.</p>'}</div>
-      <div class="card"><div class="section-header"><div><div class="section-title">Trades</div><p class="subtitle">Showing up to 15 entries per page. Trade records are read-only; expand a position to see grouped rebuys and partial sells.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade No.</th><th>Opened</th><th>Status</th><th>Instrument</th><th>Quantity</th><th>Buy-in Price</th><th>Sell Price</th><th>Net P/L</th><th>Return</th></tr></thead><tbody>${renderTradeRows(pageTrades())}</tbody></table></div>${renderTradePagination(tradePagination())}</div>
+      <div class="card"><div class="section-header"><div><div class="section-title">Trades</div><p class="subtitle">Showing up to 15 entries per page. Closed dates match realized daily and monthly performance; expand a position to see grouped rebuys and partial sells.</p></div></div><div class="journal-table-wrap"><table class="table"><thead><tr><th>Trade No.</th><th>Opened</th><th>Closed</th><th>Status</th><th>Instrument</th><th>Quantity</th><th>Buy-in Price</th><th>Sell Price</th><th>Net P/L</th><th>Return</th></tr></thead><tbody>${renderTradeRows(pageTrades())}</tbody></table></div>${renderTradePagination(tradePagination())}</div>
       <div class="card"><div class="section-title">Per-Instrument Analytics</div>${analytics?.stock_performance?.length ? `<div class="journal-table-wrap"><table class="table"><thead><tr><th>Instrument</th><th>P/L</th><th>Trades</th><th>Win Rate</th><th>Average Return</th><th>Average Hold</th></tr></thead><tbody>${analytics.stock_performance.map(row => `<tr><td><strong>${escapeHtml(row.symbol)}</strong></td><td class="${journalClass(row.pnl_usd)}">${journalSigned(row.pnl_usd)}</td><td>${row.trades}</td><td>${journalPercent(row.win_rate_pct)}</td><td>${journalPercent(row.average_return_pct)}</td><td>${Number(row.average_holding_days).toFixed(1)} days</td></tr>`).join('')}</tbody></table></div>` : '<p class="journal-empty">Per-instrument analytics appear after completed trades.</p>'}</div>`;
     const chartCard = [...container.querySelectorAll('.card')].find(card => card.querySelector('.section-title')?.textContent.trim() === 'Equity Curve');
     const chartHeader = chartCard?.querySelector('.section-header');
     if (chartCard && chartHeader) {
         chartHeader.classList.add('journal-chart-header');
-        const equityPeriods = analytics?.equity_period_performance;
-        chartHeader.querySelector('.section-title').textContent = journalChartMode === 'equity' ? 'Equity Curve' : journalChartMode === 'daily' ? (equityPeriods ? 'Daily Equity Change' : 'Daily Performance') : (equityPeriods ? 'Monthly Equity Change' : 'Monthly Performance');
+        chartHeader.querySelector('.section-title').textContent = journalChartMode === 'equity' ? 'Equity Curve' : journalChartMode === 'daily' ? 'Daily Performance' : 'Monthly Performance';
         chartHeader.insertAdjacentHTML('beforeend', journalChartControls(journalChartMode, journalPerformanceChartType));
         [...chartCard.children].filter(child => child !== chartHeader).forEach(child => child.remove());
         chartHeader.insertAdjacentHTML('afterend', renderJournalChart(analytics, journalChartMode, journalPerformanceChartType, analytics?.capital?.net_contributions_usd));
@@ -381,7 +379,7 @@ function renderJournal() {
         chartCard.insertAdjacentElement('afterend', performanceCard);
     }
     collapseJournalCardByTitle(container, 'Capital Events', 'Capital & cash movements', 'Deposits, withdrawals, and financing');
-    collapseJournalCardByTitle(container, 'Trades', 'Trades', 'Read-only trade history');
+    collapseJournalCardByTitle(container, 'Trades', 'Trades', journalData?.demoMode ? 'Demo trade history uses the same simulated fills as the equity curve. Trade records are read-only.' : 'Read-only trade history. Trade records are read-only.');
     collapseJournalCardByTitle(container, 'Per-Instrument Analytics', 'Per-instrument analytics', 'Completed-trade breakdown by instrument');
     container.querySelectorAll('[data-trade-page]').forEach(button => button.addEventListener('click', async () => {
         const page = Number(button.dataset.tradePage);
@@ -409,7 +407,11 @@ function renderJournal() {
 
     // Entry point for the Alpaca journal: analytics come from /api/alpaca/journal.
     function renderAlpacaJournal(data) {
-        journalData = { analytics: data.analytics || {} };
+        journalData = { analytics: data.analytics || {}, demoMode: data.demo_mode === true };
+        if (!journalDefaultsInitialized) {
+            if (journalData.demoMode) openJournalSections.add('Trades');
+            journalDefaultsInitialized = true;
+        }
         renderJournal();
     }
     return { renderJournal, renderAlpacaJournal, renderTradePagination };

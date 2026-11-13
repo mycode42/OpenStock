@@ -29,6 +29,20 @@ const CLOSED_TRADES = Object.freeze([
     { symbol: 'MSFT', qty: 4, bought_days_ago: 48, sold_days_ago: 27, entry_vs_base: 1.0, exit_vs_base: 0.99 },
     { symbol: 'AMZN', qty: 6, bought_days_ago: 21, sold_days_ago: 6, entry_vs_base: 0.95, exit_vs_base: 0.99 },
     { symbol: 'TSLA', qty: 5, bought_days_ago: 15, sold_days_ago: 4, entry_vs_base: 1.02, exit_vs_base: 1.04 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 13.25, sold_days_ago: 13, entry_vs_base: 0.995, exit_vs_base: 1.005 },
+    { symbol: 'MSFT', qty: 3, bought_days_ago: 12.25, sold_days_ago: 12, entry_vs_base: 1.01, exit_vs_base: 0.995 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 11.25, sold_days_ago: 11, entry_vs_base: 0.99, exit_vs_base: 1.01 },
+    { symbol: 'MSFT', qty: 4, bought_days_ago: 10.25, sold_days_ago: 10, entry_vs_base: 1.005, exit_vs_base: 0.997 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 9.25, sold_days_ago: 9, entry_vs_base: 0.985, exit_vs_base: 1.015 },
+    { symbol: 'MSFT', qty: 3, bought_days_ago: 8.25, sold_days_ago: 8, entry_vs_base: 1.01, exit_vs_base: 1.0 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 7.25, sold_days_ago: 7, entry_vs_base: 1.0, exit_vs_base: 1.008 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 6.25, sold_days_ago: 6, entry_vs_base: 0.99, exit_vs_base: 1.01 },
+    { symbol: 'AMZN', qty: 4, bought_days_ago: 5.25, sold_days_ago: 5, entry_vs_base: 1.0, exit_vs_base: 1.018 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 4.25, sold_days_ago: 4, entry_vs_base: 1.01, exit_vs_base: 1.0 },
+    { symbol: 'TSLA', qty: 2, bought_days_ago: 3.25, sold_days_ago: 3, entry_vs_base: 1.0, exit_vs_base: 1.02 },
+    { symbol: 'AMZN', qty: 3, bought_days_ago: 2.25, sold_days_ago: 2, entry_vs_base: 1.02, exit_vs_base: 1.0 },
+    { symbol: 'TSLA', qty: 3, bought_days_ago: 1.25, sold_days_ago: 1, entry_vs_base: 1.01, exit_vs_base: 0.995 },
+    { symbol: 'MSFT', qty: 2, bought_days_ago: 0.25, sold_days_ago: 0, entry_vs_base: 0.995, exit_vs_base: 1.01 },
 ]);
 
 // Levels to create. `retired` marks a level that has already fired, so the Triggered section has a row.
