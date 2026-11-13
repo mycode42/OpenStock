@@ -162,7 +162,7 @@ Prices, amounts and performance values are shown rounded to two decimals. Journa
 
 - **Trading journal:** reads Alpaca account balances, positions, and fills in USD.
 
-  <img width="1000" alt="Trading-Journal" src="https://github.com/user-attachments/assets/5f21b613-fa66-4a24-81e3-60544c9770f2" />
+  <img width="1000" alt="Trading-Journal" src="https://github.com/user-attachments/assets/f9e16db8-b9a2-4d44-a9c0-082c059dfeef" />
 
 - **Universe:** shows the current selected dynamic algo trading universe.
 
