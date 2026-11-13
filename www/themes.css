@@ -1714,13 +1714,17 @@ html[data-theme="crt"] .algo-config-toggle {
   color: var(--os-accent);
 }
 
-:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-card,
 :is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-overview > div,
 :is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-metric,
 :is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-trade-fill-list,
 :is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-events span {
   border-color: var(--os-border);
   background: var(--os-raised);
+}
+
+:is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-card {
+  border-color: var(--os-border);
+  background: var(--os-surface);
 }
 
 :is(html[data-theme]:not([data-theme="openstock"]), html[data-theme="openstock"][data-theme-mode="light"]) #page-journal .journal-performance-section,
