@@ -9,7 +9,7 @@ Every scheduled Algo job is a systemd user timer in `ops/systemd/`, named withou
 | `health` | Hourly | `portfolio.healthcheck` (read-only equity and options health check) |
 | `options-opening-capture` | 09:35 weekdays | `scripts.options.alpaca_daily_capture --phase open`: Alpaca OPRA opening snapshot for the research universe |
 | `options-history-capture` | 15:45 weekdays | `scripts.options.alpaca_daily_capture`: same-session Alpaca OPRA option-chain capture during the final 15 minutes before the close |
-| `theta-pipeline` | Every 4 hours | `scripts/options/theta_pipeline.py`: last 20 sessions, then EOD, then opening archives for the research universe. Stops calling ThetaData once complete; status shows on the Algo research page. A run still in progress makes the next one wait. |
+| `theta-pipeline` | Every 4 hours | `scripts/options/theta_pipeline.py`: last 20 sessions, then EOD archives for the research universe. Stops calling ThetaData once complete; status shows on the Algo research page. A run still in progress makes the next one wait. |
 | `llm-driven` | 06:30, 09:45, 12:30, 15:30, 18:00 weekdays | `strategies.llm_driven.ai_runner`: silent run that refreshes the `swing_llm_driven` snapshot, including owned-position reviews. No delivery. |
 | `llm-digest` | 07:45 weekdays | One briefing from the latest snapshot (`ops/prompts/llm-digest.md`), delivered to Telegram |
 | `options-research` | 17:00 daily | `research.options`, then a report from `ops/prompts/options-research.md`, delivered to Telegram |
@@ -17,6 +17,8 @@ Every scheduled Algo job is a systemd user timer in `ops/systemd/`, named withou
 | `rotate-logs` | 04:30 daily | `scripts/rotate_logs.py`: keeps each log in `data/algo/logs/` small |
 
 The two daemons, `equity` and `options`, are separate long-running services, not timers.
+
+The Theta pipeline timer is disabled locally because the EOD archive is complete. Re-enable it only when an EOD backfill needs to resume.
 
 ## LLM signal snapshot
 

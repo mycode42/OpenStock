@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Run the whole ThetaData history backfill, unattended, until it is finished.
+"""Run the ThetaData EOD history backfill, unattended, until it is finished.
 
 Order, for every research symbol:
   1. the last 20 SPY sessions (so options trading has recent history at once),
-  2. the full EOD archive from 2020 (the existing backfill, resumable),
-  3. the opening-quote archive (the opening backfill, resumable).
+  2. the full EOD archive from 2020 (resumable).
 
-Each daily run resumes where the last one stopped. Once both archives cover yesterday for every symbol, the run
-records completion, sends one Telegram message asking for the subscription to be cancelled and the key removed, and
-never calls ThetaData again. Status is written to pipeline_status.json for the research page.
+Each run resumes where the last one stopped. Once the EOD archive is complete for every symbol, the run records
+completion, sends one Telegram message asking for the subscription to be cancelled and the key removed, and never
+calls ThetaData again. Status is written to pipeline_status.json for the research page.
 """
 
 from __future__ import annotations
@@ -27,25 +26,22 @@ from dotenv import load_dotenv
 from market.sessions import ET
 from runtime.paths import ROOT
 from scripts.llm_report import send_telegram
-from scripts.options import theta_opening_backfill as opening
 from scripts.options.theta_historical_backfill import (
     FIRST_DATA_DATE,
     LOCK_PATH,
     RESEARCH_DIR,
     _atomic_json,
-    _effective_start_date,
     _read_api_key,
     _research_symbols,
     _run_symbols,
-    _theta_client,
 )
 
 STATUS_PATH = RESEARCH_DIR / "pipeline_status.json"
 RECENT_SESSIONS = 20
 
 CANCEL_MESSAGE = (
-    "ThetaData history backfill is complete for all {count} research symbols (EOD and opening archives "
-    "through {end}). Next steps: cancel the ThetaData subscription, then remove THETA_DATA_API_KEY from .env. "
+    "ThetaData EOD history backfill is complete for all {count} research symbols through {end}. "
+    "Next steps: cancel the ThetaData subscription, then remove THETA_DATA_API_KEY from .env. "
     "The pipeline will not call ThetaData again."
 )
 
@@ -77,10 +73,6 @@ def _archive_complete(path: Path) -> bool:
 
 def eod_complete(symbol: str) -> bool:
     return _archive_complete(RESEARCH_DIR / symbol / "manifest.json")
-
-
-def opening_complete(symbol: str) -> bool:
-    return _archive_complete(RESEARCH_DIR / symbol / "opening_manifest.json")
 
 
 def _yesterday() -> date:
@@ -149,25 +141,6 @@ def _run_locked(end: date) -> int:
             )
             if code != 0 or not all(eod_complete(symbol) for symbol in symbols):
                 return _fail(status, "EOD backfill is not complete yet; the next run resumes it")
-
-        if not all(opening_complete(symbol) for symbol in symbols):
-            status["phase"] = "opening"
-            _save_status(status)
-            client = _theta_client(_read_api_key())
-            failures = []
-            for symbol in symbols:
-                if opening_complete(symbol):
-                    continue
-                try:
-                    opening._fetch_symbol(
-                        client, symbol,
-                        start_date=_effective_start_date(symbol, FIRST_DATA_DATE), end_date=end,
-                    )
-                except Exception as error:
-                    failures.append(f"{symbol}: {type(error).__name__}")
-                    print(f"ThetaData opening {symbol} stopped: {_redact(str(error))}", flush=True)
-            if failures or not all(opening_complete(symbol) for symbol in symbols):
-                return _fail(status, f"opening backfill is not complete yet ({', '.join(failures) or 'resuming'})")
 
         return _complete(status, len(symbols), end)
     except Exception as error:

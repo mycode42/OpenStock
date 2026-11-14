@@ -28,7 +28,6 @@ def _sha256(path: Path) -> str:
 def _files():
     for source_kind, directory, filename in (
         ("theta", ROOT / "theta", "chains.jsonl"),
-        ("theta_opening", ROOT / "theta", "opening_chains.jsonl"),
         ("alpaca", ROOT / "alpaca", "chains.jsonl"),
         ("alpaca_opening", ROOT / "alpaca", "opening_chains.jsonl"),
     ):

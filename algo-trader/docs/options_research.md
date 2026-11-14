@@ -171,7 +171,7 @@ poetry install --with theta,research
 .venv/bin/python -m scripts.options.theta_pipeline
 ```
 
-The pipeline runs three stages for every research symbol, in order: the last 20 SPY sessions (so options trading has recent history first), the full EOD archive from 2020 (`scripts/options/theta_historical_backfill.py`), and the opening-quote archive (`scripts/options/theta_opening_backfill.py`). Each stage resumes from its cache. When both archives are complete for every symbol, the pipeline sends one Telegram message and shows a notice on the research page, then stops calling ThetaData. Its state is in `data/options/research/theta/pipeline_status.json`, and `--status` prints it.
+The pipeline runs two stages for every research symbol, in order: the last 20 SPY sessions (so options trading has recent history first) and the full EOD archive from 2020 (`scripts/options/theta_historical_backfill.py`). Each stage resumes from its cache. When the EOD archive is complete for every symbol, the pipeline sends one Telegram message and shows a notice on the research page, then stops calling ThetaData. Its state is in `data/options/research/theta/pipeline_status.json`, and `--status` prints it.
 
 The collector reads `THETA_DATA_API_KEY` from `.env` (it also accepts ThetaData's
 official `THETADATA_API_KEY` name). To backfill a smaller set, repeat
@@ -186,17 +186,6 @@ If an older collector left chain JSONL files behind, migrate and remove only
 database-verified copies with
 `poetry run python scripts/options/migrate_chain_jsonl_to_sqlite.py --delete-verified`.
 That command refuses to run while a Theta collector holds the backfill lock.
-
-Historical opening snapshots for the same research history universe are
-collected separately with `poetry run python -m scripts.options.theta_opening_backfill`. The collector
-requests the last NBBO at 09:35 ET, applies the same 60-DTE and 20-strikes-per-
-side filters, and writes opening snapshots directly to SQLite while retaining
-compressed monthly source responses for resumability. Opening snapshots use the
-underlying's daily opening price, prior-session close, and prior-session open
-interest to avoid same-day lookahead; they remain separate from the
-one-row-per-session close dataset. If local EOD open-interest archives arrive
-after the opening quote backfill, rebuild those derived rows with
-`--compile-only` after the EOD backfill finishes.
 
 ## Daily Alpaca capture
 

@@ -1,4 +1,4 @@
-"""The ThetaData pipeline runs EOD then opening, completes once, never calls ThetaData after completion, and redacts the key."""
+"""The ThetaData pipeline runs EOD only, completes once, never calls ThetaData after completion, and redacts the key."""
 
 import json
 from datetime import date
@@ -25,8 +25,7 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(pipeline, "LOCK_PATH", research / "theta_backfill.lock")
     monkeypatch.setattr(pipeline, "_research_symbols", lambda: list(SYMBOLS))
     monkeypatch.setattr(pipeline, "_read_api_key", lambda: KEY)
-    monkeypatch.setattr(pipeline, "_theta_client", lambda key: object())
-    calls = {"eod": 0, "opening": 0, "telegram": []}
+    calls = {"eod": 0, "telegram": []}
     monkeypatch.setattr(pipeline, "_notify", lambda text: calls["telegram"].append(text))
 
     def fake_eod(symbols, start, end, *, recent_sessions, on_recent_complete):
@@ -37,22 +36,16 @@ def world(monkeypatch, tmp_path):
             _write(research / symbol / "manifest.json", {"archive_complete": True, "archive_end_date": END.isoformat()})
         return 0
 
-    def fake_opening(client, symbol, *, start_date, end_date):
-        calls["opening"] += 1
-        _write(research / symbol / "opening_manifest.json", {"archive_complete": True, "archive_end_date": END.isoformat()})
-        return {}
-
     monkeypatch.setattr(pipeline, "_run_symbols", fake_eod)
-    monkeypatch.setattr(pipeline.opening, "_fetch_symbol", fake_opening)
     return {"research": research, "calls": calls}
 
 
-def test_eod_runs_before_opening_and_completion_is_announced_once(world):
+def test_eod_runs_and_completion_is_announced_once(world):
     assert pipeline.run(end_date=END) == 0
     status = json.loads((world["research"] / "pipeline_status.json").read_text())
     assert status["phase"] == "complete"
     assert status["recent_pass_complete_at"]
-    assert world["calls"]["eod"] == 1 and world["calls"]["opening"] == len(SYMBOLS)
+    assert world["calls"]["eod"] == 1
     assert len(world["calls"]["telegram"]) == 1
     assert "cancel the ThetaData subscription" in world["calls"]["telegram"][0]
     assert "remove THETA_DATA_API_KEY" in world["calls"]["telegram"][0]
@@ -84,7 +77,6 @@ def test_a_failed_stage_stops_the_run_and_is_announced_once_per_message(world, m
     assert status["phase"] == "eod_recent"
     assert status["last_error"].startswith("EOD backfill is not complete yet")
     assert len(world["calls"]["telegram"]) == 1
-    assert world["calls"]["opening"] == 0
 
 
 def test_a_failed_completion_notice_is_retried_without_calling_theta(world, monkeypatch):

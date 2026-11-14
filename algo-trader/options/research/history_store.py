@@ -302,8 +302,8 @@ def _session_date(row: dict) -> tuple[str, str]:
 
 def _source_kind(value: str) -> str:
     kind = str(value).strip().lower()
-    if kind not in {"theta", "alpaca", "theta_opening", "alpaca_opening"}:
-        raise ValueError("source_kind must be theta, alpaca, theta_opening, or alpaca_opening")
+    if kind not in {"theta", "alpaca", "alpaca_opening"}:
+        raise ValueError("source_kind must be theta, alpaca, or alpaca_opening")
     return kind
 
 
@@ -613,7 +613,7 @@ class OptionsHistoryStore:
         """
         symbol = str(underlying).strip().upper()
         kind = _source_kind(source_kind)
-        if replace_source and kind not in {"theta", "theta_opening"}:
+        if replace_source and kind != "theta":
             raise ValueError("only complete ThetaData backfills may replace a source")
         now = datetime.now(timezone.utc).isoformat()
         with closing(self._connect()) as connection:
@@ -1091,7 +1091,7 @@ class OptionsHistoryStore:
                     SELECT s.session_date, s.as_of, s.row_sha256, src.source_kind,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date, s.phase
-                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 4 WHEN 'theta_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot s
@@ -1126,7 +1126,7 @@ class OptionsHistoryStore:
                            s.iv_surface_json, s.expirations_json, s.row_sha256, src.source_kind,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date, s.phase
-                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 4 WHEN 'theta_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot AS s
@@ -1218,7 +1218,7 @@ class OptionsHistoryStore:
                            s.iv_surface_json, s.expirations_json, src.source_kind,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date, s.phase
-                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 4 WHEN 'theta_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot AS s
