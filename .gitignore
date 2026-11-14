@@ -18,3 +18,10 @@ database/*.backup
 # Database backups made by hand before risky changes (*.db.pre-*.bak); they hold live trade data.
 database/*.bak
 *.db.*.bak
+
+# OpenStock wiki scan additions kept local.
+/docs/wiki-repo-scan.md
+/ops/systemd/user/openstock-wiki-scan.service
+/ops/systemd/user/openstock-wiki-scan.timer
+/scripts/wiki-repo-scan.js
+/test/wiki-repo-scan.test.js

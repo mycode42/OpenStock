@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # Render the OpenStock systemd user units into ~/.config/systemd/user.
-# No root needed. This only writes files; start them with
-#   systemctl --user enable --now openstock.service
+# No root needed. By default this writes all templates; optional filenames
+# let callers install only selected units without rewriting unrelated units.
+# Start the dashboard with: systemctl --user enable --now openstock.service
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -9,13 +10,33 @@ NODE=$(command -v node)
 TARGET="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 mkdir -p "$TARGET"
-for template in "$ROOT"/ops/systemd/user/*; do
+write_unit() {
+    template=$1
     name=$(basename "$template")
     sed -e "s#{ROOT}#$ROOT#g" -e "s#{NODE}#$NODE#g" "$template" > "$TARGET/$name"
     echo "wrote $TARGET/$name"
-done
+}
+
+if [ "$#" -gt 0 ]; then
+    for name in "$@"; do
+        case "$name" in
+            */*|..*) echo "unit name must be a file in ops/systemd/user: $name" >&2; exit 2 ;;
+        esac
+        template="$ROOT/ops/systemd/user/$name"
+        if [ ! -f "$template" ]; then
+            echo "unit template not found: $template" >&2
+            exit 2
+        fi
+        write_unit "$template"
+    done
+else
+    for template in "$ROOT"/ops/systemd/user/*; do
+        [ -f "$template" ] || continue
+        write_unit "$template"
+    done
+fi
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user daemon-reload || true
 fi
-echo "start with: systemctl --user enable --now openstock.service"
+echo "Unit files rendered. Enable desired services/timers with systemctl --user enable --now <unit>."
