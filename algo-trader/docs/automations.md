@@ -18,7 +18,7 @@ Every scheduled Algo job is a systemd user timer in `ops/systemd/`, named withou
 
 The two daemons, `equity` and `options`, are separate long-running services, not timers.
 
-The Theta pipeline timer is disabled locally because the EOD archive is complete. Re-enable it only when an EOD backfill needs to resume.
+The `theta-pipeline` timer is disabled. The ThetaData subscription is cancelled, so nothing calls ThetaData. A fresh install that needs ThetaData history enables it with `THETA_DATA_API_KEY` set; it stops calling ThetaData once the archive is complete.
 
 ## LLM signal snapshot
 

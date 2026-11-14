@@ -26,6 +26,8 @@ from runtime.paths import DATA_DIR
 
 ET = ZoneInfo("America/New_York")
 DEFAULT_DATABASE = DATA_DIR / "options" / "research" / "options_history.sqlite3"
+# Theta EOD is the source of truth before this session; Alpaca's full-range capture (every listed strike
+# within 60 DTE) starts here. Dates before it take Theta when both sources exist; from it on, Alpaca.
 SCHEMA_VERSION = "options-chain-history-v3-liquidity-summary"
 _BATCH_SNAPSHOTS = 32
 
@@ -1023,7 +1025,7 @@ class OptionsHistoryStore:
                            l.median_option_spread, l.spread_coverage,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date
-                               ORDER BY CASE src.source_kind WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE WHEN src.source_kind='theta' AND s.session_date < '2026-11-11' THEN 3 WHEN src.source_kind='alpaca' THEN 2 WHEN src.source_kind='theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot s
@@ -1091,7 +1093,7 @@ class OptionsHistoryStore:
                     SELECT s.session_date, s.as_of, s.row_sha256, src.source_kind,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date, s.phase
-                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE WHEN s.phase='daily_close' AND src.source_kind='theta' AND s.session_date < '2026-11-11' THEN 4 WHEN src.source_kind='alpaca_opening' THEN 3 WHEN src.source_kind='alpaca' THEN 2 WHEN src.source_kind='theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot s
@@ -1126,7 +1128,7 @@ class OptionsHistoryStore:
                            s.iv_surface_json, s.expirations_json, s.row_sha256, src.source_kind,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date, s.phase
-                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE WHEN s.phase='daily_close' AND src.source_kind='theta' AND s.session_date < '2026-11-11' THEN 4 WHEN src.source_kind='alpaca_opening' THEN 3 WHEN src.source_kind='alpaca' THEN 2 WHEN src.source_kind='theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot AS s
@@ -1218,7 +1220,7 @@ class OptionsHistoryStore:
                            s.iv_surface_json, s.expirations_json, src.source_kind,
                            ROW_NUMBER() OVER (
                                PARTITION BY s.session_date, s.phase
-                               ORDER BY CASE src.source_kind WHEN 'alpaca_opening' THEN 3 WHEN 'alpaca' THEN 2 WHEN 'theta' THEN 1 ELSE 0 END DESC,
+                               ORDER BY CASE WHEN s.phase='daily_close' AND src.source_kind='theta' AND s.session_date < '2026-11-11' THEN 4 WHEN src.source_kind='alpaca_opening' THEN 3 WHEN src.source_kind='alpaca' THEN 2 WHEN src.source_kind='theta' THEN 1 ELSE 0 END DESC,
                                         s.as_of DESC
                            ) AS source_rank
                     FROM options_history_snapshot AS s

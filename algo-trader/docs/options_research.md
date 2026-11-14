@@ -54,8 +54,7 @@ The systemd timers schedule options and equity research as separate jobs:
 currently runs VRP and long-volatility. VRP screens the 117-symbol history
 candidate pool one ticker at a time; long-volatility keeps its explicit
 9-symbol list. LLM-driven options research remains outside the nightly preset
-until frozen point-in-time recommendations are available. Each ticker reads its effective ThetaData and
-Alpaca history from `data/options/research/options_history.sqlite3`, selected
+until frozen point-in-time recommendations are available. Each ticker reads its effective history from `data/options/research/options_history.sqlite3`, selected
 through `automation.data_path_template`;
 missing or not-yet-long-enough datasets are reported per ticker while available
 datasets continue through research. Edit `automation.strategies` in
@@ -110,7 +109,7 @@ For live selection, if SPY's daily-close date is missing or too stale, the
 selector fills the missing SPY market bars from Alpaca (SIP first, IEX fallback)
 and retries. These fallback rows contain completed SPY close and share-volume
 data only; they do not create option contracts or liquidity summaries. ThetaData
-remains a historical chain source, not the live market-date fallback.
+is used only for end-of-day chains before 2026-11-11 (see the ThetaData history section).
 
 After the history import is current, store a dated selector snapshot and run the
 separate selection walk-forward report:
@@ -152,40 +151,13 @@ universe. This switch affects only offline research. The live equity universe
 is the same selector's eligible subset of the 117-symbol pool, applied by the
 Algo daemon each session; see the README.
 
-## ThetaData historical backfill
+## ThetaData history
 
-ThetaData EOD bid/ask chains and historical open interest feed the same snapshot
-loader used by the research runner. The collector writes directly to
-`options_history.sqlite3`. It retains compressed monthly Theta responses as a
-resumable download cache, but no longer writes per-symbol or combined chain
-JSONL files. Its default is the 117-symbol research
-history universe in [`universe.json`](../options/research/universe.json), which
-is separate from live Algo portfolio membership. It starts at 2020-01-01, with
-later listing dates configured per symbol. Symbols with fewer than
-1,013 usable sessions remain marked `collecting` in their per-symbol manifest.
+ThetaData end-of-day chains (bid/ask and open interest, every listed strike within 60 DTE) for 2020-01-02 through 2026-11-11 are stored in `options_history.sqlite3`. The source archive is under `data/options/research/theta-max/`. Theta is the source of truth for end-of-day chains before 2026-11-11, the first session of Alpaca's full-range capture. From 2026-11-11 onward Alpaca supplies the daily chains. The research replay applies this rule in `options/research/history_store.py` (`iter_effective_snapshots`).
 
-Install the optional client on Python 3.12 or newer, then run the pipeline. It is the only entry point the cron job uses:
+The ThetaData subscription is cancelled, so nothing calls ThetaData in normal operation. Theta opening (intraday) history was not kept.
 
-```sh
-poetry install --with theta,research
-.venv/bin/python -m scripts.options.theta_pipeline
-```
-
-The pipeline runs two stages for every research symbol, in order: the last 20 SPY sessions (so options trading has recent history first) and the full EOD archive from 2020 (`scripts/options/theta_historical_backfill.py`). Each stage resumes from its cache. When the EOD archive is complete for every symbol, the pipeline sends one Telegram message and shows a notice on the research page, then stops calling ThetaData. Its state is in `data/options/research/theta/pipeline_status.json`, and `--status` prints it.
-
-The collector reads `THETA_DATA_API_KEY` from `.env` (it also accepts ThetaData's
-official `THETADATA_API_KEY` name). To backfill a smaller set, repeat
-`--underlying`, for example `--underlying SPY --underlying NVDA`. The output is
-written under `data/options/research/theta/<SYMBOL>/`.
-
-SQLite is the canonical research history. Per-symbol manifests distinguish
-`research_ready` (at least 1,013 usable sessions) from `archive_complete` (all
-requested monthly EOD and open-interest files through the requested end date
-were fetched). `research_ready` alone does not mean the full backfill is done.
-If an older collector left chain JSONL files behind, migrate and remove only
-database-verified copies with
-`poetry run python scripts/options/migrate_chain_jsonl_to_sqlite.py --delete-verified`.
-That command refuses to run while a Theta collector holds the backfill lock.
+A fresh install can still source its history from ThetaData. It needs an active subscription and `THETA_DATA_API_KEY` in `.env`. Enable the timer with `systemctl --user enable --now theta-pipeline.timer`. The pipeline is `scripts/options/theta_pipeline.py`. It runs the last 20 SPY sessions and then the full EOD archive, and it stops calling ThetaData once the archive is complete.
 
 ## Daily Alpaca capture
 

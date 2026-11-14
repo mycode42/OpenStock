@@ -161,3 +161,17 @@ def test_the_store_keeps_one_file_per_underlying_and_drops_stale_sessions(tmp_pa
     _load(db, tmp_path)
     files = sorted(path.name for path in (tmp_path / "chains").glob("SPY-*.pkl"))
     assert len(files) == 1
+
+
+def test_replay_takes_theta_before_the_full_range_alpaca_cutoff(tmp_path):
+    """Before 2026-11-11 Alpaca's capped chains lose to Theta's full EOD chains; from it on Alpaca wins."""
+    store = OptionsHistoryStore(tmp_path / "history.sqlite3")
+    before, after = date(2026, 11, 10), date(2026, 11, 11)
+    store.write_snapshots("SPY", "theta", [_snapshot(before, bid=1.0), _snapshot(after, bid=1.0)], replace_source=False)
+    store.write_snapshots("SPY", "alpaca", [_snapshot(before, bid=2.0), _snapshot(after, bid=2.0)], replace_source=False)
+
+    bids = {}
+    for snapshot in store.iter_effective_snapshots("SPY"):
+        bids[str(snapshot["as_of"])[:10]] = snapshot["contracts"][0]["bid"]
+
+    assert bids == {before.isoformat(): 1.0, after.isoformat(): 2.0}
