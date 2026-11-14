@@ -15,7 +15,8 @@ test('user units render with no pytr, TR, or root settings', () => {
     const stubBin = path.join(dir, 'bin');
     fs.mkdirSync(stubBin);
     fs.writeFileSync(path.join(stubBin, 'systemctl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    execFileSync('sh', [script], {
+    // Render only the tracked dashboard unit: local-only units (for example the gitignored wiki scan) are not expected.
+    execFileSync('sh', [script, 'openstock.service'], {
         env: { ...process.env, XDG_CONFIG_HOME: dir, PATH: `${stubBin}:${process.env.PATH}` },
         stdio: 'pipe',
     });
