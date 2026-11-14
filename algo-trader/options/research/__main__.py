@@ -9,7 +9,7 @@ from options.research.runner import run_research
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Purged walk-forward options strategy research")
+    parser = argparse.ArgumentParser(description="Fixed-configuration options strategy replay")
     parser.add_argument(
         "--strategy", required=True,
         choices=("vrp", "llm_driven", "directional_overlay", "long_volatility"),

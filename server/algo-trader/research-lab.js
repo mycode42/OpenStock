@@ -206,11 +206,15 @@ function validateEquityJobRequest(body) {
     };
 }
 
-// Only the grid parameters the research search may vary are editable through profiles.
+// Manual replay profiles may set live strategy options and values from the built-in profiles.
 function tunableKeys(baseConfig, strategy) {
-    const grid = baseConfig?.search?.grids?.[strategy];
-    if (!isPlainObject(grid)) throw new LabError(`no search grid is configured for ${strategy}`, 500);
-    return Object.keys(grid).sort();
+    const presets = PROFILE_PRESETS.options?.[strategy];
+    if (!isPlainObject(presets)) throw new LabError(`no options profiles are configured for ${strategy}`, 500);
+    const keys = new Set(Object.keys(baseConfig?.strategy_defaults?.[strategy] || {}));
+    for (const parameters of Object.values(presets)) {
+        for (const key of Object.keys(parameters || {})) keys.add(key);
+    }
+    return [...keys].sort();
 }
 
 function validateParameters(parameters, allowedKeys) {
@@ -227,10 +231,11 @@ function validateParameters(parameters, allowedKeys) {
     return clean;
 }
 
-// Research baseline for one job: the profile replaces the strategy's default section, and lab runs never write champion state.
+// Each lab job replays one fixed strategy configuration from the beginning of its date window.
 function buildJobConfig(baseConfig, { strategy, parameters, start, end }) {
     const config = JSON.parse(JSON.stringify(baseConfig));
-    config.champion = { ...(config.champion || {}), enabled: false };
+    delete config.search;
+    delete config.champion;
     config.strategy_defaults = {
         ...(config.strategy_defaults || {}),
         [strategy]: { ...((config.strategy_defaults || {})[strategy] || {}), ...(parameters || {}) },
@@ -684,7 +689,6 @@ class ResearchLab {
                 oos_metrics: pickNumericMetrics(wf.oos_metrics),
                 observed_oos_trades: report?.validation?.observed_oos_trades ?? null,
                 minimum_oos_trades_met: report?.validation?.minimum_oos_trades_met ?? null,
-                parameter_stability_score: report?.validation?.parameter_stability_score ?? null,
                 exploratory: exploratoryOf(report),
                 live_exploratory: exploratoryOf(liveReport),
             });

@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 from equity_research.artifacts.files import _json_safe
 from equity_research.artifacts.research_ledger import ResearchLedger
 from equity_research.settings import DEFAULT_OUTPUT_DIR, ET
+from options.research.reporting import report_for_filesystem
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
 
@@ -63,7 +64,7 @@ def _attach_options_report(
         return None
     # Keep the equity pipeline's report intact and expose the independent sleeve
     # at a top-level key so the daily summary can present it as a separate section.
-    report["options_research"] = options_report
+    report["options_research"] = report_for_filesystem(options_report)
     report["parallel_research"] = process_summary
     report = _json_safe(report)
     today = report.get("run_date_et")
@@ -485,7 +486,7 @@ def main(argv: list[str] | None = None) -> int:
             "schema": "swarm_autoresearch_nightly_partial_v1",
             "status": result["status"], "run_id": run_id,
             "cycle_date_et": state["cycle_date_et"],
-            "options_research": options_report,
+            "options_research": report_for_filesystem(options_report),
             "equity_research": equity_report or {
                 "status": "error", "exit_code": equity_code,
                 "report_path": str((output_dir / "invocations" / state["equity_invocation_id"] / "report.json").resolve()),

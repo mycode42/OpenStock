@@ -18,10 +18,6 @@ EXTENSIONS = (
         ROOT / "options/_pricing_cy.pyx",
     ),
     (
-        "options._search_cy",
-        ROOT / "options/_search_cy.pyx",
-    ),
-    (
         "strategies.multi_factor._features_cy",
         ROOT / "strategies/multi_factor/_features_cy.pyx",
     ),

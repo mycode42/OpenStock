@@ -534,6 +534,22 @@ def equity_simulation_context(report: dict) -> dict:
     return context
 
 
+def _compact_report_for_filesystem(report: dict) -> dict:
+    """Remove bulky equity curves and trade rows after the ledger stores the full report."""
+    def trim(value):
+        if isinstance(value, dict):
+            for key in ("daily_equity", "closed_trade_details", "equity_curve", "trade_rows"):
+                value.pop(key, None)
+            for child in value.values():
+                trim(child)
+        elif isinstance(value, list):
+            for child in value:
+                trim(child)
+
+    trim(report)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -736,6 +752,8 @@ def main(argv: list[str] | None = None) -> int:
         ledger.record_completed_report(
             invocation_id, report, report_path=str(invocation_report_path.resolve()),
         )
+    report = _compact_report_for_filesystem(report)
+    _atomic_json(invocation_report_path, report)
     if report.get("schema") == "swarm_algo_weekly_verification_v1":
         # The weekly full-history review has no nightly sections. It gets its own folder, so the day's archive row is not replaced.
         _atomic_json(output_dir / "weekly" / f"{today}.json", report)

@@ -26,7 +26,6 @@ include = [
     { path = "options/config.default.json", format = ["sdist", "wheel"] },
     { path = "options/research/config.default.json", format = ["sdist", "wheel"] },
     { path = "options/_pricing_cy.pyx", format = "sdist" },
-    { path = "options/_search_cy.pyx", format = "sdist" },
     { path = "options/*.so", format = "wheel" },
     { path = "options/*.pyd", format = "wheel" },
     { path = "strategies/multi_factor/_features_cy.pyx", format = "sdist" },
@@ -44,7 +43,6 @@ exclude = [
     "equity_research/backtest/_execution_cy.pyx",
     "strategies/_swing_common_cy.pyx",
     "options/_pricing_cy.pyx",
-    "options/_search_cy.pyx",
 ]
 
 [tool.poetry.dependencies]

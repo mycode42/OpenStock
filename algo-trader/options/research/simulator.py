@@ -21,7 +21,7 @@ from options.research.dataset import OptionsResearchDataset, ResearchObservation
 from options.research.execution import (
     ExecutionAssumptions, assess_structure_liquidity, structure_entry_cost,
 )
-from options.research.search import Candidate
+from options.research.strategy_configuration import StrategyConfiguration
 from options.structures import OptionStructure
 from strategies.options.base import OptionsStrategyContext
 from strategies.options.long_volatility import atm_implied_volatility, historical_iv_percentile
@@ -141,7 +141,7 @@ def _metrics(curve: list[dict], trades: list[dict], greek_summary: dict, quality
         1, quality.get("observations_total", len(curve)),
     )
     risk_adjusted = sharpe - 2.0 * max_drawdown - 2.0 * missing_fraction
-    # A no-trade candidate has supplied no evidence of an exploitable edge.
+    # A no-trade replay has supplied no evidence of an exploitable edge.
     if not trades:
         risk_adjusted = -5.0
     if episode_dominated:
@@ -207,14 +207,14 @@ def simulate_options_strategy(
     observations: tuple[ResearchObservation, ...],
     *,
     strategy_name: str,
-    candidate: Candidate,
+    strategy_configuration: StrategyConfiguration,
     config: dict,
     base_config: dict,
     slippage_multiplier: float = 1.0,
     spread_width_multiplier: float = 1.0,
     assignment_enabled: bool = True,
     force_close: bool = True,
-    strategy_candidates: dict[str, Candidate] | None = None,
+    strategy_configurations: dict[str, StrategyConfiguration] | None = None,
     strategy_underlyings: dict[str, set[str] | tuple[str, ...] | list[str]] | None = None,
     progress_callback=None,
 ) -> dict:
@@ -225,25 +225,25 @@ def simulate_options_strategy(
     execution_values["spread_fraction_per_leg"] = float(execution_values.get("spread_fraction_per_leg", 0.5)) * slippage_multiplier
     execution = ExecutionAssumptions.from_dict(execution_values)
     market = config.get("market_data", {})
-    candidates = dict(strategy_candidates or {strategy_name: candidate})
+    configurations = dict(strategy_configurations or {strategy_name: strategy_configuration})
     strategy_universes = {
         name: {str(symbol).upper() for symbol in symbols}
         for name, symbols in (strategy_underlyings or {}).items()
     }
     observed_symbols = sorted({item.underlying.upper() for item in observations})
     strategy_definitions = {}
-    for name, selected_candidate in candidates.items():
-        strategy_parameters = dict(selected_candidate.parameters)
+    for name, selected_configuration in configurations.items():
+        strategy_parameters = dict(selected_configuration.parameters)
         if name in {"long_volatility", "directional_overlay"} and "underlyings" not in strategy_parameters:
             strategy_parameters["underlyings"] = sorted(strategy_universes.get(name, set(observed_symbols)))
         strategy_instance, strategy_section = make_strategy(
             name,
             parameters=strategy_parameters,
-            allowed_regimes=selected_candidate.allowed_regimes,
+            allowed_regimes=selected_configuration.allowed_regimes,
             base_config=base_config,
         )
         strategy_definitions[name] = {
-            "candidate": selected_candidate,
+            "configuration": selected_configuration,
             "instance": strategy_instance,
             "section": strategy_section,
             "needs_iv_history": name == "long_volatility" or (
@@ -764,7 +764,7 @@ def simulate_options_strategy(
                     for trade in active
                 ):
                     continue
-                current_candidate = definition["candidate"]
+                current_configuration = definition["configuration"]
                 current_strategy = definition["instance"]
                 current_section = definition["section"]
                 session_key = (symbol, observation_session)
@@ -780,7 +780,7 @@ def simulate_options_strategy(
                 )
                 if not threshold_activation and not _regime_allowed(
                     observation.regime, observation.volatility_state,
-                    current_candidate.allowed_regimes,
+                    current_configuration.allowed_regimes,
                 ):
                     continue
                 context = OptionsStrategyContext(
@@ -806,7 +806,7 @@ def simulate_options_strategy(
                 except (ValueError, ArithmeticError, OverflowError):
                     signal = None
                 if signal is not None:
-                    entry_signals.append((signal, current_name, current_candidate, current_section))
+                    entry_signals.append((signal, current_name, current_configuration, current_section))
             for current_name, sample in iv_samples.items():
                 if sample is not None:
                     iv_history_by_underlying.setdefault((current_name, symbol), []).append(
@@ -814,7 +814,7 @@ def simulate_options_strategy(
                     )
         quality["signals_seen"] += len(entry_signals)
         if entry_signals:
-            signal, strategy_name, candidate, strategy_section = max(
+            signal, strategy_name, strategy_configuration, strategy_section = max(
                 entry_signals, key=lambda row: float(row[0].confidence),
             )
             liquidity = assess_structure_liquidity(

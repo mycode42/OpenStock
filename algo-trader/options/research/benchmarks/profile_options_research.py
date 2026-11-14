@@ -263,7 +263,6 @@ def _research_summary(report: dict) -> dict:
         "dataset_observations": report.get("dataset_observations"),
         "dataset_chain_errors": report.get("dataset_chain_errors"),
         "walk_forward_fold_count": len(report.get("folds") or []),
-        "candidate_count": len(report.get("candidate_leaderboard") or []),
         "approved": bool((report.get("validation") or {}).get("approved")),
         "parallelism": report.get("parallelism", {}),
     }

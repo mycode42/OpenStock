@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
-import math
 from pathlib import Path
 import sqlite3
 import zlib
 
+from options.research.reporting import report_for_history
 from runtime.paths import DATA_DIR
 
 
@@ -21,7 +21,7 @@ def _json(value: object) -> str:
 
 
 class OptionsResearchArtifactStore:
-    """Store run reports, per-run artifacts, and candidate evaluations in SQLite."""
+    """Store options replay history and selected supporting artifacts in SQLite."""
 
     def __init__(self, path: str | Path = DEFAULT_DATABASE):
         self.path = Path(path).resolve()
@@ -52,27 +52,6 @@ class OptionsResearchArtifactStore:
                     stored_at TEXT NOT NULL,
                     PRIMARY KEY(run_id, artifact_path)
                 );
-                CREATE TABLE IF NOT EXISTS options_research_candidate (
-                    run_id TEXT NOT NULL REFERENCES options_research_run(run_id) ON DELETE CASCADE,
-                    candidate_id TEXT NOT NULL,
-                    strategy TEXT NOT NULL,
-                    underlying TEXT NOT NULL,
-                    parameters_json TEXT NOT NULL,
-                    metrics_json TEXT NOT NULL,
-                    validation_json TEXT NOT NULL,
-                    details_json TEXT NOT NULL,
-                    fitness REAL,
-                    selected_oos_fitness REAL,
-                    selected_oos_return REAL,
-                    selected_oos_sharpe REAL,
-                    selected_oos_max_drawdown REAL,
-                    selected_oos_trades INTEGER,
-                    selected_oos_folds INTEGER NOT NULL DEFAULT 0,
-                    final_candidate INTEGER NOT NULL DEFAULT 0,
-                    validation_passed INTEGER,
-                    verification_status TEXT NOT NULL DEFAULT 'not_selected',
-                    PRIMARY KEY(run_id, candidate_id)
-                );
                 CREATE TABLE IF NOT EXISTS options_research_document (
                     document_type TEXT NOT NULL,
                     identity TEXT NOT NULL,
@@ -83,30 +62,9 @@ class OptionsResearchArtifactStore:
                     stored_at TEXT NOT NULL,
                     PRIMARY KEY(document_type, identity)
                 );
-            """)
-            candidate_columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(options_research_candidate)")
-            }
-            for name, declaration in (
-                ("fitness", "REAL"),
-                ("selected_oos_fitness", "REAL"),
-                ("selected_oos_return", "REAL"),
-                ("selected_oos_sharpe", "REAL"),
-                ("selected_oos_max_drawdown", "REAL"),
-                ("selected_oos_trades", "INTEGER"),
-                ("selected_oos_folds", "INTEGER NOT NULL DEFAULT 0"),
-                ("final_candidate", "INTEGER NOT NULL DEFAULT 0"),
-                ("validation_passed", "INTEGER"),
-                ("verification_status", "TEXT NOT NULL DEFAULT 'not_selected'"),
-            ):
-                if name not in candidate_columns:
-                    connection.execute(
-                        f"ALTER TABLE options_research_candidate ADD COLUMN {name} {declaration}"
-                    )
-            connection.execute("""
-                CREATE INDEX IF NOT EXISTS options_research_candidate_rank_idx
-                ON options_research_candidate(strategy, underlying,
-                    selected_oos_fitness DESC, selected_oos_folds DESC)
+                DROP TABLE IF EXISTS options_research_candidate;
+                DROP TABLE IF EXISTS options_champion_decision;
+                DROP TABLE IF EXISTS options_champion;
             """)
 
     def _connect(self) -> sqlite3.Connection:
@@ -125,49 +83,20 @@ class OptionsResearchArtifactStore:
                 report = {}
         if not isinstance(report, dict):
             raise ValueError("options research report must be a JSON object")
+        report = report_for_history(report)
         run_id = str(report.get("run_id") or directory.name)
         strategy = str(report.get("strategy") or "unknown")
         underlying = str(report.get("underlying") or "unknown").upper()
         created_at = str(report.get("created_at") or datetime.now(timezone.utc).isoformat())
         report_bytes = _json(report).encode("utf-8")
         report_sha = hashlib.sha256(report_bytes).hexdigest()
-        candidates: dict[str, dict] = {}
-        for field in ("candidate_leaderboard", "candidate_reports"):
-            values = report.get(field)
-            if not isinstance(values, list):
-                continue
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                candidate_id = item.get("candidate_id") or item.get("id")
-                if candidate_id:
-                    candidates[str(candidate_id)] = {**candidates.get(str(candidate_id), {}), **item}
-        candidate_path = directory / "candidate_reports.json"
-        try:
-            candidate_rows = json.loads(candidate_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            candidate_rows = []
-        if isinstance(candidate_rows, list):
-            for item in candidate_rows:
-                if isinstance(item, dict) and (item.get("candidate_id") or item.get("id")):
-                    key = str(item.get("candidate_id") or item.get("id"))
-                    candidates[key] = {**candidates.get(key, {}), **item}
-        final_candidate_id = report.get("final_candidate_id")
-        run_validation = report.get("validation") or {}
-
-        def numeric(metrics: dict, key: str):
-            value = metrics.get(key)
-            if value is None:
-                return None
-            try:
-                result = float(value)
-            except (TypeError, ValueError, OverflowError):
-                return None
-            return result if math.isfinite(result) else None
-
         artifacts = []
         for path in sorted(directory.rglob("*")):
-            if not path.is_file() or path.name.endswith(".lock"):
+            if (
+                not path.is_file()
+                or path.name.endswith(".lock")
+                or path.name in {"report.json", "candidate_reports.json"}
+            ):
                 continue
             raw = path.read_bytes()
             relative = str(path.relative_to(directory))
@@ -204,52 +133,32 @@ class OptionsResearchArtifactStore:
                     (run_id, artifact_path, media_type, sha256, byte_size, payload_zlib, stored_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, [(run_id, *item, now) for item in artifacts])
-            connection.execute("DELETE FROM options_research_candidate WHERE run_id=?", (run_id,))
-            connection.executemany("""
-                INSERT INTO options_research_candidate
-                    (run_id, candidate_id, strategy, underlying, parameters_json,
-                     metrics_json, validation_json, details_json, fitness,
-                     selected_oos_fitness, selected_oos_return, selected_oos_sharpe,
-                     selected_oos_max_drawdown, selected_oos_trades, selected_oos_folds,
-                     final_candidate, validation_passed, verification_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [
-                (
-                    run_id, candidate_id, strategy, underlying,
-                    _json(item.get("parameters") or {}),
-                    _json(item.get("metrics") or item.get("mean_is_metrics") or {}),
-                    _json(
-                        run_validation if candidate_id == final_candidate_id
-                        else item.get("validation") or item.get("validation_metrics") or {}
-                    ),
-                    _json(item),
-                    numeric(item.get("mean_is_metrics") or item.get("metrics") or {}, "risk_adjusted_score"),
-                    numeric(item.get("selected_oos_metrics") or {}, "risk_adjusted_score"),
-                    numeric(item.get("selected_oos_metrics") or {}, "total_return"),
-                    numeric(item.get("selected_oos_metrics") or {}, "annualized_sharpe"),
-                    numeric(item.get("selected_oos_metrics") or {}, "max_drawdown"),
-                    numeric(item.get("selected_oos_metrics") or {}, "trade_count"),
-                    int(item.get("selected_oos_folds") or 0),
-                    int(candidate_id == final_candidate_id),
-                    (int(bool(run_validation.get("approved"))) if candidate_id == final_candidate_id else None),
-                    (
-                        "final_pass" if run_validation.get("approved") else "final_fail"
-                    ) if candidate_id == final_candidate_id else (
-                        "selected_oos" if item.get("selected_oos_metrics") else "not_selected"
-                    ),
-                )
-                for candidate_id, item in candidates.items()
-            ])
-        return {"run_id": run_id, "artifacts": len(artifacts), "candidates": len(candidates), "report_sha256": report_sha}
+        return {"run_id": run_id, "artifacts": len(artifacts), "report_sha256": report_sha}
 
     def store_document(self, *, document_type: str, identity: str, path: str | Path) -> dict:
         source = Path(path)
         raw = source.read_bytes()
-        digest = hashlib.sha256(raw).hexdigest()
         media_type = {
             ".json": "application/json", ".md": "text/markdown",
             ".csv": "text/csv", ".jsonl": "application/x-ndjson",
         }.get(source.suffix.lower(), "application/octet-stream")
+        return self._store_document_bytes(
+            document_type=document_type, identity=identity, raw=raw,
+            media_type=media_type,
+        )
+
+    def store_document_payload(self, *, document_type: str, identity: str, payload: dict) -> dict:
+        """Store a JSON document directly, without writing a duplicate full-size file."""
+        payload = report_for_history(payload)
+        return self._store_document_bytes(
+            document_type=document_type, identity=identity,
+            raw=_json(payload).encode("utf-8"), media_type="application/json",
+        )
+
+    def _store_document_bytes(
+        self, *, document_type: str, identity: str, raw: bytes, media_type: str,
+    ) -> dict:
+        digest = hashlib.sha256(raw).hexdigest()
         with self._connect() as connection:
             connection.execute("""
                 INSERT INTO options_research_document

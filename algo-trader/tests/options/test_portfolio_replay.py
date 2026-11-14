@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from options.data import ChainQuote, OptionChain
 from options.research.dataset import OptionsResearchDataset, ResearchObservation, combine_options_research_datasets
 from options.research.runner import RESEARCH_DEFAULTS_PATH
-from options.research.search import Candidate
 from options.research.simulator import simulate_options_strategy
+from options.research.strategy_configuration import StrategyConfiguration
 from options.research.strategy_factory import live_defaults
 from options.models import GreeksSnapshot, OptionContract, OptionLeg, OptionSignal, OptionStructure, RiskMetrics
 
@@ -44,14 +44,15 @@ def test_portfolio_replay_emits_one_shared_equity_row_per_date(monkeypatch, tmp_
         )
     portfolio = combine_options_research_datasets(datasets)
     config = json.loads(RESEARCH_DEFAULTS_PATH.read_text(encoding="utf-8"))
-    candidates = {
-        name: Candidate(name, {}, ("range_bound",), (), is_baseline=True)
+    configurations = {
+        name: StrategyConfiguration({}, ("range_bound",))
         for name in ("vrp", "llm_driven")
     }
 
     result = simulate_options_strategy(
-        portfolio, portfolio.observations, strategy_name="vrp", candidate=candidates["vrp"],
-        strategy_candidates=candidates,
+        portfolio, portfolio.observations, strategy_name="vrp",
+        strategy_configuration=configurations["vrp"],
+        strategy_configurations=configurations,
         strategy_underlyings={"vrp": {"SPY"}, "llm_driven": {"AAPL"}},
         config=config, base_config=live_defaults(),
     )
@@ -102,7 +103,7 @@ def test_expiring_trade_does_not_replace_underlying_with_contract_symbol(monkeyp
     )
     config = json.loads(RESEARCH_DEFAULTS_PATH.read_text(encoding="utf-8"))
     config["market_data"]["minimum_contracts_per_chain"] = 1
-    candidate = Candidate("test", {}, ("range_bound",), (), is_baseline=True)
+    configuration = StrategyConfiguration({}, ("range_bound",))
 
     class _SignalOnce:
         def __init__(self):
@@ -119,8 +120,10 @@ def test_expiring_trade_does_not_replace_underlying_with_contract_symbol(monkeyp
     monkeypatch.setattr("options.research.simulator._hash_uniform", lambda *args: 0.0)
 
     result = simulate_options_strategy(
-        dataset, dataset.observations, strategy_name="test", candidate=candidate,
-        strategy_candidates={"test": candidate}, config=config, base_config=live_defaults(),
+        dataset, dataset.observations, strategy_name="test",
+        strategy_configuration=configuration,
+        strategy_configurations={"test": configuration},
+        config=config, base_config=live_defaults(),
         force_close=True,
     )
 

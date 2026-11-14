@@ -20,15 +20,11 @@ from typing import Any
 from equity_research.cpu import available_cpu_count
 from options.market_inputs import research_market_inputs
 from options.research.artifact_store import OptionsResearchArtifactStore
-from options.research.champion import (
-    champion_candidate, decide_promotion, load_state, pool_with_champion, record_decision,
-)
-from runtime.fold_ranking import fold_summary
 from options.research.dataset import load_options_research_dataset
 from options.research.reporting import write_research_report
-from options.research.search import Candidate, add_plateau_scores, candidate_pool, evaluate_candidates
+from options.research.strategy_configuration import fixed_strategy_configuration
 from options.research.simulator import simulate_options_strategy
-from options.research.strategy_factory import export_section, live_defaults
+from options.research.strategy_factory import live_defaults
 from options.research.validation import make_purged_walk_forward
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -88,34 +84,6 @@ def _dataset_chain_errors(dataset) -> int:
     if getattr(dataset.provider, "lazy_chains", False):
         return sum(item.chain_error is not None for item in dataset.observations)
     return sum(item.chain is None for item in dataset.observations)
-
-
-def _mean_metrics(rows: list[dict]) -> dict:
-    keys = (
-        "trade_count", "total_return", "annualized_sharpe", "annualized_sortino",
-        "max_drawdown", "risk_adjusted_score", "win_rate", "average_trade_pnl",
-        "gamma_vega_positive_pnl_share", "largest_winning_trade_share",
-    )
-    result = {}
-    for key in keys:
-        values = [float(row[key]) for row in rows if row.get(key) is not None and math.isfinite(float(row[key]))]
-        result[key] = statistics.mean(values) if values else None
-    result["windows"] = len(rows)
-    return result
-
-
-def _metric_deltas(tuned: dict, baseline: dict) -> dict:
-    """Return paired tuned-minus-baseline deltas for the headline metrics."""
-    keys = ("risk_adjusted_score", "total_return", "annualized_sharpe", "max_drawdown", "trade_count")
-    deltas = {}
-    for key in keys:
-        tuned_value, baseline_value = tuned.get(key), baseline.get(key)
-        if tuned_value is None or baseline_value is None:
-            deltas[key] = None
-            continue
-        tuned_number, baseline_number = float(tuned_value), float(baseline_value)
-        deltas[key] = tuned_number - baseline_number if math.isfinite(tuned_number) and math.isfinite(baseline_number) else None
-    return deltas
 
 
 def _equity_summary(run: dict) -> dict:
@@ -223,41 +191,6 @@ def _aggregate_runs(runs: list[dict], *, starting_equity: float, gamma_vega_thre
             "greek_summary": greek_summary}
 
 
-def _parameter_stability(selected: list[dict]) -> dict:
-    if not selected:
-        return {"stability_score": 0.0, "parameters": {}, "regime_set_frequency": {}}
-    names = sorted({name for row in selected for name in row["candidate"].get("parameters", {})})
-    parameters = {}
-    scores = []
-    for name in names:
-        values = [row["candidate"].get("parameters", {}).get(name) for row in selected]
-        numeric = [float(value) for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
-        if len(numeric) == len(values):
-            spread = max(numeric) - min(numeric)
-            normalized_std = statistics.pstdev(numeric) / spread if spread > 0 else 0.0
-            stability = max(0.0, 1.0 - min(1.0, normalized_std))
-            parameters[name] = {"mean": statistics.mean(numeric), "standard_deviation": statistics.pstdev(numeric),
-                                "normalized_standard_deviation": normalized_std, "stability_score": stability,
-                                "values": values}
-            scores.append(stability)
-        else:
-            counts = defaultdict(int)
-            for value in values:
-                counts[json.dumps(value, sort_keys=True)] += 1
-            stability = max(counts.values()) / len(values)
-            parameters[name] = {"values": values, "value_frequency": dict(counts), "stability_score": stability}
-            scores.append(stability)
-    regime_counts = defaultdict(int)
-    for row in selected:
-        regime_counts[tuple(row["candidate"].get("allowed_regimes", []))] += 1
-    regime_frequency = {", ".join(key): count / len(selected) for key, count in regime_counts.items()}
-    regime_stability = max(regime_counts.values()) / len(selected)
-    scores.append(regime_stability)
-    return {"stability_score": statistics.mean(scores) if scores else regime_stability,
-            "parameters": parameters, "regime_set_frequency": regime_frequency,
-            "regime_set_stability": regime_stability, "selected_windows": len(selected)}
-
-
 def _sequence_reshuffle(trades: list[dict], *, paths: int, seed: int, starting_equity: float) -> dict:
     pnls = [float(item["pnl"]) for item in trades]
     if len(pnls) < 2 or paths <= 0:
@@ -330,71 +263,30 @@ def _write_trades_csv(path: Path, rows: list[dict]) -> None:
 
 
 def _evaluate_fold_index(fold_index: int) -> dict:
-    """Evaluate one independent fold using its process's inherited dataset."""
+    """Replay one fixed configuration over the train and OOS slices."""
     context = _FOLD_EVALUATION_CONTEXT
     dataset = context["dataset"]
     folds = context["folds"]
     strategy = context["strategy"]
     research_config = context["research_config"]
     base_config = context["base_config"]
+    strategy_configuration = context["strategy_configuration"]
     fold = folds[fold_index]
     train = dataset.observations[fold.train_start:fold.train_end]
     oos = dataset.observations[fold.oos_start:fold.oos_end]
-
-    def evaluate(candidate):
-        run = simulate_options_strategy(
-            dataset, train, strategy_name=strategy, candidate=candidate,
-            config=research_config, base_config=base_config, force_close=True,
-        )
-        return {
-            "risk_adjusted_score": run["risk_adjusted_score"],
-            "metrics": run["metrics"],
-            "regime_breakdown": run["regime_breakdown"],
-            "volatility_breakdown": run["volatility_breakdown"],
-            "equity_curve_summary": _equity_summary(run),
-        }
-
-    candidate_rows = evaluate_candidates(
-        strategy, research_config, base_config, evaluate,
-        include_candidate_objects=True,
-        candidate_pool_override=context["candidate_pool"],
+    train_run = simulate_options_strategy(
+        dataset, train, strategy_name=strategy,
+        strategy_configuration=strategy_configuration,
+        config=research_config, base_config=base_config, force_close=True,
     )
-    candidate_rows = add_plateau_scores(
-        candidate_rows,
-        min_profitable_neighbour_fraction=float(
-            research_config.get("search", {}).get("minimum_profitable_neighbour_fraction", 0.5)
-        ),
-        neighbour_count=int(research_config.get("search", {}).get("plateau_neighbours", 4)),
-    )
-    chosen = candidate_rows[0]
-    chosen_obj = chosen.pop("_candidate_obj")
-    for row in candidate_rows[1:]:
-        row.pop("_candidate_obj", None)
     oos_run = simulate_options_strategy(
-        dataset, oos, strategy_name=strategy, candidate=chosen_obj,
+        dataset, oos, strategy_name=strategy,
+        strategy_configuration=strategy_configuration,
         config=research_config, base_config=base_config, force_close=True,
     )
-    baseline_candidate = next(
-        (item for item in context["candidate_pool"] if item.is_baseline), None,
-    )
-    if baseline_candidate is None:
-        raise ValueError("candidate pool lost its baseline candidate")
-    baseline_oos_run = simulate_options_strategy(
-        dataset, oos, strategy_name=strategy, candidate=baseline_candidate,
-        config=research_config, base_config=base_config, force_close=True,
-    )
-    incumbent_oos_run = None
-    if context.get("incumbent_candidate") is not None:
-        incumbent_oos_run = simulate_options_strategy(
-            dataset, oos, strategy_name=strategy, candidate=context["incumbent_candidate"],
-            config=research_config, base_config=base_config, force_close=True,
-        )
     return {
-        "candidate_rows": candidate_rows,
-        "chosen": chosen,
+        "train_run": train_run,
         "oos_run": oos_run,
-        "baseline_oos_run": baseline_oos_run,
-        "incumbent_oos_run": incumbent_oos_run,
     }
 
 
@@ -408,21 +300,35 @@ def run_research(
     parallel_workers: int | None = None,
     replay_only: bool = False,
 ) -> dict:
-    """Research one options expression module; it never reads credentials or submits orders."""
+    """Replay one options strategy with fixed settings; it never searches or submits orders."""
     strategy = str(strategy).strip().lower()
     supported = {"vrp", "llm_driven", "directional_overlay", "long_volatility"}
     if strategy not in supported:
         raise ValueError(f"strategy must be one of {', '.join(sorted(supported))}")
     config_path_resolved = _project_path(config_path) if config_path else RESEARCH_DEFAULTS_PATH
-    research_config = _merge(_read_json(RESEARCH_DEFAULTS_PATH), _read_json(config_path_resolved)) if config_path_resolved != RESEARCH_DEFAULTS_PATH else _read_json(RESEARCH_DEFAULTS_PATH)
-    configured_parallel_workers = research_config.get("search", {}).get("parallel_workers", 1)
-    if isinstance(configured_parallel_workers, bool) or not isinstance(configured_parallel_workers, int) or configured_parallel_workers < 1:
-        raise ValueError("search.parallel_workers must be a positive integer")
+    research_config = (
+        _merge(_read_json(RESEARCH_DEFAULTS_PATH), _read_json(config_path_resolved))
+        if config_path_resolved != RESEARCH_DEFAULTS_PATH
+        else _read_json(RESEARCH_DEFAULTS_PATH)
+    )
+    configured_parallel_workers = research_config.get("parallel_workers", 1)
+    if (
+        isinstance(configured_parallel_workers, bool)
+        or not isinstance(configured_parallel_workers, int)
+        or configured_parallel_workers < 1
+    ):
+        raise ValueError("parallel_workers must be a positive integer")
     effective_parallel_workers = configured_parallel_workers if parallel_workers is None else parallel_workers
-    if isinstance(effective_parallel_workers, bool) or not isinstance(effective_parallel_workers, int) or effective_parallel_workers < 1:
+    if (
+        isinstance(effective_parallel_workers, bool)
+        or not isinstance(effective_parallel_workers, int)
+        or effective_parallel_workers < 1
+    ):
         raise ValueError("parallel_workers must be a positive integer")
     loader_worker_count = min(effective_parallel_workers, available_cpu_count())
-    selected_data_path = _project_path(data_path or research_config.get("data_path", "data/options/research/chains.jsonl"))
+    selected_data_path = _project_path(
+        data_path or research_config.get("data_path", "data/options/research/chains.jsonl")
+    )
     output_root = _project_path(output_dir or research_config.get("output_dir", "data/options/research/runs"))
     underlying = str(underlying or research_config.get("underlying", "SPY")).strip().upper()
     if not underlying or not underlying.replace(".", "").isalnum():
@@ -430,10 +336,14 @@ def run_research(
     live_config_path = Path(__file__).resolve().parents[1] / "config.default.json"
     base_config = live_defaults(live_config_path)
     base_config_digest = hashlib.sha256(live_config_path.read_bytes()).hexdigest()
+    strategy_configuration = fixed_strategy_configuration(
+        strategy, base_config,
+        parameters=research_config.get("strategy_defaults", {}).get(strategy, {}),
+    )
     code_digest = _digest_files([
         Path(__file__), Path(__file__).with_name("simulator.py"),
         Path(__file__).with_name("dataset.py"), Path(__file__).with_name("history_store.py"),
-        Path(__file__).with_name("search.py"),
+        Path(__file__).with_name("strategy_configuration.py"),
         Path(__file__).with_name("validation.py"), Path(__file__).with_name("execution.py"),
         Path(__file__).with_name("strategy_factory.py"), Path(__file__).with_name("reporting.py"),
         Path(__file__).parents[1] / "data.py", Path(__file__).parents[1] / "pricing.py",
@@ -441,25 +351,23 @@ def run_research(
         Path(__file__).parents[1] / "assignment.py", live_config_path,
         ROOT / "strategies/options/vrp.py", ROOT / "strategies/options/llm_driven.py",
         ROOT / "strategies/options/directional_overlay.py", ROOT / "strategies/options/long_volatility.py",
-        ROOT / "strategies/options/base.py",
-        ROOT / "strategies/llm_driven/models.py",
+        ROOT / "strategies/options/base.py", ROOT / "strategies/llm_driven/models.py",
     ])
     section = deepcopy(base_config[strategy])
     section.update(research_config.get("strategy_defaults", {}).get(strategy, {}))
     section["underlying"] = underlying
     if strategy in {"long_volatility", "directional_overlay"}:
         section["underlyings"] = [underlying]
-    if strategy == "long_volatility":
-        research_config.setdefault("search", {}).setdefault("grids", {}).setdefault(
-            "long_volatility", {},
-        )["underlyings"] = [[underlying]]
     config_digest = hashlib.sha256(json.dumps({
         "research_config": research_config,
         "selected_underlying": underlying,
     }, sort_keys=True).encode("utf-8")).hexdigest()
     timestamp = datetime.now(timezone.utc)
     source_digest = _dataset_digest(selected_data_path, underlying) if selected_data_path.is_file() else "missing"
-    run_id = f"{strategy}-{underlying.lower()}-{timestamp:%Y%m%dT%H%M%S%fZ}-{source_digest[:10]}-{config_digest[:8]}"
+    run_id = (
+        f"{strategy}-{underlying.lower()}-{timestamp:%Y%m%dT%H%M%S%fZ}-"
+        f"{source_digest[:10]}-{config_digest[:8]}"
+    )
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     run_start = {
@@ -469,9 +377,12 @@ def run_research(
         "dataset_path": str(selected_data_path), "dataset_sha256": source_digest,
         "status": "started",
     }
-    atomic_write_json(run_dir / "run.json", {**run_start, "research_config": research_config},
-                      indent=2, sort_keys=True, allow_nan=False)
+    atomic_write_json(
+        run_dir / "run.json", {**run_start, "research_config": research_config},
+        indent=2, sort_keys=True, allow_nan=False,
+    )
     _append_run_log(output_root / "research_runs.jsonl", run_start)
+
     try:
         print(
             f"Options research {strategy}/{underlying}: loading {selected_data_path.name} "
@@ -486,16 +397,16 @@ def run_research(
             dividend_yield=research_inputs.dividend_yield(underlying, input_day).value,
             data_mode=str(research_config.get("data_mode", "auto")),
             model_surface_config=research_config.get("model_surface", {}),
-            workers=loader_worker_count,
-            lazy_chains=replay_only,
+            workers=loader_worker_count, lazy_chains=replay_only,
         )
-        # Optional research window from the UI or config: keep only observations inside it.
         date_range = research_config.get("date_range") or {}
         if date_range.get("start") or date_range.get("end"):
             range_start = date.fromisoformat(date_range["start"]) if date_range.get("start") else None
             range_end = date.fromisoformat(date_range["end"]) if date_range.get("end") else None
+
             def _as_day(value):
                 return value.date() if isinstance(value, datetime) else value
+
             kept = tuple(
                 item for item in dataset.observations
                 if (range_start is None or _as_day(item.as_of) >= range_start)
@@ -507,12 +418,12 @@ def run_research(
                 flush=True,
             )
             dataset = dataclasses.replace(dataset, observations=kept)
+
         database_source = selected_data_path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
         read_stage = "SQLite read" if database_source else "JSONL parse/normalize"
         read_seconds = dataset.loading_parallelism.get(
             "database_read_elapsed_seconds" if database_source
-            else "jsonl_parse_and_normalize_elapsed_seconds",
-            0,
+            else "jsonl_parse_and_normalize_elapsed_seconds", 0,
         )
         print(
             f"Options research {strategy}/{underlying}: loading complete in "
@@ -522,528 +433,362 @@ def run_research(
             f"({dataset.loading_parallelism.get('chain_workers_used', 1)} workers)",
             flush=True,
         )
-        try:
-            if replay_only:
-                # Replay only: no parameter search and no walk-forward. The chosen parameters run over the whole history.
-                raise ValueError("insufficient history for replay-only research")
-            folds, split = make_purged_walk_forward(
-                dataset.observations, strategy=strategy, strategy_section=section, config=research_config,
-            )
-        except ValueError as exc:
+
+        folds = None
+        split = None
+        split_error = None
+        if not replay_only:
+            try:
+                folds, split = make_purged_walk_forward(
+                    dataset.observations, strategy=strategy,
+                    strategy_section=section, config=research_config,
+                )
+            except ValueError as exc:
+                split_error = exc
+        if replay_only or split_error is not None:
             short_history = research_config.get("short_history_exploration", {})
             minimum_sessions = int(short_history.get("minimum_sessions", 60))
-            if replay_only and len(dataset.observations) < 2:
-                raise
-            if (
-                replay_only
-                or (
-                    short_history.get("enabled", False)
-                    and "insufficient history for" in str(exc)
-                    and len(dataset.observations) >= minimum_sessions
-                )
-            ):
-                baseline = candidate_pool(strategy, research_config, base_config)[0]
-                replay = simulate_options_strategy(
-                    dataset, dataset.observations, strategy_name=strategy,
-                    candidate=baseline, config=research_config,
-                    base_config=base_config, force_close=True,
-                )
-                replay_summary = _aggregate_runs(
-                    [replay], starting_equity=float(research_config.get("starting_equity", 100000)),
-                    gamma_vega_threshold=float(
-                        research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60)
+            can_replay = replay_only or (
+                short_history.get("enabled", False)
+                and split_error is not None
+                and "insufficient history for" in str(split_error)
+                and len(dataset.observations) >= minimum_sessions
+            )
+            if not can_replay:
+                if split_error is not None:
+                    raise split_error
+                raise ValueError("insufficient history for replay-only research")
+            if len(dataset.observations) < 2:
+                raise ValueError("replay-only research requires at least two observations")
+            replay = simulate_options_strategy(
+                dataset, dataset.observations, strategy_name=strategy,
+                strategy_configuration=strategy_configuration,
+                config=research_config, base_config=base_config, force_close=True,
+            )
+            replay_summary = _aggregate_runs(
+                [replay], starting_equity=float(research_config.get("starting_equity", 100000)),
+                gamma_vega_threshold=float(
+                    research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60)
+                ),
+            )
+            report = {
+                "run_id": run_id, "created_at": timestamp.isoformat(),
+                "strategy": strategy, "underlying": underlying,
+                "status": "exploratory_only",
+                "research_tier": "fixed_configuration_full_history_replay",
+                "dataset_path": str(dataset.source_path), "run_dir": str(run_dir),
+                "dataset_sha256": dataset.source_sha256,
+                "dataset_observations": len(dataset.observations),
+                "dataset_chain_errors": _dataset_chain_errors(dataset),
+                "data_mode": dataset.data_mode,
+                "parallelism": {
+                    "loader_workers_requested": loader_worker_count,
+                    "loader_workers_used": dataset.loading_parallelism.get("workers_used", 1),
+                    "chain_workers_used": dataset.loading_parallelism.get("chain_workers_used", 1),
+                    "loader_elapsed_seconds": dataset.loading_parallelism.get("elapsed_seconds"),
+                    "jsonl_parse_and_normalize_elapsed_seconds": dataset.loading_parallelism.get("jsonl_parse_and_normalize_elapsed_seconds"),
+                    "chain_preparation_elapsed_seconds": dataset.loading_parallelism.get("chain_preparation_elapsed_seconds"),
+                    "fold_workers_requested": effective_parallel_workers,
+                    "fold_workers_used": 0,
+                    "dataset_sharing": "not_applicable_full_history_replay",
+                },
+                "research_config_path": str(config_path_resolved),
+                "research_config_sha256": config_digest,
+                "live_base_config_sha256": base_config_digest,
+                "code_sha256": code_digest,
+                "random_seed": int(research_config.get("random_seed", 1)),
+                "split": {
+                    "standard_validation_available": False,
+                    "available_sessions": len(dataset.observations),
+                    "standard_validation_requirement": (
+                        "replay_only was requested" if replay_only else str(split_error)
                     ),
+                },
+                "strategy_configuration": {
+                    "mode": "fixed_live_defaults",
+                    "parameters": strategy_configuration.parameters,
+                    "allowed_regimes": list(strategy_configuration.allowed_regimes),
+                },
+                "folds": [],
+                "exploratory_replay": {
+                    "period_start": dataset.observations[0].as_of.isoformat(),
+                    "period_end": dataset.observations[-1].as_of.isoformat(),
+                    "profile": "checked-in live defaults",
+                    "metrics": replay_summary["metrics"],
+                    "regime_breakdown": replay_summary["regime_breakdown"],
+                    "volatility_breakdown": replay_summary["volatility_breakdown"],
+                    "greek_summary": replay_summary["greek_summary"],
+                    "equity_curve": replay_summary["equity_curve"],
+                    "trades": replay_summary["trades"],
+                },
+                "walk_forward": {},
+                "final_parameters": strategy_configuration.parameters,
+                "final_allowed_regimes": list(strategy_configuration.allowed_regimes),
+                "robustness": {},
+                "validation": {
+                    "approved": False,
+                    "promotion_eligible": False,
+                    "status": "descriptive_only",
+                    "reason": "This replay uses fixed live defaults and does not select or promote parameters.",
+                },
+                "data_assumptions": {
+                    "historical_chain_snapshots_required_for_empirical_claims": True,
+                    "model_or_synthetic_rows_present": dataset.data_mode.startswith("model_surface") or dataset.data_mode == "model_or_synthetic_chain_rows",
+                    "point_in_time_events_and_signals_only": True,
+                },
+            }
+            write_research_report(run_dir, report)
+            _write_equity_csv(run_dir / "exploratory_equity_curve.csv", replay_summary["equity_curve"])
+            _write_trades_csv(run_dir / "exploratory_trades.csv", replay_summary["trades"])
+            parallelism = report["parallelism"]
+            atomic_write_json(run_dir / "run.json", {
+                **run_start, "research_config": research_config,
+                "research_config_sha256": config_digest,
+                "live_base_config_sha256": base_config_digest,
+                "code_sha256": code_digest,
+                "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
+                "status": "exploratory_only", "validation": report["validation"],
+                "parallelism": parallelism,
+            }, indent=2, sort_keys=True, allow_nan=False)
+            _append_run_log(output_root / "research_runs.jsonl", {
+                **run_start, "dataset_sha256": dataset.source_sha256,
+                "run_dir": str(run_dir), "status": "exploratory_only",
+                "validation": report["validation"], "parallelism": parallelism,
+            })
+            OptionsResearchArtifactStore().store_run(run_dir, report)
+            return report
+
+        chain_errors = _dataset_chain_errors(dataset)
+        starting_equity = float(research_config.get("starting_equity", 100000))
+        gamma_vega_threshold = float(
+            research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60)
+        )
+        fold_worker_count = min(effective_parallel_workers, available_cpu_count(), len(folds))
+        if fold_worker_count > 1 and "fork" not in mp.get_all_start_methods():
+            fold_worker_count = 1
+
+        global _FOLD_EVALUATION_CONTEXT
+        _FOLD_EVALUATION_CONTEXT = {
+            "dataset": dataset, "folds": folds, "strategy": strategy,
+            "strategy_configuration": strategy_configuration,
+            "research_config": research_config, "base_config": base_config,
+        }
+        try:
+            if fold_worker_count > 1:
+                with ProcessPoolExecutor(
+                    max_workers=fold_worker_count,
+                    mp_context=mp.get_context("fork"),
+                ) as executor:
+                    fold_results = list(executor.map(
+                        _evaluate_fold_index, range(len(folds)), chunksize=1,
+                    ))
+            else:
+                fold_results = [_evaluate_fold_index(index) for index in range(len(folds))]
+        finally:
+            _FOLD_EVALUATION_CONTEXT = {}
+
+        train_runs = [result["train_run"] for result in fold_results]
+        oos_runs = [result["oos_run"] for result in fold_results]
+        fold_records = []
+        for fold, train_run, oos_run in zip(folds, train_runs, oos_runs):
+            fold_records.append({
+                "fold": fold.__dict__,
+                "train_metrics": train_run["metrics"],
+                "train_equity_summary": _equity_summary(train_run),
+                "oos_metrics": oos_run["metrics"],
+                "oos_equity_summary": _equity_summary(oos_run),
+            })
+        walk_forward = _aggregate_runs(
+            oos_runs, starting_equity=starting_equity,
+            gamma_vega_threshold=gamma_vega_threshold,
+        )
+        mean_train_score = statistics.mean(
+            float(run["metrics"].get("risk_adjusted_score", -5.0)) for run in train_runs
+        ) if train_runs else 0.0
+        mean_oos_score = float(walk_forward["metrics"]["risk_adjusted_score"])
+        efficiency = mean_oos_score / mean_train_score if mean_train_score > 0 else None
+        walk_forward["walk_forward_efficiency"] = efficiency
+        walk_forward["mean_train_risk_adjusted_score"] = mean_train_score
+        walk_forward["mean_oos_risk_adjusted_score"] = mean_oos_score
+
+        stress_span = dataset.observations[folds[0].oos_start:folds[-1].oos_end]
+        stress_run = simulate_options_strategy(
+            dataset, stress_span, strategy_name=strategy,
+            strategy_configuration=strategy_configuration,
+            config=research_config, base_config=base_config, force_close=True,
+        )
+        sensitivity = []
+        slippage_scenarios = research_config.get("robustness", {}).get(
+            "slippage_multipliers", [1.0, 1.5, 2.0],
+        )
+        spread_scenarios = research_config.get("robustness", {}).get(
+            "spread_width_multipliers", [1.0, 1.5, 2.0],
+        )
+        for slippage in slippage_scenarios:
+            for spread_width in spread_scenarios:
+                run = simulate_options_strategy(
+                    dataset, stress_span, strategy_name=strategy,
+                    strategy_configuration=strategy_configuration,
+                    config=research_config, base_config=base_config,
+                    slippage_multiplier=float(slippage),
+                    spread_width_multiplier=float(spread_width), force_close=True,
                 )
-                report = {
-                    "run_id": run_id,
-                    "created_at": timestamp.isoformat(),
-                    "strategy": strategy,
-                    "underlying": underlying,
-                    "status": "exploratory_only",
-                    "research_tier": "short_history_baseline_replay",
-                    "dataset_path": str(dataset.source_path),
-                    "run_dir": str(run_dir),
-                    "dataset_sha256": dataset.source_sha256,
-                    "dataset_observations": len(dataset.observations),
-                    "dataset_chain_errors": _dataset_chain_errors(dataset),
-                    "data_mode": dataset.data_mode,
-                    "parallelism": {
-                        "loader_workers_requested": loader_worker_count,
-                        "loader_workers_used": dataset.loading_parallelism.get("workers_used", 1),
-                        "chain_workers_used": dataset.loading_parallelism.get("chain_workers_used", 1),
-                        "loader_elapsed_seconds": dataset.loading_parallelism.get("elapsed_seconds"),
-                        "jsonl_parse_and_normalize_elapsed_seconds": dataset.loading_parallelism.get("jsonl_parse_and_normalize_elapsed_seconds"),
-                        "chain_preparation_elapsed_seconds": dataset.loading_parallelism.get("chain_preparation_elapsed_seconds"),
-                        "fold_workers_requested": effective_parallel_workers,
-                        "fold_workers_used": 0,
-                        "dataset_sharing": "not_applicable_exploratory_replay",
-                    },
-                    "research_config_path": str(config_path_resolved),
-                    "research_config_sha256": config_digest,
-                    "live_base_config_sha256": base_config_digest,
-                    "code_sha256": code_digest,
-                    "random_seed": int(research_config.get("random_seed", 1)),
-                    "split": {
-                        "standard_validation_available": False,
-                        "available_sessions": len(dataset.observations),
-                        "standard_validation_requirement": str(exc),
-                    },
-                    "folds": [],
-                    "candidate_leaderboard": [],
-                    "exploratory_replay": {
-                        "period_start": dataset.observations[0].as_of.isoformat(),
-                        "period_end": dataset.observations[-1].as_of.isoformat(),
-                        "profile": "current live defaults; no parameter search",
-                        "candidate": baseline.to_dict(),
-                        "metrics": replay_summary["metrics"],
-                        "regime_breakdown": replay_summary["regime_breakdown"],
-                        "volatility_breakdown": replay_summary["volatility_breakdown"],
-                        "greek_summary": replay_summary["greek_summary"],
-                        "equity_curve": replay_summary["equity_curve"],
-                        "trades": replay_summary["trades"],
-                    },
-                    "walk_forward": {},
-                    "final_parameters": {},
-                    "final_allowed_regimes": list(baseline.allowed_regimes),
-                    "parameter_stability": {},
-                    "robustness": {},
-                    "validation": {
-                        "approved": False,
-                        "promotion_eligible": False,
-                        "status": "not_validated",
-                        "reason": "Short-history replay is descriptive only; standard rolling OOS gates were not met.",
-                    },
-                    "data_assumptions": {
-                        "historical_chain_snapshots_required_for_empirical_claims": True,
-                        "model_or_synthetic_rows_present": dataset.data_mode.startswith("model_surface") or dataset.data_mode == "model_or_synthetic_chain_rows",
-                        "point_in_time_events_and_signals_only": True,
-                    },
-                }
-                write_research_report(run_dir, report)
-                atomic_write_json(run_dir / "candidate_reports.json", [], indent=2, sort_keys=True)
-                _write_equity_csv(run_dir / "exploratory_equity_curve.csv", replay_summary["equity_curve"])
-                _write_trades_csv(run_dir / "exploratory_trades.csv", replay_summary["trades"])
-                atomic_write_json(run_dir / "run.json", {
-                    "run_id": run_id, "strategy": strategy,
-                    "research_config": research_config,
-                    "research_config_sha256": config_digest,
-                    "live_base_config_sha256": base_config_digest,
-                    "code_sha256": code_digest,
-                    "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
-                    "created_at": timestamp.isoformat(), "status": "exploratory_only",
-                    "validation": report["validation"],
-                    "parallelism": report["parallelism"],
-                }, indent=2, sort_keys=True, allow_nan=False)
-                _append_run_log(output_root / "research_runs.jsonl", {
-                    "run_id": run_id, "created_at": timestamp.isoformat(), "strategy": strategy,
-                    "underlying": underlying, "dataset_sha256": dataset.source_sha256,
-                    "research_config_sha256": config_digest,
-                    "live_base_config_sha256": base_config_digest, "code_sha256": code_digest,
-                    "run_dir": str(run_dir), "status": "exploratory_only",
-                    "validation": report["validation"],
-                    "parallelism": report["parallelism"],
+                sensitivity.append({
+                    "slippage_multiplier": float(slippage),
+                    "spread_width_multiplier": float(spread_width),
+                    "metrics": run["metrics"],
                 })
-                OptionsResearchArtifactStore().store_run(run_dir, report)
-                return report
-            raise
+        assignment_sensitivity = {
+            "enabled": bool(research_config.get("robustness", {}).get("run_assignment_sensitivity", True))
+        }
+        if assignment_sensitivity["enabled"]:
+            without_assignment = simulate_options_strategy(
+                dataset, stress_span, strategy_name=strategy,
+                strategy_configuration=strategy_configuration,
+                config=research_config, base_config=base_config,
+                assignment_enabled=False, force_close=True,
+            )
+            assignment_sensitivity.update({
+                "with_assignment": stress_run["metrics"],
+                "without_early_assignment": without_assignment["metrics"],
+                "pnl_difference_usd": starting_equity * (
+                    stress_run["metrics"]["total_return"]
+                    - without_assignment["metrics"]["total_return"]
+                ),
+                "assignment_events": len(stress_run.get("assignment_events", [])),
+            })
+        reshuffle = _sequence_reshuffle(
+            walk_forward["trades"],
+            paths=int(research_config.get("robustness", {}).get("monte_carlo_paths", 500)),
+            seed=int(research_config.get("random_seed", 1)),
+            starting_equity=starting_equity,
+        )
+        minimum_oos_trades = int(
+            research_config.get("walk_forward", {}).get("minimum_oos_trades", 8)
+        )
+        minimum_stress_slippage = float(
+            research_config.get("robustness", {}).get("minimum_stress_slippage_multiplier", 1.5)
+        )
+        minimum_stress_spread = float(
+            research_config.get("robustness", {}).get("minimum_stress_spread_width_multiplier", 1.5)
+        )
+        stress_case = next((
+            item for item in sensitivity
+            if item["slippage_multiplier"] >= minimum_stress_slippage
+            and item["spread_width_multiplier"] >= minimum_stress_spread
+        ), None)
+        stress_positive = bool(
+            stress_case
+            and stress_case["metrics"]["risk_adjusted_score"] > 0
+            and stress_case["metrics"]["total_return"] > 0
+        )
+        metrics = walk_forward["metrics"]
+        validation = {
+            "approved": False,
+            "promotion_eligible": False,
+            "status": "fixed_configuration_replay",
+            "reason": "Fixed settings are replayed for historical evaluation; no parameter search or promotion runs.",
+            "minimum_oos_trades": minimum_oos_trades,
+            "observed_oos_trades": metrics["trade_count"],
+            "minimum_oos_trades_met": metrics["trade_count"] >= minimum_oos_trades,
+            "walk_forward_oos_positive": metrics["risk_adjusted_score"] > 0,
+            "stress_slippage_multiplier": minimum_stress_slippage,
+            "stress_spread_width_multiplier": minimum_stress_spread,
+            "stress_case_positive_after_costs": stress_positive,
+            "returns_not_dominated_by_gamma_or_vega_episodes": not (
+                metrics["returns_dominated_by_gamma_or_vega_episodes"]
+            ),
+        }
+        report = {
+            "run_id": run_id, "created_at": timestamp.isoformat(),
+            "strategy": strategy, "underlying": underlying, "status": "completed",
+            "research_tier": "fixed_configuration_walk_forward",
+            "dataset_path": str(dataset.source_path), "run_dir": str(run_dir),
+            "dataset_sha256": dataset.source_sha256,
+            "dataset_observations": len(dataset.observations),
+            "dataset_chain_errors": chain_errors, "data_mode": dataset.data_mode,
+            "research_config_path": str(config_path_resolved),
+            "research_config_sha256": config_digest,
+            "live_base_config_sha256": base_config_digest, "code_sha256": code_digest,
+            "random_seed": int(research_config.get("random_seed", 1)),
+            "parallelism": {
+                "loader_workers_requested": loader_worker_count,
+                "loader_workers_used": dataset.loading_parallelism.get("workers_used", 1),
+                "chain_workers_used": dataset.loading_parallelism.get("chain_workers_used", 1),
+                "loader_elapsed_seconds": dataset.loading_parallelism.get("elapsed_seconds"),
+                "jsonl_parse_and_normalize_elapsed_seconds": dataset.loading_parallelism.get("jsonl_parse_and_normalize_elapsed_seconds"),
+                "chain_preparation_elapsed_seconds": dataset.loading_parallelism.get("chain_preparation_elapsed_seconds"),
+                "fold_workers_requested": effective_parallel_workers,
+                "fold_workers_used": fold_worker_count,
+                "dataset_sharing": "fork_copy_on_write" if fold_worker_count > 1 else "single_process",
+            },
+            "split": split,
+            "strategy_configuration": {
+                "mode": "fixed_live_defaults",
+                "parameters": strategy_configuration.parameters,
+                "allowed_regimes": list(strategy_configuration.allowed_regimes),
+            },
+            "folds": fold_records,
+            "final_parameters": strategy_configuration.parameters,
+            "final_allowed_regimes": list(strategy_configuration.allowed_regimes),
+            "walk_forward": {
+                "metrics": metrics, "oos_metrics": metrics,
+                "walk_forward_efficiency": efficiency,
+                "mean_train_risk_adjusted_score": mean_train_score,
+                "mean_oos_risk_adjusted_score": mean_oos_score,
+                "regime_breakdown": walk_forward["regime_breakdown"],
+                "volatility_breakdown": walk_forward["volatility_breakdown"],
+                "greek_summary": walk_forward["greek_summary"],
+                "equity_curve": walk_forward["equity_curve"],
+                "trades": walk_forward["trades"],
+            },
+            "robustness": {
+                "slippage_sensitivity": sensitivity,
+                "assignment_sensitivity": assignment_sensitivity,
+                "trade_sequence_reshuffle": reshuffle,
+            },
+            "validation": validation,
+            "execution_assumptions": stress_run["execution"],
+            "data_assumptions": {
+                "historical_chain_snapshots_required_for_empirical_claims": True,
+                "model_or_synthetic_rows_present": dataset.data_mode.startswith("model_surface") or dataset.data_mode == "model_or_synthetic_chain_rows",
+                "model_iv_surface_used": dataset.data_mode.startswith("model_surface"),
+                "spot_close_fallback_used": dataset.data_mode.endswith("spot_close_proxy"),
+                "point_in_time_events_and_signals_only": True,
+            },
+        }
+        write_research_report(run_dir, report)
+        _write_equity_csv(run_dir / "equity_curve.csv", walk_forward["equity_curve"])
+        _write_trades_csv(run_dir / "oos_trades.csv", walk_forward["trades"])
+        atomic_write_json(run_dir / "run.json", {
+            **run_start, "research_config": research_config,
+            "research_config_sha256": config_digest,
+            "live_base_config_sha256": base_config_digest,
+            "code_sha256": code_digest,
+            "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
+            "status": "completed", "validation": validation,
+            "strategy_configuration": report["strategy_configuration"],
+            "parallelism": report["parallelism"],
+        }, indent=2, sort_keys=True, allow_nan=False)
+        _append_run_log(output_root / "research_runs.jsonl", {
+            **run_start, "dataset_sha256": dataset.source_sha256,
+            "run_dir": str(run_dir), "status": "completed",
+            "validation": validation, "parallelism": report["parallelism"],
+        })
+        OptionsResearchArtifactStore().store_run(run_dir, report)
+        return report
     except Exception as exc:
-        failure = {**run_start, "status": "preflight_failed", "error": f"{type(exc).__name__}: {exc}"}
-        atomic_write_json(run_dir / "run.json", {**failure, "research_config": research_config},
-                          indent=2, sort_keys=True, allow_nan=False)
+        failure = {
+            **run_start, "status": "preflight_failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        atomic_write_json(
+            run_dir / "run.json", {**failure, "research_config": research_config},
+            indent=2, sort_keys=True, allow_nan=False,
+        )
         _append_run_log(output_root / "research_runs.jsonl", failure)
         OptionsResearchArtifactStore().store_run(run_dir, failure)
         raise
-    chain_errors = _dataset_chain_errors(dataset)
-    starting_equity = float(research_config.get("starting_equity", 100000))
-    gamma_vega_threshold = float(research_config.get("robustness", {}).get("gamma_vega_episode_share_threshold", 0.60))
-
-    requested_fold_workers = configured_parallel_workers
-    fold_worker_count = min(effective_parallel_workers, available_cpu_count(), len(folds))
-    fork_available = "fork" in mp.get_all_start_methods()
-    if fold_worker_count > 1 and not fork_available:
-        fold_worker_count = 1
-
-    global _FOLD_EVALUATION_CONTEXT
-    champion_config = research_config.get("champion", {})
-    champion_enabled = bool(champion_config.get("enabled", True))
-    incumbent = load_state(strategy, underlying) if champion_enabled else None
-    incumbent_candidate = champion_candidate(incumbent) if incumbent else None
-    shared_candidate_pool = pool_with_champion(candidate_pool(strategy, research_config, base_config), incumbent)
-    _FOLD_EVALUATION_CONTEXT = {
-        "incumbent_candidate": incumbent_candidate,
-        "dataset": dataset,
-        "folds": folds,
-        "strategy": strategy,
-        "research_config": research_config,
-        "base_config": base_config,
-        "candidate_pool": shared_candidate_pool,
-    }
-    try:
-        if fold_worker_count > 1:
-            # Fork only the independent fold jobs. Their large point-in-time
-            # dataset stays read-only and shared copy-on-write; task payloads
-            # are fold indexes instead of serialized multi-gigabyte datasets.
-            with ProcessPoolExecutor(
-                max_workers=fold_worker_count,
-                mp_context=mp.get_context("fork"),
-            ) as executor:
-                fold_results = list(executor.map(_evaluate_fold_index, range(len(folds)), chunksize=1))
-        else:
-            fold_results = [_evaluate_fold_index(index) for index in range(len(folds))]
-    finally:
-        _FOLD_EVALUATION_CONTEXT = {}
-
-    fold_records = []
-    candidate_ledger: dict[str, dict] = {}
-    selected_rows = []
-    selected_oos_runs = []
-    baseline_oos_runs = []
-    for fold, fold_result in zip(folds, fold_results):
-        candidate_rows = fold_result["candidate_rows"]
-        chosen = fold_result["chosen"]
-        oos_run = fold_result["oos_run"]
-        baseline_oos_run = fold_result["baseline_oos_run"]
-        selected_oos_runs.append(oos_run)
-        baseline_oos_runs.append(baseline_oos_run)
-        selected_entry = {"candidate": chosen["candidate"], "plateau": chosen["plateau"],
-                          "is_metrics": chosen.get("metrics", {}), "oos_metrics": oos_run["metrics"],
-                          "fold": fold.number}
-        selected_rows.append(selected_entry)
-        fold_records.append({
-            "fold": fold.__dict__, "selected_candidate": chosen["candidate"],
-            "selection_score": chosen.get("selection_score"), "plateau": chosen["plateau"],
-            "is_metrics": chosen.get("metrics", {}), "oos_metrics": oos_run["metrics"],
-            "baseline_oos_metrics": baseline_oos_run["metrics"],
-            "oos_delta_vs_baseline": _metric_deltas(oos_run["metrics"], baseline_oos_run["metrics"]),
-        })
-        for item in candidate_rows:
-            identity = item["candidate"]["candidate_id"]
-            entry = candidate_ledger.setdefault(identity, {
-                "candidate": item["candidate"], "is_metrics": [], "selected_oos_metrics": [],
-                "selected_oos_folds": 0, "plateau_stability": [],
-                "in_sample_reports": [], "selected_oos_reports": [],
-            })
-            entry["is_metrics"].append(item.get("metrics", {}))
-            entry["in_sample_reports"].append({
-                "fold": fold.number,
-                "metrics": item.get("metrics", {}),
-                "regime_breakdown": item.get("regime_breakdown", {}),
-                "volatility_breakdown": item.get("volatility_breakdown", {}),
-                "equity_curve_summary": item.get("equity_curve_summary", {}),
-                "plateau": item.get("plateau", {}),
-            })
-            if identity == chosen["candidate"]["candidate_id"]:
-                entry["selected_oos_metrics"].append(oos_run["metrics"])
-                entry["selected_oos_folds"] += 1
-                entry["plateau_stability"].append(bool(item.get("plateau", {}).get("stable")))
-                entry["selected_oos_reports"].append({
-                    "fold": fold.number, "metrics": oos_run["metrics"],
-                    "regime_breakdown": oos_run["regime_breakdown"],
-                    "volatility_breakdown": oos_run["volatility_breakdown"],
-                    "equity_curve_summary": _equity_summary(oos_run),
-                })
-
-    walk_forward = _aggregate_runs(
-        selected_oos_runs, starting_equity=starting_equity,
-        gamma_vega_threshold=gamma_vega_threshold,
-    )
-    baseline_candidate = next(
-        (item for item in shared_candidate_pool if item.is_baseline), None,
-    )
-    if baseline_candidate is None:
-        raise ValueError("candidate pool lost its baseline candidate")
-    baseline_walk_forward = _aggregate_runs(
-        baseline_oos_runs, starting_equity=starting_equity,
-        gamma_vega_threshold=gamma_vega_threshold,
-    )
-    mean_is_score = statistics.mean(
-        float(row["is_metrics"].get("risk_adjusted_score", -5.0)) for row in selected_rows
-    ) if selected_rows else 0.0
-    mean_oos_score = float(walk_forward["metrics"]["risk_adjusted_score"])
-    efficiency = mean_oos_score / mean_is_score if mean_is_score > 0 else None
-    walk_forward["walk_forward_efficiency"] = efficiency
-    walk_forward["mean_selected_is_risk_adjusted_score"] = mean_is_score
-    walk_forward["mean_oos_risk_adjusted_score"] = mean_oos_score
-
-    # The final candidate is selected by risk-adjusted OOS score among the
-    # configurations already selected on training windows.
-    vote_scores = defaultdict(list)
-    selected_by_id = {}
-    for entry in selected_rows:
-        cid = entry["candidate"]["candidate_id"]
-        selected_by_id[cid] = entry["candidate"]
-        vote_scores[cid].append(float(entry["oos_metrics"].get("risk_adjusted_score", -5.0)))
-    final_id = max(vote_scores, key=lambda key: (statistics.mean(vote_scores[key]), len(vote_scores[key]), key))
-    final_candidate_payload = selected_by_id[final_id]
-    final_candidate = Candidate(
-        final_candidate_payload["candidate_id"], final_candidate_payload.get("parameters", {}),
-        tuple(final_candidate_payload.get("allowed_regimes", [])), (),
-    )
-    # Stress and assignment checks replay the final candidate over the stitched OOS span.
-    stress_span = dataset.observations[folds[0].oos_start:folds[-1].oos_end]
-    stress_run = simulate_options_strategy(
-        dataset, stress_span, strategy_name=strategy, candidate=final_candidate,
-        config=research_config, base_config=base_config, force_close=True,
-    )
-    incumbent_oos_runs = [result["incumbent_oos_run"] for result in fold_results] if incumbent_candidate else []
-    baseline_comparison = {
-        "baseline_candidate": baseline_candidate.to_dict(),
-        "same_oos_folds": True,
-        "same_execution_cost_model": True,
-        "walk_forward": {
-            "baseline_metrics": baseline_walk_forward["metrics"],
-            "tuned_metrics": walk_forward["metrics"],
-            "tuned_minus_baseline": _metric_deltas(
-                walk_forward["metrics"], baseline_walk_forward["metrics"],
-            ),
-        },
-    }
-
-    sensitivity = []
-    slippage_scenarios = research_config.get("robustness", {}).get("slippage_multipliers", [1.0, 1.5, 2.0])
-    spread_scenarios = research_config.get("robustness", {}).get("spread_width_multipliers", [1.0, 1.5, 2.0])
-    for slippage in slippage_scenarios:
-        for spread_width in spread_scenarios:
-            run = simulate_options_strategy(
-                dataset, stress_span, strategy_name=strategy, candidate=final_candidate,
-                config=research_config, base_config=base_config,
-                slippage_multiplier=float(slippage), spread_width_multiplier=float(spread_width),
-                force_close=True,
-            )
-            sensitivity.append({"slippage_multiplier": float(slippage),
-                                "spread_width_multiplier": float(spread_width),
-                                "metrics": run["metrics"]})
-    assignment_sensitivity = {"enabled": bool(research_config.get("robustness", {}).get("run_assignment_sensitivity", True))}
-    if assignment_sensitivity["enabled"]:
-        without_assignment = simulate_options_strategy(
-            dataset, stress_span, strategy_name=strategy, candidate=final_candidate,
-            config=research_config, base_config=base_config, assignment_enabled=False,
-            force_close=True,
-        )
-        assignment_sensitivity.update({
-            "with_assignment": stress_run["metrics"],
-            "without_early_assignment": without_assignment["metrics"],
-            "pnl_difference_usd": starting_equity * (
-                stress_run["metrics"]["total_return"] - without_assignment["metrics"]["total_return"]
-            ),
-            "assignment_events": len(stress_run.get("assignment_events", [])),
-        })
-    reshuffle = _sequence_reshuffle(
-        walk_forward["trades"],
-        paths=int(research_config.get("robustness", {}).get("monte_carlo_paths", 500)),
-        seed=int(research_config.get("random_seed", 1)),
-        starting_equity=starting_equity,
-    )
-
-    selected_stability = _parameter_stability(selected_rows)
-    leaderboard = []
-    for identity, entry in candidate_ledger.items():
-        is_rows = entry["is_metrics"]
-        oos_rows = entry["selected_oos_metrics"]
-        leaderboard.append({
-            "candidate_id": identity,
-            "parameters": entry["candidate"].get("parameters", {}),
-            "allowed_regimes": entry["candidate"].get("allowed_regimes", []),
-            "is_baseline": bool(entry["candidate"].get("is_baseline", False)),
-            "selected_oos_folds": entry["selected_oos_folds"],
-            "mean_is_metrics": _mean_metrics(is_rows),
-            "selected_oos_metrics": _mean_metrics(oos_rows) if oos_rows else None,
-            "plateau_stable_selection_fraction": (sum(entry["plateau_stability"]) / len(entry["plateau_stability"])
-                                                    if entry["plateau_stability"] else None),
-            "in_sample_reports": entry["in_sample_reports"],
-            "selected_oos_reports": entry["selected_oos_reports"],
-        })
-    leaderboard.sort(key=lambda row: (
-        row["selected_oos_metrics"] is not None,
-        (row["selected_oos_metrics"] or {}).get("risk_adjusted_score", -5.0),
-        row["mean_is_metrics"].get("risk_adjusted_score", -5.0),
-    ), reverse=True)
-    baseline_row = next((row for row in leaderboard if row["is_baseline"]), None)
-    baseline_fitness = (
-        baseline_row["mean_is_metrics"].get("risk_adjusted_score")
-        if baseline_row else None
-    )
-    for row in leaderboard:
-        fitness = row["mean_is_metrics"].get("risk_adjusted_score")
-        row["baseline_fitness"] = baseline_fitness
-        row["fitness_delta_vs_baseline"] = (
-            float(fitness) - float(baseline_fitness)
-            if fitness is not None and baseline_fitness is not None else None
-        )
-
-    wf_min_trades = int(research_config.get("walk_forward", {}).get("minimum_oos_trades", 8))
-    plateau_fraction = statistics.mean([bool(row["plateau"].get("stable")) for row in selected_rows]) if selected_rows else 0.0
-    min_plateau_fraction = float(research_config.get("search", {}).get("minimum_stable_selection_fraction", 0.50))
-    min_parameter_stability = float(research_config.get("search", {}).get("minimum_parameter_stability_score", 0.50))
-    minimum_stress_slippage = float(research_config.get("robustness", {}).get("minimum_stress_slippage_multiplier", 1.5))
-    minimum_stress_spread = float(research_config.get("robustness", {}).get("minimum_stress_spread_width_multiplier", 1.5))
-    stress_case = next((item for item in sensitivity
-                        if item["slippage_multiplier"] >= minimum_stress_slippage
-                        and item["spread_width_multiplier"] >= minimum_stress_spread), None)
-    stress_resilient = bool(
-        stress_case and stress_case["metrics"]["risk_adjusted_score"] > 0
-        and stress_case["metrics"]["total_return"] > 0
-    )
-    validation = {
-        "minimum_oos_trades": wf_min_trades,
-        "observed_oos_trades": walk_forward["metrics"]["trade_count"],
-        "minimum_oos_trades_met": walk_forward["metrics"]["trade_count"] >= wf_min_trades,
-        "walk_forward_oos_positive": walk_forward["metrics"]["risk_adjusted_score"] > 0,
-        "plateau_stable_selection_fraction": plateau_fraction,
-        "minimum_stable_selection_fraction": min_plateau_fraction,
-        "plateau_gate_met": plateau_fraction >= min_plateau_fraction,
-        "parameter_stability_score": selected_stability["stability_score"],
-        "minimum_parameter_stability_score": min_parameter_stability,
-        "parameter_stability_gate_met": selected_stability["stability_score"] >= min_parameter_stability,
-        "stress_slippage_multiplier": minimum_stress_slippage,
-        "stress_spread_width_multiplier": minimum_stress_spread,
-        "stress_case_positive_after_costs": stress_resilient,
-        "returns_not_dominated_by_gamma_or_vega_episodes": not (
-            walk_forward["metrics"]["returns_dominated_by_gamma_or_vega_episodes"]
-        ),
-        "approved": False,
-    }
-    validation["approved"] = all((
-        validation["minimum_oos_trades_met"], validation["walk_forward_oos_positive"],
-        validation["plateau_gate_met"], validation["parameter_stability_gate_met"],
-        validation["stress_case_positive_after_costs"],
-        validation["returns_not_dominated_by_gamma_or_vega_episodes"],
-    ))
-    candidate_summary = fold_summary([float(run["metrics"].get("risk_adjusted_score", -5.0)) for run in selected_oos_runs])
-    incumbent_summary = (
-        fold_summary([float(run["metrics"].get("risk_adjusted_score", -5.0)) for run in incumbent_oos_runs])
-        if incumbent_candidate else None
-    )
-    promoted, promotion_reason = (False, "champion carry disabled")
-    if champion_enabled:
-        promoted, promotion_reason = decide_promotion(
-            approved=validation["approved"], candidate_summary=candidate_summary,
-            incumbent_summary=incumbent_summary, has_incumbent=incumbent is not None,
-        )
-    live_candidate = final_candidate if promoted else (incumbent_candidate if incumbent else None)
-    validation["champion"] = {
-        "enabled": champion_enabled,
-        "incumbent_candidate_id": (incumbent or {}).get("candidate_id"),
-        "candidate_fold_summary": candidate_summary,
-        "incumbent_fold_summary": incumbent_summary,
-        "promoted": promoted,
-        "reason": promotion_reason,
-        "live_candidate_id": live_candidate.candidate_id if live_candidate else None,
-    }
-    exported = live_defaults(live_config_path)
-    exported[strategy] = export_section(
-        strategy, parameters=(live_candidate or final_candidate).parameters,
-        allowed_regimes=(live_candidate or final_candidate).allowed_regimes, base_config=exported,
-    )
-    if strategy in {"long_volatility", "directional_overlay"}:
-        exported[strategy]["underlyings"] = [underlying]
-    else:
-        exported[strategy]["underlying"] = underlying
-    exported[strategy]["enabled"] = live_candidate is not None
-
-    report = {
-        "run_id": run_id,
-        "created_at": timestamp.isoformat(),
-        "strategy": strategy,
-        "underlying": underlying,
-        "dataset_path": str(dataset.source_path),
-        "run_dir": str(run_dir),
-        "dataset_sha256": dataset.source_sha256,
-        "dataset_observations": len(dataset.observations),
-        "dataset_chain_errors": chain_errors,
-        "data_mode": dataset.data_mode,
-        "research_config_path": str(config_path_resolved),
-        "research_config_sha256": config_digest,
-        "live_base_config_sha256": base_config_digest,
-        "code_sha256": code_digest,
-        "random_seed": int(research_config.get("random_seed", 1)),
-        "parallelism": {
-            "loader_workers_requested": loader_worker_count,
-            "loader_workers_used": dataset.loading_parallelism.get("workers_used", 1),
-            "chain_workers_used": dataset.loading_parallelism.get("chain_workers_used", 1),
-            "loader_elapsed_seconds": dataset.loading_parallelism.get("elapsed_seconds"),
-            "jsonl_parse_and_normalize_elapsed_seconds": dataset.loading_parallelism.get("jsonl_parse_and_normalize_elapsed_seconds"),
-            "chain_preparation_elapsed_seconds": dataset.loading_parallelism.get("chain_preparation_elapsed_seconds"),
-            "fold_workers_requested": effective_parallel_workers,
-            "fold_workers_used": fold_worker_count,
-            "dataset_sharing": "fork_copy_on_write" if fold_worker_count > 1 else "single_process",
-        },
-        "split": split,
-        "folds": fold_records,
-        "candidate_leaderboard": leaderboard,
-        "final_candidate_id": final_id,
-        "final_parameters": final_candidate.parameters,
-        "final_allowed_regimes": list(final_candidate.allowed_regimes),
-        "baseline_comparison": baseline_comparison,
-        "parameter_stability": selected_stability,
-        "walk_forward": {
-            "metrics": walk_forward["metrics"],
-            "oos_metrics": walk_forward["metrics"],
-            "walk_forward_efficiency": efficiency,
-            "mean_selected_is_risk_adjusted_score": mean_is_score,
-            "mean_oos_risk_adjusted_score": mean_oos_score,
-            "regime_breakdown": walk_forward["regime_breakdown"],
-            "volatility_breakdown": walk_forward["volatility_breakdown"],
-            "greek_summary": walk_forward["greek_summary"],
-            "equity_curve": walk_forward["equity_curve"],
-            "trades": walk_forward["trades"],
-        },
-        "robustness": {
-            "slippage_sensitivity": sensitivity,
-            "assignment_sensitivity": assignment_sensitivity,
-            "trade_sequence_reshuffle": reshuffle,
-        },
-        "validation": validation,
-        "execution_assumptions": stress_run["execution"],
-        "data_assumptions": {
-            "event_llm_core_searched": False,
-            "historical_chain_snapshots_required_for_empirical_claims": True,
-            "model_or_synthetic_rows_present": dataset.data_mode.startswith("model_surface") or dataset.data_mode == "model_or_synthetic_chain_rows",
-            "model_iv_surface_used": dataset.data_mode.startswith("model_surface"),
-            "spot_close_fallback_used": dataset.data_mode.endswith("spot_close_proxy"),
-            "point_in_time_events_and_signals_only": True,
-        },
-    }
-    write_research_report(run_dir, report)
-    atomic_write_json(run_dir / "candidate_reports.json", leaderboard,
-                      indent=2, sort_keys=True, allow_nan=False)
-    _write_equity_csv(run_dir / "equity_curve.csv", walk_forward["equity_curve"])
-    _write_equity_csv(run_dir / "baseline_equity_curve.csv", baseline_walk_forward["equity_curve"])
-    _write_trades_csv(run_dir / "oos_trades.csv", walk_forward["trades"])
-    _write_trades_csv(run_dir / "baseline_oos_trades.csv", baseline_walk_forward["trades"])
-    atomic_write_json(run_dir / "run.json", {
-        "run_id": run_id, "strategy": strategy,
-        "research_config": research_config,
-        "research_config_sha256": config_digest,
-        "live_base_config_sha256": base_config_digest,
-        "code_sha256": code_digest,
-        "dataset_path": str(dataset.source_path), "dataset_sha256": dataset.source_sha256,
-        "created_at": timestamp.isoformat(), "validation": validation, "status": "completed",
-        "final_candidate_id": final_id,
-        "parallelism": report["parallelism"],
-    }, indent=2, sort_keys=True, allow_nan=False)
-    if champion_enabled:
-        record_decision(
-            strategy=strategy, underlying=underlying, run_id=run_id,
-            decided_at=timestamp.isoformat(),
-            candidate=final_candidate, candidate_summary=candidate_summary,
-            incumbent_candidate_id=(incumbent or {}).get("candidate_id"),
-            incumbent_summary=incumbent_summary, promoted=promoted, reason=promotion_reason,
-        )
-    if exported[strategy]["enabled"]:
-        atomic_write_json(run_dir / "approved-options-config.json", exported, indent=2, sort_keys=True, allow_nan=False)
-    else:
-        atomic_write_json(run_dir / "candidate-options-config.json", exported, indent=2, sort_keys=True, allow_nan=False)
-    _append_run_log(output_root / "research_runs.jsonl", {
-        "run_id": run_id, "created_at": timestamp.isoformat(), "strategy": strategy,
-        "underlying": underlying, "dataset_sha256": dataset.source_sha256,
-        "research_config_sha256": config_digest, "validation": validation,
-        "live_base_config_sha256": base_config_digest, "code_sha256": code_digest,
-        "run_dir": str(run_dir), "status": "completed",
-        "parallelism": report["parallelism"],
-    })
-    OptionsResearchArtifactStore().store_run(run_dir, report)
-    return report
 
 
 __all__ = ["run_research"]

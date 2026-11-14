@@ -68,10 +68,11 @@ test('validateJobRequest refuses equity, unknown strategies, oversize lists, bad
     assert.throws(() => validateJobRequest({ ...base, underlyings: ['a b'] }, { today: TODAY }), /ticker/);
 });
 
-test('buildJobConfig disables champion writes and applies the profile as the strategy baseline', () => {
+test('buildJobConfig applies the profile as the fixed strategy baseline without legacy search settings', () => {
     const base = { champion: { enabled: true }, strategy_defaults: { vrp: { keep: 1 } } };
     const config = buildJobConfig(base, { strategy: 'vrp', parameters: { min_iv_minus_rv: 0.05 }, start: '2023-01-01', end: null });
-    assert.equal(config.champion.enabled, false);
+    assert.equal('champion' in config, false);
+    assert.equal('search' in config, false);
     assert.deepEqual(config.strategy_defaults.vrp, { keep: 1, min_iv_minus_rv: 0.05 });
     assert.deepEqual(config.date_range, { start: '2023-01-01', end: null });
     assert.equal(base.champion.enabled, true, 'base config must not be mutated');
@@ -127,7 +128,7 @@ test('startJob refuses a second job while one is running and writes a job record
     assert.deepEqual(calls[0].args.slice(0, 2), ['-m', 'options.research.lab_run']);
     assert.equal(calls[0].options.detached, true);
     const stored = JSON.parse(fs.readFileSync(path.join(lab.jobDir(job.id), 'config.json'), 'utf8'));
-    assert.equal(stored.champion.enabled, false);
+    assert.equal(Object.hasOwn(stored, 'champion'), false);
     assert.deepEqual(stored.date_range, { start: '2023-01-01', end: '2026-06-30' });
     await assert.rejects(lab.startJob({ account: 'options', strategy: 'vrp', underlyings: ['AAPL'] }), /already running/);
 });
@@ -140,7 +141,7 @@ test('startJob refuses to run when free memory is below the floor', async t => {
     assert.equal(calls.length, 0);
 });
 
-test('profiles accept only tunable grid keys and refuse duplicates', async t => {
+test('options profiles accept supported strategy settings and refuse duplicates', async t => {
     const { root, meminfo } = fixtureRoot(t);
     const lab = new ResearchLab({ root, meminfoPath: meminfo });
     await lab.saveProfile({ strategy: 'vrp', name: 'tight', parameters: { min_iv_minus_rv: 0.03 } });

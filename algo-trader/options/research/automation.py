@@ -18,9 +18,10 @@ from options.research.artifact_store import OptionsResearchArtifactStore
 from options.research.history_store import DEFAULT_DATABASE, OptionsHistoryStore
 from options.market_inputs import research_market_inputs
 from options.research.dataset import combine_options_research_datasets, load_options_research_dataset
+from options.research.reporting import report_for_filesystem
 from options.research.runner import RESEARCH_DEFAULTS_PATH, _merge, _project_path, _read_json
-from options.research.search import Candidate, candidate_pool
 from options.research.simulator import simulate_options_strategy
+from options.research.strategy_configuration import fixed_strategy_configuration
 from options.research.strategy_factory import live_defaults
 from runtime.atomic import atomic_write_json
 from runtime.paths import ROOT
@@ -61,9 +62,13 @@ def _append_jsonl(path: Path, row: dict) -> None:
         fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
+def _write_compact_report(path: Path, report: dict) -> None:
+    atomic_write_json(path, report_for_filesystem(report), indent=2, sort_keys=True, allow_nan=False)
+
+
 def _run_portfolio_replay(
     config: dict, *, strategies: list[str], underlyings_by_strategy: dict[str, list[str]],
-    data_paths: dict[str, Path], workers: int, progress_callback=None,
+    data_paths: dict[str, Path], workers: int, progress_callback=None, membership=None,
 ) -> tuple[dict | None, dict[str, str], dict[str, dict]]:
     """Load covered symbols in a bounded pool, then replay one shared options account."""
     base_config = live_defaults()
@@ -173,16 +178,13 @@ def _run_portfolio_replay(
         for strategy in strategies
     }
     active_strategies = [strategy for strategy in strategies if covered_by_strategy[strategy]]
-    candidates = {}
+    strategy_configurations = {}
     for strategy in active_strategies:
-        pool = candidate_pool(strategy, config, base_config)
-        baseline = next((item for item in pool if item.is_baseline), pool[0])
         parameters = _merge(
-            config.get("strategy_defaults", {}).get(strategy, {}), baseline.parameters,
+            config.get("strategy_defaults", {}).get(strategy, {}), {},
         )
-        candidates[strategy] = Candidate(
-            baseline.candidate_id, parameters, baseline.allowed_regimes,
-            baseline.grid_indices, is_baseline=True,
+        strategy_configurations[strategy] = fixed_strategy_configuration(
+            strategy, base_config, parameters=parameters,
         )
     combined = combine_options_research_datasets(datasets)
     if progress_callback:
@@ -192,9 +194,10 @@ def _run_portfolio_replay(
             "sessions_total": len(combined.observations),
         })
     replay = simulate_options_strategy(
-        combined, combined.observations,
-        strategy_name=active_strategies[0], candidate=candidates[active_strategies[0]],
-        strategy_candidates=candidates,
+        combined, combined.observations, membership=membership,
+        strategy_name=active_strategies[0],
+        strategy_configuration=strategy_configurations[active_strategies[0]],
+        strategy_configurations=strategy_configurations,
         strategy_underlyings={key: set(covered_by_strategy[key]) for key in active_strategies},
         config=config, base_config=base_config, force_close=True,
         progress_callback=(
@@ -251,16 +254,6 @@ def _input_fingerprint(paths: dict[str, Path], *, config_hash: str, data_marks: 
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _return_improvement(baseline: object, tuned: object) -> str:
-    """Relative return improvement over the baseline, or the gap in points if the baseline is not positive."""
-    if baseline is None or tuned is None:
-        return "n/a"
-    base, new = float(baseline), float(tuned)
-    if base > 0:
-        return f"{(new - base) / base:+.1%}"
-    return f"n/a (baseline {base:.2%}; {(new - base) * 100:+.2f} pts)"
 
 
 SIMULATION_LABELS = {"vrp": "Volatility risk premium", "long_volatility": "Long volatility"}
@@ -460,108 +453,12 @@ def _render_markdown(report: dict) -> str:
                     f"Parameters: `{json.dumps(item.get('final_parameters', {}), sort_keys=True)}`  ",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
-                candidates = item.get("candidate_leaderboard", [])
-                if candidates:
-                    ranked_candidates = sorted(
-                        candidates,
-                        key=lambda candidate: (
-                            candidate.get("fitness") is not None,
-                            float(candidate.get("fitness") or 0.0),
-                        ),
-                        reverse=True,
-                    )
-                    display_candidates = ranked_candidates[:5]
-                    baseline = next((candidate for candidate in candidates if candidate.get("is_baseline")), None)
-                    if baseline and all(
-                        candidate.get("candidate_id") != baseline.get("candidate_id")
-                        for candidate in display_candidates
-                    ):
-                        display_candidates.append(baseline)
-                    candidate_rows = []
-                    for candidate in display_candidates:
-                        fitness = candidate.get("fitness")
-                        baseline_fitness = candidate.get("baseline_fitness")
-                        delta = candidate.get("fitness_delta_vs_baseline")
-                        candidate_rows.append([
-                            ("Baseline" if candidate.get("is_baseline") else str(candidate.get("candidate_id", ""))),
-                            json.dumps(candidate.get("parameters", {}), sort_keys=True),
-                            f"{float(fitness):.3f}" if fitness is not None else "n/a",
-                            f"{float(baseline_fitness):.3f}" if baseline_fitness is not None else "n/a",
-                            f"{float(delta):+.3f}" if delta is not None else "n/a",
-                        ])
-                    widths = [
-                        max(len(header), *(len(row[index]) for row in candidate_rows))
-                        for index, header in enumerate([
-                            "Candidate", "Parameters", "Fitness", "Baseline", "Delta",
-                        ])
-                    ]
-                    headers = ["Candidate", "Parameters", "Fitness", "Baseline", "Delta"]
-                    table = "\n".join([
-                        "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)) + " |",
-                        "| " + " | ".join("-" * widths[index] for index in range(len(headers))) + " |",
-                        *[
-                            "| " + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) + " |"
-                            for row in candidate_rows
-                        ],
-                    ])
-                    lines.extend([
-                        "",
-                        "Top five candidates by mean in-sample risk-adjusted score, plus the baseline. Delta is candidate minus baseline; the detailed report has the full candidate ledger.",
-                        "",
-                        table,
-                    ])
-                comparison = item.get("baseline_comparison", {})
-                comparison_rows = []
-                for label, period in (
-                    ("Rolling OOS", comparison.get("walk_forward", {})),
-                ):
-                    baseline_metrics = period.get("baseline_metrics", {})
-                    tuned_metrics = period.get("tuned_metrics", {})
-                    deltas = period.get("tuned_minus_baseline", {})
-                    if not baseline_metrics or not tuned_metrics:
-                        continue
-                    format_value = lambda value, percent=False: (
-                        f"{float(value):.2%}" if percent else f"{float(value):.3f}"
-                    ) if value is not None else "n/a"
-                    comparison_rows.append([
-                        label,
-                        format_value(baseline_metrics.get("total_return"), percent=True),
-                        format_value(tuned_metrics.get("total_return"), percent=True),
-                        format_value(deltas.get("total_return"), percent=True),
-                        _return_improvement(baseline_metrics.get("total_return"), tuned_metrics.get("total_return")),
-                        format_value(baseline_metrics.get("risk_adjusted_score")),
-                        format_value(tuned_metrics.get("risk_adjusted_score")),
-                        format_value(deltas.get("risk_adjusted_score")),
-                    ])
-                if comparison_rows:
-                    headers = [
-                        "Period", "Baseline return", "Tuned return", "Delta return", "Return improvement",
-                        "Baseline score", "Tuned score", "Delta score",
-                    ]
-                    widths = [
-                        max(len(header), *(len(row[index]) for row in comparison_rows))
-                        for index, header in enumerate(headers)
-                    ]
-                    table = "\n".join([
-                        "| " + " | ".join(header.ljust(widths[index]) for index, header in enumerate(headers)) + " |",
-                        "| " + " | ".join("-" * widths[index] for index in range(len(headers))) + " |",
-                        *[
-                            "| " + " | ".join(value.ljust(widths[index]) for index, value in enumerate(row)) + " |"
-                            for row in comparison_rows
-                        ],
-                    ])
-                    lines.extend([
-                        "",
-                        "Fixed baseline comparison: baseline and tuned use the same dates and execution costs; deltas are tuned minus baseline.",
-                        "",
-                        table,
-                    ])
             elif item.get("status") == "exploratory_only":
                 metrics = (item.get("exploratory_replay") or {}).get("metrics", {})
                 lines.extend([
                     "",
                     f"Exploratory baseline replay: {metrics.get('trade_count', 0)} trades, {float(metrics.get('total_return', 0.0)):.2%} return, Sharpe {float(metrics.get('annualized_sharpe', 0.0)):.3f}  ",
-                    "Replay only: the chosen parameters over the history, with no search. Judge it by its P/L and KPIs.",
+                    "Fixed settings replayed over the available history; review the P&L and risk metrics as descriptive results.",
                     f"Detailed report: `{item.get('report_path')}`",
                 ])
         lines.append("")
@@ -619,9 +516,9 @@ def run_automated_options_research(
         )
         for symbol in underlyings
     }
-    configured_fold_workers = config.get("search", {}).get("parallel_workers", 1)
+    configured_fold_workers = config.get("parallel_workers", 1)
     if isinstance(configured_fold_workers, bool) or not isinstance(configured_fold_workers, int) or configured_fold_workers < 1:
-        raise ValueError("search.parallel_workers must be a positive integer")
+        raise ValueError("parallel_workers must be a positive integer")
     if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
         raise ValueError("workers must be a positive integer")
     available_cpus = available_cpu_count()
@@ -725,6 +622,7 @@ def run_automated_options_research(
         for symbol in underlyings
     } if history_store else {}
     eligibility_report = None
+    point_in_time_membership = None
     selection_excluded_by_strategy = {}
     if cache_eligibility or apply_eligibility:
         from options.research.universe_selection import build_eligible_cache
@@ -733,17 +631,14 @@ def run_automated_options_research(
             database=history_store.path,
             rules_path=eligibility_config.get("rules_path"),
         )
-        eligible = set(eligibility_report.get("eligible_symbols", []))
         if apply_eligibility:
-            original_by_strategy = underlyings_by_strategy
-            underlyings_by_strategy = {
-                strategy: [symbol for symbol in symbols if symbol in eligible]
-                for strategy, symbols in original_by_strategy.items()
-            }
-            selection_excluded_by_strategy = {
-                strategy: [symbol for symbol in symbols if symbol not in eligible]
-                for strategy, symbols in original_by_strategy.items()
-            }
+            # Point in time over the whole pool: every pool name is replayed, and each session's new entries
+            # are limited to the names the selector had eligible before that session opened.
+            from equity_research.backtest.membership import load_default_membership
+
+            point_in_time_membership = load_default_membership(
+                history_store.path, rules_sha256=eligibility_report.get("rules_sha256"),
+            )
     data_available = any(
         history_store.has_underlying(symbol)
         if history_store and path.suffix.lower() in {".sqlite", ".sqlite3", ".db"}
@@ -777,16 +672,16 @@ def run_automated_options_research(
                 "progress": detail,
                 "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
             }
-            atomic_write_json(run_progress_dir / "progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
-            atomic_write_json(run_progress_dir / "partial-report.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
-            atomic_write_json(automation_dir / "latest-progress.json", snapshot, indent=2, sort_keys=True, allow_nan=False)
+            _write_compact_report(run_progress_dir / "progress.json", snapshot)
+            _write_compact_report(run_progress_dir / "partial-report.json", snapshot)
+            _write_compact_report(automation_dir / "latest-progress.json", snapshot)
 
         record_portfolio_progress({"phase": "starting"})
         try:
             portfolio_replay, unavailable_symbols, portfolio_loading = _run_portfolio_replay(
                 config, strategies=strategies, underlyings_by_strategy=underlyings_by_strategy,
                 data_paths=underlying_data_paths, workers=replay_data_worker_budget,
-                progress_callback=record_portfolio_progress,
+                progress_callback=record_portfolio_progress, membership=point_in_time_membership,
             )
         except Exception as exc:
             portfolio_error = f"{type(exc).__name__}: {exc}"
@@ -855,9 +750,9 @@ def run_automated_options_research(
         }
         run_progress_dir = automation_dir / "runs" / run_id
         run_progress_dir.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(run_progress_dir / "progress.json", progress_snapshot, indent=2, sort_keys=True, allow_nan=False)
-        atomic_write_json(run_progress_dir / "partial-report.json", progress_snapshot, indent=2, sort_keys=True, allow_nan=False)
-        atomic_write_json(automation_dir / "latest-progress.json", progress_snapshot, indent=2, sort_keys=True, allow_nan=False)
+        _write_compact_report(run_progress_dir / "progress.json", progress_snapshot)
+        _write_compact_report(run_progress_dir / "partial-report.json", progress_snapshot)
+        _write_compact_report(automation_dir / "latest-progress.json", progress_snapshot)
         print(
             f"Options portfolio replay: {len((portfolio_replay or {}).get('underlyings', []))} covered symbols, "
             f"one shared account, sequential replay; historical-chain preparation workers {replay_data_worker_budget}",
@@ -918,8 +813,8 @@ def run_automated_options_research(
     # Per-sleeve P/L and KPIs, stored with the report so the research history can show them without replaying.
     report["simulation_kpis"] = _simulation_summary(report)
     report_path = automation_dir / f"{today}.json"
-    atomic_write_json(report_path, report, indent=2, sort_keys=True, allow_nan=False)
-    atomic_write_json(automation_dir / "latest.json", report, indent=2, sort_keys=True, allow_nan=False)
+    _write_compact_report(report_path, report)
+    _write_compact_report(automation_dir / "latest.json", report)
     markdown_path = automation_dir / f"{today}.md"
     markdown_path.write_text(_render_markdown(report), encoding="utf-8")
     (automation_dir / "latest.md").write_text(_render_markdown(report), encoding="utf-8")
@@ -965,16 +860,17 @@ def run_automated_options_research(
         "report_path": str(report_path),
     })
     artifact_store = OptionsResearchArtifactStore()
+    artifact_store.store_document_payload(
+        document_type="automation_report", identity=today, payload=report,
+    )
     for document_type, identity, path in (
-        ("automation_report", today, report_path),
-        ("automation_report_latest", "latest", automation_dir / "latest.json"),
         ("automation_markdown", today, markdown_path),
         ("automation_markdown_latest", "latest", automation_dir / "latest.md"),
         ("automation_history", "runs", automation_dir / "runs.jsonl"),
     ):
         artifact_store.store_document(document_type=document_type, identity=identity, path=path)
     final_path = automation_dir / "runs" / run_id / "final-report.json"
-    atomic_write_json(final_path, report, indent=2, sort_keys=True, allow_nan=False)
+    _write_compact_report(final_path, report)
     checkpoint.update({
         "status": status,
         "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -995,9 +891,9 @@ def run_automated_options_research(
         "checkpoint_location": f"{checkpoint_store.path}#{run_id}",
     }
     progress_dir = automation_dir / "runs" / run_id
-    atomic_write_json(progress_dir / "progress.json", final_progress, indent=2, sort_keys=True, allow_nan=False)
-    atomic_write_json(progress_dir / "partial-report.json", report, indent=2, sort_keys=True, allow_nan=False)
-    atomic_write_json(automation_dir / "latest-progress.json", final_progress, indent=2, sort_keys=True, allow_nan=False)
+    _write_compact_report(progress_dir / "progress.json", final_progress)
+    _write_compact_report(progress_dir / "partial-report.json", report)
+    _write_compact_report(automation_dir / "latest-progress.json", final_progress)
     return report
 
 
